@@ -1,0 +1,16 @@
+{
+  "name": "Sophon",
+  "id": "dev.sophon.app",
+  "version": "0.1.0",
+  "build": 1,
+  "icon": "assets/app-icon/icon-macos-1024.png",
+  "rust": ".",
+  "root": "App",
+  "theme": "theme.json",
+  "schemes": [
+    "sophon"
+  ],
+  "updater": {
+    "github": "caoxing9/sophon"
+  }
+}

@@ -1,0 +1,733 @@
+//! An agent's conversation: user bubbles, Markdown replies, tool calls,
+//! thinking, todos, errors; pending permissions above the composer.
+
+use crate::i18n::{t, tf};
+use nsh_base::{MarkdownOptions, text_view};
+use nsh_core::{
+    element::{AdaptiveColor, FontWeight, Position, View},
+    prelude::*,
+};
+use super::kit::text;
+
+use super::kit::*;
+use crate::{
+    daemon::{
+        Item, Permission,
+        model::{Question, plan_of, questions_of},
+    },
+    store,
+};
+
+#[derive(Clone, Copy, PartialEq)]
+enum RowKind {
+    User,
+    Assistant,
+    Reasoning,
+    Tool,
+    Todo,
+    Error,
+    Notice,
+}
+
+impl RowKind {
+    fn of(item: &Item) -> Self {
+        match item {
+            Item::User { .. } => Self::User,
+            Item::Assistant { .. } => Self::Assistant,
+            Item::Reasoning { .. } => Self::Reasoning,
+            Item::Tool { .. } => Self::Tool,
+            Item::Todo { .. } => Self::Todo,
+            Item::Error { .. } => Self::Error,
+            Item::Notice { .. } => Self::Notice,
+        }
+    }
+}
+
+pub(crate) fn timeline() -> impl IntoElement {
+    let loaded = computed(store::timeline_loaded);
+    let running = computed(|| store::selected_agent().is_some_and(|a| a.is_running()));
+    view().flex_1().child(dynamic(move || {
+        let ready = loaded.get();
+        Some(untracked(move || {
+            if !ready {
+                return view()
+                    .flex_1()
+                    .items_center()
+                    .justify_center()
+                    .child(text(t("Loading…")).text_size(px(TEXT_SM)).text_color(FG_MUTED))
+                    .into_element();
+            }
+            let count = store::item_count();
+            let list = element_ref();
+            store::set_timeline_list(list.clone());
+            view().flex_1().child(virtual_list(store::item_count, move |at: Position| row(at, running))
+                .element_ref(&list)
+                .keys(store::item_keys)
+                .estimated_item_size(px(80.0))
+                .initial_scroll_index(count.saturating_sub(1))
+                .follow_end(px(40.0))
+                .content_padding_top(px(S4))
+                .content_padding_bottom(px(200.0))
+                .flex_1())
+                .child(when(store::has_older, || {
+                    view().absolute().top(px(S2)).left(px(0.0)).right(px(0.0)).items_center().child(
+                        btn(
+                            || if store::loading_older() { t("Loading…") } else { t("Load earlier messages") },
+                            Variant::Secondary,
+                            Sz::Sm,
+                            Some(Icon::ChevronUp),
+                            store::load_older,
+                        )
+                        .shadow_sm(),
+                    )
+                }))
+                .into_element()
+        }))
+    }))
+}
+
+fn row(at: Position, running: Memo<bool>) -> impl IntoElement {
+    let item = computed(move || store::item_at(at.index()));
+    let kind = computed(move || item.with(|i| i.as_ref().map(RowKind::of)));
+    let streaming = computed(move || running.get() && at.index() + 1 == store::item_count());
+    let text_of = move || {
+        item.with(|i| match i {
+            Some(Item::User { text, .. } | Item::Assistant { text } | Item::Reasoning { text }) => text.clone(),
+            Some(Item::Error { message } | Item::Notice { message }) => message.clone(),
+            _ => String::new(),
+        })
+    };
+    let hit = computed(move || {
+        let f = store::find();
+        if !f.open || f.query.trim().is_empty() {
+            return 0u8;
+        }
+        let m = store::find_matches();
+        match m.iter().position(|&i| i == at.index()) {
+            Some(p) if p == f.current => 2,
+            Some(_) => 1,
+            None => 0,
+        }
+    });
+    view()
+        .px(px(S6))
+        .py(px(6.0))
+        .w_full()
+        .max_w(px(CONTENT_MAX_WIDTH + 2.0 * S6))
+        .self_center()
+        .rounded(px(R_LG))
+        .bg(move || match hit.get() {
+            2 => tint(ACCENT, 0.14),
+            1 => tint(DOT_WARNING, 0.10),
+            _ => tint(ACCENT, 0.0),
+        })
+        .child(dynamic(
+        move || {
+            let kind = kind.get()?;
+            Some(untracked(move || match kind {
+                RowKind::User => view()
+                    .self_end()
+                    .max_w(relative(0.82))
+                    .child(user_actions(item))
+                    .px(px(14.0))
+                    .py(px(9.0))
+                    .rounded(px(18.0))
+                    .bg(tint(ACCENT, 0.10))
+                    .child(
+                        text(text_of)
+                            .text_size(px(TEXT_CONTENT))
+                            .line_height(px(22.0))
+                            .text_color(FG)
+                            .selectable(true),
+                    )
+                    .into_element(),
+                RowKind::Assistant => text_view()
+                    .markdown(move || Some(SharedString::from(text_of())))
+                    .options(move || MarkdownOptions { streaming: streaming.get(), ..MarkdownOptions::default() })
+                    .selectable(true)
+                    .gap_3()
+                    .text_size(px(TEXT_CONTENT))
+                    .line_height(px(24.0))
+                    .text_color(FG)
+                    .into_element(),
+                RowKind::Reasoning => view()
+                    .flex_row()
+                    .gap(px(S2))
+                    .child(icon(Icon::Brain, 15.0).text_color(FG_FAINT).mt(px(2.0)))
+                    .child(
+                        text(move || text_of().trim().to_owned())
+                            .text_size(px(13.0))
+                            .line_height(px(19.0))
+                            .italic()
+                            .number_of_lines(3)
+                            .text_color(FG_MUTED)
+                            .flex_1(),
+                    )
+                    .into_element(),
+                RowKind::Tool => tool_row(item).into_element(),
+                RowKind::Todo => todo_card(item).into_element(),
+                RowKind::Error => view()
+                    .flex_row()
+                    .gap(px(S2))
+                    .px(px(S3))
+                    .py(px(S2))
+                    .rounded(px(R_LG))
+                    .bg(tint(DANGER, 0.08))
+                    .child(icon(Icon::CircleAlert, 16.0).text_color(DANGER))
+                    .child(
+                        text(text_of)
+                            .text_size(px(TEXT_BASE))
+                            .text_color(DANGER)
+                            .selectable(true)
+                            .flex_1(),
+                    )
+                    .into_element(),
+                RowKind::Notice => text(text_of)
+                    .text_size(px(TEXT_SM))
+                    .text_color(FG_FAINT)
+                    .text_center()
+                    .into_element(),
+            }))
+        },
+    ))
+}
+
+fn tool_icon(kind: &str, name: &str) -> Icon {
+    match kind {
+        "shell" => Icon::Terminal,
+        "read" => Icon::FileText,
+        "edit" | "write" => Icon::Pencil,
+        "search" => Icon::Search,
+        "fetch" => Icon::Globe,
+        "sub_agent" => Icon::Bot,
+        "plan" => Icon::ListTodo,
+        _ if name.to_lowercase().contains("todo") => Icon::ListTodo,
+        _ => Icon::Wrench,
+    }
+}
+
+/// Rewind from a user message (Paseo's message menu).
+fn user_actions(item: Memo<Option<Item>>) -> impl IntoElement {
+    let id = computed(move || match item.get() {
+        Some(Item::User { message_id: Some(id), .. }) => Some(id),
+        _ => None,
+    });
+    view().absolute().bottom(px(-12.0)).right(px(-4.0)).child(dynamic(move || {
+        let id = id.get()?;
+        Some(untracked(move || {
+            let (a, b, c) = (id.clone(), id.clone(), id.clone());
+            dropdown(
+                view()
+                    .w(px(22.0))
+                    .h(px(22.0))
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(R_FULL))
+                    .bg(SURFACE0)
+                    .border_1()
+                    .border_color(BORDER)
+                    .label(t("Message actions"))
+                    .child(icon(Icon::Ellipsis, 13.0).text_color(FG_MUTED)),
+            )
+            .align(nsh_core::overlay::Align::End)
+            .child(menu_heading(t("Rewind to here")))
+            .child(menu_row(t("Conversation only"), Some(Icon::Undo2), None, false, move || store::rewind(&a, "conversation")))
+            .child(menu_row(t("Files only"), Some(Icon::FileText), None, false, move || store::rewind(&b, "files")))
+            .child(menu_row(t("Conversation and files"), Some(Icon::RotateCw), None, false, move || store::rewind(&c, "both")))
+        }))
+    }))
+}
+
+fn tool_row(item: Memo<Option<Item>>) -> impl IntoElement {
+    let tool = computed(move || match item.get() {
+        Some(Item::Tool { name, kind, status, summary, .. }) => (name, kind, status, summary),
+        _ => Default::default(),
+    });
+    let glyph = computed(move || tool.with(|(n, k, ..)| tool_icon(k, n)));
+    nsh_base::button()
+        .on_press(move || {
+            if let Some(Item::Tool { name, detail, .. }) = item.get_untracked() {
+                store::open_modal(store::Modal::ToolDetail { name, detail });
+            }
+        })
+        .flex_row()
+        .items_center()
+        .gap(px(S2))
+        .px(px(S2))
+        .h(px(30.0))
+        .rounded(px(R_LG))
+        .hover(|s| s.bg(highlight()))
+        .child(dynamic(move || {
+            let g = glyph.get();
+            Some(untracked(move || icon(g, 15.0).text_color(FG_MUTED)))
+        }))
+        .child(
+            text(move || tool.with(|(n, ..)| n.clone()))
+                .text_size(px(TEXT_BASE))
+                .font_weight(FontWeight(500))
+                .text_color(FG)
+                .flex_shrink_0(),
+        )
+        .child(
+            text(move || tool.with(|(.., s)| s.clone()))
+                .text_size(px(TEXT_CODE))
+                .font_family(|| MONO)
+                .text_color(FG_MUTED)
+                .number_of_lines(1)
+                .flex_1(),
+        )
+        .child(dynamic(move || {
+            let status = tool.with(|(_, _, s, _)| s.clone());
+            Some(untracked(move || match status.as_str() {
+                "running" => status_dot(|| Status::Running).into_element(),
+                "failed" => icon(Icon::X, 14.0).text_color(DANGER).into_element(),
+                "canceled" => icon(Icon::CircleX, 14.0).text_color(FG_FAINT).into_element(),
+                _ => icon(Icon::Check, 14.0).text_color(SUCCESS).into_element(),
+            }))
+        }))
+}
+
+fn todo_card(item: Memo<Option<Item>>) -> impl IntoElement {
+    let lines = computed(move || match item.get() {
+        Some(Item::Todo { lines }) => lines,
+        _ => vec![],
+    });
+    card().p(px(S3)).gap(px(6.0)).child(section_label(t("Tasks"))).child(dynamic(move || {
+        let lines = lines.get();
+        Some(untracked(move || {
+            let mut list = view().gap(px(6.0));
+            for (done, t) in lines.clone() {
+                list = list.child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(S2))
+                        .child(icon(if done { Icon::CircleCheck } else { Icon::CircleDot }, 15.0).text_color(if done {
+                            SUCCESS
+                        } else {
+                            FG_FAINT
+                        }))
+                        .child(
+                            text(t)
+                                .text_size(px(TEXT_BASE))
+                                .text_color(if done { FG_MUTED } else { FG })
+                                .flex_1(),
+                        ),
+                );
+            }
+            list
+        }))
+    }))
+}
+
+/// The first pending permission, as a card above the composer: a question
+/// form, a plan to approve, or a tool to allow.
+pub(crate) fn permissions() -> View {
+    let pending = computed(|| store::selected_agent().map(|a| a.pending).unwrap_or_default());
+    view().w_full().max_w(px(CONTENT_MAX_WIDTH)).self_center().child(dynamic(move || {
+        let first = pending.get().into_iter().next()?;
+        Some(untracked(move || {
+            let questions = first.input.as_ref().and_then(questions_of).filter(|q| !q.is_empty());
+            let plan = first.input.as_ref().and_then(plan_of);
+            match (questions, plan) {
+                (Some(qs), _) if first.kind == "question" || first.actions.is_empty() => {
+                    question_card(first.clone(), qs).into_element()
+                }
+                (_, Some(plan)) => plan_card(first.clone(), plan).into_element(),
+                _ => tool_card(first.clone()).into_element(),
+            }
+        }))
+    }))
+}
+
+fn action_buttons(p: &Permission) -> View {
+    let pid = p.id.clone();
+    let mut buttons = view().flex_row().gap(px(S2)).flex_wrap();
+    if p.actions.is_empty() {
+        let (a, d) = (pid.clone(), pid.clone());
+        return buttons
+            .child(btn(t("Allow"), Variant::Primary, Sz::Md, Some(Icon::Check), move || {
+                store::answer_permission(&a, true, None)
+            }))
+            .child(btn(t("Deny"), Variant::Secondary, Sz::Md, None, move || store::answer_permission(&d, false, None)));
+    }
+    let mut primary_used = false;
+    for act in p.actions.clone() {
+        let id = pid.clone();
+        let label = if act.label.is_empty() { act.id.clone() } else { act.label.clone() };
+        let variant = if act.allow && !primary_used {
+            primary_used = true;
+            Variant::Primary
+        } else {
+            Variant::Secondary
+        };
+        buttons = buttons.child(btn(label, variant, Sz::Md, None, move || {
+            store::answer_permission(&id, act.allow, Some(act.id.clone()))
+        }));
+    }
+    buttons
+}
+
+fn card_title(glyph: Icon, tone: AdaptiveColor, title: String) -> View {
+    view()
+        .flex_row()
+        .items_center()
+        .gap(px(S2))
+        .child(icon(glyph, 16.0).text_color(tone))
+        .child(text(title).text_size(px(TEXT_BASE)).font_weight(FontWeight(500)).flex_1())
+}
+
+fn tool_card(p: Permission) -> View {
+    card()
+        .mb(px(S2))
+        .p(px(S4))
+        .gap(px(S3))
+        .border_color(tint(DOT_WARNING, 0.5))
+        .child(card_title(Icon::TriangleAlert, WARNING, p.title.clone()))
+        .when(!p.description.is_empty(), |v| {
+            v.child(
+                view().px(px(S3)).py(px(S2)).rounded(px(R_LG)).bg(SURFACE2).child(
+                    text(p.description.clone())
+                        .text_size(px(TEXT_CODE))
+                        .font_family(|| MONO)
+                        .line_height(px(18.0))
+                        .number_of_lines(8)
+                        .text_color(FG)
+                        .selectable(true),
+                ),
+            )
+        })
+        .child(action_buttons(&p))
+}
+
+fn plan_card(p: Permission, plan: String) -> View {
+    card()
+        .mb(px(S2))
+        .p(px(S4))
+        .gap(px(S3))
+        .child(card_title(Icon::ListTodo, ACCENT, t("Plan ready for review").into()))
+        .child(
+            scroll().max_h(px(320.0)).child(
+                text_view()
+                    .markdown(move || Some(SharedString::from(plan.clone())))
+                    .selectable(true)
+                    .gap_2()
+                    .text_size(px(TEXT_BASE))
+                    .line_height(px(21.0))
+                    .text_color(FG),
+            ),
+        )
+        .child(action_buttons(&p))
+}
+
+/// A form for an agent's questions: options as choices (one or several),
+/// an "Other" answer, and Submit / Dismiss.
+fn question_card(p: Permission, questions: Vec<Question>) -> View {
+    // Per question: the chosen option labels and the typed answer.
+    let chosen = signal(vec![Vec::<String>::new(); questions.len()]);
+    let other = signal(vec![String::new(); questions.len()]);
+    let qs = questions.clone();
+    let answered = computed(move || {
+        let (c, o) = (chosen.get(), other.get());
+        (0..qs.len()).all(|i| !c[i].is_empty() || !o[i].trim().is_empty())
+    });
+
+    let mut body = view().gap(px(S4));
+    for (i, q) in questions.iter().enumerate() {
+        let mut options = view().flex_row().flex_wrap().gap(px(S2));
+        for (label, detail) in q.options.clone() {
+            let multi = q.multi;
+            let (l1, l2) = (label.clone(), label.clone());
+            let shown = if detail.is_empty() { label.clone() } else { format!("{label} — {detail}") };
+            options = options.child(chip(shown, None, move || chosen.with(|c| c[i].contains(&l1)), move || {
+                chosen.update(|c| {
+                    if multi {
+                        if let Some(pos) = c[i].iter().position(|x| *x == l2) {
+                            c[i].remove(pos);
+                        } else {
+                            c[i].push(l2.clone());
+                        }
+                    } else {
+                        c[i] = vec![l2.clone()];
+                    }
+                });
+                if !multi {
+                    other.update(|o| o[i].clear());
+                }
+            }));
+        }
+        body = body.child(
+            view()
+                .gap(px(S2))
+                .child(section_label(q.header.clone()))
+                .child(text(q.question.clone()).text_size(px(TEXT_BASE)).line_height(px(20.0)))
+                .child(options)
+                .child(
+                    field()
+                        .value(move || other.with(|o| o[i].clone()))
+                        .on_change(move |v: &str| other.update(|o| o[i] = v.to_owned()))
+                        .placeholder(if q.options.is_empty() { t("Your answer") } else { "Other…" }),
+                ),
+        );
+    }
+
+    let input = p.input.clone().unwrap_or(serde_json::Value::Null);
+    let (submit_id, dismiss_id) = (p.id.clone(), p.id.clone());
+    let headers: Vec<(String, bool)> = questions.iter().map(|q| (q.header.clone(), q.multi)).collect();
+    card()
+        .mb(px(S2))
+        .p(px(S4))
+        .gap(px(S4))
+        .child(card_title(Icon::CircleDot, ACCENT, p.title.clone()))
+        .child(scroll().max_h(px(380.0)).child(body))
+        .child(
+            view()
+                .flex_row()
+                .gap(px(S2))
+                .child(
+                    btn(t("Submit"), Variant::Primary, Sz::Md, Some(Icon::Check), move || {
+                        let (c, o) = (chosen.get_untracked(), other.get_untracked());
+                        let mut answers = serde_json::Map::new();
+                        for (i, (header, multi)) in headers.iter().enumerate() {
+                            let typed = o[i].trim();
+                            let value = if typed.is_empty() {
+                                c[i].join(", ")
+                            } else if *multi {
+                                c[i].iter().cloned().chain([typed.to_owned()]).collect::<Vec<_>>().join(", ")
+                            } else {
+                                typed.to_owned()
+                            };
+                            answers.insert(header.clone(), serde_json::Value::String(value));
+                        }
+                        let mut updated = input.clone();
+                        if let Some(obj) = updated.as_object_mut() {
+                            obj.insert("answers".into(), serde_json::Value::Object(answers));
+                        }
+                        store::answer_permission_with(&submit_id, true, None, Some(updated));
+                    })
+                    .disabled(move || !answered.get()),
+                )
+                .child(btn(t("Dismiss"), Variant::Secondary, Sz::Md, None, move || {
+                    store::answer_permission(&dismiss_id, false, None)
+                })),
+        )
+}
+
+/// Sub-agents and background work of the open agent, as tracks above the
+/// composer.
+pub(crate) fn tracks() -> View {
+    let todos = computed(|| {
+        (0..store::item_count()).rev().find_map(|i| match store::item_at(i) {
+            Some(Item::Todo { lines }) => Some(lines),
+            _ => None,
+        })
+    });
+    let subs = computed(|| store::selected_id().map(|id| store::subagents(&id)).unwrap_or_default());
+    let work = computed(|| store::selected_id().map(|id| store::background(&id)).unwrap_or_default());
+    view()
+        .w_full()
+        .max_w(px(CONTENT_MAX_WIDTH))
+        .self_center()
+        .child(dynamic(move || {
+            let lines = todos.get()?;
+            let done = lines.iter().filter(|(d, _)| *d).count();
+            if lines.is_empty() || done == lines.len() {
+                return None;
+            }
+            Some(untracked(move || {
+                let next = lines.iter().find(|(d, _)| !*d).map(|(_, t)| t.clone()).unwrap_or_default();
+                card()
+                    .mb(px(S2))
+                    .px(px(S3))
+                    .py(px(S2))
+                    .flex_row()
+                    .items_center()
+                    .gap(px(S2))
+                    .child(icon(Icon::ListTodo, 15.0).text_color(ACCENT))
+                    .child(text(tf("Tasks {}/{}", &[&done.to_string(), &lines.len().to_string()])).text_size(px(TEXT_SM)).font_weight(FontWeight(500)))
+                    .child(text(next).text_size(px(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1).flex_1())
+            }))
+        }))
+        .child(dynamic(move || {
+            let list = subs.get();
+            if list.is_empty() {
+                return None;
+            }
+            Some(untracked(move || {
+                let mut c = card().mb(px(S2)).px(px(S3)).py(px(S2)).gap(px(2.0)).child(section_label(tf("Sub-agents · {}", &[&list.len().to_string()])));
+                for s in list.clone() {
+                    let status = match s.status.as_str() {
+                        "running" => Status::Running,
+                        "failed" => Status::Failed,
+                        "completed" => Status::Done,
+                        _ => Status::Idle,
+                    };
+                    let (parent, id) = (s.parent.clone(), s.id.clone());
+                    c = c.child(
+                        nsh_base::button()
+                            .on_press(move || store::open_tab(store::Tab::Subagent(parent.clone(), id.clone())))
+                            .flex_row()
+                            .items_center()
+                            .gap(px(S2))
+                            .h(px(30.0))
+                            .px(px(S1))
+                            .rounded(px(R_LG))
+                            .hover(|st| st.bg(highlight()))
+                            .child(status_dot(move || status))
+                            .child(text(s.title.clone()).text_size(px(TEXT_BASE)).number_of_lines(1).flex_shrink(1.0))
+                            .child(text(s.subtitle.clone()).text_size(px(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1).flex_1()),
+                    );
+                }
+                c
+            }))
+        }))
+        .child(dynamic(move || {
+            let list = work.get();
+            if list.is_empty() {
+                return None;
+            }
+            Some(untracked(move || {
+                let mut c = card().mb(px(S2)).px(px(S3)).py(px(S2)).gap(px(2.0)).child(section_label(t("Background")));
+                for w in list.clone() {
+                    let mut row = view()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(S2))
+                        .h(px(30.0))
+                        .child(status_dot(|| Status::Running))
+                        .child(text(w.label.clone()).text_size(px(TEXT_CODE)).font_family(|| MONO).number_of_lines(1).flex_1());
+                    if let Some(token) = w.stop_token.clone() {
+                        let item = w.id.clone();
+                        row = row.child(btn(t("Stop"), Variant::Outline, Sz::Sm, None, move || {
+                            if let Some(agent) = store::selected_id() {
+                                store::stop_background(&agent, &item, &token);
+                            }
+                        }));
+                    }
+                    c = c.child(row);
+                }
+                c
+            }))
+        }))
+}
+
+/// A sub-agent's conversation, read-only.
+pub(crate) fn subagent_pane(parent: String, id: String) -> impl IntoElement {
+    let items = {
+        let id = id.clone();
+        computed(move || store::subagent_items(&id))
+    };
+    let info = computed(move || store::subagent(&parent, &id));
+    view()
+        .flex_1()
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap(px(S2))
+                .h(px(40.0))
+                .px(px(S6))
+                .border_b_1()
+                .border_color(BORDER)
+                .child(icon(Icon::Bot, 15.0).text_color(FG_MUTED))
+                .child(text(move || info.with(|i| i.as_ref().map(|i| i.title.clone()).unwrap_or_default())).text_size(px(TEXT_BASE)).number_of_lines(1).flex_1())
+                .child(text(move || info.with(|i| i.as_ref().map(|i| i.status.clone()).unwrap_or_default())).text_size(px(TEXT_SM)).text_color(FG_MUTED)),
+        )
+        .child(dynamic(move || {
+            let list = items.get();
+            Some(untracked(move || match list.clone() {
+                None => view().flex_1().items_center().justify_center().child(text(t("Loading…")).text_color(FG_MUTED)).into_element(),
+                Some(list) => {
+                    let mut col = view().gap(px(S2)).px(px(S6)).py(px(S4)).w_full().max_w(px(CONTENT_MAX_WIDTH + 2.0 * S6)).self_center();
+                    for item in list {
+                        col = col.child(static_row(item));
+                    }
+                    scroll().flex_1().child(col).into_element()
+                }
+            }))
+        }))
+}
+
+fn static_row(item: Item) -> AnyElement {
+    match item {
+        Item::User { text: t, .. } => view()
+            .self_end()
+            .max_w(relative(0.82))
+            .px(px(14.0))
+            .py(px(9.0))
+            .rounded(px(18.0))
+            .bg(SURFACE2)
+            .child(text(t).text_size(px(TEXT_CONTENT)).line_height(px(22.0)).selectable(true))
+            .into_element(),
+        Item::Assistant { text: t } => text_view()
+            .markdown(move || Some(SharedString::from(t.clone())))
+            .selectable(true)
+            .gap_3()
+            .text_size(px(TEXT_CONTENT))
+            .line_height(px(24.0))
+            .text_color(FG)
+            .into_element(),
+        Item::Tool { name, kind, summary, .. } => view()
+            .flex_row()
+            .items_center()
+            .gap(px(S2))
+            .px(px(S2))
+            .h(px(30.0))
+            .child(icon(tool_icon(&kind, &name), 15.0).text_color(FG_MUTED))
+            .child(text(name).text_size(px(TEXT_BASE)).font_weight(FontWeight(500)))
+            .child(text(summary).text_size(px(TEXT_CODE)).font_family(|| MONO).text_color(FG_MUTED).number_of_lines(1).flex_1())
+            .into_element(),
+        Item::Reasoning { text: t } => text(t).text_size(px(13.0)).italic().number_of_lines(3).text_color(FG_MUTED).into_element(),
+        Item::Error { message } => text(message).text_size(px(TEXT_BASE)).text_color(DANGER).into_element(),
+        Item::Notice { message } => text(message).text_size(px(TEXT_SM)).text_color(FG_FAINT).into_element(),
+        Item::Todo { lines } => text(lines.iter().map(|(d, t)| format!("{} {t}", if *d { "☑" } else { "☐" })).collect::<Vec<_>>().join("\n"))
+            .text_size(px(TEXT_BASE))
+            .into_element(),
+    }
+}
+
+/// The find bar over the conversation (⌘F).
+pub(crate) fn find_bar() -> impl IntoElement {
+    let open = computed(|| store::find().open);
+    when(open, || {
+        let count = computed(|| store::find_matches().len());
+        let cur = computed(|| store::find().current);
+        view()
+            .flex_row()
+            .items_center()
+            .gap(px(S2))
+            .mx(px(S6))
+            .mb(px(S2))
+            .px(px(S2))
+            .py(px(S1))
+            .rounded(px(R_FULL))
+            .border_1()
+            .border_color(BORDER_STRONG)
+            .bg(SURFACE0)
+            .shadow_sm()
+            .child(icon(Icon::Search, 15.0).text_color(FG_MUTED).ml(px(S1)))
+            .child(
+                nsh_core::element::input()
+                    .value(|| store::find().query)
+                    .on_change(|v: &str| store::set_find_query(v))
+                    .on_submit(|_: &str| store::find_step(true))
+                    .placeholder(t("Find in conversation"))
+                    .auto_focus(true)
+                    .text_size(px(TEXT_BASE))
+                    .text_color(FG)
+                    .h(px(28.0))
+                    .flex_1(),
+            )
+            .child(
+                text(move || match count.get() {
+                    0 => String::new(),
+                    n => format!("{}/{n}", cur.get().min(n - 1) + 1),
+                })
+                .text_size(px(TEXT_SM))
+                .text_color(FG_MUTED),
+            )
+            .child(icon_btn(Icon::ChevronUp, Sz::Sm, t("Previous match"), || store::find_step(false)))
+            .child(icon_btn(Icon::ChevronDown, Sz::Sm, t("Next match"), || store::find_step(true)))
+            .child(icon_btn(Icon::X, Sz::Sm, t("Close find"), store::toggle_find))
+    })
+}

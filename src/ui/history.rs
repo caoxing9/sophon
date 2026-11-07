@@ -1,0 +1,112 @@
+//! History, as Paseo's sessions screen: every session, archived included,
+//! newest first and searchable; opening an archived one restores it.
+
+use crate::i18n::t;
+use nsh_base::button;
+use nsh_core::{
+    element::{FontWeight, Position},
+    prelude::*,
+};
+use super::kit::text;
+
+use super::kit::*;
+use crate::{daemon::Agent, store};
+
+pub(crate) fn history(compact: bool) -> impl IntoElement {
+    let state = computed(store::history);
+    let query = signal(store::history().0);
+    view()
+        .flex_1()
+        .child(
+            view()
+                .w_full()
+                .max_w(px(820.0))
+                .self_center()
+                .px(px(S6))
+                .pt(px(S8))
+                .pb(px(S4))
+                .gap(px(S4))
+                .child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(S2))
+                        .when(compact, |v| v.child(icon_btn(Icon::ArrowLeft, Sz::Sm, t("Back"), store::go_home)))
+                        .child(text(t("History")).text_size(px(TEXT_2XL)).font_weight(FontWeight(500))),
+                )
+                .child(
+                    field()
+                        .value(move || query.get())
+                        .on_change(move |v: &str| {
+                            query.set(v.to_owned());
+                            store::search_history(v);
+                        })
+                        .placeholder(t("Search agents, workspaces, branches and projects")),
+                ),
+        )
+        .child(dynamic(move || {
+            let (_, agents, loaded) = state.get();
+            Some(untracked(move || {
+                if !loaded {
+                    return view().p(px(S8)).items_center().child(text(t("Loading…")).text_color(FG_MUTED)).into_element();
+                }
+                if agents.is_empty() {
+                    return view()
+                        .p(px(S8))
+                        .items_center()
+                        .child(text(t("No sessions yet")).text_size(px(TEXT_BASE)).text_color(FG_MUTED))
+                        .into_element();
+                }
+                let count = agents.len();
+                virtual_list(move || count, move |at: Position| {
+                    let agent = computed(move || state.with(|(_, a, _)| a.get(at.index()).cloned()));
+                    session_row(agent)
+                })
+                .keys(move || state.with(|(_, a, _)| a.iter().map(|a| a.id.clone()).collect::<Vec<_>>()))
+                .estimated_item_size(px(60.0))
+                .content_padding_bottom(px(S8))
+                .flex_1()
+                .into_element()
+            }))
+        }))
+}
+
+fn session_row(agent: Memo<Option<Agent>>) -> impl IntoElement {
+    let label = move |f: fn(&Agent) -> String| move || agent.with(|a| a.as_ref().map(f).unwrap_or_default());
+    view().w_full().max_w(px(820.0)).self_center().px(px(S4)).child(
+        button()
+            .on_press(move || {
+                if let Some(a) = agent.get_untracked() {
+                    store::open_session(&a);
+                }
+            })
+            .flex_row()
+            .items_center()
+            .gap(px(S3))
+            .px(px(S3))
+            .py(px(S2))
+            .rounded(px(R_LG))
+            .hover(|s| s.bg(highlight()))
+            .child(status_dot(move || {
+                agent.with(|a| a.as_ref().map(|a| if a.archived { Status::Idle } else { Status::of_agent(&a.status, !a.pending.is_empty()) }).unwrap_or(Status::Idle))
+            }))
+            .child(
+                view()
+                    .flex_1()
+                    .gap(px(2.0))
+                    .child(text(label(|a| a.title.clone())).text_size(px(TEXT_BASE)).number_of_lines(1))
+                    .child(
+                        text(label(|a| {
+                            let date = a.updated_at.get(..10).unwrap_or_default();
+                            format!("{} · {} · {date}", a.provider, crate::daemon::model::folder_name(&a.cwd))
+                        }))
+                        .text_size(px(TEXT_SM))
+                        .text_color(FG_MUTED)
+                        .number_of_lines(1),
+                    ),
+            )
+            .child(when(move || agent.with(|a| a.as_ref().is_some_and(|a| a.archived)), || {
+                badge(t("Archived"), FG_MUTED)
+            })),
+    )
+}
