@@ -82,7 +82,7 @@ pub(crate) const R_FULL: f32 = 999.0;
 
 /// A phone or tablet: the app is a remote for a computer's agents, sized
 /// for fingers (Apple's 44 pt touch target), as Paseo's touch sizing.
-pub(crate) const MOBILE: bool = cfg!(any(target_os = "ios", target_os = "android"));
+pub(crate) const MOBILE: bool = cfg!(any(target_os = "ios", target_os = "android", target_arch = "wasm32"));
 
 // Control heights: touch values on mobile, pointer values on desktop.
 pub(crate) const CONTROL_MD: f32 = if MOBILE { 44.0 } else { 32.0 };

@@ -975,10 +975,6 @@ struct Hosts {
     current: Option<String>,
 }
 
-fn hosts_path() -> std::path::PathBuf {
-    prefs_path().with_file_name("hosts.json")
-}
-
 /// The pairing link of the daemon in use, and a QR code of it (SVG).
 #[derive(Clone, Debug, PartialEq, Default)]
 pub(crate) struct Pairing {
@@ -991,13 +987,27 @@ pub(crate) struct Pairing {
     pub(crate) error: Option<String>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+type BridgeInfo = crate::daemon::bridge::BridgeInfo;
+/// A page runs no bridge.
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct BridgeInfo {
+    addr: String,
+    key: [u8; 32],
+    token: String,
+}
+
 thread_local! {
-    static BRIDGE: RefCell<Option<crate::daemon::bridge::BridgeInfo>> = const { RefCell::new(None) };
+    static BRIDGE: RefCell<Option<BridgeInfo>> = const { RefCell::new(None) };
 }
 
 /// Starts the LAN bridge (desktops), so paired phones on this network skip
 /// the relay.
 pub(crate) fn start_bridge() {
+    #[cfg(target_arch = "wasm32")]
+    let info: Option<BridgeInfo> = None;
+    #[cfg(not(target_arch = "wasm32"))]
     let info = crate::daemon::bridge::start();
     if info.is_none() {
         log::warn!("the LAN bridge could not start; phones pair through the relay only");
@@ -1076,22 +1086,14 @@ fn save_hosts() {
         "current": h.current,
         "hosts": h.list.iter().map(|x| serde_json::json!({ "id": x.id, "name": x.name, "url": x.url, "password": x.password })).collect::<Vec<_>>(),
     });
-    let path = hosts_path();
-    let _ = path.parent().map(std::fs::create_dir_all);
-    if let Err(e) = std::fs::write(&path, json.to_string()) {
+    if let Err(e) = crate::daemon::write_file("hosts.json", &json.to_string()) {
         log::warn!("cannot save hosts: {e}");
-    }
-    // The file holds passwords: readable by this user only.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     }
 }
 
 /// Restores the saved hosts and connects to the one last used.
 pub(crate) fn load_hosts() {
-    let Ok(text) = std::fs::read_to_string(hosts_path()) else { return };
+    let Some(text) = crate::daemon::read_file("hosts.json") else { return };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return };
     let list: Vec<HostProfile> = v
         .get("hosts")
@@ -1158,9 +1160,6 @@ pub(crate) fn edit_settings(change: impl FnOnce(&mut Settings)) {
     save_prefs();
 }
 
-fn prefs_path() -> std::path::PathBuf {
-    crate::daemon::data_dir().join("settings.json")
-}
 
 /// What Sophon remembers between launches.
 fn save_prefs() {
@@ -1185,16 +1184,14 @@ fn save_prefs() {
             _ => "system",
         },
     });
-    let path = prefs_path();
-    let _ = path.parent().map(std::fs::create_dir_all);
-    if let Err(e) = std::fs::write(&path, json.to_string()) {
-        log::warn!("cannot save settings to {}: {e}", path.display());
+    if let Err(e) = crate::daemon::write_file("settings.json", &json.to_string()) {
+        log::warn!("cannot save settings: {e}");
     }
 }
 
 /// Restores what `save_prefs` wrote.
 pub(crate) fn load_prefs() {
-    let Ok(text) = std::fs::read_to_string(prefs_path()) else { return };
+    let Some(text) = crate::daemon::read_file("settings.json") else { return };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return };
     let behavior = match v.get("sendBehavior").and_then(serde_json::Value::as_str) {
         Some("interrupt") => SendBehavior::Interrupt,
