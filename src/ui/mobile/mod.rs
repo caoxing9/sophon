@@ -141,7 +141,6 @@ pub(crate) fn shell() -> impl IntoElement {
         .text_color(FG)
         .child(ambient())
         .child(modals::modal_layer())
-        .child(sheet_layer())
         .child(dynamic(move || {
             let paired = paired.get();
             Some(untracked(move || {
@@ -153,6 +152,8 @@ pub(crate) fn shell() -> impl IntoElement {
                 }
             }))
         }))
+        // Last: over the pages and their tab bar.
+        .child(sheet_layer())
 }
 
 fn stack() -> impl IntoElement {
