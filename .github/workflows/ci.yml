@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+jobs:
+  build:
+    name: Check, test and package (macOS + iOS)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Temporary files
+        run: |
+          mkdir -p "$RUNNER_TEMP/nsh-tmp"
+          echo "TMPDIR=$RUNNER_TEMP/nsh-tmp" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, aarch64-apple-ios, aarch64-apple-ios-sim
+
+      - name: NSH revision
+        id: nsh
+        run: echo "rev=$(sed -n 's/^nsh-core = .*rev = \"\([0-9a-f]*\)\".*/\1/p' Cargo.toml | head -n 1)" >> "$GITHUB_OUTPUT"
+
+      # The nsh CLI built at the pinned revision; rebuilt only when the pin moves.
+      - name: Cache nsh CLI
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/sophon-nsh
+          key: nsh-cli-${{ runner.os }}-${{ steps.nsh.outputs.rev }}
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install nsh
+        run: echo "$(scripts/install-nsh.sh)" >> "$GITHUB_PATH"
+
+      - run: nsh --version
+      - name: Check
+        run: nsh check
+      - name: Rust tests
+        run: cargo test --locked
+      - name: UI tests (headless)
+        run: nsh test App.test.tsx
+
+      - name: Package macOS
+        run: nsh package --target macos -o dist/macos
+      - name: Package iOS simulator
+        run: nsh package --target ios-simulator --icon assets/app-icon/icon-ios-1024.png -o dist/ios-simulator
+
+      - name: Archive
+        run: |
+          ditto -c -k --keepParent dist/macos/Sophon.app dist/Sophon-macos.zip
+          ditto -c -k --keepParent dist/ios-simulator/Sophon.app dist/Sophon-ios-simulator.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sophon-macos
+          path: dist/Sophon-macos.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sophon-ios-simulator
+          path: dist/Sophon-ios-simulator.zip

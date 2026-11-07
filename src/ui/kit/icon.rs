@@ -1,0 +1,195 @@
+//! Lucide icons (ISC), the set Paseo uses, drawn as native vector shapes
+//! tinted by the text color (`stroke="currentColor"`).
+
+use std::{cell::RefCell, collections::HashMap};
+
+use nsh_core::{element::{ImageSrc, Svg}, prelude::*};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[allow(dead_code)]
+pub(crate) enum Icon {
+    Activity,
+    Archive,
+    ArrowDown,
+    ArrowLeft,
+    ArrowUp,
+    AtSign,
+    Bot,
+    Brain,
+    CalendarClock,
+    Check,
+    ChevronDown,
+    ChevronLeft,
+    ChevronRight,
+    ChevronUp,
+    CircleAlert,
+    CircleArrowUp,
+    CircleCheck,
+    CircleCheckBig,
+    CircleDot,
+    CircleX,
+    Code,
+    Copy,
+    Cpu,
+    Ellipsis,
+    EllipsisVertical,
+    ExternalLink,
+    Eye,
+    EyeOff,
+    File,
+    FileDiff,
+    FileText,
+    Folder,
+    FolderOpen,
+    FolderPlus,
+    FolderTree,
+    GitBranch,
+    GitCommitHorizontal,
+    GitCompare,
+    GitMerge,
+    GitPullRequest,
+    Globe,
+    History,
+    Image,
+    Inbox,
+    Info,
+    Keyboard,
+    Layers,
+    Link2,
+    ListTodo,
+    Maximize2,
+    Mic,
+    MicOff,
+    PanelLeft,
+    PanelRight,
+    Paperclip,
+    Pencil,
+    Pin,
+    PinOff,
+    Play,
+    Plus,
+    RotateCw,
+    Search,
+    Server,
+    Settings,
+    Settings2,
+    Slash,
+    Sparkles,
+    Square,
+    SquarePen,
+    SquareTerminal,
+    Terminal,
+    Trash2,
+    TriangleAlert,
+    Undo2,
+    Upload,
+    Workflow,
+    Wrench,
+    X,
+}
+
+fn markup(icon: Icon) -> &'static str {
+    match icon {
+        Icon::Activity => include_str!("../../../assets/icons/activity.svg"),
+        Icon::Archive => include_str!("../../../assets/icons/archive.svg"),
+        Icon::ArrowDown => include_str!("../../../assets/icons/arrow-down.svg"),
+        Icon::ArrowLeft => include_str!("../../../assets/icons/arrow-left.svg"),
+        Icon::ArrowUp => include_str!("../../../assets/icons/arrow-up.svg"),
+        Icon::AtSign => include_str!("../../../assets/icons/at-sign.svg"),
+        Icon::Bot => include_str!("../../../assets/icons/bot.svg"),
+        Icon::Brain => include_str!("../../../assets/icons/brain.svg"),
+        Icon::CalendarClock => include_str!("../../../assets/icons/calendar-clock.svg"),
+        Icon::Check => include_str!("../../../assets/icons/check.svg"),
+        Icon::ChevronDown => include_str!("../../../assets/icons/chevron-down.svg"),
+        Icon::ChevronLeft => include_str!("../../../assets/icons/chevron-left.svg"),
+        Icon::ChevronRight => include_str!("../../../assets/icons/chevron-right.svg"),
+        Icon::ChevronUp => include_str!("../../../assets/icons/chevron-up.svg"),
+        Icon::CircleAlert => include_str!("../../../assets/icons/circle-alert.svg"),
+        Icon::CircleArrowUp => include_str!("../../../assets/icons/circle-arrow-up.svg"),
+        Icon::CircleCheck => include_str!("../../../assets/icons/circle-check.svg"),
+        Icon::CircleCheckBig => include_str!("../../../assets/icons/circle-check-big.svg"),
+        Icon::CircleDot => include_str!("../../../assets/icons/circle-dot.svg"),
+        Icon::CircleX => include_str!("../../../assets/icons/circle-x.svg"),
+        Icon::Code => include_str!("../../../assets/icons/code.svg"),
+        Icon::Copy => include_str!("../../../assets/icons/copy.svg"),
+        Icon::Cpu => include_str!("../../../assets/icons/cpu.svg"),
+        Icon::Ellipsis => include_str!("../../../assets/icons/ellipsis.svg"),
+        Icon::EllipsisVertical => include_str!("../../../assets/icons/ellipsis-vertical.svg"),
+        Icon::ExternalLink => include_str!("../../../assets/icons/external-link.svg"),
+        Icon::Eye => include_str!("../../../assets/icons/eye.svg"),
+        Icon::EyeOff => include_str!("../../../assets/icons/eye-off.svg"),
+        Icon::File => include_str!("../../../assets/icons/file.svg"),
+        Icon::FileDiff => include_str!("../../../assets/icons/file-diff.svg"),
+        Icon::FileText => include_str!("../../../assets/icons/file-text.svg"),
+        Icon::Folder => include_str!("../../../assets/icons/folder.svg"),
+        Icon::FolderOpen => include_str!("../../../assets/icons/folder-open.svg"),
+        Icon::FolderPlus => include_str!("../../../assets/icons/folder-plus.svg"),
+        Icon::FolderTree => include_str!("../../../assets/icons/folder-tree.svg"),
+        Icon::GitBranch => include_str!("../../../assets/icons/git-branch.svg"),
+        Icon::GitCommitHorizontal => include_str!("../../../assets/icons/git-commit-horizontal.svg"),
+        Icon::GitCompare => include_str!("../../../assets/icons/git-compare.svg"),
+        Icon::GitMerge => include_str!("../../../assets/icons/git-merge.svg"),
+        Icon::GitPullRequest => include_str!("../../../assets/icons/git-pull-request.svg"),
+        Icon::Globe => include_str!("../../../assets/icons/globe.svg"),
+        Icon::History => include_str!("../../../assets/icons/history.svg"),
+        Icon::Image => include_str!("../../../assets/icons/image.svg"),
+        Icon::Inbox => include_str!("../../../assets/icons/inbox.svg"),
+        Icon::Info => include_str!("../../../assets/icons/info.svg"),
+        Icon::Keyboard => include_str!("../../../assets/icons/keyboard.svg"),
+        Icon::Layers => include_str!("../../../assets/icons/layers.svg"),
+        Icon::Link2 => include_str!("../../../assets/icons/link-2.svg"),
+        Icon::ListTodo => include_str!("../../../assets/icons/list-todo.svg"),
+        Icon::Maximize2 => include_str!("../../../assets/icons/maximize-2.svg"),
+        Icon::Mic => include_str!("../../../assets/icons/mic.svg"),
+        Icon::MicOff => include_str!("../../../assets/icons/mic-off.svg"),
+        Icon::PanelLeft => include_str!("../../../assets/icons/panel-left.svg"),
+        Icon::PanelRight => include_str!("../../../assets/icons/panel-right.svg"),
+        Icon::Paperclip => include_str!("../../../assets/icons/paperclip.svg"),
+        Icon::Pencil => include_str!("../../../assets/icons/pencil.svg"),
+        Icon::Pin => include_str!("../../../assets/icons/pin.svg"),
+        Icon::PinOff => include_str!("../../../assets/icons/pin-off.svg"),
+        Icon::Play => include_str!("../../../assets/icons/play.svg"),
+        Icon::Plus => include_str!("../../../assets/icons/plus.svg"),
+        Icon::RotateCw => include_str!("../../../assets/icons/rotate-cw.svg"),
+        Icon::Search => include_str!("../../../assets/icons/search.svg"),
+        Icon::Server => include_str!("../../../assets/icons/server.svg"),
+        Icon::Settings => include_str!("../../../assets/icons/settings.svg"),
+        Icon::Settings2 => include_str!("../../../assets/icons/settings-2.svg"),
+        Icon::Slash => include_str!("../../../assets/icons/slash.svg"),
+        Icon::Sparkles => include_str!("../../../assets/icons/sparkles.svg"),
+        Icon::Square => include_str!("../../../assets/icons/square.svg"),
+        Icon::SquarePen => include_str!("../../../assets/icons/square-pen.svg"),
+        Icon::SquareTerminal => include_str!("../../../assets/icons/square-terminal.svg"),
+        Icon::Terminal => include_str!("../../../assets/icons/terminal.svg"),
+        Icon::Trash2 => include_str!("../../../assets/icons/trash-2.svg"),
+        Icon::TriangleAlert => include_str!("../../../assets/icons/triangle-alert.svg"),
+        Icon::Undo2 => include_str!("../../../assets/icons/undo-2.svg"),
+        Icon::Upload => include_str!("../../../assets/icons/upload.svg"),
+        Icon::Workflow => include_str!("../../../assets/icons/workflow.svg"),
+        Icon::Wrench => include_str!("../../../assets/icons/wrench.svg"),
+        Icon::X => include_str!("../../../assets/icons/x.svg"),
+    }
+}
+
+thread_local! {
+    static SOURCES: RefCell<HashMap<Icon, ImageSrc>> = RefCell::new(HashMap::new());
+}
+
+/// The icon's source, its stroke thinned to Paseo's 1.5 (made once).
+fn source(icon: Icon) -> ImageSrc {
+    SOURCES.with_borrow_mut(|cache| {
+        cache
+            .entry(icon)
+            .or_insert_with(|| {
+                let svg = markup(icon);
+                let svg = svg.split_once("<svg").map(|(_, rest)| format!("<svg{rest}")).unwrap_or_else(|| svg.to_owned());
+                ImageSrc::svg_markup(&svg.replace("stroke-width=\"2\"", "stroke-width=\"1.5\""))
+            })
+            .clone()
+    })
+}
+
+/// An icon `size` points square, in the current text color unless tinted.
+pub(crate) fn icon(icon: Icon, size: f32) -> Svg {
+    svg(move || source(icon)).w(px(size)).h(px(size)).flex_shrink_0()
+}

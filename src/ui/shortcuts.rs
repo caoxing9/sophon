@@ -1,0 +1,139 @@
+//! Desktop keyboard shortcuts and the command palette (⌘K), as Paseo's.
+
+use crate::i18n::t;
+use nsh_base::{CommandEntry, CommandItem, command};
+use nsh_core::prelude::*;
+use super::kit::text;
+
+use super::kit::*;
+use crate::store::{self, ExplorerTab, Modal, Screen, Tab};
+
+/// Binds the app's shortcuts for as long as the shell lives.
+pub(crate) fn bind() {
+    on_key("mod+k", |_| store::open_modal(Modal::Palette));
+    on_key("mod+n", |_| store::open_new_workspace(None));
+    on_key("mod+t", |_| {
+        if matches!(store::screen(), Screen::Workspace(_)) {
+            store::open_tab(Tab::Draft);
+        }
+    });
+    on_key("shift+mod+t", |_| store::new_terminal());
+    on_key("mod+s", |_| store::save_current_file());
+    on_key("mod+f", |_| {
+        if store::selected_agent().is_some() {
+            store::toggle_find();
+        }
+    });
+    on_key("mod+b", |_| store::toggle_sidebar());
+    on_key("mod+e", |_| store::toggle_explorer());
+    on_key("mod+,", |_| store::open_settings());
+    for n in 1..=9usize {
+        on_key(&format!("mod+{n}"), move |_| {
+            if let Some(tab) = store::tab_list().get(n - 1).cloned() {
+                store::open_tab(tab);
+            }
+        });
+    }
+}
+
+/// What the palette lists: actions, then workspaces and the open
+/// workspace's agents.
+fn items() -> Vec<CommandItem> {
+    let mut items = vec![
+        CommandItem::new("new-workspace", t("New workspace")).group(t("Actions")).shortcut("mod+n"),
+        CommandItem::new("settings", t("Settings")).group(t("Actions")).shortcut("mod+,"),
+        CommandItem::new("history", t("History")).group(t("Actions")).keywords(["sessions", "archive"]),
+        CommandItem::new("schedules", t("Schedules")).group(t("Actions")).keywords(["cron", "automation"]),
+        CommandItem::new("usage", t("Usage")).group(t("Actions")).keywords(["limits", "quota", "cost"]),
+        CommandItem::new("import", t("Import a session")).group(t("Actions")).keywords(["claude", "codex", "resume"]),
+        CommandItem::new("toggle-sidebar", t("Toggle sidebar")).group(t("Actions")).shortcut("mod+b"),
+    ];
+    if store::current_workspace().is_some() {
+        items.push(CommandItem::new("new-agent", t("New agent")).group(t("Actions")).shortcut("mod+t"));
+        items.push(CommandItem::new("new-terminal", t("New terminal")).group(t("Actions")).shortcut("shift+mod+t"));
+        items.push(CommandItem::new("toggle-explorer", t("Toggle explorer")).group(t("Actions")).shortcut("mod+e"));
+        items.push(CommandItem::new("changes", t("Show changes")).group(t("Actions")).keywords(["diff", "git"]));
+        items.push(CommandItem::new("files", t("Show files")).group(t("Actions")).keywords(["tree", "explorer"]));
+        items.push(CommandItem::new("commit", t("Commit all changes")).group(t("Git")).keywords(["git"]));
+        for a in store::current_workspace().map(|w| store::workspace_agents(&w.id)).unwrap_or_default() {
+            items.push(CommandItem::new(format!("agent:{}", a.id), a.title.clone()).group(t("Agents")).keywords([a.provider]));
+        }
+    }
+    for r in store::rows() {
+        if let store::Row::Workspace(w) = r {
+            items.push(
+                CommandItem::new(format!("ws:{}", w.id), w.name.clone()).group(t("Workspaces")).keywords([w.project_name]),
+            );
+        }
+    }
+    items
+}
+
+fn run(id: &str) {
+    store::close_modal();
+    match id {
+        "new-workspace" => store::open_new_workspace(None),
+        "settings" => store::open_settings(),
+        "history" => store::open_history(),
+        "schedules" => store::open_schedules(),
+        "usage" => store::open_usage(),
+        "import" => {
+            store::search_sessions("");
+            store::open_modal(Modal::ImportSession);
+        }
+        "toggle-sidebar" => store::toggle_sidebar(),
+        "new-agent" => store::open_tab(Tab::Draft),
+        "new-terminal" => store::new_terminal(),
+        "toggle-explorer" => store::toggle_explorer(),
+        "changes" => store::set_explorer_tab(ExplorerTab::Changes),
+        "files" => store::set_explorer_tab(ExplorerTab::Files),
+        "commit" => store::open_modal(Modal::Commit),
+        _ => {
+            if let Some(ws) = id.strip_prefix("ws:") {
+                store::open_workspace(ws);
+            } else if let Some(agent) = id.strip_prefix("agent:") {
+                store::open_tab(Tab::Agent(agent.to_owned()));
+            }
+        }
+    }
+}
+
+pub(crate) fn palette() -> impl IntoElement {
+    glass_strong(view())
+        .w(px(560.0))
+        .max_w(relative(0.92))
+        .rounded(px(22.0))
+        .overflow_hidden()
+        .child(
+            command()
+                .items(items())
+                .placeholder(t("Search workspaces, agents and actions…"))
+                .accessibility_label(t("Command palette"))
+                .auto_focus(true)
+                .on_select(|id: &SharedString| run(id))
+                .empty(view().p(px(S4)).child(text(t("No results")).text_size(px(TEXT_BASE)).text_color(FG_MUTED)))
+                .h(px(420.0))
+                .search_prefix(icon(Icon::Search, 17.0).text_color(FG_MUTED))
+                .search_bar_class("flex-row items-center gap-3 px-4 h-14 border-b border-border")
+                .search_class("flex-1 text-base text-foreground")
+                .group_class("px-4 pt-3 pb-1 text-xs font-medium text-muted-foreground")
+                .item_class("mx-2 rounded-lg focus:bg-accent hover:bg-accent")
+                .list_class("pb-2")
+                .separator(false)
+                .on_cancel(store::close_modal)
+                .render_item(|entry: &CommandEntry| {
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(S2))
+                        .h(px(CONTROL_MD + 4.0))
+                        .px(px(S3))
+                        .child(text(entry.label.clone()).text_size(px(TEXT_BASE)).text_color(FG).number_of_lines(1).flex_1())
+                        .child(
+                            text(entry.shortcut_label.clone().unwrap_or_default())
+                                .text_size(px(TEXT_SM))
+                                .text_color(FG_FAINT),
+                        )
+                }),
+        )
+}

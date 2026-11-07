@@ -1,0 +1,5 @@
+{
+  "extends": "./.nsh/tsconfig.json",
+  "include": ["**/*.ts", "**/*.tsx"],
+  "exclude": ["ref", "target", ".nsh/out", "node_modules"]
+}
