@@ -2,9 +2,9 @@
 
 use crate::i18n::t;
 use nsh_core::{element::FontWeight, prelude::*};
-use super::kit::text;
+use crate::ui::kit::text;
 
-use super::kit::*;
+use crate::ui::kit::*;
 use crate::{daemon::connection::Schedule, store};
 
 pub(crate) fn schedules(compact: bool) -> impl IntoElement {

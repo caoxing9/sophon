@@ -4,11 +4,11 @@
 
 use crate::i18n::{t, tf};
 use nsh_core::{element::FontWeight, file_dialog::OpenDialog, prelude::*};
-use super::kit::text;
+use crate::ui::kit::text;
 
-use super::{
-    composer::{self, Target},
+use crate::ui::{
     kit::*,
+    shared::composer::{self, Target},
 };
 use crate::store;
 

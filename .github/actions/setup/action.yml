@@ -1,0 +1,35 @@
+name: Set up Sophon's build
+description: Rust, the cached nsh CLI of the pinned NSH revision, and a Cargo cache of the job's own.
+inputs:
+  rev:
+    description: The NSH revision (the nsh job's output), keying the CLI's cache.
+    required: true
+  cache-key:
+    description: Keeps each job's Cargo cache apart (they build different things).
+    required: true
+  targets:
+    description: Extra Rust targets.
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Temporary files
+      shell: bash
+      run: |
+        mkdir -p "$RUNNER_TEMP/nsh-tmp"
+        echo "TMPDIR=$RUNNER_TEMP/nsh-tmp" >> "$GITHUB_ENV"
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: aarch64-apple-darwin${{ inputs.targets != '' && format(', {0}', inputs.targets) || '' }}
+    - uses: actions/cache/restore@v4
+      with:
+        path: ~/.cache/sophon-nsh
+        key: nsh-cli-${{ runner.os }}-${{ inputs.rev }}
+        fail-on-cache-miss: true
+    - uses: Swatinem/rust-cache@v2
+      with:
+        key: ${{ inputs.cache-key }}
+    - name: nsh on PATH
+      shell: bash
+      run: echo "$(scripts/install-nsh.sh)" >> "$GITHUB_PATH"

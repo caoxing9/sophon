@@ -1,0 +1,33 @@
+//! The phone's settings tab: how it looks and sends, and the computer it
+//! follows. The computer's own settings are the desktop's.
+
+use crate::i18n::t;
+use nsh_core::prelude::*;
+
+use crate::store;
+use crate::ui::kit::*;
+use crate::ui::shared::settings::*;
+
+pub(crate) fn settings() -> impl IntoElement {
+    view()
+        .flex_1()
+        .child(page(
+            true,
+            view()
+                .child(section(t("Appearance"), appearance_card()))
+                .child(section(t("Sending"), sending_card()))
+                .child(section(
+                    t("Computer"),
+                    host_card().child(row(
+                        t("Forget this computer"),
+                        t("Pair it again from its QR code"),
+                        btn(t("Forget"), Variant::Outline, Sz::Sm, Some(Icon::Trash2), || {
+                            if let Some(h) = store::current_host() {
+                                store::remove_host(&h.id);
+                            }
+                        }),
+                        false,
+                    )),
+                )),
+        ))
+}

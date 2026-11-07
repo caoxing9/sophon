@@ -7,9 +7,9 @@ use nsh_core::{
     element::{FontWeight, View},
     prelude::*,
 };
-use super::kit::text;
+use crate::ui::kit::text;
 
-use super::kit::*;
+use crate::ui::kit::*;
 use crate::store::{self, Modal};
 
 pub(crate) fn modal_layer() -> impl IntoElement {
@@ -29,7 +29,7 @@ pub(crate) fn modal_layer() -> impl IntoElement {
                         let m = store::modal()?;
                         Some(untracked(move || {
                             if m == Modal::Palette {
-                                view().self_stretch().items_center().pt(relative(0.12)).flex_1().child(super::shortcuts::palette())
+                                view().self_stretch().items_center().pt(relative(0.12)).flex_1().child(crate::ui::desktop::shortcuts::palette())
                             } else {
                                 body(m.clone())
                             }

@@ -1,90 +1,91 @@
-//! Settings, in Paseo's shape: a centered 720 pt column of sections, each a
-//! label over a card of rows; controls sit in the rows' trailing slot.
+//! Settings sections, in Paseo's shape: each a label over a card of rows,
+//! controls in the rows' trailing slot. The desktop and the phone each
+//! assemble their page from them.
 
 use crate::i18n::{Lang, t, tf};
 use nsh_core::{
     element::{FontWeight, View},
     prelude::*,
 };
-use super::kit::text;
+use crate::ui::kit::text;
 
-use super::kit::*;
+use crate::ui::kit::*;
 use crate::store::{self, Conn, SendBehavior};
 
-pub(crate) fn settings(compact: bool) -> impl IntoElement {
+/// Theme and language.
+pub(crate) fn appearance_card() -> View {
+    card()
+        .child(row(
+            t("Theme"),
+            t("Light, dark, or as the system is set"),
+            segmented(
+                vec![
+                    (nsh_core::platform::Appearance::System, t("System").into()),
+                    (nsh_core::platform::Appearance::Light, t("Light").into()),
+                    (nsh_core::platform::Appearance::Dark, t("Dark").into()),
+                ],
+                store::appearance,
+                store::set_appearance,
+            ),
+            true,
+        ))
+        .child(row(
+            t("Language"),
+            t("The language of Sophon's interface"),
+            segmented(
+                vec![(Lang::Auto, t("System").into()), (Lang::En, "English".into()), (Lang::Zh, "中文".into())],
+                crate::i18n::lang,
+                store::set_language,
+            ),
+            false,
+        ))
+}
+
+/// What Return does while an agent runs.
+pub(crate) fn sending_card() -> View {
+    card().child(row(
+        t("While an agent is running"),
+        t("What Return does with your message"),
+        segmented(
+            vec![
+                (SendBehavior::Steer, t("Steer").into()),
+                (SendBehavior::Interrupt, t("Interrupt").into()),
+                (SendBehavior::Queue, t("Queue").into()),
+            ],
+            || store::settings().send_behavior,
+            |b| store::edit_settings(|s| s.send_behavior = b),
+        ),
+        true,
+    ))
+}
+
+/// The settings page frame: a centered column under the title.
+pub(crate) fn page(compact: bool, sections: View) -> impl IntoElement {
     scroll().flex_1().child(
         view()
             .w_full()
             .max_w(px(720.0))
             .self_center()
-            .px(px(S6))
-            .py(px(S8))
-            .gap(px(S8))
+            .px(px(if compact { S4 } else { S6 }))
+            .py(px(if compact { S4 } else { S8 }))
+            .gap(px(if compact { S6 } else { S8 }))
             .child(
                 view()
                     .flex_row()
                     .items_center()
                     .gap(px(S2))
-                    .when(compact, |v| v.child(icon_btn(Icon::ArrowLeft, Sz::Sm, t("Back"), store::go_home)))
                     .child(text(t("Settings")).text_size(px(TEXT_2XL)).font_weight(FontWeight(500))),
             )
-            .child(section(
-                t("Appearance"),
-                card()
-                .child(row(
-                    t("Theme"),
-                    t("Light, dark, or as the system is set"),
-                    segmented(
-                        vec![
-                            (nsh_core::platform::Appearance::System, t("System").into()),
-                            (nsh_core::platform::Appearance::Light, t("Light").into()),
-                            (nsh_core::platform::Appearance::Dark, t("Dark").into()),
-                        ],
-                        store::appearance,
-                        store::set_appearance,
-                    ),
-                    true,
-                ))
-                .child(row(
-                    t("Language"),
-                    t("The language of Sophon's interface"),
-                    segmented(
-                        vec![(Lang::Auto, t("System").into()), (Lang::En, "English".into()), (Lang::Zh, "中文".into())],
-                        crate::i18n::lang,
-                        store::set_language,
-                    ),
-                    false,
-                )),
-            ))
-            .child(section(
-                t("Sending"),
-                card().child(row(
-                    t("While an agent is running"),
-                    t("What Return does with your message"),
-                    segmented(
-                        vec![
-                            (SendBehavior::Steer, t("Steer").into()),
-                            (SendBehavior::Interrupt, t("Interrupt").into()),
-                            (SendBehavior::Queue, t("Queue").into()),
-                        ],
-                        || store::settings().send_behavior,
-                        |b| store::edit_settings(|s| s.send_behavior = b),
-                    ),
-                    true,
-                )),
-            ))
-            .child(section(t("Host"), host_card()))
-            .child(section(t("Host behavior"), behavior_card()))
-            .child(section(t("Providers"), providers_card())),
+            .child(sections.gap(px(if compact { S6 } else { S8 }))),
     )
 }
 
-fn section(title: &'static str, body: impl IntoElement) -> View {
+pub(crate) fn section(title: &'static str, body: impl IntoElement) -> View {
     view().gap(px(S3)).child(section_label(title)).child(body)
 }
 
 /// A settings row: title and hint on the leading rail, the control trailing.
-fn row(title: impl IntoReactive<SharedString>, hint: impl IntoReactive<SharedString>, control: impl IntoElement, first: bool) -> View {
+pub(crate) fn row(title: impl IntoReactive<SharedString>, hint: impl IntoReactive<SharedString>, control: impl IntoElement, first: bool) -> View {
     view()
         .flex_row()
         .items_center()
@@ -102,7 +103,7 @@ fn row(title: impl IntoReactive<SharedString>, hint: impl IntoReactive<SharedStr
         .child(control)
 }
 
-fn host_card() -> impl IntoElement {
+pub(crate) fn host_card() -> View {
     let conn = computed(store::conn);
     let field = move |f: fn(&Conn) -> String| move || conn.with(f);
     card()
@@ -136,21 +137,9 @@ fn host_card() -> impl IntoElement {
             .text_color(FG_MUTED),
             false,
         ))
-        .child(row(
-            t("Pair a device"),
-            t("Reach this host from your phone through the encrypted relay"),
-            btn(t("Pair…"), Variant::Outline, Sz::Sm, Some(Icon::Link2), store::open_pairing),
-            false,
-        ))
-        .child(row(
-            t("Update service"),
-            t("Installs the latest service release; Sophon reconnects on its own"),
-            btn(t("Update"), Variant::Outline, Sz::Sm, Some(Icon::ArrowDown), store::update_daemon),
-            false,
-        ))
 }
 
-fn providers_card() -> impl IntoElement {
+pub(crate) fn providers_card() -> impl IntoElement {
     let providers = computed(store::providers);
     card().child(dynamic(move || {
         let list = providers.get();
@@ -205,7 +194,7 @@ fn flag(pointer: &'static str, default: bool) -> impl IntoElement {
     )
 }
 
-fn behavior_card() -> impl IntoElement {
+pub(crate) fn behavior_card() -> impl IntoElement {
     let prompt = signal(String::new());
     let loaded = computed(|| store::daemon_config().is_some());
     effect(move || {

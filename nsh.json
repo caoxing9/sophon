@@ -12,5 +12,11 @@
   ],
   "updater": {
     "github": "caoxing9/sophon"
+  },
+  "ios": {
+    "infoPlist": {
+      "NSCameraUsageDescription": "Sophon uses the camera to scan the pairing QR code your computer shows.",
+      "NSLocalNetworkUsageDescription": "Sophon connects to the computer your agents run on over the local network."
+    }
   }
 }

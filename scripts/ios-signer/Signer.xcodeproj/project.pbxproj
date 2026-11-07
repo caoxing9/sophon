@@ -1,0 +1,26 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+		A0000001 /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000002; };
+		A0000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
+		A0000003 = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Signer.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A0000004 = {isa = PBXGroup; children = (A0000005, A0000006); sourceTree = "<group>"; };
+		A0000005 = {isa = PBXGroup; children = (A0000002); path = Signer; sourceTree = "<group>"; };
+		A0000006 = {isa = PBXGroup; children = (A0000003); name = Products; sourceTree = "<group>"; };
+		A0000007 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A0000001); runOnlyForDeploymentPostprocessing = 0; };
+		A0000008 = {isa = PBXNativeTarget; buildConfigurationList = A000000B; buildPhases = (A0000007); buildRules = (); dependencies = (); name = Signer; productName = Signer; productReference = A0000003; productType = "com.apple.product-type.application"; };
+		A0000009 = {isa = PBXProject; attributes = {LastUpgradeCheck = 1600; TargetAttributes = {A0000008 = {CreatedOnToolsVersion = 16.0;};};}; buildConfigurationList = A000000C; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = A0000004; productRefGroup = A0000006; projectDirPath = ""; projectRoot = ""; targets = (A0000008); };
+		A000000D = {isa = XCBuildConfiguration; buildSettings = {
+			PRODUCT_BUNDLE_IDENTIFIER = dev.sophon.app; PRODUCT_NAME = "$(TARGET_NAME)"; INFOPLIST_KEY_CFBundleDisplayName = Sophon; GENERATE_INFOPLIST_FILE = YES;
+			SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 17.0; TARGETED_DEVICE_FAMILY = "1,2"; SWIFT_VERSION = 5.0;
+			CODE_SIGN_STYLE = Automatic; CODE_SIGN_IDENTITY = "Apple Development"; INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+		}; name = Debug; };
+		A000000E = {isa = XCBuildConfiguration; buildSettings = {SDKROOT = iphoneos;}; name = Debug; };
+		A000000B = {isa = XCConfigurationList; buildConfigurations = (A000000D); defaultConfigurationName = Debug; };
+		A000000C = {isa = XCConfigurationList; buildConfigurations = (A000000E); defaultConfigurationName = Debug; };
+	};
+	rootObject = A0000009;
+}

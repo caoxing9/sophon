@@ -1981,6 +1981,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "nsh-platform-ios"
+version = "0.4.0"
+source = "git+https://github.com/longbridge/nsh?rev=7571948ee4ad05fbc0b08d774e6afc63e039773d#7571948ee4ad05fbc0b08d774e6afc63e039773d"
+dependencies = [
+ "block2",
+ "dispatch2",
+ "libc",
+ "log",
+ "nsh-base",
+ "nsh-core",
+ "nsh-engine",
+ "nsh-platform-apple",
+ "objc2",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-core-text",
+ "objc2-foundation",
+ "objc2-image-io",
+ "objc2-quartz-core",
+ "objc2-ui-kit",
+ "rustc-hash",
+ "serde_json",
+]
+
+[[package]]
 name = "nsh-platform-linux"
 version = "0.4.0"
 source = "git+https://github.com/longbridge/nsh?rev=7571948ee4ad05fbc0b08d774e6afc63e039773d#7571948ee4ad05fbc0b08d774e6afc63e039773d"
@@ -3065,10 +3090,14 @@ dependencies = [
  "log",
  "nsh-base",
  "nsh-core",
+ "nsh-platform-ios",
  "nsh-platform-linux",
  "nsh-platform-macos",
  "nsh-platform-windows",
  "nsh-updater",
+ "objc2",
+ "objc2-foundation",
+ "objc2-ui-kit",
  "qrcode",
  "serde_json",
  "snow",

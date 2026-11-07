@@ -4,13 +4,12 @@
 use crate::i18n::{t, tf};
 use nsh_base::button;
 use nsh_core::{element::FontWeight, prelude::*};
-use super::kit::text;
+use crate::ui::kit::text;
 
-use super::{
-    composer::{self, Target},
-    explorer, file_pane,
+use super::{explorer, file_pane, terminal};
+use crate::ui::{
     kit::*,
-    terminal, timeline,
+    shared::{agent, timeline},
 };
 use crate::store::{self, Tab};
 
@@ -48,8 +47,8 @@ pub(crate) fn workspace(compact: bool) -> impl IntoElement {
                     view().flex_1().min_w(px(0.0)).child(tabs()).child(dynamic(move || {
                         let pane = pane.get();
                         Some(untracked(move || match pane.clone() {
-                            Pane::Draft => draft_pane().into_element(),
-                            Pane::Agent => agent_pane().into_element(),
+                            Pane::Draft => agent::draft_pane().into_element(),
+                            Pane::Agent => agent::agent_pane(true).into_element(),
                             Pane::Diff(p) => explorer::diff_pane(p).into_element(),
                             Pane::Terminal(id) => terminal::terminal_pane(id).into_element(),
                             Pane::File(p) => file_pane::file_pane(p).into_element(),
@@ -328,148 +327,6 @@ fn agent_tab(id: String) -> impl IntoElement {
                         .number_of_lines(1)
                         .flex_shrink(1.0),
                 )
-        }))
-    }))
-}
-
-fn agent_pane() -> impl IntoElement {
-    let agent = computed(store::selected_agent);
-    // The composer floats over the conversation, which scrolls under the
-    // glass.
-    view()
-        .flex_1()
-        .child(agent_bar(agent))
-        .child(timeline::find_bar())
-        .child(timeline::timeline())
-        .child(
-            view()
-                .absolute()
-                .left(px(0.0))
-                .right(px(0.0))
-                .bottom(px(0.0))
-                .px(px(S6))
-                .pb(px(S4))
-                .child(timeline::tracks())
-                .child(timeline::permissions())
-                .child(composer::composer(Target::Agent, t("Message the agent…"))),
-        )
-}
-
-/// A thin bar over the conversation: the agent's provider and actions.
-fn agent_bar(agent: Memo<Option<crate::daemon::Agent>>) -> impl IntoElement {
-    let label = computed(move || {
-        agent.with(|a| {
-            a.as_ref()
-                .map(|a| {
-                    let provider = store::provider(&a.provider).map(|p| p.label).unwrap_or_else(|| a.provider.clone());
-                    format!("{provider} · {}", Status::of_agent(&a.status, !a.pending.is_empty()).label())
-                })
-                .unwrap_or_default()
-        })
-    });
-    view()
-        .flex_row()
-        .items_center()
-        .gap(px(S2))
-        .h(px(36.0))
-        .px(px(S6))
-        .child(text(move || label.get()).text_size(px(TEXT_SM)).text_color(FG_FAINT))
-        .child(composer::context_meter())
-        .child(view().flex_1())
-        .child(
-            dropup_or_down_outline(),
-        )
-        .child(icon_btn(Icon::Search, Sz::Sm, t("Find in conversation"), store::toggle_find))
-        .child(
-            dropdown(
-                view()
-                    .w(px(26.0))
-                    .h(px(26.0))
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(R_FULL))
-                    .hover(|s| s.bg(highlight()))
-                    .child(icon(Icon::Ellipsis, 16.0).text_color(FG_MUTED)),
-            )
-            .align(nsh_core::overlay::Align::End)
-            .child(dynamic(move || {
-                let a = agent.get()?;
-                Some(untracked(move || {
-                    let (stop, archive, rename) = (a.is_running(), a.id.clone(), a.id.clone());
-                    let title = a.title.clone();
-                    let mut menu = view()
-                        .child(menu_row(t("Fork into new agent"), Some(Icon::GitCompare), None, false, store::fork_selected))
-                        .child(menu_row(t("Rename"), Some(Icon::Pencil), None, false, move || {
-                        store::open_modal(store::Modal::RenameAgent { id: rename.clone(), name: title.clone() })
-                    }));
-                    if stop {
-                        menu = menu.child(menu_row(t("Stop"), Some(Icon::Square), None, false, store::stop_selected));
-                    }
-                    menu.child(menu_row_danger(t("Archive agent"), Icon::Archive, move || store::archive_agent(&archive)))
-                        .into_element()
-                }))
-            })),
-        )
-}
-
-/// A new agent in this workspace.
-fn draft_pane() -> impl IntoElement {
-    let form = computed(store::form);
-    view()
-        .flex_1()
-        .justify_center()
-        .px(px(S6))
-        .pb(px(S8))
-        .gap(px(S3))
-        .child(
-            view()
-                .w_full()
-                .max_w(px(CONTENT_MAX_WIDTH))
-                .self_center()
-                .px(px(S2))
-                .child(text(t("New agent")).text_size(px(TEXT_2XL)).font_weight(FontWeight(500))),
-        )
-        .child(composer::composer(Target::Form, t("What should the agent do?")))
-        .child(composer::hint(move || {
-            form.with(|f| {
-                f.error.clone().map(|e| (e, true)).or_else(|| {
-                    if f.busy {
-                        Some((t("Starting…").into(), false))
-                    } else if let Some((_, from)) = &f.context {
-                        Some((tf("Continues from “{}” · runs in {}", &[&from, &f.path]), false))
-                    } else {
-                        Some((tf("Runs in {}", &[&f.path]), false))
-                    }
-                })
-            })
-        }))
-}
-
-/// The outline: the conversation's prompts, to jump to.
-fn dropup_or_down_outline() -> impl IntoElement {
-    dropdown(
-        view()
-            .w(px(CONTROL_SM))
-            .h(px(CONTROL_SM))
-            .items_center()
-            .justify_center()
-            .rounded(px(R_FULL))
-            .hover(|s| s.bg(highlight()))
-            .label(t("Outline"))
-            .child(icon(Icon::ListTodo, 15.0).text_color(FG_MUTED)),
-    )
-    .align(nsh_core::overlay::Align::End)
-    .child(dynamic(|| {
-        let prompts = store::prompts();
-        Some(untracked(move || {
-            let mut list = view().child(menu_heading(t("Your messages")));
-            if prompts.is_empty() {
-                list = list.child(menu_row(t("No messages yet"), None, None, false, || {}).disabled(true));
-            }
-            for (row, text) in prompts.clone() {
-                list = list.child(menu_row(text, None, None, false, move || store::scroll_timeline_to(row)));
-            }
-            menu_scroll(380.0, list).into_element()
         }))
     }))
 }

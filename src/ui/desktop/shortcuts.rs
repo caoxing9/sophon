@@ -3,9 +3,9 @@
 use crate::i18n::t;
 use nsh_base::{CommandEntry, CommandItem, command};
 use nsh_core::prelude::*;
-use super::kit::text;
+use crate::ui::kit::text;
 
-use super::kit::*;
+use crate::ui::kit::*;
 use crate::store::{self, ExplorerTab, Modal, Screen, Tab};
 
 /// Binds the app's shortcuts for as long as the shell lives.

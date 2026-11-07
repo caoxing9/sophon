@@ -6,9 +6,9 @@
 use crate::i18n::{t, tf};
 use nsh_base::{button, input};
 use nsh_core::{element::FontWeight, prelude::*};
-use super::kit::text;
+use crate::ui::kit::text;
 
-use super::kit::*;
+use crate::ui::kit::*;
 use crate::store::{self, Control};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -17,7 +17,7 @@ pub(crate) enum Target {
     Form,
 }
 
-pub(crate) fn composer(target: Target, placeholder: &'static str) -> impl IntoElement {
+pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement {
     let live = target == Target::Agent;
     // The text: the agent's kept draft, or the form's prompt.
     let text_value = computed(move || match target {
@@ -46,6 +46,90 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> impl IntoEl
     let busy = computed(move || !live && store::form().busy);
     let empty = computed(move || text_value.with(|t| t.trim().is_empty()) && store::pending_images().is_empty());
     let height = signal(22.0_f32);
+
+    if MOBILE {
+        // One glass card, as Lody's: the text on top, a bar under it with
+        // "+" (attachments), the agent's settings as one chip (model,
+        // thinking, mode; pressed, their sheets) and the send disc. Plain
+        // buttons inside: the glass is the card's alone.
+        let settings = computed(move || settings_summary(live));
+        return view()
+            .w_full()
+            .child(queue_track(live))
+            .child(image_tray())
+            .child(suggest_panel(target, text_value, set_text))
+            .child(
+                liquid_glass(view())
+                    .rounded(px(24.0))
+                    .px(px(S3))
+                    .pt(px(S3))
+                    .pb(px(S2))
+                    .gap(px(S2))
+                    .child(
+                        input()
+                            .value(move || text_value.get())
+                            .multiline(true)
+                            .submit_behavior(SubmitBehavior::Newline)
+                            .on_change(move |v: &str| set_text(v))
+                            .on_content_size_change(move |size: &Size<Points>| {
+                                height.set(size.height.clamp(px(22.0), px(160.0)).0);
+                            })
+                            .caret_color(|| color(ACCENT))
+                            .selection_color(|| color(tint(ACCENT, 0.3)))
+                            .h(move || px(height.get() + 2.0))
+                            .text_size(px(TEXT_LG))
+                            .line_height(px(22.0))
+                            .text_color(FG)
+                            .px(px(S1)),
+                    )
+                    .child(
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(S2))
+                            .child(
+                                nsh_base::button()
+                                    // Photos are the one attachment: straight to the picker.
+                                    .on_press(|| {
+                                        dismiss_keyboard();
+                                        pick_images_into_composer();
+                                    })
+                                    .accessibility_label(t("Attach"))
+                                    .w(px(36.0))
+                                    .h(px(36.0))
+                                    .rounded(px(10.0))
+                                    .bg(tint(FG, 0.07))
+                                    .items_center()
+                                    .justify_center()
+                                    .active(|s| s.opacity(0.6))
+                                    .child(icon(Icon::Plus, 18.0).text_color(FG)),
+                            )
+                            .child(
+                                nsh_base::button()
+                                    .on_press(move || options_sheet(live))
+                                    .accessibility_label(t("Agent settings"))
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .h(px(36.0))
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(6.0))
+                                    .px(px(S1))
+                                    .active(|s| s.opacity(0.6))
+                                    .child(icon(Icon::Sparkles, 15.0).text_color(FG_MUTED))
+                                    .child(
+                                        text(move || settings.get())
+                                            .text_size(px(TEXT_BASE))
+                                            .text_color(FG_MUTED)
+                                            .number_of_lines(1)
+                                            .flex_shrink(1.0),
+                                    ),
+                            )
+                            .child(disc(running, busy, empty, submit)),
+                    ),
+            )
+            .into_element();
+    }
 
     view()
         .w_full()
@@ -118,6 +202,90 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> impl IntoEl
                 )
                 .child(view().flex_shrink_0().child(disc(running, busy, empty, submit))),
         ))
+        .into_element()
+}
+
+/// The agent's settings in a line: model · thinking · mode.
+fn settings_summary(live: bool) -> String {
+    let c = store::controls(live);
+    let provider = store::provider(&c.provider);
+    let model = c
+        .model
+        .as_deref()
+        .and_then(|m| provider.as_ref().and_then(|p| p.model(m)).map(|m| m.label.clone()))
+        .or_else(|| provider.as_ref().map(|p| p.label.clone()))
+        .unwrap_or_default();
+    let thinking = thinking_options(live);
+    let thinking = c.thinking.as_deref().and_then(|t| thinking.iter().find(|o| o.id == t)).or(thinking.first()).map(|o| o.label.clone());
+    let mode = c.mode.as_deref().and_then(|m| c.modes.iter().find(|o| o.id == m)).or(c.modes.first()).map(|o| o.label.clone());
+    [Some(model), thinking, mode].into_iter().flatten().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ")
+}
+
+/// The agent's settings, as a sheet: each opens its choices.
+fn options_sheet(live: bool) {
+    let c = store::controls(live);
+    let provider = store::provider(&c.provider);
+    let model = c
+        .model
+        .as_deref()
+        .and_then(|m| provider.as_ref().and_then(|p| p.model(m)).map(|m| m.label.clone()))
+        .or_else(|| provider.as_ref().map(|p| p.label.clone()))
+        .unwrap_or_default();
+    let mut items = vec![SheetItem::new(tf("Model · {}", &[&model]), move || model_sheet(live)).icon(Icon::Bot)];
+    let thinking = thinking_options(live);
+    if !thinking.is_empty() {
+        let current = c.thinking.as_deref().and_then(|t| thinking.iter().find(|o| o.id == t)).or(thinking.first()).map(|o| o.label.clone()).unwrap_or_default();
+        items.push(SheetItem::new(tf("Thinking · {}", &[&current]), move || {
+            let c = store::controls(live);
+            choice_sheet(t("Thinking"), thinking_options(live), c.thinking, move |id| store::set_control(live, Control::Thinking(id)))
+        }).icon(Icon::Brain));
+    }
+    if !c.modes.is_empty() {
+        let current = c.mode.as_deref().and_then(|m| c.modes.iter().find(|o| o.id == m)).or(c.modes.first()).map(|o| o.label.clone()).unwrap_or_default();
+        items.push(SheetItem::new(tf("Mode · {}", &[&current]), move || {
+            let c = store::controls(live);
+            choice_sheet(t("Mode"), c.modes.clone(), c.mode, move |id| store::set_control(live, Control::Mode(id)))
+        }).icon(Icon::Layers));
+    }
+    show_sheet(None, items);
+}
+
+/// Options as a sheet, the current one checked.
+fn choice_sheet(title: &str, options: Vec<crate::daemon::model::Opt>, current: Option<String>, pick: impl Fn(String) + Clone + 'static) {
+    let items = options
+        .into_iter()
+        .map(|o| {
+            let on = current.as_deref() == Some(o.id.as_str());
+            let pick = pick.clone();
+            let id = o.id.clone();
+            SheetItem::new(o.label.clone(), move || pick(id.clone())).checked(on)
+        })
+        .collect();
+    show_sheet(Some(title.to_owned()), items);
+}
+
+/// The models of the agent's provider (a new agent: every available
+/// provider's), the current one checked.
+fn model_sheet(live: bool) {
+    let c = store::controls(live);
+    let mut items = Vec::new();
+    for p in store::providers().into_iter().filter(|p| p.enabled && p.available()) {
+        if live && p.id != c.provider {
+            continue;
+        }
+        for m in &p.models {
+            let checked = c.provider == p.id && c.model.as_deref() == Some(m.id.as_str());
+            let (pid, mid) = (p.id.clone(), m.id.clone());
+            let label = if live { m.label.clone() } else { format!("{} · {}", p.label, m.label) };
+            items.push(SheetItem::new(label, move || {
+                if !live {
+                    store::set_control(false, Control::Provider(pid.clone()));
+                }
+                store::set_control(live, Control::Model(mid.clone()));
+            }).checked(checked));
+        }
+    }
+    show_sheet(Some(t("Model").into()), items);
 }
 
 /// What an @ mention or a leading / asks for, from the composer text.
@@ -287,7 +455,13 @@ fn model_picker(live: bool) -> impl IntoElement {
             None => p_label,
         }
     });
-    dropup(picker_trigger(Some(Icon::Bot), move || label.get())).child(dynamic(move || {
+    dropup(picker_trigger(Some(Icon::Bot), move || label.get())).child(model_rows(live, true))
+}
+
+/// The models to pick from, as menu rows (in a scroll of their own when
+/// `scrolled`).
+fn model_rows(live: bool, scrolled: bool) -> impl IntoElement {
+    view().child(dynamic(move || {
         let c = store::controls(live);
         let providers = store::providers();
         Some(untracked(move || {
@@ -326,7 +500,7 @@ fn model_picker(live: bool) -> impl IntoElement {
                     );
                 }
             }
-            menu_scroll(420.0, list).into_element()
+            if scrolled { menu_scroll(420.0, list).into_element() } else { list.into_element() }
         }))
     }))
 }
@@ -352,9 +526,17 @@ fn thinking_picker(live: bool) -> impl IntoElement {
             .unwrap_or_default()
     });
     when(has, move || {
-        dropup(picker_trigger(Some(Icon::Brain), move || label.get())).child(dynamic(move || {
+        dropup(picker_trigger(Some(Icon::Brain), move || label.get())).child(thinking_rows(live))
+    })
+}
+
+fn thinking_rows(live: bool) -> impl IntoElement {
+    view().child(dynamic(move || {
             let c = store::controls(live);
             let opts = thinking_options(live);
+            if opts.is_empty() {
+                return None;
+            }
             Some(untracked(move || {
                 let mut list = view().child(menu_heading(t("Thinking")));
                 for o in &opts {
@@ -369,8 +551,7 @@ fn thinking_picker(live: bool) -> impl IntoElement {
                 }
                 list.into_element()
             }))
-        }))
-    })
+    }))
 }
 
 fn mode_picker(live: bool) -> impl IntoElement {
@@ -385,8 +566,16 @@ fn mode_picker(live: bool) -> impl IntoElement {
             .unwrap_or_default()
     });
     when(has, move || {
-        dropup(picker_trigger(Some(Icon::Layers), move || label.get())).child(dynamic(move || {
+        dropup(picker_trigger(Some(Icon::Layers), move || label.get())).child(mode_rows(live))
+    })
+}
+
+fn mode_rows(live: bool) -> impl IntoElement {
+    view().child(dynamic(move || {
             let c = store::controls(live);
+            if c.modes.is_empty() {
+                return None;
+            }
             Some(untracked(move || {
                 let mut list = view().child(menu_heading(t("Mode")));
                 for o in &c.modes {
@@ -401,8 +590,7 @@ fn mode_picker(live: bool) -> impl IntoElement {
                 }
                 list.into_element()
             }))
-        }))
-    })
+    }))
 }
 
 /// A hint line under a composer (errors, where it starts).

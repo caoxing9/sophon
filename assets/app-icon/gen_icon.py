@@ -38,15 +38,21 @@ svg=f'''<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewB
 <filter id="b5" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024"><feGaussianBlur stdDeviation="5"/></filter>
 <filter id="grain" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024"><feTurbulence type="fractalNoise" baseFrequency=".85" numOctaves="2" seed="4"/><feColorMatrix type="saturate" values="0"/><feComponentTransfer><feFuncA type="table" tableValues="0 .5"/></feComponentTransfer></filter>
 </defs>
-<rect width="1024" height="1024" fill="url(#bg)"/><rect width="1024" height="1024" fill="url(#neb)"/>{stars}
-<circle cx="512" cy="512" r="470" fill="url(#glow)"/>
+{{BODY}}
+</svg>'''
+# The icon in layers too, for the loading mark (the corona turns between a
+# still sky and a still moon): `gen_icon.py out.svg [sky|corona|moon]`.
+sky=f'''<rect width="1024" height="1024" fill="url(#bg)"/><rect width="1024" height="1024" fill="url(#neb)"/>{stars}'''
+corona=f'''<circle cx="512" cy="512" r="470" fill="url(#glow)"/>
 <g filter="url(#b9)" style="mix-blend-mode:screen">{streams(22,70,200,14,30,.22,.45)}</g>
 <g filter="url(#b2)" style="mix-blend-mode:screen">{streams(150,20,150,1.4,3.2,.12,.42)}</g>
 <circle cx="512" cy="512" r="300" fill="url(#inner)"/>
-<circle cx="512" cy="512" r="{R+3}" fill="none" stroke="#fff6ef" stroke-width="10" filter="url(#b5)" opacity=".9"/>
-<circle cx="512" cy="512" r="{R}" fill="url(#disc)"/>
+<circle cx="512" cy="512" r="{R+3}" fill="none" stroke="#fff6ef" stroke-width="10" filter="url(#b5)" opacity=".9"/>'''
+moon=f'''<circle cx="512" cy="512" r="{R}" fill="url(#disc)"/>
 <circle cx="512" cy="512" r="{R}" fill="url(#limb)"/>
-<circle cx="512" cy="512" r="{R-1}" fill="none" stroke="url(#rim)" stroke-width="2.5"/>
-<rect width="1024" height="1024" filter="url(#grain)" opacity=".12" style="mix-blend-mode:overlay"/>
-</svg>'''
+<circle cx="512" cy="512" r="{R-1}" fill="none" stroke="url(#rim)" stroke-width="2.5"/>'''
+grain='''<rect width="1024" height="1024" filter="url(#grain)" opacity=".12" style="mix-blend-mode:overlay"/>'''
+layer=sys.argv[2] if len(sys.argv)>2 else "all"
+body={"all":sky+"\n"+corona+"\n"+moon+"\n"+grain,"sky":sky+"\n"+grain,"corona":corona,"moon":moon}[layer]
+svg=svg.replace("{BODY}",body)
 open(sys.argv[1],'w').write(svg)

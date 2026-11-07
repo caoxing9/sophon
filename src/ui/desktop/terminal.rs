@@ -6,7 +6,7 @@ use crate::i18n::t;
 use nsh_base::{Terminal, TerminalApi, TerminalEvent, terminal};
 use nsh_core::prelude::*;
 
-use super::kit::*;
+use crate::ui::kit::*;
 use crate::store;
 
 pub(crate) fn terminal_pane(id: String) -> impl IntoElement {

@@ -23,6 +23,12 @@ if-addrs = "0.13"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 crypto_box = { version = "0.9", features = ["std"] }
 
+[target.'cfg(target_os = "ios")'.dependencies]
+nsh-platform-ios = { git = "https://github.com/longbridge/nsh", rev = "7571948ee4ad05fbc0b08d774e6afc63e039773d", default-features = false }
+objc2 = "0.6.5"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSString", "NSObject"] }
+objc2-ui-kit = { version = "0.3.2", default-features = false, features = ["std", "objc2-quartz-core", "UIView", "UIResponder"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 nsh-platform-linux = { git = "https://github.com/longbridge/nsh", rev = "7571948ee4ad05fbc0b08d774e6afc63e039773d", default-features = false }
 

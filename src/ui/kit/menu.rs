@@ -17,7 +17,8 @@ use super::{
 };
 
 fn popup(s: StyleRefinement) -> StyleRefinement {
-    s.bg(glass_fill_strong())
+    // Near opaque: what is under a menu must not read through its rows.
+    s.bg(AdaptiveColor::new(Hsla::from(rgb(0xfdfcf9)).opacity(0.985), Hsla::from(rgb(0x2b2b28)).opacity(0.985)))
         .backdrop_blur(px(GLASS_BLUR))
         .backdrop_saturate(1.7)
         .rounded(px(14.0))
@@ -31,7 +32,22 @@ fn popup(s: StyleRefinement) -> StyleRefinement {
 
 /// A menu that opens under `trigger`.
 pub(crate) fn dropdown(trigger: impl IntoElement) -> MenuElement {
-    menu().offset(px(6.0)).popup_style(popup).trigger(trigger)
+    // A menu over the keyboard is half hidden: it goes first, as Paseo's
+    // pickers dismiss it.
+    menu().offset(px(6.0)).popup_style(popup).trigger(trigger).on_open(|| {
+        if MOBILE {
+            dismiss_keyboard();
+        }
+    })
+}
+
+/// A menu that opens under `trigger` as wide as `width` (a sidebar's
+/// header: the menu lines up with the rows under it, edge to edge).
+pub(crate) fn dropdown_wide(trigger: impl IntoElement, width: f32) -> MenuElement {
+    dropdown(trigger)
+        .align(nsh_core::overlay::Align::Start)
+        .offset(px(4.0))
+        .popup_style(move |s: StyleRefinement| popup(s).w(px(width)).min_w(px(width)).max_w(px(width)))
 }
 
 /// A menu that opens above `trigger` (pickers in the composer, which sits

@@ -1,0 +1,9 @@
+//! Native pieces of the app on each platform, beside what NSH provides.
+
+#[cfg(target_os = "ios")]
+pub(crate) mod ios_scanner;
+
+/// The QR scanner component's name (`nsh_core::element::native`).
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+pub(crate) const QR_SCANNER: &str = "sophon/qr-scanner";
+

@@ -4,9 +4,9 @@
 use crate::i18n::{t, tf};
 use nsh_base::editor;
 use nsh_core::prelude::*;
-use super::kit::text;
+use crate::ui::kit::text;
 
-use super::kit::*;
+use crate::ui::kit::*;
 use crate::store;
 
 pub(crate) fn file_pane(path: String) -> impl IntoElement {

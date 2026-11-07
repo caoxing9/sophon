@@ -84,8 +84,16 @@ the app and restarts it. `brew upgrade --cask sophon` works too.
 ### iOS
 
 There is no App Store or TestFlight build yet. Each release has `Sophon-<version>-ios-simulator.zip` for the iOS
-Simulator; to run it on your own iPhone, build it from source with your Apple ID (below). On the Mac, open
-*Settings → Pair a device* in Sophon and scan the QR code with the iPhone's camera.
+Simulator. To run it on your own iPhone with a free Apple ID: sign in to Xcode (*Settings → Accounts*), plug in the
+iPhone, turn on *Developer Mode* (*Settings → Privacy & Security*), set up the build tools (below) and run
+
+```sh
+scripts/ios-device.sh
+```
+
+It makes a development certificate and profile, builds and signs Sophon and installs it. The first time, trust your
+Apple ID on the iPhone (*Settings → General → VPN & Device Management*). Free signing lasts 7 days: run it again then.
+On the Mac, open *Settings → Pair a device* in Sophon and scan the QR code with the iPhone's camera.
 
 ## Build from source
 
@@ -118,7 +126,10 @@ nsh package --target ios-simulator --icon assets/app-icon/icon-ios-1024.png
 |---|---|
 | `src/daemon/` | The Paseo connection: WebSocket protocol, relay end-to-end encryption, the LAN bridge for phones |
 | `src/store.rs` | UI state in signals |
-| `src/ui/` | Screens, built from the design system in `src/ui/kit/` |
+| `src/ui/kit/` | The design system: controls, icons, menus, tokens |
+| `src/ui/shared/` | Components both platforms use: the timeline, the composer, the agent pane, the project list, dialogs, settings sections |
+| `src/ui/desktop/` | The desktop's own shell and screens: sidebar, tabs, explorer, git, terminals, new workspaces, history, schedules, shortcuts |
+| `src/ui/mobile/` | The phone's: pairing, the swipeable panels (workspaces, agent, changes), its settings |
 | `src/update.rs` | Self-update from GitHub Releases |
 | `App.test.tsx` | Headless UI tests of the root component, run by `nsh test` |
 | `assets/app-icon/` | The app icon: SVG sources, `build.sh` regenerates every size |
@@ -153,7 +164,7 @@ the iOS Simulator (downloadable from the run's artifacts).
 
 ## Acknowledgements
 
-- [Paseo](https://paseo.sh) runs the agents; Sophon follows the Paseo app's features and protocol.
+- [Paseo](https://paseo.sh) runs the agents and speaks the protocol Sophon connects with; Sophon started from the Paseo app's features and goes its own way from there.
 - [NSH](https://github.com/longbridge/nsh) is the native UI framework Sophon is built on.
 - The name comes from Liu Cixin's *The Three-Body Problem*. Sophon is a fan project, not affiliated with the book's
   rights holders, Paseo or NSH.

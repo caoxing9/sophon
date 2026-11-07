@@ -7,9 +7,9 @@ use nsh_core::{
     element::{AdaptiveColor, FontWeight, Position, View},
     prelude::*,
 };
-use super::kit::text;
+use crate::ui::kit::text;
 
-use super::kit::*;
+use crate::ui::kit::*;
 use crate::{
     daemon::{
         Item, Permission,
@@ -54,13 +54,17 @@ pub(crate) fn timeline() -> impl IntoElement {
                     .flex_1()
                     .items_center()
                     .justify_center()
-                    .child(text(t("Loading…")).text_size(px(TEXT_SM)).text_color(FG_MUTED))
+                    .pb(px(96.0))
+                    .child(loader(None))
                     .into_element();
             }
             let count = store::item_count();
             let list = element_ref();
             store::set_timeline_list(list.clone());
             view().flex_1().child(virtual_list(store::item_count, move |at: Position| row(at, running))
+                // On the phone, a drag down the conversation takes the
+                // keyboard with it, as Messages does.
+                .keyboard_dismiss_mode(if MOBILE { KeyboardDismissMode::Interactive } else { KeyboardDismissMode::None })
                 .element_ref(&list)
                 .keys(store::item_keys)
                 .estimated_item_size(px(80.0))
@@ -68,6 +72,10 @@ pub(crate) fn timeline() -> impl IntoElement {
                 .follow_end(px(40.0))
                 .content_padding_top(px(S4))
                 .content_padding_bottom(px(200.0))
+                .footer(thinking(running))
+                // Earlier pages come as the conversation nears its start.
+                .on_load_more_at_start(store::load_older)
+                .load_more_at_start_threshold(1.0)
                 .flex_1())
                 .child(when(store::has_older, || {
                     view().absolute().top(px(S2)).left(px(0.0)).right(px(0.0)).items_center().child(
@@ -125,6 +133,19 @@ fn row(at: Position, running: Memo<bool>) -> impl IntoElement {
         move || {
             let kind = kind.get()?;
             Some(untracked(move || match kind {
+                // The phone: no button on the bubble; holding it opens its
+                // actions (Messages' way), copying among them.
+                RowKind::User if MOBILE => view()
+                    .self_end()
+                    .max_w(relative(0.82))
+                    .px(px(14.0))
+                    .py(px(9.0))
+                    .rounded(px(18.0))
+                    .bg(tint(ACCENT, 0.10))
+                    .active(|s| s.opacity(0.7))
+                    .on_long_press(move |_: &PressEvent| message_sheet(item))
+                    .child(text(text_of).text_size(px(TEXT_CONTENT)).line_height(px(22.0)).text_color(FG))
+                    .into_element(),
                 RowKind::User => view()
                     .self_end()
                     .max_w(relative(0.82))
@@ -206,6 +227,19 @@ fn tool_icon(kind: &str, name: &str) -> Icon {
     }
 }
 
+/// A user message's actions on the phone: copy it, or rewind to it.
+fn message_sheet(item: Memo<Option<Item>>) {
+    let Some(Item::User { text: body, message_id }) = item.get_untracked() else { return };
+    let mut items = vec![SheetItem::new(t("Copy"), move || set_clipboard(body.clone())).icon(Icon::Copy)];
+    if let Some(id) = message_id {
+        let (a, b, c) = (id.clone(), id.clone(), id);
+        items.push(SheetItem::new(t("Rewind conversation to here"), move || store::rewind(&a, "conversation")).icon(Icon::Undo2));
+        items.push(SheetItem::new(t("Rewind files to here"), move || store::rewind(&b, "files")).icon(Icon::FileText));
+        items.push(SheetItem::new(t("Rewind both to here"), move || store::rewind(&c, "both")).icon(Icon::RotateCw));
+    }
+    show_sheet(None, items);
+}
+
 /// Rewind from a user message (Paseo's message menu).
 fn user_actions(item: Memo<Option<Item>>) -> impl IntoElement {
     let id = computed(move || match item.get() {
@@ -216,6 +250,32 @@ fn user_actions(item: Memo<Option<Item>>) -> impl IntoElement {
         let id = id.get()?;
         Some(untracked(move || {
             let (a, b, c) = (id.clone(), id.clone(), id.clone());
+            if MOBILE {
+                // The phone: the system's action sheet.
+                return nsh_base::button()
+                    .on_press(move || {
+                        let (a, b, c) = (a.clone(), b.clone(), c.clone());
+                        show_sheet(
+                            Some(t("Rewind to here").into()),
+                            vec![
+                                SheetItem::new(t("Conversation only"), move || store::rewind(&a, "conversation")).icon(Icon::Undo2),
+                                SheetItem::new(t("Files only"), move || store::rewind(&b, "files")).icon(Icon::FileText),
+                                SheetItem::new(t("Conversation and files"), move || store::rewind(&c, "both")).icon(Icon::RotateCw),
+                            ],
+                        )
+                    })
+                    .accessibility_label(t("Message actions"))
+                    .w(px(32.0))
+                    .h(px(32.0))
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(R_FULL))
+                    .bg(SURFACE0)
+                    .border_1()
+                    .border_color(BORDER)
+                    .child(icon(Icon::Ellipsis, 14.0).text_color(FG_MUTED))
+                    .into_element();
+            }
             dropdown(
                 view()
                     .w(px(22.0))
@@ -234,6 +294,7 @@ fn user_actions(item: Memo<Option<Item>>) -> impl IntoElement {
             .child(menu_row(t("Conversation only"), Some(Icon::Undo2), None, false, move || store::rewind(&a, "conversation")))
             .child(menu_row(t("Files only"), Some(Icon::FileText), None, false, move || store::rewind(&b, "files")))
             .child(menu_row(t("Conversation and files"), Some(Icon::RotateCw), None, false, move || store::rewind(&c, "both")))
+            .into_element()
         }))
     }))
 }
@@ -636,7 +697,7 @@ pub(crate) fn subagent_pane(parent: String, id: String) -> impl IntoElement {
         .child(dynamic(move || {
             let list = items.get();
             Some(untracked(move || match list.clone() {
-                None => view().flex_1().items_center().justify_center().child(text(t("Loading…")).text_color(FG_MUTED)).into_element(),
+                None => view().flex_1().items_center().justify_center().child(loader(None)).into_element(),
                 Some(list) => {
                     let mut col = view().gap(px(S2)).px(px(S6)).py(px(S4)).w_full().max_w(px(CONTENT_MAX_WIDTH + 2.0 * S6)).self_center();
                     for item in list {
@@ -730,4 +791,36 @@ pub(crate) fn find_bar() -> impl IntoElement {
             .child(icon_btn(Icon::ChevronDown, Sz::Sm, t("Next match"), || store::find_step(true)))
             .child(icon_btn(Icon::X, Sz::Sm, t("Close find"), store::toggle_find))
     })
+}
+
+/// While the agent runs and nothing it says is streaming: the mark
+/// breathing at the foot of the conversation, so a sent message never sits
+/// there without an answer in sight.
+fn thinking(running: Memo<bool>) -> impl IntoElement {
+    let state = computed(move || {
+        if !running.get() {
+            return None;
+        }
+        let last = store::item_count().checked_sub(1).and_then(store::item_at);
+        match last {
+            // Its words are on screen already.
+            Some(Item::Assistant { .. }) => None,
+            Some(Item::User { .. }) | None => Some(t("Thinking…")),
+            Some(_) => Some(t("Working…")),
+        }
+    });
+    view().child(dynamic(move || {
+        let label = state.get()?;
+        Some(untracked(move || {
+            view()
+                .w_full()
+                .max_w(px(CONTENT_MAX_WIDTH + 2.0 * S6))
+                .self_center()
+                // The rows' own inset, so the mark lines up with the text.
+                .px(px(S6))
+                .py(px(S3))
+                .child(working(label))
+                .into_element()
+        }))
+    }))
 }

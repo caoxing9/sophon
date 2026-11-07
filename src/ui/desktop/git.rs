@@ -3,9 +3,9 @@
 
 use crate::i18n::{t, tf};
 use nsh_core::{element::FontWeight, prelude::*};
-use super::kit::text;
+use crate::ui::kit::text;
 
-use super::kit::*;
+use crate::ui::kit::*;
 use crate::{daemon::connection::GitAction, store};
 
 pub(crate) fn git_controls() -> impl IntoElement {
