@@ -9,19 +9,32 @@ publish = false
 [dependencies]
 nsh-core = { git = "https://github.com/longbridge/nsh", rev = "7571948ee4ad05fbc0b08d774e6afc63e039773d" }
 nsh-base = { git = "https://github.com/longbridge/nsh", rev = "7571948ee4ad05fbc0b08d774e6afc63e039773d" }
-nsh-updater = { git = "https://github.com/longbridge/nsh", rev = "7571948ee4ad05fbc0b08d774e6afc63e039773d" }
-env_logger = "0.11"
 log = "0.4"
 serde_json = "1"
-tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net", "fs"] }
-tokio-tungstenite = { version = "0.28", features = ["native-tls"] }
+tokio = { version = "1", default-features = false, features = ["sync", "macros"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 snow = "0.9"
-if-addrs = "0.13"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 crypto_box = { version = "0.9", features = ["std"] }
+
+# Natively the connection runs on a thread of its own with tokio; in a
+# browser on the page's WebSocket (`daemon::rt`).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+nsh-updater = { git = "https://github.com/longbridge/nsh", rev = "7571948ee4ad05fbc0b08d774e6afc63e039773d" }
+env_logger = "0.11"
+tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net", "fs"] }
+tokio-tungstenite = { version = "0.28", features = ["native-tls"] }
+if-addrs = "0.13"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "=0.2.129"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["WebSocket", "MessageEvent", "CloseEvent", "Event", "BinaryType", "Window", "Storage"] }
+getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
+getrandom03 = { package = "getrandom", version = "0.3" }
+uuid = { version = "1", features = ["v4", "rng-getrandom"] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
 nsh-platform-ios = { git = "https://github.com/longbridge/nsh", rev = "7571948ee4ad05fbc0b08d774e6afc63e039773d", default-features = false }

@@ -13,6 +13,17 @@ mod store;
 mod ui;
 mod update;
 
+/// Randomness on the web: NSH builds with getrandom's `custom` backend,
+/// filled here from the page's `crypto.getRandomValues` (getrandom 0.2's
+/// `js`), which the keys and ids draw from.
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+unsafe extern "Rust" fn __getrandom_v03_custom(dest: *mut u8, len: usize) -> Result<(), getrandom03::Error> {
+    // SAFETY: getrandom passes a writable buffer of `len` bytes.
+    let buf = unsafe { std::slice::from_raw_parts_mut(dest, len) };
+    getrandom02::getrandom(buf).map_err(|_| getrandom03::Error::UNSUPPORTED)
+}
+
 /// The app's UI set (`nsh.json` `"rust"`).
 #[native_module("sophon/native")]
 fn native(registry: &mut Registry) {
@@ -51,7 +62,8 @@ pub fn App() -> impl IntoElement {
     store::load_hosts();
     store::watch_notification_presses();
     store::watch_pairing_links();
-    if is_desktop() {
+    // The web's desktop idiom is still a page: no bridge, no updates.
+    if is_desktop() && !cfg!(target_arch = "wasm32") {
         store::start_bridge();
         update::start();
     }
@@ -77,15 +89,22 @@ fn start_connection() {
     // app (including the headless test runner, which has no tokio reactor),
     // and ends once this surface drops its channel ends. tokio's channels
     // are executor-agnostic, so the engine-thread pump below reads them.
-    let spawned = std::thread::Builder::new().name("sophon-daemon".into()).spawn(move || {
-        match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-            Ok(rt) => rt.block_on(daemon::connection::run(event_tx, command_rx)),
-            Err(e) => log::error!("cannot start the daemon connection: {e}"),
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let spawned = std::thread::Builder::new().name("sophon-daemon".into()).spawn(move || {
+            match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                Ok(rt) => rt.block_on(daemon::connection::run(event_tx, command_rx)),
+                Err(e) => log::error!("cannot start the daemon connection: {e}"),
+            }
+        });
+        if let Err(e) = spawned {
+            log::error!("cannot start the daemon thread: {e}");
         }
-    });
-    if let Err(e) = spawned {
-        log::error!("cannot start the daemon thread: {e}");
     }
+    // A page has one thread: the connection is a task of the engine's,
+    // on the page's WebSocket.
+    #[cfg(target_arch = "wasm32")]
+    spawn(daemon::connection::run(event_tx, command_rx));
     spawn(async move {
         while let Some(first) = event_rx.recv().await {
             batch(|| {

@@ -8,10 +8,9 @@
 
 use std::{collections::HashMap, path::PathBuf, time::Duration};
 
-use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio_tungstenite::tungstenite::Message;
+use super::rt::{self, Message};
 
 use super::model::{Agent, DiffFile, Item, Project, Provider, Workspace};
 
@@ -514,7 +513,7 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
         }
         // Keep the latest open request while waiting, so a click during an
         // outage is honoured on reconnect.
-        let deadline = tokio::time::sleep(backoff);
+        let deadline = rt::sleep(backoff);
         tokio::pin!(deadline);
         loop {
             tokio::select! {
@@ -638,14 +637,13 @@ async fn session(
     // Terminal output arrives in binary frames addressed by slot.
     let mut slots: HashMap<u8, String> = HashMap::new();
     let mut utf8_tails: HashMap<String, Vec<u8>> = HashMap::new();
-    let (ws, _) = tokio::time::timeout(
+    let (sink, mut rx) = rt::timeout(
         Duration::from_secs(if endpoint.bridge_token.is_some() { 3 } else { 10 }),
-        tokio_tungstenite::connect_async(endpoint.url.as_str()),
+        rt::connect(endpoint.url.as_str()),
     )
     .await
-    .map_err(|_| "Timed out connecting to the daemon".to_owned())?
+    .ok_or_else(|| "Timed out connecting to the daemon".to_owned())?
     .map_err(|e| format!("Cannot reach the Sophon service at {}: {e}", endpoint.url))?;
-    let (sink, mut rx) = ws.split();
     let mut tx = Out { sink, seal: None };
     // Through the relay: the end-to-end handshake first, then every frame
     // is sealed for the daemon and opened from it.
@@ -687,19 +685,19 @@ async fn session(
 
     let mut pending: HashMap<String, Pending> = HashMap::new();
     let mut connected = false;
-    let mut ping = tokio::time::interval_at(
-        tokio::time::Instant::now() + Duration::from_secs(10),
+    let mut ping = rt::interval_at(
+        rt::Instant::now() + Duration::from_secs(10),
         Duration::from_secs(10),
     );
-    let hello_deadline = tokio::time::sleep(Duration::from_secs(15));
+    let hello_deadline = rt::sleep(Duration::from_secs(15));
     tokio::pin!(hello_deadline);
     // The daemon answers every ping: a connection silent for longer than
     // this is dead (a relay that dropped it, a phone back from sleep), and
     // the session ends so the loop reconnects instead of sending into it.
     const SILENCE: Duration = Duration::from_secs(25);
-    let mut last_frame = tokio::time::Instant::now();
-    let mut lan_check = tokio::time::interval_at(
-        tokio::time::Instant::now() + Duration::from_secs(5),
+    let mut last_frame = rt::Instant::now();
+    let mut lan_check = rt::interval_at(
+        rt::Instant::now() + Duration::from_secs(5),
         Duration::from_secs(15),
     );
 
@@ -710,8 +708,7 @@ async fn session(
             }
             _ = lan_check.tick(), if connected && !endpoint.lan_probe.is_empty() => {
                 for addr in &endpoint.lan_probe {
-                    let reach = tokio::time::timeout(Duration::from_millis(800), tokio::net::TcpStream::connect(addr.as_str())).await;
-                    if matches!(reach, Ok(Ok(_))) {
+                    if rt::reachable(addr, Duration::from_millis(800)).await {
                         log::info!("the LAN bridge at {addr} answers: leaving the relay");
                         return Ok(Exit::Lan);
                     }
@@ -762,7 +759,7 @@ async fn session(
                     Some(Err(e)) => return Err(format!("Connection lost: {e}")),
                     Some(Ok(frame)) => frame,
                 };
-                last_frame = tokio::time::Instant::now();
+                last_frame = rt::Instant::now();
                 let frame = match unseal.as_mut() {
                     None => frame,
                     Some(r) => match frame {
@@ -785,7 +782,7 @@ async fn session(
                         continue;
                     }
                     Message::Close(c) => {
-                        let reason = c.map(|c| format!("{} ({})", c.reason, u16::from(c.code)))
+                        let reason = c.map(|c| format!("{} ({})", c.reason, c.code))
                             .unwrap_or_else(|| "closed".into());
                         return Ok(Exit::Closed(format!("The daemon closed the connection: {reason}")));
                     }
@@ -2124,17 +2121,13 @@ fn handle(
 
 /// The socket's sending half, sealing frames when the session goes through
 /// the relay.
-struct Out<S> {
-    sink: S,
+struct Out {
+    sink: rt::WsTx,
     seal: Option<super::relay::Sender>,
 }
 
-async fn send<S>(tx: &mut Out<S>, msg: &Value) -> Result<(), String>
-where
-    S: SinkExt<Message> + Unpin,
-    S::Error: std::fmt::Display,
-{
-    let mut frame = Message::Text(msg.to_string().into());
+async fn send(tx: &mut Out, msg: &Value) -> Result<(), String> {
+    let mut frame = Message::Text(msg.to_string());
     if let Some(seal) = tx.seal.as_mut() {
         frame = seal.seal(frame)?;
     }
@@ -2143,26 +2136,21 @@ where
 
 /// Sends the hello every second until the daemon answers (the relay may
 /// not have the daemon's side yet), then opens the channel.
-async fn relay_handshake<S, R>(
+async fn relay_handshake(
     offer: &super::relay::RelayOffer,
-    tx: &mut Out<S>,
-    rx: &mut R,
-) -> Result<(super::relay::Sender, super::relay::Receiver), String>
-where
-    S: SinkExt<Message> + Unpin,
-    S::Error: std::fmt::Display,
-    R: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
-{
+    tx: &mut Out,
+    rx: &mut rt::WsRx,
+) -> Result<(super::relay::Sender, super::relay::Receiver), String> {
     let mut hs = super::relay::Handshake::start(offer)?;
     let hello = hs.hello().to_owned();
-    let mut retry = tokio::time::interval(Duration::from_secs(1));
-    let deadline = tokio::time::sleep(Duration::from_secs(20));
+    let mut retry = rt::interval(Duration::from_secs(1));
+    let deadline = rt::sleep(Duration::from_secs(20));
     tokio::pin!(deadline);
     loop {
         tokio::select! {
             _ = &mut deadline => return Err("The daemon did not answer through the relay; is it running with the relay on?".into()),
             _ = retry.tick() => {
-                tx.sink.send(Message::Text(hello.clone().into())).await.map_err(|e| format!("Relay send failed: {e}"))?;
+                tx.sink.send(Message::Text(hello.clone())).await.map_err(|e| format!("Relay send failed: {e}"))?;
             }
             frame = rx.next() => match frame {
                 None => return Err("The relay closed the connection".into()),
@@ -2174,7 +2162,7 @@ where
                     Err((_, e)) => return Err(e),
                 },
                 Some(Ok(Message::Close(c))) => {
-                    return Err(format!("The relay closed the connection: {}", c.map(|c| c.reason.to_string()).unwrap_or_default()));
+                    return Err(format!("The relay closed the connection: {}", c.map(|c| c.reason).unwrap_or_default()));
                 }
                 Some(Ok(_)) => {}
             },
@@ -2280,16 +2268,14 @@ pub fn discover() -> Endpoint {
 /// A stable id, so a reconnect within the daemon's grace period resumes the
 /// same logical session.
 fn client_id() -> String {
-    let dir = super::data_dir();
-    let path = dir.join("client-id");
-    if let Ok(id) = std::fs::read_to_string(&path) {
+    if let Some(id) = super::read_file("client-id") {
         let id = id.trim();
         if !id.is_empty() {
             return id.to_owned();
         }
     }
     let id = format!("cid_{}", uuid::Uuid::new_v4().simple());
-    let _ = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&path, &id));
+    let _ = super::write_file("client-id", &id);
     id
 }
 
