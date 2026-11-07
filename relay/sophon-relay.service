@@ -1,0 +1,18 @@
+[Unit]
+Description=Sophon relay (end-to-end encrypted sessions between a computer and its phones)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/sophon-relay 0.0.0.0:8443
+Restart=always
+RestartSec=2
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

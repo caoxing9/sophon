@@ -74,8 +74,16 @@ curl -fsSL https://raw.githubusercontent.com/caoxing9/sophon/main/install.sh | s
 ### iOS
 
 目前还没有 App Store 或 TestFlight 版本。每个版本都附带用于 iOS 模拟器的 `Sophon-<版本>-ios-simulator.zip`；
-想装到自己的 iPhone 上，可以用自己的 Apple ID 从源码构建（见下文）。在 Mac 上打开 Sophon 的
-*Settings → Pair a device*，用 iPhone 相机扫描二维码即可配对。
+想用免费 Apple ID 装到自己的 iPhone 上：在 Xcode 登录 Apple ID（*Settings → Accounts*），连上 iPhone，打开
+*开发者模式*（*设置 → 隐私与安全性*），准备好构建工具（见下文），然后运行
+
+```sh
+scripts/ios-device.sh
+```
+
+它会生成开发证书和描述文件，构建、签名并安装 Sophon。第一次需要在 iPhone 上信任你的 Apple ID
+（*设置 → 通用 → VPN与设备管理*）。免费签名 7 天有效，到期后再运行一次即可。在 Mac 上打开 Sophon 的
+*设置 → 配对设备*，用 iPhone 相机扫描二维码即可配对。
 
 ## 从源码构建
 
@@ -108,7 +116,10 @@ nsh package --target ios-simulator --icon assets/app-icon/icon-ios-1024.png
 |---|---|
 | `src/daemon/` | 与 Paseo 的连接：WebSocket 协议、中继端到端加密、供手机连接的局域网桥 |
 | `src/store.rs` | 用 signal 管理的 UI 状态 |
-| `src/ui/` | 各个界面，基于 `src/ui/kit/` 中的设计系统 |
+| `src/ui/kit/` | 设计系统：控件、图标、菜单、设计变量 |
+| `src/ui/shared/` | 两端公用的组件：对话时间线、输入框、智能体页面、项目列表、弹窗、设置分区 |
+| `src/ui/desktop/` | 桌面端独有：侧边栏、标签页、文件浏览、Git、终端、新建工作区、历史、定时任务、快捷键 |
+| `src/ui/mobile/` | 手机端独有：配对引导、可滑动的三栏（工作区 / 智能体 / 改动）、精简设置 |
 | `src/update.rs` | 从 GitHub Releases 自动更新 |
 | `App.test.tsx` | 根组件的无界面 UI 测试，由 `nsh test` 运行 |
 | `assets/app-icon/` | 应用图标：SVG 源文件，`build.sh` 重新生成所有尺寸 |
@@ -142,6 +153,6 @@ Release 和 `latest.json`（已安装的应用从这里获取更新），并更�
 
 ## 致谢
 
-- [Paseo](https://paseo.sh) 负责运行智能体；Sophon 参照了 Paseo 应用的功能和协议。
+- [Paseo](https://paseo.sh) 负责运行智能体，Sophon 通过它的协议连接；Sophon 以 Paseo 应用的功能为起点，之后按自己的方向发展。
 - [NSH](https://github.com/longbridge/nsh) 是 Sophon 所用的原生 UI 框架。
 - 名字取自刘慈欣的《三体》。Sophon 是爱好者项目，与原著版权方、Paseo 和 NSH 均无关联。

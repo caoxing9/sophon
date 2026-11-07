@@ -466,6 +466,18 @@ pub(crate) fn animate_panels() {
     });
 }
 
+/// A list growing or shrinking (a project folding, a project moved): the
+/// rows that stay glide to their places, natively in the next commit. No
+/// fade for rows that come or go: a list re-renders rows by position, so
+/// a fade would flash rows that only changed what they show.
+pub(crate) fn animate_rows() {
+    animate_layout(nsh_core::LayoutAnimation {
+        create: None,
+        update: Some(nsh_core::LayoutTransition::new(nsh_core::LayoutCurve::EaseInEaseOut, 220.0)),
+        delete: None,
+    });
+}
+
 pub(crate) fn toggle_sidebar() {
     animate_panels();
     global::<SidebarHidden>().update(|s| s.0 = !s.0);
@@ -684,6 +696,16 @@ pub(crate) fn current_workspace() -> Option<Workspace> {
     }
 }
 
+/// Every agent this host has, archived ones included.
+pub(crate) fn agents() -> Vec<Agent> {
+    global::<Agents>().with(|a| a.0.clone())
+}
+
+/// Every workspace, those being archived left out.
+pub(crate) fn workspaces() -> Vec<Workspace> {
+    global::<Workspaces>().with(|w| w.0.iter().filter(|w| !w.archiving).cloned().collect())
+}
+
 pub(crate) fn agent(id: &str) -> Option<Agent> {
     global::<Agents>().with(|a| a.0.iter().find(|a| a.id == id).cloned())
 }
@@ -706,6 +728,90 @@ pub(crate) fn workspace_agents(workspace_id: &str) -> Vec<Agent> {
         .with(|a| a.0.iter().filter(|a| a.workspace_id.as_deref() == Some(workspace_id)).cloned().collect());
     list.sort_by(|a, b| a.created_at.cmp(&b.created_at));
     list
+}
+
+/// The workspace and agent open last, opened again at launch (desktop).
+#[derive(Clone, Default)]
+struct LastOpen {
+    workspace: Option<String>,
+    agent: Option<String>,
+    /// Restored already (or the user moved on first).
+    done: bool,
+}
+
+/// The sidebar's project order, as the user dragged it (project ids).
+#[derive(Clone, Default)]
+struct ProjectOrder(Vec<String>);
+
+/// Projects whose workspaces the sidebar folds away.
+#[derive(Clone, Default)]
+struct Collapsed(Vec<String>);
+
+pub(crate) fn is_collapsed(project_id: &str) -> bool {
+    global::<Collapsed>().with(|c| c.0.iter().any(|id| id == project_id))
+}
+
+pub(crate) fn toggle_collapsed(project_id: &str) {
+    // The desktop sidebar's rows glide; the phone's groups reveal on their
+    // own (nsh/base's Collapsible), which a second animation would fight.
+    if !crate::ui::kit::MOBILE {
+        animate_rows();
+    }
+    global::<Collapsed>().update(|c| {
+        if let Some(i) = c.0.iter().position(|id| id == project_id) {
+            c.0.remove(i);
+        } else {
+            c.0.push(project_id.to_owned());
+        }
+    });
+    save_prefs();
+}
+
+/// Where each project's header sits in the sidebar's list, for drops.
+#[derive(Clone, Default)]
+struct ProjectTops(std::collections::HashMap<String, f32>);
+
+pub(crate) fn set_project_row_top(project_id: &str, top: f32) {
+    global::<ProjectTops>().update(|t| {
+        t.0.insert(project_id.to_owned(), top);
+    });
+}
+
+/// A project header let go `dy` points from where it was: it goes before
+/// the first header below its new place.
+pub(crate) fn drop_project(project_id: &str, dy: f32) {
+    if dy.abs() < 4.0 {
+        return;
+    }
+    let tops = global::<ProjectTops>().with_untracked(|t| t.0.clone());
+    let Some(start) = tops.get(project_id).copied() else { return };
+    let landed = start + dy;
+    let others: Vec<String> = rows()
+        .into_iter()
+        .filter_map(|r| match r {
+            Row::Project(p) if p.id != project_id => Some(p.id),
+            _ => None,
+        })
+        .collect();
+    let index = others.iter().filter(|id| tops.get(*id).is_some_and(|t| *t < landed)).count();
+    move_project(project_id, index);
+}
+
+/// Moves a project to `index` among the projects, as dropped there.
+pub(crate) fn move_project(project_id: &str, index: usize) {
+    let mut ids: Vec<String> = rows()
+        .into_iter()
+        .filter_map(|r| match r {
+            Row::Project(p) => Some(p.id),
+            _ => None,
+        })
+        .collect();
+    let Some(from) = ids.iter().position(|id| id == project_id) else { return };
+    let id = ids.remove(from);
+    ids.insert(index.min(ids.len()), id);
+    animate_rows();
+    global::<ProjectOrder>().set(ProjectOrder(ids));
+    save_prefs();
 }
 
 /// One line of the sidebar.
@@ -752,6 +858,11 @@ pub(crate) fn rows() -> Vec<Row> {
         workspaces.iter().filter(|w| w.project_id == p.id).map(|w| w.activity_at.clone()).max().unwrap_or_default()
     };
     project_list.sort_by(|a, b| activity(b).cmp(&activity(a)).then_with(|| a.name.cmp(&b.name)));
+    // The user's order, from dragging: projects it does not have yet (new
+    // ones) come first, by activity, then the ordered ones.
+    let order = global::<ProjectOrder>().with(|o| o.0.clone());
+    project_list.sort_by_key(|p| order.iter().position(|id| *id == p.id).map_or((0, 0), |i| (1, i)));
+    let collapsed = global::<Collapsed>().with(|c| c.0.clone());
 
     let mut rows = Vec::new();
     let pinned: Vec<&Workspace> = workspaces.iter().filter(|w| w.pinned).collect();
@@ -762,8 +873,11 @@ pub(crate) fn rows() -> Vec<Row> {
     for p in project_list {
         let mut ws: Vec<&Workspace> = workspaces.iter().filter(|w| w.project_id == p.id && !w.pinned).collect();
         ws.sort_by(|a, b| b.activity_at.cmp(&a.activity_at));
+        let folded = collapsed.contains(&p.id);
         rows.push(Row::Project(p));
-        rows.extend(ws.into_iter().cloned().map(Row::Workspace));
+        if !folded {
+            rows.extend(ws.into_iter().cloned().map(Row::Workspace));
+        }
     }
     rows
 }
@@ -1060,6 +1174,10 @@ fn save_prefs() {
         "sidebarHidden": global::<SidebarHidden>().with_untracked(|h| h.0),
         "explorerOpen": global::<Explorer>().with_untracked(|e| e.open),
         "sidebarWidth": global::<SidebarWidth>().with_untracked(|w| w.0),
+        "projectOrder": global::<ProjectOrder>().with_untracked(|o| o.0.clone()),
+        "lastWorkspace": global::<LastOpen>().with_untracked(|l| l.workspace.clone()),
+        "lastAgent": global::<LastOpen>().with_untracked(|l| l.agent.clone()),
+        "collapsedProjects": global::<Collapsed>().with_untracked(|c| c.0.clone()),
         "language": crate::i18n::lang_untracked().as_str(),
         "appearance": match global::<Theme>().with_untracked(|t| t.0) {
             nsh_core::platform::Appearance::Light => "light",
@@ -1090,6 +1208,13 @@ pub(crate) fn load_prefs() {
     if let Some(o) = v.get("explorerOpen").and_then(serde_json::Value::as_bool) {
         global::<Explorer>().update(|e| e.open = o);
     }
+    let strings = |k: &str| -> Vec<String> {
+        v.get(k).and_then(serde_json::Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect()).unwrap_or_default()
+    };
+    global::<ProjectOrder>().set(ProjectOrder(strings("projectOrder")));
+    let string = |k: &str| v.get(k).and_then(serde_json::Value::as_str).map(str::to_owned);
+    global::<LastOpen>().set(LastOpen { workspace: string("lastWorkspace"), agent: string("lastAgent"), done: false });
+    global::<Collapsed>().set(Collapsed(strings("collapsedProjects")));
     if let Some(w) = v.get("sidebarWidth").and_then(serde_json::Value::as_f64) {
         global::<SidebarWidth>().set(SidebarWidth((w as f32).clamp(SIDEBAR_MIN, SIDEBAR_MAX)));
     }
@@ -1137,6 +1262,15 @@ fn service_cli() -> Option<std::path::PathBuf> {
         home.join("Applications/Paseo.app/Contents/Resources/bin/paseo"),
     ]);
     candidates.into_iter().find(|p| p.is_file())
+}
+
+/// Whether this Mac's service comes with the Paseo app (its updates come
+/// with the app's) rather than from npm, whose package the service can
+/// update itself.
+pub(crate) fn service_bundled() -> bool {
+    service_cli()
+        .and_then(|p| std::fs::canonicalize(p).ok())
+        .is_some_and(|p| !p.to_string_lossy().contains("node_modules"))
 }
 
 #[derive(Clone, Default, PartialEq)]
@@ -1232,6 +1366,49 @@ pub(crate) fn run_notice_action() {
         Some(NoticeAction::UndoArchive(id)) => send(Command::UndoArchive(id)),
         None => {}
     }
+}
+
+/// A folder of the host being browsed (the phone's add project screen).
+#[derive(Clone, Default, PartialEq)]
+pub(crate) struct Browse {
+    pub(crate) cwd: String,
+    pub(crate) loaded: bool,
+    pub(crate) folders: Vec<String>,
+    pub(crate) error: Option<String>,
+}
+
+pub(crate) fn browse_state() -> Browse {
+    global::<Browse>().with(Clone::clone)
+}
+
+/// Lists the folders in `cwd`, an absolute path on the host.
+pub(crate) fn browse(cwd: &str) {
+    global::<Browse>().set(Browse { cwd: cwd.to_owned(), ..Default::default() });
+    send(Command::ListDir { cwd: cwd.to_owned(), path: ".".into() });
+}
+
+/// The host's home folder, as its workspaces' paths show it
+/// (`/Users/name`, `/home/name`), or `/`.
+pub(crate) fn host_home() -> String {
+    let paths: Vec<String> = global::<Workspaces>().with(|w| w.0.iter().map(|w| w.project_root.clone()).collect());
+    paths
+        .iter()
+        .find_map(|p| {
+            let parts: Vec<&str> = p.split('/').collect();
+            (parts.len() > 2 && matches!(parts[1], "Users" | "home")).then(|| format!("/{}/{}", parts[1], parts[2]))
+        })
+        .unwrap_or_else(|| "/".into())
+}
+
+/// Folders on the host matching `query`: asks when the query changes and
+/// gives the last answer meanwhile.
+pub(crate) fn find_dirs(query: &str) -> Vec<String> {
+    let (last, entries) = global::<Suggestions>().with(|s| (s.query.clone(), s.entries.clone()));
+    if last != query {
+        global::<Suggestions>().update(|s| s.query = query.to_owned());
+        send(Command::FindDirs { query: query.to_owned() });
+    }
+    entries.into_iter().filter(|(_, dir)| *dir).map(|(p, _)| p).collect()
 }
 
 pub(crate) fn add_project(path: &str) {
@@ -1414,7 +1591,12 @@ pub(crate) fn recover_workspace(id: &str) {
     send(Command::RecoverWorkspace(id.to_owned()));
 }
 
+/// A restart is under way: the next connection says it is done.
+#[derive(Clone, Copy, Default)]
+struct Restarting(bool);
+
 pub(crate) fn restart_daemon() {
+    global::<Restarting>().set(Restarting(true));
     send(Command::RestartDaemon);
     notify(t("Restarting the service…").into());
 }
@@ -1430,7 +1612,29 @@ pub(crate) fn go_home() {
     send(Command::WatchDiff(None));
 }
 
+/// At launch, the workspace (and agent) open last, once the workspaces are
+/// known; not on the phone, whose home is its lists.
+fn restore_last_open() {
+    if crate::ui::kit::MOBILE {
+        return;
+    }
+    let (ws, agent, done) = global::<LastOpen>().with_untracked(|l| (l.workspace.clone(), l.agent.clone(), l.done));
+    if done || screen() != Screen::Home {
+        return;
+    }
+    global::<LastOpen>().update(|l| l.done = true);
+    let Some(ws) = ws.filter(|id| workspace(id).is_some()) else { return };
+    open_workspace(&ws);
+    if let Some(agent) = agent.filter(|a| self::agent(a).is_none_or(|a| a.workspace_id.as_deref() == Some(ws.as_str()))) {
+        open_tab(Tab::Agent(agent));
+    }
+}
+
 pub(crate) fn open_workspace(id: &str) {
+    global::<LastOpen>().update(|l| {
+        l.workspace = Some(id.to_owned());
+        l.done = true;
+    });
     let tab = workspace_agents(id).into_iter().last().map(|a| Tab::Agent(a.id)).unwrap_or(Tab::Draft);
     global::<Nav>().update(|n| n.screen = Screen::Workspace(id.to_owned()));
     watch_changes(id);
@@ -1460,6 +1664,10 @@ fn watch_changes(workspace_id: &str) {
 }
 
 pub(crate) fn open_tab(tab: Tab) {
+    if let Tab::Agent(id) = &tab {
+        global::<LastOpen>().update(|l| l.agent = Some(id.clone()));
+        save_prefs();
+    }
     let agent_id = match &tab {
         Tab::Agent(id) => Some(id.clone()),
         Tab::Draft | Tab::Diff(_) | Tab::Terminal(_) | Tab::File(_) | Tab::Subagent(..) | Tab::CommitDiff(..) => None,
@@ -2038,9 +2246,15 @@ pub(crate) fn apply(event: Event) {
                 c.0 = Conn::Connecting(url);
             }
         }),
-        Event::Connected { hostname, version } => global::<ConnState>().update(|c| {
-            c.0 = Conn::Connected { hostname, version, url: c.1.clone() };
-        }),
+        Event::Connected { hostname, version } => {
+            global::<ConnState>().update(|c| {
+                c.0 = Conn::Connected { hostname, version, url: c.1.clone() };
+            });
+            if global::<Restarting>().with_untracked(|r| r.0) {
+                global::<Restarting>().set(Restarting(false));
+                notify(t("The service restarted").into());
+            }
+        }
         Event::Disconnected { reason } => global::<ConnState>().update(|c| c.0 = Conn::Down(reason)),
         Event::ProjectsReset(list) => global::<Projects>().update(|p| p.0 = list),
         Event::ProjectUpsert(project) => global::<Projects>().update(|p| {
@@ -2048,7 +2262,10 @@ pub(crate) fn apply(event: Event) {
             p.0.push(project);
         }),
         Event::ProjectRemove(id) => global::<Projects>().update(|p| p.0.retain(|x| x.id != id)),
-        Event::WorkspacesReset(list) => global::<Workspaces>().update(|w| w.0 = list),
+        Event::WorkspacesReset(list) => {
+            global::<Workspaces>().update(|w| w.0 = list);
+            restore_last_open();
+        }
         Event::WorkspaceUpsert(ws) => global::<Workspaces>().update(|w| {
             w.0.retain(|x| x.id != ws.id);
             w.0.push(ws);
@@ -2175,6 +2392,21 @@ pub(crate) fn apply(event: Event) {
         }
         Event::TerminalExit(id) => global::<Terminals>().update(|t| t.list.retain(|x| x.id != id)),
         Event::Dir { cwd, path, entries, error } => {
+            if global::<Browse>().with_untracked(|b| b.cwd == cwd) && path == "." {
+                let base = cwd.trim_end_matches('/').to_owned();
+                let mut folders: Vec<String> = entries
+                    .iter()
+                    .filter(|e| e.is_dir && !e.name.starts_with('.'))
+                    .map(|e| format!("{base}/{}", e.name))
+                    .collect();
+                folders.sort_by_key(|f| f.to_lowercase());
+                global::<Browse>().update(|b| {
+                    b.loaded = true;
+                    b.folders = folders;
+                    b.error = error;
+                });
+                return;
+            }
             if let Some(e) = error {
                 notify(tf("Could not list {}: {}", &[&path, &e]));
             }

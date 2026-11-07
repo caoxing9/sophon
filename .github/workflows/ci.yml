@@ -17,62 +17,105 @@ env:
   CARGO_INCREMENTAL: "0"
   CARGO_PROFILE_DEV_DEBUG: "0"
 
+# One job sets up the nsh CLI (built only when the NSH pin moves, cached
+# otherwise); the checks, the UI tests and each package then run side by
+# side, as nothing among them waits on another. The relay builds apart.
 jobs:
-  build:
-    name: Check, test and package (macOS + iOS)
+  nsh:
+    name: nsh CLI
     runs-on: macos-15
+    outputs:
+      rev: ${{ steps.nsh.outputs.rev }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Temporary files
-        run: |
-          mkdir -p "$RUNNER_TEMP/nsh-tmp"
-          echo "TMPDIR=$RUNNER_TEMP/nsh-tmp" >> "$GITHUB_ENV"
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin, aarch64-apple-ios, aarch64-apple-ios-sim
-
       - name: NSH revision
         id: nsh
         run: echo "rev=$(sed -n 's/^nsh-core = .*rev = \"\([0-9a-f]*\)\".*/\1/p' Cargo.toml | head -n 1)" >> "$GITHUB_OUTPUT"
-
-      # The nsh CLI built at the pinned revision; rebuilt only when the pin moves.
       - name: Cache nsh CLI
+        id: cache
         uses: actions/cache@v4
         with:
           path: ~/.cache/sophon-nsh
           key: nsh-cli-${{ runner.os }}-${{ steps.nsh.outputs.rev }}
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.cache.outputs.cache-hit != 'true'
+      - name: Build nsh
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: scripts/install-nsh.sh
 
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install nsh
-        run: echo "$(scripts/install-nsh.sh)" >> "$GITHUB_PATH"
-
-      - run: nsh --version
+  check:
+    name: Check and Rust tests
+    needs: nsh
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          rev: ${{ needs.nsh.outputs.rev }}
+          cache-key: check
       - name: Check
         run: nsh check
       - name: Rust tests
         run: cargo test --locked
+
+  ui:
+    name: UI tests
+    needs: nsh
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          rev: ${{ needs.nsh.outputs.rev }}
+          cache-key: ui
       - name: UI tests (headless)
         run: nsh test App.test.tsx
 
-      - name: Package macOS
-        run: nsh package --target macos -o dist/macos
-      - name: Package iOS simulator
-        run: nsh package --target ios-simulator --icon assets/app-icon/icon-ios-1024.png -o dist/ios-simulator
-
-      - name: Archive
-        run: |
-          ditto -c -k --keepParent dist/macos/Sophon.app dist/Sophon-macos.zip
-          ditto -c -k --keepParent dist/ios-simulator/Sophon.app dist/Sophon-ios-simulator.zip
-
+  macos:
+    name: Package macOS
+    needs: nsh
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          rev: ${{ needs.nsh.outputs.rev }}
+          cache-key: macos
+      - run: nsh package --target macos -o dist/macos
+      - run: ditto -c -k --keepParent dist/macos/Sophon.app dist/Sophon-macos.zip
       - uses: actions/upload-artifact@v4
         with:
           name: Sophon-macos
           path: dist/Sophon-macos.zip
+
+  ios:
+    name: Package iOS simulator
+    needs: nsh
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          rev: ${{ needs.nsh.outputs.rev }}
+          cache-key: ios
+          targets: aarch64-apple-ios-sim
+      - run: nsh package --target ios-simulator --icon assets/app-icon/icon-ios-1024.png -o dist/ios-simulator
+      - run: ditto -c -k --keepParent dist/ios-simulator/Sophon.app dist/Sophon-ios-simulator.zip
       - uses: actions/upload-artifact@v4
         with:
           name: Sophon-ios-simulator
           path: dist/Sophon-ios-simulator.zip
+
+  relay:
+    name: Relay
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: relay
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: relay
+      - run: cargo build --release --locked

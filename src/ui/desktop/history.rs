@@ -7,9 +7,9 @@ use nsh_core::{
     element::{FontWeight, Position},
     prelude::*,
 };
-use super::kit::text;
+use crate::ui::kit::text;
 
-use super::kit::*;
+use crate::ui::kit::*;
 use crate::{daemon::Agent, store};
 
 pub(crate) fn history(compact: bool) -> impl IntoElement {

@@ -353,8 +353,25 @@ pub(crate) fn glass(v: View) -> View {
         .shadow_lg()
 }
 
-/// The denser glass of menus, dialogs and the composer.
+/// Apple's Liquid Glass (iOS 26 and later; earlier systems keep the
+/// backdrop blur): what floats over content at the bottom of the phone's
+/// screens, the composer and its buttons.
+pub(crate) fn liquid_glass(v: View) -> View {
+    v.glass_effect(nsh_core::GlassEffect::Regular)
+        .bg(tint(SURFACE0, 0.35))
+        .backdrop_blur(px(GLASS_BLUR))
+        .backdrop_saturate(1.7)
+        .border_1()
+        .border_color(glass_edge())
+        .shadow_lg()
+}
+
+/// The denser glass of menus, dialogs and the composer (Liquid Glass on
+/// the phone).
 pub(crate) fn glass_strong(v: View) -> View {
+    if MOBILE {
+        return liquid_glass(v);
+    }
     v.bg(glass_fill_strong())
         .backdrop_blur(px(GLASS_BLUR))
         .backdrop_saturate(1.7)
@@ -396,4 +413,64 @@ pub(crate) fn ambient() -> View {
         .child(glow(tint(ACCENT, 0.16), Some(-220.0), None, 760.0))
         .child(glow(tint(DOT_WARNING, 0.12), None, Some(-200.0), 700.0))
         .child(glow(tint(ACCENT, 0.07), Some(260.0), Some(420.0), 520.0))
+}
+
+/// The mark, loading: the eclipse alone (no sky, no tile), its corona
+/// alive around a still moon. Two copies of the corona turn opposite ways
+/// at different speeds (9 s and 13 s a turn), the first also breathing
+/// (1.7 s): as their streamers cross, the light shifts unevenly, as a
+/// corona's does, never in one steady beat. All natively, animated values
+/// bound to rotation and opacity: no layout or engine work per frame.
+pub(crate) fn eclipse(size: f32) -> View {
+    let forward = animated_value(0.0);
+    let backward = animated_value(0.0);
+    let breath = animated_value(1.0);
+    Animation::timing(&forward, 360.0, nsh_core::element::Timing::new(9000.0, Easing::Linear)).looped(None).start();
+    Animation::timing(&backward, -360.0, nsh_core::element::Timing::new(13000.0, Easing::Linear)).looped(None).start();
+    let half = nsh_core::element::Timing::new(850.0, Easing::EaseInOut);
+    Animation::sequence([Animation::timing(&breath, 0.72, half.clone()), Animation::timing(&breath, 1.0, half)])
+        .looped(None)
+        .start();
+    let layer = |asset: ImageAsset| image(asset).absolute().top(px(0.0)).left(px(0.0)).w(px(size)).h(px(size));
+    view()
+        .w(px(size))
+        .h(px(size))
+        .flex_shrink_0()
+        .child(layer(crate::LOADER_CORONA).bind_rotate(&forward).bind_opacity(&breath))
+        .child(layer(crate::LOADER_CORONA).bind_rotate(&backward).opacity(0.45))
+        .child(layer(crate::LOADER_MOON))
+}
+
+/// The mark, still and sharp at any size (the icon's layers, 256 px).
+pub(crate) fn mark(size: f32) -> View {
+    let layer = |asset: ImageAsset| image(asset).absolute().top(px(0.0)).left(px(0.0)).w(px(size)).h(px(size));
+    view()
+        .w(px(size))
+        .h(px(size))
+        .flex_shrink_0()
+        .rounded(px(size * 0.24))
+        .overflow_hidden()
+        .child(layer(crate::LOADER_SKY))
+        .child(layer(crate::LOADER_CORONA))
+        .child(layer(crate::LOADER_MOON))
+}
+
+/// Loading: the mark with its corona running, under an optional line.
+pub(crate) fn loader(label: Option<&'static str>) -> View {
+    view()
+        .items_center()
+        .gap(px(S3))
+        .child(eclipse(44.0))
+        .when_some(label, |v, l| v.child(text(crate::i18n::t(l)).text_size(px(TEXT_SM)).text_color(FG_MUTED)))
+}
+
+/// The inline form of [`loader`], for work in progress in a list (an agent
+/// thinking): a small running mark beside a line.
+pub(crate) fn working(label: impl IntoReactive<SharedString>) -> View {
+    view()
+        .flex_row()
+        .items_center()
+        .gap(px(6.0))
+        .child(eclipse(24.0))
+        .child(text(label).text_size(px(TEXT_SM)).text_color(FG_MUTED))
 }

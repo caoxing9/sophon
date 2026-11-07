@@ -46,6 +46,8 @@ pub enum Command {
     ListCommands(String),
     /// Files and folders matching `query` under `cwd` (@ mentions).
     Suggest { cwd: String, query: String },
+    /// Folders on the host matching `query` (a path, from the home folder).
+    FindDirs { query: String },
     /// The page of history before `cursor`.
     LoadOlder { agent_id: String, cursor: Value },
     /// Streams the uncommitted changes of `cwd` (one checkout at a time);
@@ -488,6 +490,11 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
                 backoff = Duration::from_secs(1);
                 continue;
             }
+            Ok(Exit::Lan) => {
+                lan_index = 0;
+                backoff = Duration::from_secs(1);
+                continue;
+            }
             Ok(Exit::Closed(reason)) => {
                 backoff = Duration::from_secs(1);
                 reason
@@ -554,19 +561,26 @@ fn endpoint_for(r: &RemoteHost, lan_index: usize) -> Endpoint {
                     password: None,
                 }),
                 bridge_token: Some(token),
+                lan_probe: vec![],
             };
         }
         if let Some(offer) = link.relay {
+            let lan_probe = link
+                .lan
+                .as_ref()
+                .map(|(addrs, ..)| addrs.split(',').filter(|a| !a.is_empty()).map(str::to_owned).collect())
+                .unwrap_or_default();
             return Endpoint {
                 url: offer.ws_url(),
                 local_credential: None,
                 password: r.password.clone().or_else(|| offer.password.clone()),
                 relay: Some(offer),
                 bridge_token: None,
+                lan_probe,
             };
         }
     }
-    Endpoint { url: r.ws_url(), local_credential: None, password: r.password.clone(), relay: None, bridge_token: None }
+    Endpoint { url: r.ws_url(), local_credential: None, password: r.password.clone(), relay: None, bridge_token: None, lan_probe: vec![] }
 }
 
 enum Exit {
@@ -574,6 +588,8 @@ enum Exit {
     Closed(String),
     /// The user picked another host.
     Switch(Option<RemoteHost>),
+    /// The LAN bridge answers: leave the relay for it.
+    Lan,
 }
 
 /// What a request was for, so its response can be routed.
@@ -677,13 +693,34 @@ async fn session(
     );
     let hello_deadline = tokio::time::sleep(Duration::from_secs(15));
     tokio::pin!(hello_deadline);
+    // The daemon answers every ping: a connection silent for longer than
+    // this is dead (a relay that dropped it, a phone back from sleep), and
+    // the session ends so the loop reconnects instead of sending into it.
+    const SILENCE: Duration = Duration::from_secs(25);
+    let mut last_frame = tokio::time::Instant::now();
+    let mut lan_check = tokio::time::interval_at(
+        tokio::time::Instant::now() + Duration::from_secs(5),
+        Duration::from_secs(15),
+    );
 
     loop {
         tokio::select! {
             _ = &mut hello_deadline, if !connected => {
                 return Err("The daemon did not answer the handshake".into());
             }
+            _ = lan_check.tick(), if connected && !endpoint.lan_probe.is_empty() => {
+                for addr in &endpoint.lan_probe {
+                    let reach = tokio::time::timeout(Duration::from_millis(800), tokio::net::TcpStream::connect(addr.as_str())).await;
+                    if matches!(reach, Ok(Ok(_))) {
+                        log::info!("the LAN bridge at {addr} answers: leaving the relay");
+                        return Ok(Exit::Lan);
+                    }
+                }
+            }
             _ = ping.tick(), if connected => {
+                if last_frame.elapsed() > SILENCE {
+                    return Err("The connection timed out".into());
+                }
                 send(&mut tx, &json!({ "type": "ping" })).await?;
             }
             cmd = commands.recv() => {
@@ -725,6 +762,7 @@ async fn session(
                     Some(Err(e)) => return Err(format!("Connection lost: {e}")),
                     Some(Ok(frame)) => frame,
                 };
+                last_frame = tokio::time::Instant::now();
                 let frame = match unseal.as_mut() {
                     None => frame,
                     Some(r) => match frame {
@@ -822,6 +860,9 @@ fn session_msg(message: Value) -> Value {
     json!({ "type": "session", "message": message })
 }
 
+/// Items a conversation opens with, and each earlier page brings.
+const TIMELINE_PAGE: u32 = 40;
+
 fn timeline_requests(agent_id: &str, pending: &mut HashMap<String, Pending>) -> Vec<Value> {
     vec![
         request(
@@ -831,7 +872,10 @@ fn timeline_requests(agent_id: &str, pending: &mut HashMap<String, Pending>) -> 
                 "type": "fetch_agent_timeline_request",
                 "agentId": agent_id,
                 "direction": "tail",
-                "limit": 300,
+                // A screenful, as Paseo's app pages it: earlier ones load as
+                // the conversation scrolls up, so a long agent opens as
+                // fast as a short one, through a relay too.
+                "limit": TIMELINE_PAGE,
                 "projection": "projected",
             }),
         ),
@@ -882,8 +926,9 @@ fn diff_request(cwd: &str, pending: &mut HashMap<String, Pending>) -> Value {
 
 const BASE_EVENTS: &[&str] =
     &["project.update", "agent_permission_request", "agent_permission_resolved", "agent_attention_required"];
-const NEWER_EVENTS: &[&str] =
-    &["providers_snapshot_update", "agent.provider_subagents.update", "agent.background_work.update"];
+// Events 0.15 (the service Sophon ships) knows: one it does not makes it
+// refuse the whole list.
+const NEWER_EVENTS: &[&str] = &["providers_snapshot_update", "agent.provider_subagents.update"];
 
 fn events_request(pending: &mut HashMap<String, Pending>, full: bool) -> Value {
     let mut events: Vec<&str> = BASE_EVENTS.to_vec();
@@ -943,6 +988,17 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
             pending,
             Pending::Commands,
             json!({ "type": "list_commands_request", "agentId": agent_id }),
+        )],
+        Command::FindDirs { query } => vec![request(
+            pending,
+            Pending::Suggest(query.clone()),
+            json!({
+                "type": "directory_suggestions_request",
+                "query": query,
+                "includeFiles": false,
+                "includeDirectories": true,
+                "limit": 40,
+            }),
         )],
         Command::Suggest { cwd, query } => vec![request(
             pending,
@@ -1269,7 +1325,7 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
                 "agentId": agent_id,
                 "direction": "before",
                 "cursor": cursor,
-                "limit": 100,
+                "limit": TIMELINE_PAGE,
                 "projection": "projected",
             }),
         )],
@@ -2139,6 +2195,48 @@ pub struct Endpoint {
     pub relay: Option<super::relay::RelayOffer>,
     /// The LAN bridge's pairing token, sent first through the channel.
     pub bridge_token: Option<String>,
+    /// Through the relay: the LAN bridge's addresses, probed now and then so
+    /// the session moves to the LAN as soon as it answers (back home, or
+    /// once iOS grants local network access, whose prompt fails the first
+    /// attempt).
+    pub lan_probe: Vec<String>,
+}
+
+/// The relay this Mac's service registers with (`daemon.relay.endpoint` in
+/// its config file; the service exposes no call to change it): `None` is
+/// Paseo's own.
+pub fn relay_endpoint() -> Option<String> {
+    let text = std::fs::read_to_string(paseo_home().join("config.json")).ok()?;
+    let v: Value = serde_json::from_str(&text).ok()?;
+    v.pointer("/daemon/relay/endpoint").and_then(Value::as_str).map(str::to_owned).filter(|s| !s.is_empty())
+}
+
+/// Sets the relay (`host:port`, TLS when the port is 443; empty: Paseo's),
+/// keeping the rest of the file. The service reads it when it starts.
+pub fn set_relay_endpoint(endpoint: &str) -> Result<(), String> {
+    let path = paseo_home().join("config.json");
+    let mut v: Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_else(|| json!({}));
+    let endpoint = endpoint.trim().trim_start_matches("https://").trim_start_matches("wss://").trim_end_matches('/');
+    if !v.get("daemon").is_some_and(Value::is_object) {
+        v["daemon"] = json!({});
+    }
+    if !v["daemon"].get("relay").is_some_and(Value::is_object) {
+        v["daemon"]["relay"] = json!({ "enabled": true });
+    }
+    let relay = v["daemon"]["relay"].as_object_mut().ok_or("bad config")?;
+    if endpoint.is_empty() {
+        relay.remove("endpoint");
+        relay.remove("useTls");
+    } else {
+        let endpoint = if endpoint.contains(':') { endpoint.to_owned() } else { format!("{endpoint}:443") };
+        relay.insert("useTls".into(), json!(endpoint.ends_with(":443")));
+        relay.insert("endpoint".into(), json!(endpoint));
+    }
+    let text = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
+    std::fs::write(&path, text).map_err(|e| e.to_string())
 }
 
 fn paseo_home() -> PathBuf {
@@ -2176,7 +2274,7 @@ pub fn discover() -> Endpoint {
         .flatten()
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty());
-    Endpoint { url: format!("ws://{listen}/ws"), local_credential, password: None, relay: None, bridge_token: None }
+    Endpoint { url: format!("ws://{listen}/ws"), local_credential, password: None, relay: None, bridge_token: None, lan_probe: vec![] }
 }
 
 /// A stable id, so a reconnect within the daemon's grace period resumes the
