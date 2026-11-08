@@ -18,6 +18,7 @@ use std::{
 use nsh_core::prelude::*;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 use nsh_updater::install::Installation;
+#[cfg(not(target_arch = "wasm32"))]
 use nsh_updater::{Available, Config, Download};
 
 /// How often a running app looks for a newer version.
@@ -58,6 +59,7 @@ pub(crate) fn state() -> UpdateState {
     global::<UpdateState>().with(Clone::clone)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 enum Msg {
     Found(Available, bool, Option<String>),
     Progress(f32),
@@ -66,6 +68,7 @@ enum Msg {
     Failed(String),
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// What the package says about updates, and its bytes (the installation
 /// check compares them).
 fn package_config() -> Option<(Config, Vec<u8>)> {
@@ -79,9 +82,13 @@ fn package_config() -> Option<(Config, Vec<u8>)> {
 
 /// The running version: the package's, else the crate's (development).
 pub(crate) fn current_version() -> String {
+    #[cfg(target_arch = "wasm32")]
+    return env!("CARGO_PKG_VERSION").to_owned();
+    #[cfg(not(target_arch = "wasm32"))]
     package_config().map(|(c, _)| c.version).unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_owned())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn curl(url: &str) -> Result<Vec<u8>, String> {
     let out = Command::new("curl")
         .args(["-fsSL", "--max-time", "30", url])
@@ -95,6 +102,7 @@ fn curl(url: &str) -> Result<Vec<u8>, String> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn check(config: &Config) -> Result<Option<Available>, String> {
     let manifest = curl(&config.manifest_url())?;
     let signature = match config.signature_url() {
@@ -104,6 +112,7 @@ fn check(config: &Config) -> Result<Option<Available>, String> {
     config.check(&manifest, signature.as_deref(), &nsh_updater::platform()).map_err(|e| e.to_string())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Downloads `update` into the data directory, reporting progress, and
 /// checks its size and SHA-256.
 fn download(update: &Available, progress: impl Fn(f32)) -> Result<PathBuf, String> {

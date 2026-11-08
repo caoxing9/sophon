@@ -14,7 +14,7 @@ use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::net::{TcpListener, TcpStream};
-use tokio_tungstenite::tungstenite::Message;
+use super::rt::{Message, from_ws, to_ws};
 
 use super::{connection::discover, relay};
 
@@ -153,13 +153,13 @@ async fn serve(stream: TcpStream, private: [u8; 32], token: &str) -> Result<(), 
             .map_err(|_| "no hello")?
             .ok_or("closed")?
             .map_err(|e| e.to_string())?;
-        if let Message::Text(t) = frame
+        if let Message::Text(t) = from_ws(frame)
             && let Ok(done) = relay::respond(&private, t.as_str())
         {
             break done;
         }
     };
-    ptx.send(Message::Text(ready.clone().into())).await.map_err(|e| e.to_string())?;
+    ptx.send(to_ws(Message::Text(ready.clone()))).await.map_err(|e| e.to_string())?;
 
     // 2. The pairing token, sealed, before anything reaches the daemon.
     let authed = loop {
@@ -168,8 +168,8 @@ async fn serve(stream: TcpStream, private: [u8; 32], token: &str) -> Result<(), 
             .map_err(|_| "no token")?
             .ok_or("closed")?
             .map_err(|e| e.to_string())?;
-        match unseal.open(frame)? {
-            None => ptx.send(Message::Text(ready.clone().into())).await.map_err(|e| e.to_string())?,
+        match unseal.open(from_ws(frame))? {
+            None => ptx.send(to_ws(Message::Text(ready.clone()))).await.map_err(|e| e.to_string())?,
             Some(Message::Text(t)) => {
                 let v: Value = serde_json::from_str(t.as_str()).unwrap_or(Value::Null);
                 break matches!(v.get("type").and_then(Value::as_str), Some("sophon_bridge_auth" | "victor_bridge_auth"))
@@ -191,7 +191,7 @@ async fn serve(stream: TcpStream, private: [u8; 32], token: &str) -> Result<(), 
         tokio::select! {
             frame = prx.next() => {
                 let Some(Ok(frame)) = frame else { break };
-                let Some(mut plain) = unseal.open(frame)? else { continue };
+                let Some(mut plain) = unseal.open(from_ws(frame))? else { continue };
                 // The phone's hello gets this machine's credential, which a
                 // daemon with a password requires.
                 if let (Message::Text(t), Some(cred)) = (&plain, &credential)
@@ -199,16 +199,17 @@ async fn serve(stream: TcpStream, private: [u8; 32], token: &str) -> Result<(), 
                     && v.get("type").and_then(Value::as_str) == Some("hello")
                 {
                     v["auth"] = json!({ "kind": "localCredential", "token": cred });
-                    plain = Message::Text(v.to_string().into());
+                    plain = Message::Text(v.to_string());
                 }
                 if let Message::Close(_) = plain { break; }
-                dtx.send(plain).await.map_err(|e| e.to_string())?;
+                dtx.send(to_ws(plain)).await.map_err(|e| e.to_string())?;
             }
             frame = drx.next() => {
                 let Some(Ok(frame)) = frame else { break };
+                let frame = from_ws(frame);
                 if let Message::Close(_) = frame { break; }
                 let sealed = seal.seal(frame)?;
-                ptx.send(sealed).await.map_err(|e| e.to_string())?;
+                ptx.send(to_ws(sealed)).await.map_err(|e| e.to_string())?;
             }
         }
     }

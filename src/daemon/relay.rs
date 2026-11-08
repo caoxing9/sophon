@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use serde_json::{Value, json};
-use tokio_tungstenite::tungstenite::Message;
+use super::rt::Message;
 
 const PROLOGUE: &[u8] = b"paseo-relay-e2ee/1";
 const PATTERN: &str = "Noise_NK_25519_ChaChaPoly_SHA256";
