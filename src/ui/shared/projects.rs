@@ -5,7 +5,7 @@
 use crate::i18n::t;
 use nsh_base::button;
 use nsh_core::{
-    element::{FontWeight, Position},
+    element::FontWeight,
     prelude::*,
 };
 
@@ -17,52 +17,54 @@ use crate::ui::kit::*;
 const ROW_HEIGHT: f32 = if MOBILE { 44.0 } else { 32.0 };
 
 /// The list; `actions` adds the desktop's (new workspace, pin, rename,
-/// archive), `empty` is what shows with no projects.
+/// archive), `empty` is what shows with no projects. Each project is a
+/// group whose workspaces fold away: a clipped height on a native spring
+/// (nsh/base's Collapsible), the groups below gliding with it. Groups and
+/// rows are keyed, so what stays keeps its views while data changes.
 pub(crate) fn project_list(actions: bool, empty: impl Fn() -> AnyElement + 'static) -> impl IntoElement {
-    let rows = computed(store::rows);
+    let groups = computed(store::groups);
+    let none = computed(move || groups.with(Vec::is_empty));
     view().flex_1().child(dynamic(move || {
-        let none = rows.with(Vec::is_empty);
+        let none = none.get();
         Some(untracked(|| {
             if none {
-                empty()
-            } else {
-                virtual_list(move || rows.with(Vec::len), move |at: Position| row(at, rows, actions))
-                    .keys(move || rows.with(|r| r.iter().map(Row::key).collect::<Vec<_>>()))
-                    .estimated_item_size(px(ROW_HEIGHT))
-                    .content_padding_bottom(px(S2))
-                    .flex_1()
-                    .into_element()
+                return empty();
             }
+            scroll()
+                .flex_1()
+                .child(view().pb(px(S2)).child(each(move || groups.get(), store::Group::key, move |g, _| group(g, actions))))
+                .into_element()
         }))
     }))
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum Kind {
-    Section,
-    Project,
-    Workspace,
-}
-
-fn row(at: Position, rows: Memo<Vec<Row>>, actions: bool) -> impl IntoElement {
-    let item = computed(move || rows.with(|r| r.get(at.index()).cloned()));
-    let kind = computed(move || {
-        item.with(|r| {
-            r.as_ref().map(|r| match r {
-                Row::Section(_) => Kind::Section,
-                Row::Project(_) => Kind::Project,
-                Row::Workspace(_) => Kind::Workspace,
-            })
-        })
-    });
-    view().child(dynamic(move || {
-        let kind = kind.get()?;
-        Some(untracked(move || match kind {
-            Kind::Section => section_row(item).into_element(),
-            Kind::Project => project_row(item, actions).into_element(),
-            Kind::Workspace => workspace_row(item, actions).into_element(),
-        }))
-    }))
+fn group(g: ReadSignal<store::Group>, actions: bool) -> AnyElement {
+    let rows = move || {
+        each(
+            move || g.with(|g| g.workspaces.clone()),
+            |w: &crate::daemon::Workspace| w.id.clone(),
+            move |w, _| workspace_row(computed(move || Some(Row::Workspace(w.get()))), actions),
+        )
+    };
+    let Some(project) = g.with_untracked(|g| g.project.clone()) else {
+        return view()
+            .child(section_row(computed(|| Some(Row::Section("Pinned".into())))))
+            .child(rows())
+            .into_element();
+    };
+    let pid = project.id.clone();
+    let header = computed(move || g.with(|g| g.project.clone().map(Row::Project)));
+    view()
+        // Where the group starts, for dropping a dragged project.
+        .on_layout(move |b: &Bounds<Points>| store::set_project_row_top(&pid, b.origin.y.0))
+        .child(
+            nsh_base::collapsible()
+                .open(move || !store::is_collapsed(&project.id))
+                .reveal(true)
+                .content(view().child(rows()))
+                .child(project_row(header, actions)),
+        )
+        .into_element()
 }
 
 fn section_row(item: Memo<Option<Row>>) -> impl IntoElement {
@@ -95,12 +97,6 @@ fn project_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
         .rounded(px(R_MD))
         .translate_y(move || DefiniteLength::from(px(drag.get())))
         .bg(move || if dragging.get() { highlight() } else { tint(SIDEBAR, 0.0) })
-        .on_layout(move |b: &Bounds<Points>| {
-            let pid = id();
-            if !dragging.get_untracked() && !pid.is_empty() {
-                store::set_project_row_top(&pid, b.origin.y.0);
-            }
-        })
         .child(
             button()
                 .on_press(move || {

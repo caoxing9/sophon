@@ -431,13 +431,30 @@ pub(crate) fn eclipse(size: f32) -> View {
     Animation::sequence([Animation::timing(&breath, 0.72, half.clone()), Animation::timing(&breath, 1.0, half)])
         .looped(None)
         .start();
-    let layer = |asset: ImageAsset| image(asset).absolute().top(px(0.0)).left(px(0.0)).w(px(size)).h(px(size));
+    let layer = move |asset: ImageAsset| image(asset).absolute().top(px(0.0)).left(px(0.0)).w(px(size)).h(px(size));
+    // The corona is a pale glow made for the dark: on a light page it is
+    // drawn in the accent instead, so the ring still shows round the moon.
+    let glow = move |asset: ImageAsset| layer(asset).tint_color(ACCENT);
     view()
         .w(px(size))
         .h(px(size))
         .flex_shrink_0()
-        .child(layer(crate::LOADER_CORONA).bind_rotate(&forward).bind_opacity(&breath))
-        .child(layer(crate::LOADER_CORONA).bind_rotate(&backward).opacity(0.45))
+        .child(dynamic(move || {
+            let light = !dark();
+            Some(untracked(move || {
+                let main = if light { glow(crate::LOADER_CORONA) } else { layer(crate::LOADER_CORONA) };
+                let back = if light { glow(crate::LOADER_CORONA).opacity(0.3) } else { layer(crate::LOADER_CORONA).opacity(0.45) };
+                view()
+                    .absolute()
+                    .top(px(0.0))
+                    .left(px(0.0))
+                    .w(px(size))
+                    .h(px(size))
+                    .child(main.bind_rotate(&forward).bind_opacity(&breath))
+                    .child(back.bind_rotate(&backward))
+                    .into_element()
+            }))
+        }))
         .child(layer(crate::LOADER_MOON))
 }
 

@@ -752,11 +752,8 @@ pub(crate) fn is_collapsed(project_id: &str) -> bool {
 }
 
 pub(crate) fn toggle_collapsed(project_id: &str) {
-    // The desktop sidebar's rows glide; the phone's groups reveal on their
-    // own (nsh/base's Collapsible), which a second animation would fight.
-    if !crate::ui::kit::MOBILE {
-        animate_rows();
-    }
+    // The groups reveal on their own (nsh/base's Collapsible, a clipped
+    // height on a native spring), which a layout animation would fight.
     global::<Collapsed>().update(|c| {
         if let Some(i) = c.0.iter().position(|id| id == project_id) {
             c.0.remove(i);
@@ -822,19 +819,23 @@ pub(crate) enum Row {
     Workspace(Workspace),
 }
 
-impl Row {
+/// The sidebar: pinned workspaces, then projects (most recent activity
+/// first) each with its workspaces (most recent first).
+/// The sidebar's groups: the pinned workspaces (`project: None`), then
+/// each project with its own, folded or not.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Group {
+    pub(crate) project: Option<Project>,
+    pub(crate) workspaces: Vec<Workspace>,
+}
+
+impl Group {
     pub(crate) fn key(&self) -> String {
-        match self {
-            Row::Section(s) => format!("s:{s}"),
-            Row::Project(p) => format!("p:{}", p.id),
-            Row::Workspace(w) => format!("w:{}", w.id),
-        }
+        self.project.as_ref().map_or_else(|| "pinned".into(), |p| p.id.clone())
     }
 }
 
-/// The sidebar: pinned workspaces, then projects (most recent activity
-/// first) each with its workspaces (most recent first).
-pub(crate) fn rows() -> Vec<Row> {
+pub(crate) fn groups() -> Vec<Group> {
     let projects = projects();
     let workspaces: Vec<Workspace> =
         global::<Workspaces>().with(|w| w.0.iter().filter(|w| !w.archiving).cloned().collect());
@@ -862,21 +863,32 @@ pub(crate) fn rows() -> Vec<Row> {
     // ones) come first, by activity, then the ordered ones.
     let order = global::<ProjectOrder>().with(|o| o.0.clone());
     project_list.sort_by_key(|p| order.iter().position(|id| *id == p.id).map_or((0, 0), |i| (1, i)));
-    let collapsed = global::<Collapsed>().with(|c| c.0.clone());
 
-    let mut rows = Vec::new();
-    let pinned: Vec<&Workspace> = workspaces.iter().filter(|w| w.pinned).collect();
+    let mut groups = Vec::new();
+    let pinned: Vec<Workspace> = workspaces.iter().filter(|w| w.pinned).cloned().collect();
     if !pinned.is_empty() {
-        rows.push(Row::Section("Pinned".into()));
-        rows.extend(pinned.into_iter().cloned().map(Row::Workspace));
+        groups.push(Group { project: None, workspaces: pinned });
     }
     for p in project_list {
-        let mut ws: Vec<&Workspace> = workspaces.iter().filter(|w| w.project_id == p.id && !w.pinned).collect();
+        let mut ws: Vec<Workspace> = workspaces.iter().filter(|w| w.project_id == p.id && !w.pinned).cloned().collect();
         ws.sort_by(|a, b| b.activity_at.cmp(&a.activity_at));
-        let folded = collapsed.contains(&p.id);
-        rows.push(Row::Project(p));
+        groups.push(Group { project: Some(p), workspaces: ws });
+    }
+    groups
+}
+
+/// The groups as one list of rows, folded projects without theirs.
+pub(crate) fn rows() -> Vec<Row> {
+    let collapsed = global::<Collapsed>().with(|c| c.0.clone());
+    let mut rows = Vec::new();
+    for g in groups() {
+        let folded = g.project.as_ref().is_some_and(|p| collapsed.contains(&p.id));
+        match g.project {
+            None => rows.push(Row::Section("Pinned".into())),
+            Some(p) => rows.push(Row::Project(p)),
+        }
         if !folded {
-            rows.extend(ws.into_iter().cloned().map(Row::Workspace));
+            rows.extend(g.workspaces.into_iter().map(Row::Workspace));
         }
     }
     rows
@@ -2074,11 +2086,16 @@ fn deliver(agent_id: &str, text: &str, behavior: Option<&'static str>) {
             shown.push_str(&format!("\n📎 {name}"));
         }
     }
+    let mut shown_here = false;
     global::<Timeline>().update(|t| {
         if t.agent_id.as_deref() == Some(agent_id) {
             t.items.push(Item::User { text: shown.trim().to_owned(), message_id: None });
+            shown_here = true;
         }
     });
+    if shown_here {
+        scroll_timeline_to_end();
+    }
     send(Command::Send { agent_id: agent_id.to_owned(), text: text.to_owned(), behavior, images, attachments });
 }
 
@@ -2209,6 +2226,19 @@ pub(crate) fn scroll_timeline_to(index: usize) {
         if let Some(list) = l {
             list.scroll_to_index(index as u32, nsh_core::geometry::Percentage(0.3), px(0.0), true);
         }
+    });
+}
+
+/// Brings the conversation to its end (a message just sent), once the
+/// new row is laid out.
+pub(crate) fn scroll_timeline_to_end() {
+    spawn(async {
+        nsh_core::element::timer(std::time::Duration::from_millis(60)).await;
+        TIMELINE_LIST.with_borrow(|l| {
+            if let Some(list) = l {
+                list.scroll_to_end(true);
+            }
+        });
     });
 }
 
