@@ -190,7 +190,7 @@ pub(crate) fn send_review(path: Option<&str>, note: &str) -> bool {
     let what = path.map(|p| format!("`{p}`")).unwrap_or_else(|| "the uncommitted changes".into());
     let text = format!("Review of {what}:\n\n{}", note.trim());
     let behavior = agent.is_running().then_some("steer");
-    send(Command::Send { agent_id: agent.id.clone(), text, behavior, images: vec![] });
+    send(Command::Send { agent_id: agent.id.clone(), text, behavior, images: vec![], attachments: vec![] });
     notify(tf("Review sent to “{}”", &[&agent.title]));
     true
 }
@@ -950,6 +950,87 @@ pub(crate) fn remove_image(index: usize) {
             list.remove(index);
         }
     });
+}
+
+/// A file going with the next message: uploading to the host until
+/// `attachment` (what names it in the message) arrives.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PendingFile {
+    id: String,
+    pub(crate) name: String,
+    attachment: Option<serde_json::Value>,
+}
+
+impl PendingFile {
+    pub(crate) fn uploading(&self) -> bool {
+        self.attachment.is_none()
+    }
+}
+
+#[derive(Clone, Default)]
+struct PendingFiles(HashMap<String, Vec<PendingFile>>);
+
+/// The largest file the host takes (Paseo's limit).
+const FILE_MAX_BYTES: usize = 50 * 1024 * 1024;
+
+pub(crate) fn pending_files() -> Vec<PendingFile> {
+    let key = image_key();
+    global::<PendingFiles>().with(|p| p.0.get(&key).cloned().unwrap_or_default())
+}
+
+/// Starts uploading `bytes` to the host; the file shows in the composer
+/// meanwhile and goes with the message once it is there.
+pub(crate) fn attach_file(name: String, mime: String, bytes: Vec<u8>) {
+    if bytes.len() > FILE_MAX_BYTES {
+        notify(tf("“{}” is over 50 MB", &[&name]));
+        return;
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let key = image_key();
+    global::<PendingFiles>().update(|p| {
+        p.0.entry(key).or_default().push(PendingFile { id: id.clone(), name: name.clone(), attachment: None })
+    });
+    send(Command::Upload { id, name, mime, bytes });
+}
+
+pub(crate) fn remove_file(index: usize) {
+    let key = image_key();
+    global::<PendingFiles>().update(|p| {
+        if let Some(list) = p.0.get_mut(&key)
+            && index < list.len()
+        {
+            list.remove(index);
+        }
+    });
+}
+
+fn uploaded(id: String, result: Result<serde_json::Value, String>) {
+    global::<PendingFiles>().update(|p| {
+        for list in p.0.values_mut() {
+            if let Some(i) = list.iter().position(|f| f.id == id) {
+                match &result {
+                    Ok(att) => list[i].attachment = Some(att.clone()),
+                    Err(e) => {
+                        let f = list.remove(i);
+                        notify(tf("Could not upload “{}”: {}", &[&f.name, e]));
+                    }
+                }
+                return;
+            }
+        }
+    });
+}
+
+/// Whether a file of this composer is still on its way to the host.
+pub(crate) fn uploading() -> bool {
+    pending_files().iter().any(PendingFile::uploading)
+}
+
+fn take_files() -> Vec<serde_json::Value> {
+    let key = image_key();
+    let mut out = vec![];
+    global::<PendingFiles>().update(|p| out = p.0.remove(&key).unwrap_or_default());
+    out.into_iter().filter_map(|f| f.attachment).collect()
 }
 
 fn take_images() -> Vec<ImageInput> {
@@ -1916,6 +1997,10 @@ pub(crate) fn submit_form() {
     if f.busy || f.path.trim().is_empty() || f.provider.is_empty() {
         return;
     }
+    if uploading() {
+        notify(t("Wait for the files to finish uploading").into());
+        return;
+    }
     let workspace_id = match screen() {
         Screen::Workspace(id) => Some(id),
         _ => None,
@@ -1936,6 +2021,7 @@ pub(crate) fn submit_form() {
         thinking: f.thinking,
         prompt: f.prompt,
         images: take_images(),
+        attachments: take_files(),
         context: f.context.map(|(c, _)| c),
         features: f
             .features
@@ -1955,7 +2041,11 @@ pub(crate) fn submit_form() {
 pub(crate) fn send_message(text: &str) -> bool {
     let text = text.trim();
     let Some(agent) = selected_agent() else { return false };
-    if text.is_empty() && pending_images().is_empty() {
+    if text.is_empty() && pending_images().is_empty() && pending_files().is_empty() {
+        return false;
+    }
+    if uploading() {
+        notify(t("Wait for the files to finish uploading").into());
         return false;
     }
     let behavior = settings().send_behavior;
@@ -1972,14 +2062,24 @@ pub(crate) fn send_message(text: &str) -> bool {
 }
 
 fn deliver(agent_id: &str, text: &str, behavior: Option<&'static str>) {
-    let images = if image_key() == agent_id { take_images() } else { vec![] };
-    let shown = if images.is_empty() { text.to_owned() } else { format!("{text}\n\n[{} image(s)]", images.len()) };
+    let mine = image_key() == agent_id;
+    let images = if mine { take_images() } else { vec![] };
+    let attachments = if mine { take_files() } else { vec![] };
+    let mut shown = text.to_owned();
+    if !images.is_empty() {
+        shown.push_str(&format!("\n\n[{} image(s)]", images.len()));
+    }
+    for a in &attachments {
+        if let Some(name) = a.get("fileName").and_then(serde_json::Value::as_str) {
+            shown.push_str(&format!("\n📎 {name}"));
+        }
+    }
     global::<Timeline>().update(|t| {
         if t.agent_id.as_deref() == Some(agent_id) {
             t.items.push(Item::User { text: shown.trim().to_owned(), message_id: None });
         }
     });
-    send(Command::Send { agent_id: agent_id.to_owned(), text: text.to_owned(), behavior, images });
+    send(Command::Send { agent_id: agent_id.to_owned(), text: text.to_owned(), behavior, images, attachments });
 }
 
 /// A system notification when an agent starts needing you while you look
@@ -2511,6 +2611,7 @@ pub(crate) fn apply(event: Event) {
                 (None, None) => Err("No text changes in this file".into()),
             })
         }),
+        Event::Uploaded { id, result } => uploaded(id, result),
         Event::PairingOffer { url, relay_enabled, error } => global::<Pairing>().update(|p| {
             // The QR is Sophon's link (LAN + relay); `url` stays Paseo's for
             // its own app.

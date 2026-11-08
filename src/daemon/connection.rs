@@ -20,7 +20,10 @@ pub enum Command {
     /// Show an agent: load its tail and stream it live.
     Open(String),
     /// `behavior`: `steer` or `interrupt` while a turn runs.
-    Send { agent_id: String, text: String, behavior: Option<&'static str>, images: Vec<ImageInput> },
+    Send { agent_id: String, text: String, behavior: Option<&'static str>, images: Vec<ImageInput>, attachments: Vec<Value> },
+    /// Uploads a file to the host for the next message; answered by
+    /// [`Event::Uploaded`] with the same `id`.
+    Upload { id: String, name: String, mime: String, bytes: Vec<u8> },
     Permit {
         agent_id: String,
         permission_id: String,
@@ -390,6 +393,8 @@ pub struct CreateAgent {
     pub thinking: Option<String>,
     pub prompt: String,
     pub images: Vec<ImageInput>,
+    /// Files uploaded to the host ([`Command::Upload`]).
+    pub attachments: Vec<Value>,
     /// Context carried over (a fork's chat history), as a text attachment.
     pub context: Option<Value>,
     pub features: serde_json::Map<String, Value>,
@@ -443,6 +448,9 @@ pub enum Event {
     Usage(Vec<ProviderUsage>),
     /// A link a phone pairs with: relay, daemon id and key.
     PairingOffer { url: Option<String>, relay_enabled: bool, error: Option<String> },
+    /// A file of [`Command::Upload`] is on the host: the attachment that
+    /// names it in a message, or why it is not.
+    Uploaded { id: String, result: Result<Value, String> },
     /// The label catalog: (name, color).
     Labels(Vec<(String, String)>),
     CommitFileDiff { sha: String, path: String, file: Option<DiffFile>, error: Option<String> },
@@ -623,6 +631,7 @@ enum Pending {
     CreateWorkspace,
     CreateAgent,
     Import,
+    Upload(String),
     Other(&'static str),
 }
 
@@ -747,6 +756,13 @@ async fn session(
                     continue;
                 }
                 if !connected {
+                    if let Command::Upload { id, .. } = cmd {
+                        let _ = events.send(Event::Uploaded { id, result: Err("Not connected".into()) });
+                    }
+                    continue;
+                }
+                if let Command::Upload { id, name, mime, bytes } = cmd {
+                    upload(&mut tx, &mut pending, id, name, mime, bytes).await?;
                     continue;
                 }
                 for msg in command_messages(cmd, &mut pending) {
@@ -961,7 +977,9 @@ fn startup_messages(open_agent: Option<&str>, pending: &mut HashMap<String, Pend
 fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec<Value> {
     match cmd {
         Command::Open(id) => timeline_requests(&id, pending),
-        Command::Send { agent_id, text, behavior, images } => {
+        // Sent by the session itself, with its binary frames.
+        Command::Upload { .. } => vec![],
+        Command::Send { agent_id, text, behavior, images, attachments } => {
             let mut msg = json!({
                 "type": "send_agent_message_request",
                 "agentId": agent_id,
@@ -973,6 +991,9 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
             }
             if !images.is_empty() {
                 msg["images"] = images_json(&images);
+            }
+            if !attachments.is_empty() {
+                msg["attachments"] = Value::Array(attachments);
             }
             vec![request(pending, Pending::Other("send message"), msg)]
         }
@@ -1441,8 +1462,9 @@ fn agent_input(create: &CreateAgent, cwd: &str) -> Value {
     if !create.images.is_empty() {
         agent["images"] = images_json(&create.images);
     }
-    if let Some(att) = &create.context {
-        agent["attachments"] = json!([att]);
+    let attachments: Vec<Value> = create.context.iter().chain(&create.attachments).cloned().collect();
+    if !attachments.is_empty() {
+        agent["attachments"] = Value::Array(attachments);
     }
     if !create.prompt.trim().is_empty() {
         agent["initialPrompt"] = json!(create.prompt);
@@ -1519,6 +1541,9 @@ fn handle(
                 Some(Pending::Project) => "add the project",
                 Some(Pending::Events(_)) => "subscribe to events",
                 Some(Pending::FileOp(_)) => "change the file",
+                Some(Pending::Upload(id)) => {
+                    return vec![Event::Uploaded { id, result: Err(error.to_owned()) }];
+                }
                 Some(Pending::Pairing) => {
                     return vec![Event::PairingOffer { url: None, relay_enabled: false, error: Some(error.to_owned()) }];
                 }
@@ -1829,6 +1854,14 @@ fn handle(
                 features: list_of(payload, "features", super::model::Feature::from_json),
             }]
         }
+        "file.upload.response" => {
+            let Some(Pending::Upload(id)) = request_id.and_then(|id| pending.remove(id)) else { return vec![] };
+            let result = match payload.get("file").filter(|f| f.is_object()) {
+                Some(file) => Ok(file.clone()),
+                None => Err(payload.get("error").and_then(Value::as_str).unwrap_or("Upload failed").to_owned()),
+            };
+            vec![Event::Uploaded { id, result }]
+        }
         "daemon.get_pairing_offer.response" => {
             request_id.and_then(|id| pending.remove(id));
             vec![Event::PairingOffer {
@@ -2126,8 +2159,72 @@ struct Out {
     seal: Option<super::relay::Sender>,
 }
 
+/// Paseo's file transfer: the request, then the bytes in binary frames
+/// (begin with the metadata, chunks, end), all under the request's id.
+async fn upload(
+    tx: &mut Out,
+    pending: &mut HashMap<String, Pending>,
+    id: String,
+    name: String,
+    mime: String,
+    bytes: Vec<u8>,
+) -> Result<(), String> {
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let modified_at = "1970-01-01T00:00:00.000Z";
+    pending.insert(request_id.clone(), Pending::Upload(id));
+    send(tx, &session_msg(json!({
+        "type": "file.upload.request",
+        "fileName": name,
+        "mimeType": mime,
+        "size": bytes.len(),
+        "modifiedAt": modified_at,
+        "requestId": request_id,
+    })))
+    .await?;
+    for frame in file_frames(&request_id, &name, &mime, modified_at, &bytes) {
+        send_frame(tx, Message::Binary(frame)).await?;
+    }
+    Ok(())
+}
+
+const FILE_BEGIN: u8 = 0x10;
+const FILE_CHUNK: u8 = 0x11;
+const FILE_END: u8 = 0x12;
+const FILE_CHUNK_BYTES: usize = 128 * 1024;
+
+fn file_frames(request_id: &str, name: &str, mime: &str, modified_at: &str, bytes: &[u8]) -> Vec<Vec<u8>> {
+    let id = request_id.as_bytes();
+    let head = |op: u8| {
+        let mut f = vec![op, id.len() as u8];
+        f.extend_from_slice(id);
+        f
+    };
+    let meta = json!({
+        "mime": mime,
+        "size": bytes.len(),
+        "encoding": "binary",
+        "modifiedAt": modified_at,
+        "fileName": name,
+    })
+    .to_string();
+    let mut begin = head(FILE_BEGIN);
+    begin.extend_from_slice(&(meta.len() as u16).to_be_bytes());
+    begin.extend_from_slice(meta.as_bytes());
+    let mut frames = vec![begin];
+    for chunk in bytes.chunks(FILE_CHUNK_BYTES) {
+        let mut f = head(FILE_CHUNK);
+        f.extend_from_slice(chunk);
+        frames.push(f);
+    }
+    frames.push(head(FILE_END));
+    frames
+}
+
 async fn send(tx: &mut Out, msg: &Value) -> Result<(), String> {
-    let mut frame = Message::Text(msg.to_string());
+    send_frame(tx, Message::Text(msg.to_string())).await
+}
+
+async fn send_frame(tx: &mut Out, mut frame: Message) -> Result<(), String> {
     if let Some(seal) = tx.seal.as_mut() {
         frame = seal.seal(frame)?;
     }
@@ -2281,6 +2378,24 @@ fn client_id() -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn file_frames_follow_paseo() {
+        let bytes = vec![7u8; FILE_CHUNK_BYTES + 3];
+        let frames = file_frames("r1", "a.txt", "text/plain", "t", &bytes);
+        assert_eq!(frames.len(), 4);
+        let begin = &frames[0];
+        assert_eq!(&begin[..4], &[FILE_BEGIN, 2, b'r', b'1']);
+        let len = u16::from_be_bytes([begin[4], begin[5]]) as usize;
+        let meta: Value = serde_json::from_slice(&begin[6..]).unwrap();
+        assert_eq!(len, begin.len() - 6);
+        assert_eq!(meta["size"], json!(bytes.len()));
+        assert_eq!(meta["fileName"], json!("a.txt"));
+        assert_eq!(frames[1].len(), 4 + FILE_CHUNK_BYTES);
+        assert_eq!(&frames[2][..4], &[FILE_CHUNK, 2, b'r', b'1']);
+        assert_eq!(frames[2].len(), 4 + 3);
+        assert_eq!(frames[3], vec![FILE_END, 2, b'r', b'1']);
+    }
+
     use super::*;
 
     #[test]
@@ -2333,6 +2448,39 @@ mod tests {
 
     /// The LAN bridge end to end, against the local daemon:
     /// `cargo test bridge_live -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn upload_live() {
+        // The local daemon; uploads a file and prints the attachment.
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let (ev_tx, mut ev_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+            tokio::spawn(run(ev_tx, cmd_rx));
+            let deadline = tokio::time::sleep(Duration::from_secs(20));
+            tokio::pin!(deadline);
+            let bytes: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+            loop {
+                tokio::select! {
+                    _ = &mut deadline => panic!("no upload answer"),
+                    ev = ev_rx.recv() => match ev.unwrap() {
+                        Event::Connected { .. } => {
+                            cmd_tx.send(Command::Upload { id: "u1".into(), name: "sophon-test.bin".into(), mime: "application/octet-stream".into(), bytes: bytes.clone() }).unwrap();
+                        }
+                        Event::Uploaded { id, result } => {
+                            println!("uploaded {id}: {result:?}");
+                            let file = result.expect("upload");
+                            assert_eq!(file["size"], json!(bytes.len()));
+                            assert_eq!(std::fs::read(file["path"].as_str().unwrap()).unwrap(), bytes);
+                            break;
+                        }
+                        _ => {}
+                    },
+                }
+            }
+        });
+    }
+
     #[test]
     #[ignore]
     fn bridge_live() {

@@ -44,7 +44,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
     };
     let running = computed(move || live && store::selected_agent().is_some_and(|a| a.is_running()));
     let busy = computed(move || !live && store::form().busy);
-    let empty = computed(move || text_value.with(|t| t.trim().is_empty()) && store::pending_images().is_empty());
+    let empty = computed(move || text_value.with(|t| t.trim().is_empty()) && store::pending_images().is_empty() && store::pending_files().is_empty());
     let height = signal(22.0_f32);
 
     if MOBILE {
@@ -89,10 +89,12 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                             .gap(px(S2))
                             .child(
                                 nsh_base::button()
-                                    // Photos are the one attachment: straight to the picker.
                                     .on_press(|| {
                                         dismiss_keyboard();
-                                        pick_images_into_composer();
+                                        show_sheet(None, vec![
+                                            SheetItem::new(t("Photo Library"), pick_images_into_composer).icon(Icon::Image),
+                                            SheetItem::new(t("Choose Files"), pick_files_into_composer).icon(Icon::Folder),
+                                        ]);
                                     })
                                     .accessibility_label(t("Attach"))
                                     .w(px(36.0))
@@ -192,6 +194,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                             .child(icon(Icon::Paperclip, 16.0).text_color(FG_MUTED)),
                     )
                     .child(menu_row(t("Choose images…"), Some(Icon::Image), None, false, pick_images_into_composer))
+                    .child(menu_row(t("Choose files…"), Some(Icon::File), None, false, pick_files_into_composer))
                     .child(menu_row(t("Paste image"), Some(Icon::Copy), None, false, paste_image_into_composer)),
                 )
                 .child(mic_button(text_value, set_text))
@@ -641,16 +644,49 @@ fn pick_images_into_composer() {
     });
 }
 
-/// The images waiting to go with the message.
+/// Files from the device: uploaded to the host, then sent as attachments.
+fn pick_files_into_composer() {
+    spawn(async move {
+        let picked = pick_files(nsh_core::picker::FilePickRequest::new(true, 10)).await;
+        for f in picked {
+            store::attach_file(f.name.clone(), f.mime.clone(), f.data.bytes().to_vec());
+        }
+    });
+}
+
+/// What waits to go with the message: images, and files (dimmed while
+/// they upload).
 fn image_tray() -> impl IntoElement {
     let images = computed(|| store::pending_images().into_iter().map(|i| i.name).collect::<Vec<_>>());
+    let files = computed(|| store::pending_files().into_iter().map(|f| (f.uploading(), f.name)).collect::<Vec<_>>());
     view().child(dynamic(move || {
         let names = images.get();
-        if names.is_empty() {
+        let files = files.get();
+        if names.is_empty() && files.is_empty() {
             return None;
         }
         Some(untracked(move || {
             let mut row = view().flex_row().flex_wrap().gap(px(S2)).mb(px(S2));
+            for (i, (uploading, name)) in files.clone().into_iter().enumerate() {
+                row = row.child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(6.0))
+                        .h(px(30.0))
+                        .pl(px(S2))
+                        .pr(px(2.0))
+                        .rounded(px(R_LG))
+                        .border_1()
+                        .border_color(BORDER)
+                        .bg(SURFACE1)
+                        .opacity(if uploading { 0.55 } else { 1.0 })
+                        .child(icon(Icon::FileText, 14.0).text_color(FG_MUTED))
+                        .child(text(name).text_size(px(TEXT_SM)).number_of_lines(1).max_w(px(180.0)))
+                        .when(uploading, |v| v.child(text(t("Uploading…")).text_size(px(TEXT_XS)).text_color(FG_MUTED)))
+                        .child(icon_btn(Icon::X, Sz::Sm, t("Remove file"), move || store::remove_file(i))),
+                );
+            }
             for (i, name) in names.clone().into_iter().enumerate() {
                 row = row.child(
                     view()
