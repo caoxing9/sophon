@@ -1,7 +1,7 @@
 //! The home screen: the computer and a search field on top, then the
 //! conversations, the projects or settings, picked in the system tab bar
-//! (Liquid Glass on iOS 26 and later) at the foot, beside a glass button
-//! that starts a new agent.
+//! (Liquid Glass on iOS 26 and later) at the foot, under a round glass
+//! button that starts a new conversation.
 
 use crate::i18n::{t, tf};
 use nsh_base::{button, input};
@@ -23,12 +23,7 @@ enum HomeTab {
     Chats,
     Projects,
     Settings,
-    /// The new conversation item, selected for a moment.
-    New,
 }
-
-/// The tab bar's new conversation item.
-const NEW_ITEM: u32 = 3;
 
 impl HomeTab {
     fn index(self) -> u32 {
@@ -43,8 +38,8 @@ impl HomeTab {
     }
 }
 
-/// Room the floating bar takes at the foot of the lists.
-const BAR_ROOM: f32 = 96.0;
+/// Room the floating bar and the new button take at the foot of the lists.
+const BAR_ROOM: f32 = 168.0;
 
 pub(crate) fn home() -> impl IntoElement {
     let tab = signal(HomeTab::Chats);
@@ -57,7 +52,6 @@ pub(crate) fn home() -> impl IntoElement {
             Some(untracked(move || {
                 match current {
                     HomeTab::Settings => view().flex_1().child(settings::settings()).into_element(),
-                    HomeTab::New => view().flex_1().into_element(),
                     HomeTab::Chats => view()
                         .flex_1()
                         .child(large_header(t("Chats"), host_chip()))
@@ -186,9 +180,9 @@ fn host_chip() -> impl IntoElement {
         .child(icon(Icon::ChevronDown, 12.0).text_color(FG_MUTED))
 }
 
-/// The system tab bar, icons only: the three tabs, then a fourth item that
-/// starts a conversation (a screen to pick its workspace) rather than
-/// showing a tab.
+/// The system tab bar, icons only, with the three tabs; over its right
+/// end, a round glass button that starts a conversation (a screen to pick
+/// its workspace).
 fn foot(tab: Signal<HomeTab>) -> impl IntoElement {
     view()
         .absolute()
@@ -196,27 +190,36 @@ fn foot(tab: Signal<HomeTab>) -> impl IntoElement {
         .right(px(0.0))
         .bottom(px(0.0))
         .pb_safe_area()
+        .pointer_events(nsh_core::PointerEvents::BoxNone)
+        .child(
+            view().flex_row().justify_end().px(px(S6)).pb(px(S3)).pointer_events(nsh_core::PointerEvents::BoxNone).child(
+                liquid_glass(view()).w(px(56.0)).h(px(56.0)).rounded(px(R_FULL)).shadow_lg().child(
+                    button()
+                        .on_press(|| {
+                            dismiss_keyboard();
+                            super::push(super::Route::NewChat);
+                        })
+                        .accessibility_label(t("New conversation"))
+                        .flex_1()
+                        .rounded(px(R_FULL))
+                        .items_center()
+                        .justify_center()
+                        .active(|s| s.opacity(0.6))
+                        .child(icon(Icon::SquarePen, 22.0).text_color(FG)),
+                ),
+            ),
+        )
         .child(
             tab_bar()
                 .items(vec![
                     TabBarItem::new("").icon("bubble.left.and.bubble.right"),
                     TabBarItem::new("").icon("folder"),
                     TabBarItem::new("").icon("gearshape"),
-                    TabBarItem::new("").icon("square.and.pencil"),
                 ])
                 .selected_index(move || tab.get().index())
                 .on_change(move |i: &u32| {
                     dismiss_keyboard();
-                    if *i == NEW_ITEM {
-                        // The bar shows the choice at once: put it back on
-                        // the tab that stays, after this turn.
-                        let keep = tab.get_untracked();
-                        tab.set(HomeTab::New);
-                        spawn(async move { tab.set(keep) });
-                        super::push(super::Route::NewChat);
-                    } else {
-                        tab.set(HomeTab::from_index(*i));
-                    }
+                    tab.set(HomeTab::from_index(*i));
                 }),
         )
 }

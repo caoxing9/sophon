@@ -133,9 +133,9 @@ fn row(at: Position, running: Memo<bool>) -> impl IntoElement {
         move || {
             let kind = kind.get()?;
             Some(untracked(move || match kind {
-                // The phone: no button on the bubble; holding it opens its
-                // actions (Messages' way), copying among them.
-                RowKind::User if MOBILE => view()
+                // The phone: no button on the bubble; a tap opens its
+                // actions, copying among them.
+                RowKind::User if MOBILE => nsh_base::button()
                     .self_end()
                     .max_w(relative(0.82))
                     .px(px(14.0))
@@ -143,13 +143,19 @@ fn row(at: Position, running: Memo<bool>) -> impl IntoElement {
                     .rounded(px(18.0))
                     .bg(tint(ACCENT, 0.10))
                     .active(|s| s.opacity(0.7))
-                    .on_long_press(move |_: &PressEvent| message_sheet(item))
+                    .on_press(move || message_sheet(item))
+                    .accessibility_label(t("Message actions"))
                     .child(text(text_of).text_size(px(TEXT_CONTENT)).line_height(px(22.0)).text_color(FG))
                     .into_element(),
-                RowKind::User => view()
+                // The desktop: its actions show while the pointer is on it.
+                RowKind::User => {
+                    let hover = signal(false);
+                    view()
                     .self_end()
                     .max_w(relative(0.82))
-                    .child(user_actions(item))
+                    .on_mouse_enter(move |_: &MouseEvent| hover.set(true))
+                    .on_mouse_leave(move |_: &MouseEvent| hover.set(false))
+                    .child(user_actions(item).opacity(move || if hover.get() { 1.0_f32 } else { 0.0 }).transition_opacity())
                     .px(px(14.0))
                     .py(px(9.0))
                     .rounded(px(18.0))
@@ -161,7 +167,8 @@ fn row(at: Position, running: Memo<bool>) -> impl IntoElement {
                             .text_color(FG)
                             .selectable(true),
                     )
-                    .into_element(),
+                    .into_element()
+                }
                 RowKind::Assistant => text_view()
                     .markdown(move || Some(SharedString::from(text_of())))
                     .options(move || MarkdownOptions { streaming: streaming.get(), ..MarkdownOptions::default() })
@@ -241,7 +248,7 @@ fn message_sheet(item: Memo<Option<Item>>) {
 }
 
 /// Rewind from a user message (Paseo's message menu).
-fn user_actions(item: Memo<Option<Item>>) -> impl IntoElement {
+fn user_actions(item: Memo<Option<Item>>) -> View {
     let id = computed(move || match item.get() {
         Some(Item::User { message_id: Some(id), .. }) => Some(id),
         _ => None,

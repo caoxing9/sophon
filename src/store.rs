@@ -190,7 +190,7 @@ pub(crate) fn send_review(path: Option<&str>, note: &str) -> bool {
     let what = path.map(|p| format!("`{p}`")).unwrap_or_else(|| "the uncommitted changes".into());
     let text = format!("Review of {what}:\n\n{}", note.trim());
     let behavior = agent.is_running().then_some("steer");
-    send(Command::Send { agent_id: agent.id.clone(), text, behavior, images: vec![] });
+    send(Command::Send { agent_id: agent.id.clone(), text, behavior, images: vec![], attachments: vec![] });
     notify(tf("Review sent to “{}”", &[&agent.title]));
     true
 }
@@ -752,11 +752,8 @@ pub(crate) fn is_collapsed(project_id: &str) -> bool {
 }
 
 pub(crate) fn toggle_collapsed(project_id: &str) {
-    // The desktop sidebar's rows glide; the phone's groups reveal on their
-    // own (nsh/base's Collapsible), which a second animation would fight.
-    if !crate::ui::kit::MOBILE {
-        animate_rows();
-    }
+    // The groups reveal on their own (nsh/base's Collapsible, a clipped
+    // height on a native spring), which a layout animation would fight.
     global::<Collapsed>().update(|c| {
         if let Some(i) = c.0.iter().position(|id| id == project_id) {
             c.0.remove(i);
@@ -822,19 +819,23 @@ pub(crate) enum Row {
     Workspace(Workspace),
 }
 
-impl Row {
+/// The sidebar: pinned workspaces, then projects (most recent activity
+/// first) each with its workspaces (most recent first).
+/// The sidebar's groups: the pinned workspaces (`project: None`), then
+/// each project with its own, folded or not.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Group {
+    pub(crate) project: Option<Project>,
+    pub(crate) workspaces: Vec<Workspace>,
+}
+
+impl Group {
     pub(crate) fn key(&self) -> String {
-        match self {
-            Row::Section(s) => format!("s:{s}"),
-            Row::Project(p) => format!("p:{}", p.id),
-            Row::Workspace(w) => format!("w:{}", w.id),
-        }
+        self.project.as_ref().map_or_else(|| "pinned".into(), |p| p.id.clone())
     }
 }
 
-/// The sidebar: pinned workspaces, then projects (most recent activity
-/// first) each with its workspaces (most recent first).
-pub(crate) fn rows() -> Vec<Row> {
+pub(crate) fn groups() -> Vec<Group> {
     let projects = projects();
     let workspaces: Vec<Workspace> =
         global::<Workspaces>().with(|w| w.0.iter().filter(|w| !w.archiving).cloned().collect());
@@ -862,21 +863,32 @@ pub(crate) fn rows() -> Vec<Row> {
     // ones) come first, by activity, then the ordered ones.
     let order = global::<ProjectOrder>().with(|o| o.0.clone());
     project_list.sort_by_key(|p| order.iter().position(|id| *id == p.id).map_or((0, 0), |i| (1, i)));
-    let collapsed = global::<Collapsed>().with(|c| c.0.clone());
 
-    let mut rows = Vec::new();
-    let pinned: Vec<&Workspace> = workspaces.iter().filter(|w| w.pinned).collect();
+    let mut groups = Vec::new();
+    let pinned: Vec<Workspace> = workspaces.iter().filter(|w| w.pinned).cloned().collect();
     if !pinned.is_empty() {
-        rows.push(Row::Section("Pinned".into()));
-        rows.extend(pinned.into_iter().cloned().map(Row::Workspace));
+        groups.push(Group { project: None, workspaces: pinned });
     }
     for p in project_list {
-        let mut ws: Vec<&Workspace> = workspaces.iter().filter(|w| w.project_id == p.id && !w.pinned).collect();
+        let mut ws: Vec<Workspace> = workspaces.iter().filter(|w| w.project_id == p.id && !w.pinned).cloned().collect();
         ws.sort_by(|a, b| b.activity_at.cmp(&a.activity_at));
-        let folded = collapsed.contains(&p.id);
-        rows.push(Row::Project(p));
+        groups.push(Group { project: Some(p), workspaces: ws });
+    }
+    groups
+}
+
+/// The groups as one list of rows, folded projects without theirs.
+pub(crate) fn rows() -> Vec<Row> {
+    let collapsed = global::<Collapsed>().with(|c| c.0.clone());
+    let mut rows = Vec::new();
+    for g in groups() {
+        let folded = g.project.as_ref().is_some_and(|p| collapsed.contains(&p.id));
+        match g.project {
+            None => rows.push(Row::Section("Pinned".into())),
+            Some(p) => rows.push(Row::Project(p)),
+        }
         if !folded {
-            rows.extend(ws.into_iter().cloned().map(Row::Workspace));
+            rows.extend(g.workspaces.into_iter().map(Row::Workspace));
         }
     }
     rows
@@ -950,6 +962,87 @@ pub(crate) fn remove_image(index: usize) {
             list.remove(index);
         }
     });
+}
+
+/// A file going with the next message: uploading to the host until
+/// `attachment` (what names it in the message) arrives.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PendingFile {
+    id: String,
+    pub(crate) name: String,
+    attachment: Option<serde_json::Value>,
+}
+
+impl PendingFile {
+    pub(crate) fn uploading(&self) -> bool {
+        self.attachment.is_none()
+    }
+}
+
+#[derive(Clone, Default)]
+struct PendingFiles(HashMap<String, Vec<PendingFile>>);
+
+/// The largest file the host takes (Paseo's limit).
+const FILE_MAX_BYTES: usize = 50 * 1024 * 1024;
+
+pub(crate) fn pending_files() -> Vec<PendingFile> {
+    let key = image_key();
+    global::<PendingFiles>().with(|p| p.0.get(&key).cloned().unwrap_or_default())
+}
+
+/// Starts uploading `bytes` to the host; the file shows in the composer
+/// meanwhile and goes with the message once it is there.
+pub(crate) fn attach_file(name: String, mime: String, bytes: Vec<u8>) {
+    if bytes.len() > FILE_MAX_BYTES {
+        notify(tf("“{}” is over 50 MB", &[&name]));
+        return;
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let key = image_key();
+    global::<PendingFiles>().update(|p| {
+        p.0.entry(key).or_default().push(PendingFile { id: id.clone(), name: name.clone(), attachment: None })
+    });
+    send(Command::Upload { id, name, mime, bytes });
+}
+
+pub(crate) fn remove_file(index: usize) {
+    let key = image_key();
+    global::<PendingFiles>().update(|p| {
+        if let Some(list) = p.0.get_mut(&key)
+            && index < list.len()
+        {
+            list.remove(index);
+        }
+    });
+}
+
+fn uploaded(id: String, result: Result<serde_json::Value, String>) {
+    global::<PendingFiles>().update(|p| {
+        for list in p.0.values_mut() {
+            if let Some(i) = list.iter().position(|f| f.id == id) {
+                match &result {
+                    Ok(att) => list[i].attachment = Some(att.clone()),
+                    Err(e) => {
+                        let f = list.remove(i);
+                        notify(tf("Could not upload “{}”: {}", &[&f.name, e]));
+                    }
+                }
+                return;
+            }
+        }
+    });
+}
+
+/// Whether a file of this composer is still on its way to the host.
+pub(crate) fn uploading() -> bool {
+    pending_files().iter().any(PendingFile::uploading)
+}
+
+fn take_files() -> Vec<serde_json::Value> {
+    let key = image_key();
+    let mut out = vec![];
+    global::<PendingFiles>().update(|p| out = p.0.remove(&key).unwrap_or_default());
+    out.into_iter().filter_map(|f| f.attachment).collect()
 }
 
 fn take_images() -> Vec<ImageInput> {
@@ -1916,6 +2009,10 @@ pub(crate) fn submit_form() {
     if f.busy || f.path.trim().is_empty() || f.provider.is_empty() {
         return;
     }
+    if uploading() {
+        notify(t("Wait for the files to finish uploading").into());
+        return;
+    }
     let workspace_id = match screen() {
         Screen::Workspace(id) => Some(id),
         _ => None,
@@ -1936,6 +2033,7 @@ pub(crate) fn submit_form() {
         thinking: f.thinking,
         prompt: f.prompt,
         images: take_images(),
+        attachments: take_files(),
         context: f.context.map(|(c, _)| c),
         features: f
             .features
@@ -1955,7 +2053,11 @@ pub(crate) fn submit_form() {
 pub(crate) fn send_message(text: &str) -> bool {
     let text = text.trim();
     let Some(agent) = selected_agent() else { return false };
-    if text.is_empty() && pending_images().is_empty() {
+    if text.is_empty() && pending_images().is_empty() && pending_files().is_empty() {
+        return false;
+    }
+    if uploading() {
+        notify(t("Wait for the files to finish uploading").into());
         return false;
     }
     let behavior = settings().send_behavior;
@@ -1972,14 +2074,29 @@ pub(crate) fn send_message(text: &str) -> bool {
 }
 
 fn deliver(agent_id: &str, text: &str, behavior: Option<&'static str>) {
-    let images = if image_key() == agent_id { take_images() } else { vec![] };
-    let shown = if images.is_empty() { text.to_owned() } else { format!("{text}\n\n[{} image(s)]", images.len()) };
+    let mine = image_key() == agent_id;
+    let images = if mine { take_images() } else { vec![] };
+    let attachments = if mine { take_files() } else { vec![] };
+    let mut shown = text.to_owned();
+    if !images.is_empty() {
+        shown.push_str(&format!("\n\n[{} image(s)]", images.len()));
+    }
+    for a in &attachments {
+        if let Some(name) = a.get("fileName").and_then(serde_json::Value::as_str) {
+            shown.push_str(&format!("\n📎 {name}"));
+        }
+    }
+    let mut shown_here = false;
     global::<Timeline>().update(|t| {
         if t.agent_id.as_deref() == Some(agent_id) {
             t.items.push(Item::User { text: shown.trim().to_owned(), message_id: None });
+            shown_here = true;
         }
     });
-    send(Command::Send { agent_id: agent_id.to_owned(), text: text.to_owned(), behavior, images });
+    if shown_here {
+        scroll_timeline_to_end();
+    }
+    send(Command::Send { agent_id: agent_id.to_owned(), text: text.to_owned(), behavior, images, attachments });
 }
 
 /// A system notification when an agent starts needing you while you look
@@ -2109,6 +2226,19 @@ pub(crate) fn scroll_timeline_to(index: usize) {
         if let Some(list) = l {
             list.scroll_to_index(index as u32, nsh_core::geometry::Percentage(0.3), px(0.0), true);
         }
+    });
+}
+
+/// Brings the conversation to its end (a message just sent), once the
+/// new row is laid out.
+pub(crate) fn scroll_timeline_to_end() {
+    spawn(async {
+        nsh_core::element::timer(std::time::Duration::from_millis(60)).await;
+        TIMELINE_LIST.with_borrow(|l| {
+            if let Some(list) = l {
+                list.scroll_to_end(true);
+            }
+        });
     });
 }
 
@@ -2511,6 +2641,7 @@ pub(crate) fn apply(event: Event) {
                 (None, None) => Err("No text changes in this file".into()),
             })
         }),
+        Event::Uploaded { id, result } => uploaded(id, result),
         Event::PairingOffer { url, relay_enabled, error } => global::<Pairing>().update(|p| {
             // The QR is Sophon's link (LAN + relay); `url` stays Paseo's for
             // its own app.
