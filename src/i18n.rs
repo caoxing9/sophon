@@ -310,7 +310,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Checks passed", "检查已通过"),
     ("Detached", "游离状态"),
     // Composer and timeline
-    ("Message the agent…", "给智能体发消息…"),
+    ("Message the agent…", "发消息…"),
     ("Attach", "附件"),
     ("Choose images…", "选择图片…"),
     ("Paste image", "粘贴图片"),
