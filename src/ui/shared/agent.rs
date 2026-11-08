@@ -17,8 +17,9 @@ use crate::ui::kit::*;
 /// header instead).
 pub(crate) fn agent_pane(bar: bool) -> impl IntoElement {
     let agent = computed(store::selected_agent);
-    // The composer floats over the conversation, which scrolls under the
-    // glass.
+    // On the phone the composer floats over the conversation, which
+    // scrolls under the glass and with the keyboard; on the desktop the
+    // conversation ends above it, so its scroll bar does too.
     view()
         .flex_1()
         .when(bar, |v| v.child(agent_bar(agent)))
@@ -33,10 +34,7 @@ pub(crate) fn agent_pane(bar: bool) -> impl IntoElement {
         )
         .child(
             view()
-                .absolute()
-                .left(px(0.0))
-                .right(px(0.0))
-                .bottom(px(0.0))
+                .when(MOBILE, |v| v.absolute().left(px(0.0)).right(px(0.0)).bottom(px(0.0)))
                 .px(px(if MOBILE { S2 } else { S6 }))
                 .pb(px(if MOBILE { S2 } else { S4 }))
                 .child(timeline::tracks())
