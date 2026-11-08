@@ -432,44 +432,56 @@ pub(crate) fn eclipse(size: f32) -> View {
         .looped(None)
         .start();
     let layer = move |asset: ImageAsset| image(asset).absolute().top(px(0.0)).left(px(0.0)).w(px(size)).h(px(size));
-    // The corona is a pale glow made for the dark: on a light page it is
-    // drawn in the accent instead, so the ring still shows round the moon.
-    let glow = move |asset: ImageAsset| layer(asset).tint_color(ACCENT);
     view()
         .w(px(size))
         .h(px(size))
         .flex_shrink_0()
+        // Each appearance has its own corona (the night's pale glow, the
+        // day's terracotta): the turning layers follow it.
         .child(dynamic(move || {
-            let light = !dark();
+            let corona = if dark() { crate::LOADER_CORONA } else { crate::LOADER_CORONA_LIGHT };
             Some(untracked(move || {
-                let main = if light { glow(crate::LOADER_CORONA) } else { layer(crate::LOADER_CORONA) };
-                let back = if light { glow(crate::LOADER_CORONA).opacity(0.3) } else { layer(crate::LOADER_CORONA).opacity(0.45) };
                 view()
                     .absolute()
                     .top(px(0.0))
                     .left(px(0.0))
                     .w(px(size))
                     .h(px(size))
-                    .child(main.bind_rotate(&forward).bind_opacity(&breath))
-                    .child(back.bind_rotate(&backward))
+                    .child(layer(corona).bind_rotate(&forward).bind_opacity(&breath))
+                    .child(layer(corona).bind_rotate(&backward).opacity(0.45))
                     .into_element()
             }))
         }))
         .child(layer(crate::LOADER_MOON))
 }
 
-/// The mark, still and sharp at any size (the icon's layers, 256 px).
+/// The mark, still and sharp at any size (the icon's layers, 256 px), in
+/// the appearance's version.
 pub(crate) fn mark(size: f32) -> View {
-    let layer = |asset: ImageAsset| image(asset).absolute().top(px(0.0)).left(px(0.0)).w(px(size)).h(px(size));
+    let layer = move |asset: ImageAsset| image(asset).absolute().top(px(0.0)).left(px(0.0)).w(px(size)).h(px(size));
     view()
         .w(px(size))
         .h(px(size))
         .flex_shrink_0()
         .rounded(px(size * 0.24))
         .overflow_hidden()
-        .child(layer(crate::LOADER_SKY))
-        .child(layer(crate::LOADER_CORONA))
+        .child(dynamic(move || {
+            let (sky, corona) = if dark() {
+                (crate::LOADER_SKY, crate::LOADER_CORONA)
+            } else {
+                (crate::LOADER_SKY_LIGHT, crate::LOADER_CORONA_LIGHT)
+            };
+            Some(untracked(move || view().w(px(size)).h(px(size)).child(layer(sky)).child(layer(corona)).into_element()))
+        }))
         .child(layer(crate::LOADER_MOON))
+}
+
+/// The app icon, small, in the appearance's version (the sidebar's mark).
+pub(crate) fn logo(size: f32) -> View {
+    view().w(px(size)).h(px(size)).flex_shrink_0().child(dynamic(move || {
+        let asset = if dark() { crate::LOGO } else { crate::LOGO_LIGHT };
+        Some(untracked(move || image(asset).w(px(size)).h(px(size)).into_element()))
+    }))
 }
 
 /// Loading: the mark with its corona running, under an optional line.

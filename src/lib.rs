@@ -35,6 +35,9 @@ fn native(registry: &mut Registry) {
         AssetFile { uri: LOADER_SKY.url, source: concat!(env!("CARGO_MANIFEST_DIR"), "/assets/loader/sky@2x.png"), kind: AssetKind::Image },
         AssetFile { uri: LOADER_CORONA.url, source: concat!(env!("CARGO_MANIFEST_DIR"), "/assets/loader/corona@2x.png"), kind: AssetKind::Image },
         AssetFile { uri: LOADER_MOON.url, source: concat!(env!("CARGO_MANIFEST_DIR"), "/assets/loader/moon@2x.png"), kind: AssetKind::Image },
+        AssetFile { uri: LOGO_LIGHT.url, source: concat!(env!("CARGO_MANIFEST_DIR"), "/assets/logo-light@2x.png"), kind: AssetKind::Image },
+        AssetFile { uri: LOADER_SKY_LIGHT.url, source: concat!(env!("CARGO_MANIFEST_DIR"), "/assets/loader/sky-light@2x.png"), kind: AssetKind::Image },
+        AssetFile { uri: LOADER_CORONA_LIGHT.url, source: concat!(env!("CARGO_MANIFEST_DIR"), "/assets/loader/corona-light@2x.png"), kind: AssetKind::Image },
     ]);
 }
 
@@ -53,6 +56,12 @@ pub(crate) const LOGO: ImageAsset = asset!("logo@2x.png");
 pub(crate) const LOADER_SKY: ImageAsset = asset!("loader/sky@2x.png");
 pub(crate) const LOADER_CORONA: ImageAsset = asset!("loader/corona@2x.png");
 pub(crate) const LOADER_MOON: ImageAsset = asset!("loader/moon@2x.png");
+
+/// The same for light pages: the daytime eclipse, a dawn sky and a
+/// terracotta corona (`gen_icon.py … light`); the moon is shared.
+pub(crate) const LOGO_LIGHT: ImageAsset = asset!("logo-light@2x.png");
+pub(crate) const LOADER_SKY_LIGHT: ImageAsset = asset!("loader/sky-light@2x.png");
+pub(crate) const LOADER_CORONA_LIGHT: ImageAsset = asset!("loader/corona-light@2x.png");
 
 /// The application's root component.
 #[component]

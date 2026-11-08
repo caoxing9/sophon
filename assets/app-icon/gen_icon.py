@@ -1,5 +1,9 @@
 import math, random, sys
 random.seed(11)
+# `gen_icon.py out.svg [layer] [light]`: light is the daytime eclipse for
+# light pages (a warm dawn sky, the corona in terracotta, drawn plainly
+# rather than screened, so it shows on cream); dark is the night sky.
+LIGHT = len(sys.argv) > 3 and sys.argv[3] == "light"
 R=236; C=512
 def streams(n, lmin, lmax, wmin, wmax, amin, amax):
     o=[]
@@ -22,7 +26,10 @@ for i in range(170):
     stars+=f'<circle cx="{x:.0f}" cy="{y:.0f}" r="{r}" fill="#fff" opacity="{a:.2f}"/>'
 for (x,y,r) in [(150,180,4),(860,150,3.6),(120,760,3.4),(905,820,4.2),(690,95,3)]:
     stars+=f'<circle cx="{x}" cy="{y}" r="{r*4}" fill="url(#twk)"/><circle cx="{x}" cy="{y}" r="{r}" fill="#fff"/>'
-fades=''.join(f'<radialGradient id="fade{k}" gradientUnits="userSpaceOnUse" cx="512" cy="512" r="{r}"><stop offset="{R/r:.3f}" stop-color="{c}"/><stop offset="1" stop-color="{c}" stop-opacity="0"/></radialGradient>' for k,(r,c) in enumerate([(420,"#ffd6bd"),(470,"#ffb48a"),(390,"#fff1e6")]))
+if LIGHT:
+    stars=''
+fade_colors=[(420,"#e88a5e"),(470,"#d96a40"),(390,"#f3a47c")] if LIGHT else [(420,"#ffd6bd"),(470,"#ffb48a"),(390,"#fff1e6")]
+fades=''.join(f'<radialGradient id="fade{k}" gradientUnits="userSpaceOnUse" cx="512" cy="512" r="{r}"><stop offset="{R/r:.3f}" stop-color="{c}"/><stop offset="1" stop-color="{c}" stop-opacity="0"/></radialGradient>' for k,(r,c) in enumerate(fade_colors))
 svg=f'''<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024"><defs>
 <radialGradient id="bg" cx=".5" cy=".46" r=".78"><stop offset="0" stop-color="#1e1a30"/><stop offset=".5" stop-color="#0f0d1c"/><stop offset="1" stop-color="#040309"/></radialGradient>
 <radialGradient id="twk"><stop offset="0" stop-color="#dfe6ff" stop-opacity=".7"/><stop offset="1" stop-color="#dfe6ff" stop-opacity="0"/></radialGradient>
@@ -55,4 +62,21 @@ grain='''<rect width="1024" height="1024" filter="url(#grain)" opacity=".12" sty
 layer=sys.argv[2] if len(sys.argv)>2 else "all"
 body={"all":sky+"\n"+corona+"\n"+moon+"\n"+grain,"sky":sky+"\n"+grain,"corona":corona,"moon":moon}[layer]
 svg=svg.replace("{BODY}",body)
+if LIGHT:
+    for old, new in [
+        # A warm dawn sky, lightest round the sun.
+        ('<stop offset="0" stop-color="#1e1a30"/><stop offset=".5" stop-color="#0f0d1c"/><stop offset="1" stop-color="#040309"/>',
+         '<stop offset="0" stop-color="#fffaf4"/><stop offset=".55" stop-color="#f9eadf"/><stop offset="1" stop-color="#efd3c0"/>'),
+        ('stop-color="#3a2a5c" stop-opacity=".35"', 'stop-color="#f2b89a" stop-opacity=".28"'),
+        ('stop-color="#3a2a5c" stop-opacity="0"', 'stop-color="#f2b89a" stop-opacity="0"'),
+        # The glow and streamers in terracotta, laid on rather than screened.
+        ('<stop offset=".48" stop-color="#ff9f70" stop-opacity=".55"/><stop offset=".62" stop-color="#e2754a" stop-opacity=".22"/><stop offset="1" stop-color="#b8462a" stop-opacity="0"/>',
+         '<stop offset=".48" stop-color="#ec8152" stop-opacity=".5"/><stop offset=".64" stop-color="#e2754a" stop-opacity=".2"/><stop offset="1" stop-color="#e2754a" stop-opacity="0"/>'),
+        ('style="mix-blend-mode:screen"', ''),
+        ('<stop offset=".76" stop-color="#fff3ea" stop-opacity="1"/><stop offset=".82" stop-color="#ffd0b2" stop-opacity=".75"/><stop offset=".92" stop-color="#ff9a68" stop-opacity=".2"/>',
+         '<stop offset=".76" stop-color="#f6935f" stop-opacity="1"/><stop offset=".82" stop-color="#ef8452" stop-opacity=".8"/><stop offset=".92" stop-color="#e2754a" stop-opacity=".25"/>'),
+        # The ring round the moon: bright amber, not white on cream.
+        ('stroke="#fff6ef" stroke-width="10"', 'stroke="#ffb07e" stroke-width="10"'),
+    ]:
+        svg = svg.replace(old, new)
 open(sys.argv[1],'w').write(svg)

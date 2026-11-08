@@ -81,7 +81,7 @@ fn host_body() -> View {
         .py(px(S2))
         .mb(px(S1))
         .child(
-            image(crate::LOGO).w(px(26.0)).h(px(26.0)).rounded(px(7.0)).shadow_sm(),
+            logo(26.0).rounded(px(7.0)).overflow_hidden().shadow_sm(),
         )
         .rounded(px(R_LG))
         .hover(|s| s.bg(highlight()))
