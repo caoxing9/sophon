@@ -72,15 +72,21 @@ if LIGHT:
 <path d="{lobes(R, 80, 9)}" fill="#f8dc86" opacity=".6"/></g>'''
     long_streams = streams(26, 110, 260, 10, 24, .35, .6)
     fine_streams = streams(170, 30, 190, 1.4, 3.4, .2, .55)
+    # No ring: the brightest light is uneven too, spilling past the moon
+    # where the corona is strong and barely at all where it is weak, as
+    # if the moon only covered it.
+    core = f'''<g filter="url(#b9)"><path d="{lobes(R - 30, 95, 13)}" fill="#fbe6a0" opacity=".9"/></g>
+<g filter="url(#b5)"><path d="{lobes(R - 30, 50, 17)}" fill="#fffaf0" opacity=".95"/></g>'''
 else:
     glow_shape = '<circle cx="512" cy="512" r="470" fill="url(#glow)"/>'
     long_streams = streams(22, 70, 200, 14, 30, .22, .45)
     fine_streams = streams(150, 20, 150, 1.4, 3.2, .12, .42)
+    core = f'''<circle cx="512" cy="512" r="300" fill="url(#inner)"/>
+<circle cx="512" cy="512" r="{R+3}" fill="none" stroke="#fff6ef" stroke-width="10" filter="url(#b5)" opacity=".9"/>'''
 corona=f'''{glow_shape}
 <g filter="url(#b9)" style="mix-blend-mode:screen">{long_streams}</g>
 <g filter="url(#b2)" style="mix-blend-mode:screen">{fine_streams}</g>
-<circle cx="512" cy="512" r="300" fill="url(#inner)"/>
-<circle cx="512" cy="512" r="{R+3}" fill="none" stroke="#fff6ef" stroke-width="10" filter="url(#b5)" opacity=".9"/>'''
+{core}'''
 moon=f'''<circle cx="512" cy="512" r="{R}" fill="url(#disc)"/>
 <circle cx="512" cy="512" r="{R}" fill="url(#limb)"/>
 <circle cx="512" cy="512" r="{R-1}" fill="none" stroke="url(#rim)" stroke-width="2.5"/>'''
