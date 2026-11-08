@@ -394,7 +394,9 @@ pub enum Item {
     Assistant { text: String },
     Reasoning { text: String },
     /// `kind` is the detail type: `shell`, `read`, `edit`, `write`, `search`, `fetch`, `sub_agent`, ...
-    Tool { call_id: String, name: String, kind: String, status: String, summary: String, detail: String },
+    /// `detail`: the call's detail object as the daemon sent it (its
+    /// `type` says which fields it has), `error` what failed.
+    Tool { call_id: String, name: String, kind: String, status: String, summary: String, detail: Value, error: Option<String> },
     Todo { lines: Vec<(bool, String)> },
     Error { message: String },
     Notice { message: String },
@@ -414,13 +416,11 @@ impl Item {
                 kind: v.pointer("/detail/type").and_then(Value::as_str).unwrap_or_default().to_owned(),
                 status: str_of(v, "status").unwrap_or_default(),
                 summary: v.get("detail").map(summarize_tool).unwrap_or_default(),
-                detail: {
-                    let mut d = v.get("detail").map(|d| serde_json::to_string_pretty(d).unwrap_or_default()).unwrap_or_default();
-                    if let Some(e) = v.get("error").filter(|e| !e.is_null()) {
-                        d.push_str(&format!("\n\nError: {e}"));
-                    }
-                    d
-                },
+                detail: v.get("detail").cloned().unwrap_or(Value::Null),
+                error: v.get("error").filter(|e| !e.is_null()).map(|e| match e.as_str() {
+                    Some(s) => s.to_owned(),
+                    None => e.get("message").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(|| e.to_string()),
+                }),
             },
             "todo" => Item::Todo {
                 lines: v
@@ -650,7 +650,8 @@ mod tests {
             name: "Bash".into(),
             kind: "shell".into(),
             status: status.into(),
-            detail: String::new(),
+            detail: Value::Null,
+            error: None,
             summary: "ls".into(),
         };
         apply_live(&mut items, tool("running"));

@@ -22,16 +22,36 @@ pub(crate) fn modal_layer() -> impl IntoElement {
             .child(
                 view()
                     .flex_1()
-                    .items_center()
-                    .justify_center()
-                    .bg(AdaptiveColor::rgb(0x000000, 0x000000).opacity(0.32))
+                    .child(
+                        // The backdrop: a press outside the card closes it.
+                        nsh_base::button()
+                            .on_press(store::close_modal)
+                            .absolute()
+                            .top(px(0.0))
+                            .bottom(px(0.0))
+                            .left(px(0.0))
+                            .right(px(0.0))
+                            .bg(AdaptiveColor::rgb(0x000000, 0x000000).opacity(0.32)),
+                    )
                     .child(dynamic(|| {
                         let m = store::modal()?;
                         Some(untracked(move || {
                             if m == Modal::Palette {
                                 view().self_stretch().items_center().pt(relative(0.12)).flex_1().child(crate::ui::desktop::shortcuts::palette())
+                            } else if MOBILE && matches!(m, Modal::ToolDetail { .. }) {
+                                // The phone: a sheet at the foot, full width.
+                                view()
+                                    .flex_1()
+                                    .justify_end()
+                                    .pointer_events(nsh_core::PointerEvents::BoxNone)
+                                    .child(body(m.clone()))
                             } else {
-                                body(m.clone())
+                                view()
+                                    .flex_1()
+                                    .items_center()
+                                    .justify_center()
+                                    .pointer_events(nsh_core::PointerEvents::BoxNone)
+                                    .child(body(m.clone()))
                             }
                         }))
                     })),
@@ -97,19 +117,19 @@ fn body(m: Modal) -> View {
                 store::restart_daemon();
                 store::close_modal();
             }))),
-        Modal::ToolDetail { name, detail } => sheet(&name)
-            .w(px(720.0))
-            .child(
-                scroll().max_h(px(480.0)).rounded(px(R_LG)).bg(SURFACE2).child(
-                    text(if detail.is_empty() { t("No details").to_owned() } else { detail })
-                        .p(px(S3))
-                        .text_size(px(TEXT_CODE))
-                        .line_height(px(18.0))
-                        .font_family(|| MONO)
-                        .selectable(true),
-                ),
-            )
-            .child(actions(view())),
+        // The phone's tool sheet: tight margins, the detail taking the room;
+        // a press outside or the handle's swipe-free close puts it away.
+        Modal::ToolDetail { name, kind, detail, error } => glass_strong(view())
+            .w_full()
+            .max_h(relative(0.8))
+            .px(px(S4))
+            .pt(px(S2))
+            .pb_safe_area_plus(px(S3))
+            .gap(px(S2))
+            .rounded_t(px(22.0))
+            .child(view().items_center().child(view().w(px(36.0)).h(px(5.0)).rounded(px(R_FULL)).bg(tint(FG, 0.18))))
+            .child(text(name).text_size(px(TEXT_LG)).font_weight(FontWeight(600)).number_of_lines(1))
+            .child(scroll().flex_shrink(1.0).child(crate::ui::shared::tool_detail::tool_body(&kind, &detail, error.as_deref()))),
         Modal::RenameProject { id, name } => rename(t("Rename project"), name, move |v| store::rename_project(&id, v)),
         Modal::ArchiveWorkspace { id, name } => sheet(t("Archive workspace"))
             .child(

@@ -9,3 +9,4 @@ pub(crate) mod notice;
 pub(crate) mod projects;
 pub(crate) mod settings;
 pub(crate) mod timeline;
+pub(crate) mod tool_detail;
