@@ -21,9 +21,7 @@ for sz in 16 32 128 256 512; do
   sips -z $((sz*2)) $((sz*2)) icon-macos-1024.png --out AppIcon.iconset/icon_${sz}x${sz}@2x.png >/dev/null
 done
 iconutil -c icns AppIcon.iconset -o AppIcon.icns && rm -rf AppIcon.iconset
-# The light pages' versions: the logo and the loader's sky and corona.
-python3 gen_icon.py .light-light.svg all light && render .light-light.svg .light-light.png
-sips -s format png -z 88 88 .light-light.png --out ../logo-light@2x.png >/dev/null
+# The light pages' versions of the mark's sky and corona.
 for layer in sky corona; do
   python3 gen_icon.py .light-$layer-light.svg $layer light
   render .light-$layer-light.svg .light-$layer-light.png

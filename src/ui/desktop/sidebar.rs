@@ -81,7 +81,7 @@ fn host_body() -> View {
         .py(px(S2))
         .mb(px(S1))
         .child(
-            logo(26.0).rounded(px(7.0)).overflow_hidden().shadow_sm(),
+            mark(26.0, Lift::Small),
         )
         .rounded(px(R_LG))
         .hover(|s| s.bg(highlight()))

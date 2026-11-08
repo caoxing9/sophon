@@ -216,7 +216,7 @@ fn draft() -> impl IntoElement {
     let error = computed(|| store::form().error);
     view()
         .flex_1()
-        .child(view().flex_1().items_center().justify_center().child(mark(48.0)))
+        .child(view().flex_1().items_center().justify_center().child(mark(48.0, Lift::Flat)))
         .child(
             view()
                 .px(px(S2))

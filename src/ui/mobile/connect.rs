@@ -42,7 +42,7 @@ fn welcome(open_scan: impl Fn() + Clone + 'static) -> impl IntoElement {
                     .w_full()
                     .items_center()
                     .justify_center()
-                    .child(logo(96.0).rounded(px(22.0)).overflow_hidden().shadow_lg())
+                    .child(mark(96.0, Lift::Large))
                     .child(
                         view()
                             .items_center()

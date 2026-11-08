@@ -134,7 +134,7 @@ pub(crate) fn draft_pane() -> AnyElement {
                     .items_center()
                     .justify_center()
                     .gap(px(S3))
-                    .child(mark(48.0))
+                    .child(mark(48.0, Lift::Flat))
                     .child(
                         text(line)
                             .px(px(S8))
