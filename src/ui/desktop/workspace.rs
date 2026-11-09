@@ -215,25 +215,23 @@ fn tabs() -> impl IntoElement {
         .child(dynamic(|| {
             let draft = store::tab() == Tab::Draft;
             Some(untracked(move || {
-                let plus = dropdown(
-                    view()
-                        .w(px(CONTROL_SM))
-                        .h(px(CONTROL_SM))
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(R_FULL))
-                        .hover(|s| s.bg(highlight()))
-                        .label(t("New tab"))
-                        .child(icon(Icon::Plus, 16.0).text_color(FG_MUTED)),
-                )
-                .child(menu_row(t("New agent"), Some(Icon::Bot), None, false, || store::open_tab(Tab::Draft)))
-                .child(menu_row(t("New terminal"), Some(Icon::SquareTerminal), None, false, store::new_terminal));
+                // "+" starts a new conversation here, straight away.
+                let plus = button()
+                    .on_press(|| store::open_tab(Tab::Draft))
+                    .accessibility_label(t("New chat"))
+                    .w(px(CONTROL_SM))
+                    .h(px(CONTROL_SM))
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(R_FULL))
+                    .hover(|s| s.bg(highlight()))
+                    .child(icon(Icon::Plus, 16.0).text_color(FG_MUTED));
                 let mut row = view().flex_row().items_center().gap(px(S1)).ml(px(2.0));
                 if draft {
                     row = row.child(
                         tab_shell(true, || store::open_tab(Tab::Draft))
                             .child(icon(Icon::SquarePen, 14.0).text_color(FG_MUTED))
-                            .child(text(t("New agent")).text_size(px(TEXT_SM)).text_color(FG)),
+                            .child(text(t("New chat")).text_size(px(TEXT_SM)).text_color(FG)),
                     );
                 }
                 row.child(plus).into_element()

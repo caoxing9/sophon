@@ -168,6 +168,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Update failed · Retry", "更新失败 · 重试"),
     ("Get {}", "获取 {}"),
     ("Update to {}", "更新到 {}"),
+    ("New chat", "新对话"),
     ("Changes since {}", "自 {} 以来的更新内容"),
     ("Restart to update", "重启以更新"),
     ("Later", "稍后"),
