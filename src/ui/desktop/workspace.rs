@@ -18,7 +18,6 @@ enum Pane {
     Draft,
     Agent,
     Diff(Option<String>),
-    Terminal(String),
     File(String),
     Subagent(String, String),
     CommitDiff(String, String),
@@ -29,7 +28,6 @@ pub(crate) fn workspace(compact: bool) -> impl IntoElement {
         Tab::Draft => Pane::Draft,
         Tab::Agent(_) => Pane::Agent,
         Tab::Diff(p) => Pane::Diff(p),
-        Tab::Terminal(id) => Pane::Terminal(id),
         Tab::File(p) => Pane::File(p),
         Tab::Subagent(parent, id) => Pane::Subagent(parent, id),
         Tab::CommitDiff(sha, path) => Pane::CommitDiff(sha, path),
@@ -50,12 +48,12 @@ pub(crate) fn workspace(compact: bool) -> impl IntoElement {
                             Pane::Draft => agent::draft_pane().into_element(),
                             Pane::Agent => agent::agent_pane(false).into_element(),
                             Pane::Diff(p) => explorer::diff_pane(p).into_element(),
-                            Pane::Terminal(id) => terminal::terminal_pane(id).into_element(),
                             Pane::File(p) => file_pane::file_pane(p).into_element(),
                             Pane::Subagent(parent, id) => timeline::subagent_pane(parent, id).into_element(),
                             Pane::CommitDiff(sha, path) => explorer::commit_diff_pane(sha, path).into_element(),
                         }))
-                    })),
+                    }))
+                    .child(when(store::terminal_panel_open, terminal::terminal_panel)),
                 )
                 .child(when(fits, move || {
                     // Mounted while it fits; the toggle slides it in and out
@@ -156,11 +154,6 @@ fn tabs() -> impl IntoElement {
                 let id = a.get_untracked().id;
                 agent_tab(id)
             },
-        ))
-        .child(each(
-            store::terminals,
-            |t| t.id.clone(),
-            |t, _| terminal_tab(t.get_untracked()),
         ))
         .child(each(store::open_files, |p| p.clone(), |p, _| file_tab(p.get_untracked())))
         .child(dynamic(|| {
@@ -291,25 +284,6 @@ fn file_tab(path: String) -> impl IntoElement {
                 .child(text(label).text_size(px(TEXT_SM)).text_color(if on { FG } else { FG_MUTED }).number_of_lines(1))
                 .child(when(dirty, || view().w(px(6.0)).h(px(6.0)).rounded(px(R_FULL)).bg(FG_MUTED)))
                 .child(close_button(t("Close file"), move || store::close_file(&close)))
-        }))
-    }))
-}
-
-fn terminal_tab(t: crate::daemon::connection::TerminalInfo) -> impl IntoElement {
-    let id = t.id.clone();
-    let selected = {
-        let id = id.clone();
-        computed(move || store::tab() == Tab::Terminal(id.clone()))
-    };
-    let label = t.title.clone().unwrap_or_else(|| t.name.clone());
-    view().child(dynamic(move || {
-        let on = selected.get();
-        let (open_id, kill_id, label) = (id.clone(), id.clone(), label.clone());
-        Some(untracked(move || {
-            tab_shell(on, move || store::open_tab(Tab::Terminal(open_id.clone())))
-                .child(icon(Icon::SquareTerminal, 14.0).text_color(FG_MUTED))
-                .child(text(label).text_size(px(TEXT_SM)).text_color(if on { FG } else { FG_MUTED }).number_of_lines(1))
-                .child(close_button(crate::i18n::t("Close terminal"), move || store::kill_terminal(&kill_id)))
         }))
     }))
 }

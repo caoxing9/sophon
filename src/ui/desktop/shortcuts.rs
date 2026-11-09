@@ -18,6 +18,11 @@ pub(crate) fn bind() {
         }
     });
     on_key("shift+mod+t", |_| store::new_terminal());
+    // VS Code's: ⌃` shows and hides the terminal panel (⌘J too), ⌃⇧` opens
+    // another terminal.
+    on_key("ctrl+`", |_| store::toggle_terminal_panel());
+    on_key("mod+j", |_| store::toggle_terminal_panel());
+    on_key("shift+ctrl+`", |_| store::new_terminal());
     on_key("mod+s", |_| store::save_current_file());
     on_key("mod+f", |_| {
         if store::selected_agent().is_some() {
@@ -50,7 +55,8 @@ fn items() -> Vec<CommandItem> {
     ];
     if store::current_workspace().is_some() {
         items.push(CommandItem::new("new-agent", t("New agent")).group(t("Actions")).shortcut("mod+t"));
-        items.push(CommandItem::new("new-terminal", t("New terminal")).group(t("Actions")).shortcut("shift+mod+t"));
+        items.push(CommandItem::new("new-terminal", t("New terminal")).group(t("Actions")).shortcut("shift+ctrl+`"));
+        items.push(CommandItem::new("toggle-terminal", t("Toggle terminal")).group(t("Actions")).shortcut("ctrl+`"));
         items.push(CommandItem::new("toggle-explorer", t("Toggle explorer")).group(t("Actions")).shortcut("mod+e"));
         items.push(CommandItem::new("changes", t("Show changes")).group(t("Actions")).keywords(["diff", "git"]));
         items.push(CommandItem::new("files", t("Show files")).group(t("Actions")).keywords(["tree", "explorer"]));
@@ -84,6 +90,7 @@ fn run(id: &str) {
         "toggle-sidebar" => store::toggle_sidebar(),
         "new-agent" => store::open_tab(Tab::Draft),
         "new-terminal" => store::new_terminal(),
+        "toggle-terminal" => store::toggle_terminal_panel(),
         "toggle-explorer" => store::toggle_explorer(),
         "changes" => store::set_explorer_tab(ExplorerTab::Changes),
         "files" => store::set_explorer_tab(ExplorerTab::Files),

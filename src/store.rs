@@ -45,7 +45,6 @@ pub(crate) enum Tab {
     Agent(String),
     /// The workspace's uncommitted changes: one file, or all (`None`).
     Diff(Option<String>),
-    Terminal(String),
     File(String),
     /// A sub-agent of an agent, read-only: (parent, sub-agent).
     Subagent(String, String),
@@ -379,16 +378,80 @@ pub(crate) fn terminal_resize(id: &str, rows: u16, cols: u16) {
 pub(crate) fn new_terminal() {
     if let Some(w) = current_workspace() {
         send(Command::CreateTerminal { cwd: w.directory, workspace_id: w.id });
+        set_terminal_panel(true);
     }
 }
 
 pub(crate) fn kill_terminal(id: &str) {
     global::<Terminals>().update(|t| t.list.retain(|x| x.id != id));
     send(Command::KillTerminal(id.to_owned()));
-    if tab() == Tab::Terminal(id.to_owned())
-        && let Some(w) = current_workspace()
-    {
-        open_workspace(&w.id);
+    // The last one closed folds the panel away, as VS Code's does.
+    if terminals().is_empty() {
+        set_terminal_panel(false);
+    }
+}
+
+/// The desktop's terminal panel under the workspace (VS Code's): whether
+/// it is open, its height, and the terminal it shows.
+#[derive(Clone, PartialEq)]
+struct TerminalPanel {
+    open: bool,
+    height: f32,
+    active: Option<String>,
+}
+
+impl Default for TerminalPanel {
+    fn default() -> Self {
+        TerminalPanel { open: false, height: 280.0, active: None }
+    }
+}
+
+pub(crate) fn terminal_panel_open() -> bool {
+    global::<TerminalPanel>().with(|p| p.open)
+}
+
+pub(crate) fn terminal_panel_height() -> f32 {
+    global::<TerminalPanel>().with(|p| p.height)
+}
+
+pub(crate) fn set_terminal_panel_height(h: f32) {
+    global::<TerminalPanel>().update(|p| p.height = h.clamp(120.0, 900.0));
+}
+
+/// The terminal the panel shows: the one picked last, else the first.
+pub(crate) fn active_terminal() -> Option<String> {
+    let list = terminals();
+    let picked = global::<TerminalPanel>().with(|p| p.active.clone());
+    picked.filter(|id| list.iter().any(|t| &t.id == id)).or_else(|| list.first().map(|t| t.id.clone()))
+}
+
+pub(crate) fn show_terminal(id: &str) {
+    global::<TerminalPanel>().update(|p| {
+        p.active = Some(id.to_owned());
+        p.open = true;
+    });
+}
+
+fn set_terminal_panel(open: bool) {
+    if terminal_panel_open() != open {
+        animate_panels();
+        global::<TerminalPanel>().update(|p| p.open = open);
+    }
+}
+
+/// ⌃` (and ⌘J): shows the panel, starting a terminal when there is none;
+/// hides it when shown.
+pub(crate) fn toggle_terminal_panel() {
+    if current_workspace().is_none() {
+        return;
+    }
+    if terminal_panel_open() {
+        set_terminal_panel(false);
+    } else {
+        if terminals().is_empty() {
+            new_terminal();
+        }
+        set_terminal_panel(true);
     }
 }
 
@@ -488,7 +551,6 @@ pub(crate) fn toggle_sidebar() {
 pub(crate) fn tab_list() -> Vec<Tab> {
     let Some(w) = current_workspace() else { return vec![] };
     let mut tabs: Vec<Tab> = workspace_agents(&w.id).into_iter().map(|a| Tab::Agent(a.id)).collect();
-    tabs.extend(terminals().into_iter().map(|t| Tab::Terminal(t.id)));
     tabs.extend(open_files().into_iter().map(Tab::File));
     tabs
 }
@@ -1854,7 +1916,7 @@ pub(crate) fn open_tab(tab: Tab) {
     }
     let agent_id = match &tab {
         Tab::Agent(id) => Some(id.clone()),
-        Tab::Draft | Tab::Diff(_) | Tab::Terminal(_) | Tab::File(_) | Tab::Subagent(..) | Tab::CommitDiff(..) => None,
+        Tab::Draft | Tab::Diff(_) | Tab::File(_) | Tab::Subagent(..) | Tab::CommitDiff(..) => None,
     };
     if let (Tab::CommitDiff(sha, path), Some(cwd)) = (&tab, current_workspace().map(|w| w.directory)) {
         global::<CommitDiffState>().update(|c| c.0 = None);
@@ -1863,7 +1925,7 @@ pub(crate) fn open_tab(tab: Tab) {
     if let Tab::Subagent(parent, id) = &tab {
         send(Command::SubagentTimeline { parent: parent.clone(), id: id.clone() });
     }
-    if matches!(tab, Tab::Diff(_) | Tab::Terminal(_) | Tab::File(_) | Tab::Subagent(..) | Tab::CommitDiff(..)) {
+    if matches!(tab, Tab::Diff(_) | Tab::File(_) | Tab::Subagent(..) | Tab::CommitDiff(..)) {
         global::<Nav>().update(|n| n.tab = tab);
         return;
     }
@@ -2612,7 +2674,7 @@ pub(crate) fn apply(event: Event) {
                     t.list.push(info);
                 }
             });
-            open_tab(Tab::Terminal(id));
+            show_terminal(&id);
         }
         Event::TerminalOutput { terminal_id, data, reset } => {
             TERM_OUT.with_borrow_mut(|out| {
