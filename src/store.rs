@@ -418,6 +418,11 @@ pub(crate) fn set_terminal_panel_height(h: f32) {
     global::<TerminalPanel>().update(|p| p.height = h.clamp(120.0, 900.0));
 }
 
+/// Keeps the height a drag ended on, for the next launch.
+pub(crate) fn save_terminal_panel_height() {
+    save_prefs();
+}
+
 /// The terminal the panel shows: the one picked last, else the first.
 pub(crate) fn active_terminal() -> Option<String> {
     let list = terminals();
@@ -1422,6 +1427,7 @@ fn save_prefs() {
         "sidebarHidden": global::<SidebarHidden>().with_untracked(|h| h.0),
         "explorerOpen": global::<Explorer>().with_untracked(|e| e.open),
         "sidebarWidth": global::<SidebarWidth>().with_untracked(|w| w.0),
+        "terminalHeight": global::<TerminalPanel>().with_untracked(|p| p.height),
         "projectOrder": global::<ProjectOrder>().with_untracked(|o| o.0.clone()),
         "lastWorkspace": global::<LastOpen>().with_untracked(|l| l.workspace.clone()),
         "lastAgent": global::<LastOpen>().with_untracked(|l| l.agent.clone()),
@@ -1461,6 +1467,9 @@ pub(crate) fn load_prefs() {
     let string = |k: &str| v.get(k).and_then(serde_json::Value::as_str).map(str::to_owned);
     global::<LastOpen>().set(LastOpen { workspace: string("lastWorkspace"), agent: string("lastAgent"), done: false });
     global::<Collapsed>().set(Collapsed(strings("collapsedProjects")));
+    if let Some(h) = v.get("terminalHeight").and_then(serde_json::Value::as_f64) {
+        global::<TerminalPanel>().update(|p| p.height = (h as f32).clamp(120.0, 900.0));
+    }
     if let Some(w) = v.get("sidebarWidth").and_then(serde_json::Value::as_f64) {
         global::<SidebarWidth>().set(SidebarWidth((w as f32).clamp(SIDEBAR_MIN, SIDEBAR_MAX)));
     }

@@ -152,7 +152,10 @@ fn height_handle() -> impl IntoElement {
             dragging.set(true);
         })
         .on_responder_move(move |e: &ResponderEvent| store::set_terminal_panel_height(start.get_untracked() - e.gesture.delta.y.0))
-        .on_responder_release(move |_: &ResponderEvent| dragging.set(false))
+        .on_responder_release(move |_: &ResponderEvent| {
+            dragging.set(false);
+            store::save_terminal_panel_height();
+        })
         .on_responder_terminate(move |_: &ResponderEvent| dragging.set(false))
         .child(
             view()
