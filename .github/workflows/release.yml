@@ -65,7 +65,7 @@ jobs:
             .nsh/out/*.dmg
 
   ios:
-    runs-on: macos-14
+    runs-on: macos-15
     env:
       HAS_SIGNING: ${{ secrets.IOS_CERT_P12 != '' && secrets.IOS_PROFILE != '' }}
       HAS_ASC: ${{ secrets.ASC_KEY_P8 != '' }}
@@ -135,7 +135,7 @@ jobs:
 
   release:
     needs: [macos, ios]
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
         with:
