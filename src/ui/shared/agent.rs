@@ -45,6 +45,17 @@ pub(crate) fn agent_pane(bar: bool) -> impl IntoElement {
 
 /// A thin bar over the conversation: the agent's provider and actions.
 fn agent_bar(agent: Memo<Option<crate::daemon::Agent>>) -> impl IntoElement {
+    view().flex_row().items_center().h(px(36.0)).px(px(S6)).child(view().flex_1()).child(agent_tools_of(agent))
+}
+
+/// The open agent's state and actions in a row: its provider and status,
+/// the context meter, outline, find and the menu. The desktop puts them at
+/// the end of the tab strip.
+pub(crate) fn agent_tools() -> impl IntoElement {
+    agent_tools_of(computed(store::selected_agent))
+}
+
+fn agent_tools_of(agent: Memo<Option<crate::daemon::Agent>>) -> impl IntoElement {
     let label = computed(move || {
         agent.with(|a| {
             a.as_ref()
@@ -59,11 +70,10 @@ fn agent_bar(agent: Memo<Option<crate::daemon::Agent>>) -> impl IntoElement {
         .flex_row()
         .items_center()
         .gap(px(S2))
-        .h(px(36.0))
-        .px(px(S6))
-        .child(text(move || label.get()).text_size(px(TEXT_SM)).text_color(FG_FAINT))
+        .min_w(px(0.0))
+        .child(text(move || label.get()).text_size(px(TEXT_SM)).text_color(FG_FAINT).number_of_lines(1).flex_shrink(1.0))
         .child(composer::context_meter())
-        .child(view().flex_1())
+        .child(view().w(px(S1)))
         .child(
             dropup_or_down_outline(),
         )
