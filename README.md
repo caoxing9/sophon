@@ -51,7 +51,7 @@ What is done and what is still missing, item by item: [docs/parity.md](docs/pari
 You need the daemon running on the computer where your code lives (Sophon connects to it on its own once it is up:
 `paseo daemon start`).
 
-### macOS (14 Sonoma or later)
+### macOS (14 Sonoma or later, Apple silicon)
 
 **Homebrew**
 
@@ -70,7 +70,7 @@ It installs into `/Applications` (or `~/Applications` when that is not writable)
 `SOPHON_VERSION=0.1.0` installs a given version, `SOPHON_DIR=…` another directory, `SOPHON_NO_OPEN=1` does not
 launch it afterwards.
 
-**By hand**: download `Sophon-<version>-macos-aarch64.dmg` (Apple silicon) or `…-x86_64.dmg` (Intel) from
+**By hand**: download `Sophon-<version>-macos-aarch64.dmg` from
 [Releases](https://github.com/caoxing9/sophon/releases/latest).
 
 > Sophon is signed ad hoc, not notarized yet. If macOS refuses to open it, run this once (Homebrew and the script do it
@@ -154,8 +154,8 @@ Homebrew cask. Each release has:
 
 | Asset | For |
 |---|---|
-| `Sophon-<v>-macos-{aarch64,x86_64}.dmg` | Installing by hand |
-| `Sophon-<v>-macos-{aarch64,x86_64}.tar.gz` | The installer, Homebrew and in-app updates |
+| `Sophon-<v>-macos-aarch64.dmg` | Installing by hand |
+| `Sophon-<v>-macos-aarch64.tar.gz` | The installer, Homebrew and in-app updates |
 | `Sophon-<v>-ios-simulator.zip` | The iOS Simulator |
 | `latest.json` | The update feed |
 

@@ -1,21 +1,19 @@
 #!/bin/sh
-# Prints the Homebrew cask for a release: write-cask.sh VERSION ARM_SHA INTEL_SHA
+# Prints the Homebrew cask for a release (Apple silicon only): write-cask.sh VERSION SHA
 set -eu
 cat <<CASK
 cask "sophon" do
-  arch arm: "aarch64", intel: "x86_64"
-
   version "$1"
-  sha256 arm:   "$2",
-         intel: "$3"
+  sha256 "$2"
 
-  url "https://github.com/caoxing9/sophon/releases/download/v#{version}/Sophon-#{version}-macos-#{arch}.tar.gz"
+  url "https://github.com/caoxing9/sophon/releases/download/v#{version}/Sophon-#{version}-macos-aarch64.tar.gz"
   name "Sophon"
   desc "Native desktop client for coding agents"
   homepage "https://github.com/caoxing9/sophon"
 
   # The app updates itself (sidebar → Update); brew upgrade works too.
   auto_updates true
+  depends_on arch: :arm64
   depends_on macos: ">= :sonoma"
 
   app "Sophon.app"
