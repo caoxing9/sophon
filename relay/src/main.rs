@@ -1,4 +1,4 @@
-//! Sophon's relay: Paseo's relay protocol (version 2) on a server of your
+//! Sophon's relay: the daemon's relay protocol (version 2) on a server of your
 //! own, so a phone away from home reaches its computer through a nearby
 //! machine instead of an overseas one.
 //!
@@ -6,14 +6,14 @@
 //! encrypted between the phone and the computer (Noise, keyed by the pairing
 //! QR code), so it reads nothing and needs no secrets.
 //!
-//! The computer's service (Paseo's daemon, `daemon.relay.endpoint`) holds a
+//! The computer's service (the daemon, `daemon.relay.endpoint`) holds a
 //! control socket per server id: `/ws?serverId=S&role=server&v=2`. A phone
 //! connects as a client (`role=client`, a connection id given or made up);
 //! the relay tells the control socket (`{"type":"connected","connectionId"}`),
 //! and the service opens a data socket for that connection
 //! (`role=server&connectionId=C`). Frames then pass between the client and
 //! that data socket; the client's frames sent before it arrives wait in a
-//! small buffer. This is the behavior of Paseo's Cloudflare relay
+//! small buffer. This is the behavior of the default Cloudflare relay
 //! (`packages/relay/src/cloudflare-adapter.ts`), on a plain socket server.
 //!
 //! Usage: `sophon-relay [ADDR]` (default `0.0.0.0:8443`; `RELAY_ADDR` too).
@@ -296,7 +296,7 @@ fn unregister(state: &Shared, server_id: &str, role: &Role, id: u64) {
 
 /// A phone waiting for the service: remind the control socket after 10 s,
 /// and drop it 5 s later if the service still does not open the data
-/// socket (it reconnects fresh), as Paseo's relay does.
+/// socket (it reconnects fresh), as the default relay does.
 fn nudge(state: Shared, server_id: String, conn: String) {
     tokio::spawn(async move {
         let waiting = |state: &Shared| {

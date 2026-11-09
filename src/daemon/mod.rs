@@ -1,4 +1,4 @@
-//! Everything that talks to the Paseo daemon. Free of UI types, so it builds
+//! Everything that talks to the daemon. Free of UI types, so it builds
 //! and tests without a window.
 
 /// Where Sophon keeps its settings, hosts, keys and ids: `~/.sophon`. A

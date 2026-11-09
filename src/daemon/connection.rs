@@ -1,4 +1,4 @@
-//! The WebSocket connection to a local Paseo daemon.
+//! The WebSocket connection to the local daemon.
 //!
 //! It runs on tokio's threads (`nsh_core::prelude::background`), owns the
 //! socket and talks to the UI over two channels: `Command`s in, `Event`s out.
@@ -68,6 +68,9 @@ pub enum Command {
     KillTerminal(String),
     ListDir { cwd: String, path: String },
     ReadFile { cwd: String, path: String },
+    /// The whole file, any size, as bytes (for saving it here): answered by
+    /// [`Event::Downloaded`] with the same `id`.
+    Download { id: String, cwd: String, path: String },
     WriteFile { cwd: String, path: String, content: String, modified_at: String, revision: Option<String> },
     /// Branch, dirty state, ahead / behind, and the pull request.
     GitStatus(String),
@@ -220,7 +223,7 @@ pub struct GitStatus {
     pub ahead: u64,
     pub behind: u64,
     pub has_remote: bool,
-    pub paseo_worktree: bool,
+    pub managed_worktree: bool,
 }
 
 /// A provider's plan usage: (window label, used %, resets at).
@@ -422,7 +425,9 @@ pub enum Event {
     AgentUpsert(Agent),
     AgentRemove(String),
     /// `older`: the cursor of the page before these items, when there is one.
-    TimelineReset { agent_id: String, items: Vec<Item>, older: Option<Value> },
+    /// `cursor`: the epoch and last seq the page covers, so live events it
+    /// already holds are not applied again.
+    TimelineReset { agent_id: String, items: Vec<Item>, older: Option<Value>, cursor: Option<(String, u64)> },
     TimelineOlder { agent_id: String, items: Vec<Item>, older: Option<Value> },
     Commands { agent_id: String, list: Vec<SlashCommand> },
     Diff { cwd: String, files: Vec<DiffFile>, error: Option<String>, too_large: bool },
@@ -453,6 +458,8 @@ pub enum Event {
     /// A file of [`Command::Upload`] is on the host: the attachment that
     /// names it in a message, or why it is not.
     Uploaded { id: String, result: Result<Value, String> },
+    /// A [`Command::Download`]'s file, or why it could not be read.
+    Downloaded { id: String, result: Result<Vec<u8>, String> },
     /// The label catalog: (name, color).
     Labels(Vec<(String, String)>),
     CommitFileDiff { sha: String, path: String, file: Option<DiffFile>, error: Option<String> },
@@ -467,7 +474,10 @@ pub enum Event {
     BackgroundWork { agent: String, items: Vec<BackgroundItem> },
     Branches { cwd: String, list: Vec<String> },
     Suggestions { query: String, entries: Vec<(String, bool)> },
-    TimelineLive { agent_id: String, item: Item },
+    /// `cursor`: the event's epoch and seq; the host can deliver one more
+    /// than once (a subscription and its implicit delivery, a refetch that
+    /// already has it), and a chunk applied twice shows twice.
+    TimelineLive { agent_id: String, item: Item, cursor: Option<(String, u64)> },
     Notice(String),
 }
 
@@ -634,6 +644,7 @@ enum Pending {
     CreateAgent,
     Import,
     Upload(String),
+    Download(String),
     Other(&'static str),
 }
 
@@ -648,6 +659,8 @@ async fn session(
     // Terminal output arrives in binary frames addressed by slot.
     let mut slots: HashMap<u8, String> = HashMap::new();
     let mut utf8_tails: HashMap<String, Vec<u8>> = HashMap::new();
+    // Downloads under way: their bytes so far, by request id.
+    let mut downloads: HashMap<String, Vec<u8>> = HashMap::new();
     let (sink, mut rx) = rt::timeout(
         Duration::from_secs(if endpoint.bridge_token.is_some() { 3 } else { 10 }),
         rt::connect(endpoint.url.as_str()),
@@ -760,7 +773,23 @@ async fn session(
                 if !connected {
                     if let Command::Upload { id, .. } = cmd {
                         let _ = events.send(Event::Uploaded { id, result: Err("Not connected".into()) });
+                    } else if let Command::Download { id, .. } = cmd {
+                        let _ = events.send(Event::Downloaded { id, result: Err("Not connected".into()) });
                     }
+                    continue;
+                }
+                if let Command::Download { id, cwd, path } = cmd {
+                    // Under our id: the file's frames carry it.
+                    downloads.insert(id.clone(), Vec::new());
+                    pending.insert(id.clone(), Pending::Download(id.clone()));
+                    send(&mut tx, &session_msg(json!({
+                        "type": "file_explorer_request",
+                        "cwd": cwd,
+                        "path": path,
+                        "mode": "file",
+                        "acceptBinary": true,
+                        "requestId": id,
+                    }))).await?;
                     continue;
                 }
                 if let Command::Upload { id, name, mime, bytes } = cmd {
@@ -791,6 +820,15 @@ async fn session(
                 };
                 let text = match frame {
                     Message::Text(t) => t,
+                    Message::Binary(bytes) if matches!(bytes.first(), Some(&(FILE_BEGIN..=FILE_END))) => {
+                        if let Some((id, result)) = download_frame(&bytes, &mut downloads) {
+                            pending.remove(&id);
+                            if events.send(Event::Downloaded { id, result }).is_err() {
+                                return Ok(Exit::UiGone);
+                            }
+                        }
+                        continue;
+                    }
                     Message::Binary(bytes) => {
                         for ev in terminal_frame(&bytes, &slots, &mut utf8_tails) {
                             if events.send(ev).is_err() {
@@ -875,6 +913,18 @@ fn session_msg(message: Value) -> Value {
     json!({ "type": "session", "message": message })
 }
 
+/// A live event's place in its agent's timeline: `(epoch, seq)`.
+fn seq_cursor(payload: &Value) -> Option<(String, u64)> {
+    Some((payload.get("epoch")?.as_str()?.to_owned(), payload.get("seq")?.as_u64()?))
+}
+
+/// The last place a fetched page covers: `(epoch, seq)`.
+fn end_cursor(payload: &Value) -> Option<(String, u64)> {
+    let end = payload.get("endCursor")?;
+    let epoch = end.get("epoch").or_else(|| payload.get("epoch"))?.as_str()?.to_owned();
+    Some((epoch, end.get("seq")?.as_u64()?))
+}
+
 /// Items a conversation opens with, and each earlier page brings.
 const TIMELINE_PAGE: u32 = 40;
 
@@ -887,7 +937,7 @@ fn timeline_requests(agent_id: &str, pending: &mut HashMap<String, Pending>) -> 
                 "type": "fetch_agent_timeline_request",
                 "agentId": agent_id,
                 "direction": "tail",
-                // A screenful, as Paseo's app pages it: earlier ones load as
+                // A screenful at a time: earlier ones load as
                 // the conversation scrolls up, so a long agent opens as
                 // fast as a short one, through a relay too.
                 "limit": TIMELINE_PAGE,
@@ -980,7 +1030,7 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
     match cmd {
         Command::Open(id) => timeline_requests(&id, pending),
         // Sent by the session itself, with its binary frames.
-        Command::Upload { .. } => vec![],
+        Command::Upload { .. } | Command::Download { .. } => vec![],
         Command::Send { agent_id, text, behavior, images, attachments, message_id } => {
             let mut msg = json!({
                 "type": "send_agent_message_request",
@@ -1546,6 +1596,9 @@ fn handle(
                 Some(Pending::Upload(id)) => {
                     return vec![Event::Uploaded { id, result: Err(error.to_owned()) }];
                 }
+                Some(Pending::Download(id)) => {
+                    return vec![Event::Downloaded { id, result: Err(error.to_owned()) }];
+                }
                 Some(Pending::Pairing) => {
                     return vec![Event::PairingOffer { url: None, relay_enabled: false, error: Some(error.to_owned()) }];
                 }
@@ -1661,7 +1714,7 @@ fn handle(
                 }
                 // Shown in place of the history, so the view never waits on it.
                 let message = format!("Could not load history: {error}");
-                return vec![Event::TimelineReset { agent_id, items: vec![Item::Error { message }], older: None }];
+                return vec![Event::TimelineReset { agent_id, items: vec![Item::Error { message }], older: None, cursor: None }];
             }
             let items = payload
                 .get("entries")
@@ -1675,7 +1728,7 @@ fn handle(
             let mut out: Vec<Event> = vec![if older_page {
                 Event::TimelineOlder { agent_id: agent_id.clone(), items, older }
             } else {
-                Event::TimelineReset { agent_id: agent_id.clone(), items, older }
+                Event::TimelineReset { agent_id: agent_id.clone(), items, older, cursor: end_cursor(payload) }
             }];
             if let Some(agent) = payload.get("agent").and_then(Agent::from_json) {
                 out.push(Event::AgentUpsert(agent));
@@ -1692,7 +1745,11 @@ fn handle(
             }]
         }
         "file_explorer_response" => {
-            request_id.and_then(|id| pending.remove(id));
+            // A download that failed: its file never comes.
+            if let Some(Pending::Download(id)) = request_id.and_then(|id| pending.remove(id)) {
+                let error = payload.get("error").and_then(Value::as_str).unwrap_or("The file could not be read");
+                return vec![Event::Downloaded { id, result: Err(error.to_owned()) }];
+            }
             let cwd = payload.get("cwd").and_then(Value::as_str).unwrap_or_default().to_owned();
             let path = payload.get("path").and_then(Value::as_str).unwrap_or_default().to_owned();
             let error = payload.get("error").and_then(Value::as_str).map(str::to_owned);
@@ -1743,7 +1800,7 @@ fn handle(
                     ahead: n("aheadOfOrigin").or_else(|| p.pointer("/aheadBehind/ahead").and_then(Value::as_u64)).unwrap_or(0),
                     behind: n("behindOfOrigin").or_else(|| p.pointer("/aheadBehind/behind").and_then(Value::as_u64)).unwrap_or(0),
                     has_remote: p.get("hasRemote").and_then(Value::as_bool).unwrap_or(false),
-                    paseo_worktree: p.get("isPaseoOwnedWorktree").and_then(Value::as_bool).unwrap_or(false),
+                    managed_worktree: p.get("isPaseoOwnedWorktree").and_then(Value::as_bool).unwrap_or(false),
                 },
             }]
         }
@@ -2103,7 +2160,7 @@ fn handle(
                 Some("timeline") => event
                     .get("item")
                     .and_then(Item::from_json)
-                    .map(|item| Event::TimelineLive { agent_id, item })
+                    .map(|item| Event::TimelineLive { agent_id, item, cursor: seq_cursor(payload) })
                     .into_iter()
                     .collect(),
                 // A finished turn: replace the delta-built rows with the
@@ -2161,7 +2218,7 @@ struct Out {
     seal: Option<super::relay::Sender>,
 }
 
-/// Paseo's file transfer: the request, then the bytes in binary frames
+/// File transfer: the request, then the bytes in binary frames
 /// (begin with the metadata, chunks, end), all under the request's id.
 async fn upload(
     tx: &mut Out,
@@ -2187,6 +2244,33 @@ async fn upload(
         send_frame(tx, Message::Binary(frame)).await?;
     }
     Ok(())
+}
+
+/// A frame of a download's file: begin (its metadata), a chunk of its
+/// bytes, end. The whole file once its end comes, with its request id; a
+/// frame of no download we asked for is dropped.
+fn download_frame(frame: &[u8], downloads: &mut HashMap<String, Vec<u8>>) -> Option<(String, Result<Vec<u8>, String>)> {
+    let (&op, rest) = frame.split_first()?;
+    let (&len, rest) = rest.split_first()?;
+    let id = std::str::from_utf8(rest.get(..len as usize)?).ok()?.to_owned();
+    let body = &rest[len as usize..];
+    let bytes = downloads.get_mut(&id)?;
+    match op {
+        FILE_BEGIN => {
+            // The size, to hold the file in one allocation.
+            let meta = body.get(2..).and_then(|m| serde_json::from_slice::<Value>(m).ok());
+            if let Some(size) = meta.and_then(|m| m.get("size").and_then(Value::as_u64)) {
+                bytes.reserve(size as usize);
+            }
+            None
+        }
+        FILE_CHUNK => {
+            bytes.extend_from_slice(body);
+            None
+        }
+        FILE_END => downloads.remove(&id).map(|b| (id, Ok(b))),
+        _ => None,
+    }
 }
 
 const FILE_BEGIN: u8 = 0x10;
@@ -2277,7 +2361,7 @@ pub struct Endpoint {
     pub local_credential: Option<String>,
     /// The daemon password, for a remote host that requires one.
     pub password: Option<String>,
-    /// Set when the session goes through Paseo's relay (or Sophon's LAN
+    /// Set when the session goes through the relay (or Sophon's LAN
     /// bridge, which speaks the same encryption).
     pub relay: Option<super::relay::RelayOffer>,
     /// The LAN bridge's pairing token, sent first through the channel.
@@ -2291,17 +2375,17 @@ pub struct Endpoint {
 
 /// The relay this Mac's service registers with (`daemon.relay.endpoint` in
 /// its config file; the service exposes no call to change it): `None` is
-/// Paseo's own.
+/// the default relay.
 pub fn relay_endpoint() -> Option<String> {
-    let text = std::fs::read_to_string(paseo_home().join("config.json")).ok()?;
+    let text = std::fs::read_to_string(daemon_home().join("config.json")).ok()?;
     let v: Value = serde_json::from_str(&text).ok()?;
     v.pointer("/daemon/relay/endpoint").and_then(Value::as_str).map(str::to_owned).filter(|s| !s.is_empty())
 }
 
-/// Sets the relay (`host:port`, TLS when the port is 443; empty: Paseo's),
+/// Sets the relay (`host:port`, TLS when the port is 443; empty: the default),
 /// keeping the rest of the file. The service reads it when it starts.
 pub fn set_relay_endpoint(endpoint: &str) -> Result<(), String> {
-    let path = paseo_home().join("config.json");
+    let path = daemon_home().join("config.json");
     let mut v: Value = std::fs::read_to_string(&path)
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
@@ -2326,7 +2410,7 @@ pub fn set_relay_endpoint(endpoint: &str) -> Result<(), String> {
     std::fs::write(&path, text).map_err(|e| e.to_string())
 }
 
-fn paseo_home() -> PathBuf {
+fn daemon_home() -> PathBuf {
     if let Some(home) = std::env::var_os("PASEO_HOME") {
         return PathBuf::from(home);
     }
@@ -2340,9 +2424,9 @@ fn home_dir() -> PathBuf {
 /// Reads the live address from `paseo.pid` (falling back to `config.json`
 /// and then the default port) and the local credential the daemon rewrites
 /// on every start. The credential is only offered to the address `paseo.pid`
-/// names, as Paseo's CLI does.
+/// names, as the daemon's CLI does.
 pub fn discover() -> Endpoint {
-    let home = paseo_home();
+    let home = daemon_home();
     let read_json = |name: &str| {
         std::fs::read_to_string(home.join(name)).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok())
     };
@@ -2381,7 +2465,7 @@ fn client_id() -> String {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn file_frames_follow_paseo() {
+    fn file_frames_follow_the_protocol() {
         let bytes = vec![7u8; FILE_CHUNK_BYTES + 3];
         let frames = file_frames("r1", "a.txt", "text/plain", "t", &bytes);
         assert_eq!(frames.len(), 4);
@@ -2399,6 +2483,21 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_download_is_the_file_its_frames_carry_under_its_id() {
+        let bytes: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+        let mut downloads = HashMap::from([("d1".to_owned(), Vec::new())]);
+        // A frame of a download not asked for is dropped.
+        let stray = file_frames("other", "x.bin", "application/octet-stream", "t", &bytes);
+        assert!(stray.iter().all(|f| download_frame(f, &mut downloads).is_none()));
+        let frames = file_frames("d1", "x.bin", "application/octet-stream", "t", &bytes);
+        assert!(frames.len() > 3, "a file of several chunks");
+        let (last, rest) = frames.split_last().unwrap();
+        assert!(rest.iter().all(|f| download_frame(f, &mut downloads).is_none()));
+        assert_eq!(download_frame(last, &mut downloads), Some(("d1".to_owned(), Ok(bytes))));
+        assert!(downloads.is_empty());
+    }
 
     #[test]
     fn terminal_output_keeps_split_characters() {
@@ -2450,6 +2549,52 @@ mod tests {
 
     /// The LAN bridge end to end, against the local daemon:
     /// `cargo test bridge_live -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn download_live() {
+        // The local daemon; downloads a binary file larger than a read
+        // shows (2 MB), then one that is not there.
+        let dir = std::env::temp_dir().join(format!("sophon-download-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bytes: Vec<u8> = (0..3_000_000u32).map(|i| (i % 251) as u8).collect();
+        std::fs::write(dir.join("big.bin"), &bytes).unwrap();
+        let cwd = dir.to_string_lossy().into_owned();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let (ev_tx, mut ev_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+            tokio::spawn(run(ev_tx, cmd_rx));
+            let deadline = tokio::time::sleep(Duration::from_secs(20));
+            tokio::pin!(deadline);
+            let mut answers = 0;
+            loop {
+                tokio::select! {
+                    _ = &mut deadline => panic!("no download answer"),
+                    ev = ev_rx.recv() => match ev.unwrap() {
+                        Event::Connected { .. } => {
+                            cmd_tx.send(Command::Download { id: "d1".into(), cwd: cwd.clone(), path: "big.bin".into() }).unwrap();
+                            cmd_tx.send(Command::Download { id: "d2".into(), cwd: cwd.clone(), path: "missing.bin".into() }).unwrap();
+                        }
+                        Event::Downloaded { id, result } => {
+                            match id.as_str() {
+                                "d1" => assert!(result.as_ref().is_ok_and(|b| *b == bytes), "the whole file"),
+                                "d2" => assert!(result.is_err(), "a missing file is an error: {result:?}"),
+                                other => panic!("unknown download {other}"),
+                            }
+                            println!("{id}: {}", match &result { Ok(b) => format!("{} bytes", b.len()), Err(e) => e.clone() });
+                            answers += 1;
+                            if answers == 2 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    },
+                }
+            }
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     #[ignore]
     fn upload_live() {
@@ -2519,7 +2664,7 @@ mod tests {
     fn remote_host_urls() {
         let h = |u: &str| RemoteHost { url: u.into(), password: None }.ws_url();
         assert_eq!(h("100.64.0.2:6767"), "ws://100.64.0.2:6767/ws");
-        assert_eq!(h("https://paseo.example.com"), "wss://paseo.example.com/ws");
+        assert_eq!(h("https://daemon.example.com"), "wss://daemon.example.com/ws");
         assert_eq!(h("wss://x.y/ws"), "wss://x.y/ws");
     }
 
@@ -2537,7 +2682,7 @@ mod tests {
             Some("a1"),
             &mut follow,
         );
-        assert!(matches!(&events[..], [Event::TimelineLive { agent_id, item: Item::Assistant { text } }] if agent_id == "a1" && text == "hi"));
+        assert!(matches!(&events[..], [Event::TimelineLive { agent_id, item: Item::Assistant { text }, .. }] if agent_id == "a1" && text == "hi"));
         assert!(follow.is_empty());
     }
 

@@ -354,7 +354,7 @@ fn file_sheet(composer: String, id: String) {
 }
 
 /// A size for people: bytes, KB or MB.
-fn format_size(bytes: usize) -> String {
+pub(crate) fn format_size(bytes: usize) -> String {
     match bytes {
         b if b < 1024 => format!("{b} B"),
         b if b < 1024 * 1024 => format!("{:.0} KB", b as f64 / 1024.0),

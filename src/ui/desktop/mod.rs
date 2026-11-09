@@ -1,4 +1,4 @@
-//! The desktop shell, as Paseo's: a pinned sidebar of projects and
+//! The desktop shell: a pinned sidebar of projects and
 //! workspaces beside the main surface on wide windows; on narrow ones, one
 //! at a time. What only the desktop has (tabs, the explorer, git, terminals,
 //! new workspaces, history, schedules, shortcuts) lives here.
@@ -26,7 +26,7 @@ use nsh_core::{
 use crate::store::{self, Screen};
 use crate::ui::{kit::*, shared::{modals, notice}};
 
-/// Paseo's compact / wide boundary.
+/// The compact / wide boundary.
 const SPLIT_WIDTH: f32 = 600.0;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -39,7 +39,7 @@ enum Layout {
 pub(crate) fn shell() -> impl IntoElement {
     if is_desktop() {
         shortcuts::bind();
-        // Paseo's / Claude's look: no system bar, the traffic lights sit
+        // Claude's look: no system bar, the traffic lights sit
         // on the app's own surface.
         set_title_bar(TitleBarStyle::Hidden, Some(px(44.0)));
     }

@@ -1,4 +1,4 @@
-//! The composer, as Paseo's: the input over a toolbar of agent controls
+//! The composer: the input over a toolbar of agent controls
 //! (provider and model, thinking, mode) with the send / stop disc in the
 //! corner. One composer serves a live agent (`Target::Agent`, controls
 //! change the agent) and a new one (`Target::Form`, controls fill the form).
@@ -958,8 +958,7 @@ fn mic_button(doc: Doc) -> impl IntoElement {
         }))
 }
 
-/// Cmd+V / Ctrl+V of files: chips at the caret, as Paseo's composer takes
-/// them: images (a screenshot) as images, other files uploaded to the
+/// Cmd+V / Ctrl+V of files: chips at the caret: images (a screenshot) as images, other files uploaded to the
 /// host, and files copied in Finder read and uploaded too (the host may be
 /// another computer). Text pastes into the editor itself.
 fn attach_pasted(key: &str, e: &RichEditorPastedFiles) {

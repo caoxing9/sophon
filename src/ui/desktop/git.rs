@@ -1,5 +1,5 @@
 //! Git in the workspace header: ahead / behind, the pull request and its
-//! checks, and the actions menu (Paseo's git split button).
+//! checks, and the actions menu (a git split button).
 
 use crate::i18n::{t, tf};
 use nsh_core::{element::FontWeight, prelude::*};
@@ -161,7 +161,7 @@ fn actions_menu(git: Memo<store::Git>) -> impl IntoElement {
                     .disabled(!st.has_remote),
                 );
             }
-            if let Some(base) = st.base_ref.clone().filter(|_| st.paseo_worktree) {
+            if let Some(base) = st.base_ref.clone().filter(|_| st.managed_worktree) {
                 m = m.child(menu_row(
                     t("Merge into base"),
                     Some(Icon::GitMerge),

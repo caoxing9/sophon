@@ -5,7 +5,7 @@
 <h1 align="center">Sophon · 智子</h1>
 
 <p align="center">
-  一个大脑，所有设备：<a href="https://paseo.sh">Paseo</a> 编程智能体的原生客户端，支持 macOS 和 iOS。
+  一个大脑，所有设备：编程智能体的原生客户端，支持 macOS 和 iOS。
 </p>
 
 <p align="center">
@@ -16,7 +16,7 @@
 
 ---
 
-你的编程智能体（Claude Code、Codex 等）运行在电脑上的 [Paseo](https://paseo.sh) 守护进程里。Sophon 是它们的窗口：
+Sophon 基于 [Paseo](https://paseo.sh)：你的编程智能体（Claude Code、Codex 等）运行在电脑上的守护进程里，Sophon 是它们的窗口：
 在 Mac 或手机上启动智能体、跟进进度、审查改动、回答它们的提问，所有设备连的都是同一个守护进程。
 Sophon 用 Rust 和 [NSH](https://github.com/longbridge/nsh) 编写，在每个平台上都是真正的原生应用，不是网页套壳。
 
@@ -29,17 +29,17 @@ Sophon 用 Rust 和 [NSH](https://github.com/longbridge/nsh) 编写，在每个�
 - **智能体即标签页**：一个工作区多个智能体；切换模型、模式和思考深度；斜杠命令、`@` 引用文件、图片附件；排队、插话或打断
 - **实时时间线**：流式输出、工具调用、计划、权限与提问卡片、子智能体、后台任务，支持回退和分叉
 - **代码审查**：改动列表、并排/统一 diff、逐行评论发回给智能体；提交记录；提交、推送、拉取、合并、贮藏；创建和合并 PR 并查看检查状态
-- **终端与文件**：PTY 终端标签页、文件树和编辑器
+- **终端与文件**：像 VS Code 一样的底部终端面板（⌃` 或 ⌘J）、文件树和编辑器；工作区里的任意文件都能下载到当前设备：Mac 上弹出保存面板，iPhone 上存进「文件」App 里的 Sophon 文件夹，局域网和中继都能用
 - **定时任务、历史与用量**：cron 定时任务、已归档的智能体、各服务商的用量窗口
-- **随处可用**：扫码配对 iPhone；局域网直连，或在任何地方通过 Paseo 中继连接，端到端加密（Noise）
-- **键盘优先**：命令面板（⌘K）和快捷键；智能体需要你时发送桌面通知
+- **随处可用**：扫码配对 iPhone；局域网直连，或在任何地方通过中继连接，端到端加密（Noise）
+- **键盘优先**：命令面板（⌘K）和快捷键，在输入框里打字时也能用；智能体需要你时发送桌面通知
 - **自动更新**：有新版本时侧边栏会出现更新按钮
 
 逐项的完成情况见 [docs/parity.md](docs/parity.md)。
 
 ## 安装
 
-需要在存放代码的电脑上运行 [Paseo](https://paseo.sh) 守护进程（`paseo daemon start`），Sophon 会自动连上它。
+需要在存放代码的电脑上运行守护进程（`paseo daemon start`），Sophon 会自动连上它。
 
 ### macOS（14 Sonoma 及以上）
 
@@ -114,7 +114,7 @@ nsh package --target ios-simulator --icon assets/app-icon/icon-ios-1024.png
 
 | 路径 | 内容 |
 |---|---|
-| `src/daemon/` | 与 Paseo 的连接：WebSocket 协议、中继端到端加密、供手机连接的局域网桥 |
+| `src/daemon/` | 与守护进程的连接：WebSocket 协议、中继端到端加密、供手机连接的局域网桥 |
 | `src/store.rs` | 用 signal 管理的 UI 状态 |
 | `src/ui/kit/` | 设计系统：控件、图标、菜单、设计变量 |
 | `src/ui/shared/` | 两端公用的组件：对话时间线、输入框、智能体页面、项目列表、弹窗、设置分区 |
@@ -153,6 +153,5 @@ Release 和 `latest.json`（已安装的应用从这里获取更新），并更�
 
 ## 致谢
 
-- [Paseo](https://paseo.sh) 负责运行智能体，Sophon 通过它的协议连接；Sophon 以 Paseo 应用的功能为起点，之后按自己的方向发展。
 - [NSH](https://github.com/longbridge/nsh) 是 Sophon 所用的原生 UI 框架。
-- 名字取自刘慈欣的《三体》。Sophon 是爱好者项目，与原著版权方、Paseo 和 NSH 均无关联。
+- 名字取自刘慈欣的《三体》。Sophon 是爱好者项目，与原著版权方和 NSH 均无关联。

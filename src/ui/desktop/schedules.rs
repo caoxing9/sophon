@@ -1,4 +1,4 @@
-//! Schedules, as Paseo's: prompts that start agents on a cadence.
+//! Schedules: prompts that start agents on a cadence.
 
 use crate::i18n::t;
 use nsh_core::{element::FontWeight, prelude::*};

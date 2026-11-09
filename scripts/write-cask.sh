@@ -11,7 +11,7 @@ cask "sophon" do
 
   url "https://github.com/caoxing9/sophon/releases/download/v#{version}/Sophon-#{version}-macos-#{arch}.tar.gz"
   name "Sophon"
-  desc "Native desktop client for Paseo coding agents"
+  desc "Native desktop client for coding agents"
   homepage "https://github.com/caoxing9/sophon"
 
   # The app updates itself (sidebar → Update); brew upgrade works too.

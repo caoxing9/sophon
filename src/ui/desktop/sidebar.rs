@@ -1,4 +1,4 @@
-//! The sidebar, as Paseo's: the host line, "New workspace", then pinned
+//! The sidebar: the host line, "New workspace", then pinned
 //! workspaces and projects with their workspaces; "Add project" at the foot.
 
 use crate::i18n::{t, tf};
@@ -32,8 +32,8 @@ pub(crate) fn sidebar() -> View {
         .child(footer())
 }
 
-/// The connected host, as Paseo's host chooser shows it.
-/// The host in use, and the menu that switches hosts (Paseo's host chooser).
+/// The connected host, as the host chooser shows it.
+/// The host in use, and the menu that switches hosts (the host chooser).
 fn host_line() -> impl IntoElement {
     // The host and its menu sit on the sidebar's rail (the rows' inset),
     // the menu as wide as the rows under it.
@@ -86,10 +86,9 @@ fn host_body() -> View {
         .rounded(px(R_LG))
         .hover(|s| s.bg(highlight()))
         .child(
+            // The host alone: the mark beside it says whose app this is.
             view()
                 .flex_1()
-                .gap(px(1.0))
-                .child(text("Sophon").text_size(px(TEXT_BASE)).font_weight(FontWeight(600)))
                 .child(
                     view()
                         .flex_row()
@@ -109,8 +108,8 @@ fn host_body() -> View {
                                     Conn::Down(_) => tf("{} offline", &[&name.unwrap_or_else(|| t("Host").into())]),
                                 }
                             })
-                            .text_size(px(TEXT_SM))
-                            .text_color(FG_MUTED)
+                            .text_size(px(TEXT_BASE))
+                            .font_weight(FontWeight(500))
                             .number_of_lines(1),
                         ),
                 ),

@@ -105,6 +105,8 @@ fn header(compact: bool, explorer_shown: Memo<bool>) -> impl IntoElement {
         .child(view().flex_1())
         .child(scripts_menu())
         .child(super::git::git_controls())
+        // The terminal panel, as VS Code's ⌃` and ⌘J.
+        .when(!compact, |v| v.child(icon_btn(Icon::PanelBottom, Sz::Sm, t("Toggle terminal  ⌃`"), store::toggle_terminal_panel)))
         // The explorer has its own toggle while it shows.
         .when(!compact, |v| {
             v.child(when(move || !explorer_shown.get(), || icon_btn(Icon::PanelRight, Sz::Sm, t("Toggle explorer"), store::toggle_explorer)))

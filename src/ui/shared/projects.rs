@@ -1,4 +1,4 @@
-//! The projects and their workspaces, as Paseo's sidebar lists them:
+//! The projects and their workspaces, as the sidebar lists them:
 //! pinned workspaces, then each project with its workspaces. The desktop
 //! sidebar and the phone's list share it; only the desktop edits.
 

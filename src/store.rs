@@ -2,7 +2,7 @@
 //! the conversation and nothing else. Screens read through these functions
 //! and change state only here: by applying daemon events or sending commands.
 //!
-//! Navigation follows Paseo: the sidebar lists projects and their
+//! Navigation: the sidebar lists projects and their
 //! workspaces; a workspace shows its agents as tabs, plus a draft tab that
 //! starts a new agent there. "New workspace" is its own screen.
 
@@ -15,7 +15,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::daemon::{
     Agent, Command, Event, Item, Project, Provider, Workspace,
     connection::{CreateAgent, ImageInput, SlashCommand},
-    model::apply_live,
+    model::{apply_live, carry_images},
 };
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -58,6 +58,8 @@ struct FileTree {
     cwd: String,
     dirs: HashMap<String, Vec<crate::daemon::connection::DirEntry>>,
     expanded: std::collections::HashSet<String>,
+    /// Folders asked for and not listed yet.
+    listing: std::collections::HashSet<String>,
 }
 
 /// A file open in a tab: what is on disk and what the editor holds.
@@ -218,6 +220,13 @@ pub(crate) fn toggle_dir(path: &str) {
 }
 
 pub(crate) fn open_file(path: &str) {
+    load_file(path);
+    open_tab(Tab::File(path.to_owned()));
+}
+
+/// Reads the workspace's file `path` into [`file`] once, without a tab
+/// (the phone shows it on a page of its own).
+pub(crate) fn load_file(path: &str) {
     let Some(cwd) = tree_cwd() else { return };
     let known = global::<Files>().with_untracked(|f| f.0.contains_key(path));
     if !known {
@@ -226,7 +235,28 @@ pub(crate) fn open_file(path: &str) {
         });
         send(Command::ReadFile { cwd, path: path.to_owned() });
     }
-    open_tab(Tab::File(path.to_owned()));
+}
+
+/// The open workspace's folder `dir` (`.`, its root): folders first, then
+/// files, by name; `None` until listed, which this asks for.
+pub(crate) fn dir_entries(dir: &str) -> Option<Vec<crate::daemon::connection::DirEntry>> {
+    let cwd = tree_cwd()?;
+    if global::<FileTree>().with_untracked(|t| t.cwd != cwd) {
+        global::<FileTree>().update(|t| *t = FileTree { cwd: cwd.clone(), ..Default::default() });
+    }
+    let listed = global::<FileTree>().with(|t| t.dirs.get(dir).cloned());
+    let Some(mut entries) = listed else {
+        let asked = global::<FileTree>().with_untracked(|t| t.listing.contains(dir));
+        if !asked {
+            untracked(|| global::<FileTree>().update(|t| {
+                t.listing.insert(dir.to_owned());
+            }));
+            send(Command::ListDir { cwd, path: dir.to_owned() });
+        }
+        return None;
+    };
+    entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    Some(entries)
 }
 
 pub(crate) fn file(path: &str) -> Option<OpenFile> {
@@ -617,6 +647,9 @@ struct Timeline {
     /// The cursor of the page before `items`, while there is older history.
     older: Option<serde_json::Value>,
     loading_older: bool,
+    /// The epoch and last seq `items` hold: live events at or before it
+    /// are repeats.
+    cursor: Option<(String, u64)>,
 }
 /// Messages waiting for the running turn to end, per agent.
 #[derive(Clone, Default)]
@@ -629,7 +662,7 @@ struct Suggestions {
     entries: Vec<(String, bool)>,
 }
 
-/// What Return does while the agent is running (Paseo's "Sending" setting).
+/// What Return does while the agent is running (the "Sending" setting).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) enum SendBehavior {
     /// Adds the message to the running turn.
@@ -694,7 +727,7 @@ pub(crate) enum NoticeAction {
 
 #[derive(Clone, Default)]
 struct Notice(Option<(u64, String, Option<NoticeAction>)>);
-/// Unsent composer text per agent (Paseo keeps drafts per agent).
+/// Unsent composer text per agent.
 #[derive(Clone, Default)]
 struct Drafts(HashMap<String, String>);
 
@@ -1067,7 +1100,7 @@ impl PendingFile {
 #[derive(Clone, Default)]
 struct PendingFiles(HashMap<String, Vec<PendingFile>>);
 
-/// The largest file the host takes (Paseo's limit).
+/// The largest file the host takes.
 const FILE_MAX_BYTES: usize = 50 * 1024 * 1024;
 
 pub(crate) fn pending_files() -> Vec<PendingFile> {
@@ -1169,6 +1202,92 @@ fn arrangement(now: &[(String, bool)], ids: &[String]) -> Option<Vec<(usize, boo
     let next: Vec<(usize, bool)> = order.into_iter().map(|i| (i, rank(&now[i].0).is_none())).collect();
     let same = next.iter().enumerate().all(|(n, &(i, detached))| n == i && now[i].1 == detached);
     (!same).then_some(next)
+}
+
+/// Files on their way here, by request id: their path in the workspace.
+#[derive(Clone, Default)]
+struct Downloads(HashMap<String, String>);
+
+/// Saves the workspace's file `path` on this device, whatever its size or
+/// kind: on the Mac where the save panel says, on the phone in Sophon's
+/// folder of the Files app.
+pub(crate) fn download_file(path: &str) {
+    let Some(cwd) = tree_cwd() else { return };
+    if downloading(path) {
+        return;
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    global::<Downloads>().update(|d| {
+        d.0.insert(id.clone(), path.to_owned());
+    });
+    notify(tf("Downloading “{}”…", &[file_name(path)]));
+    send(Command::Download { id, cwd, path: path.to_owned() });
+}
+
+/// Whether `path` is on its way here.
+pub(crate) fn downloading(path: &str) -> bool {
+    global::<Downloads>().with(|d| d.0.values().any(|p| p == path))
+}
+
+fn file_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+fn downloaded(id: String, result: Result<Vec<u8>, String>) {
+    let mut path = None;
+    global::<Downloads>().update(|d| path = d.0.remove(&id));
+    let Some(path) = path else { return };
+    let name = file_name(&path).to_owned();
+    match result {
+        Ok(bytes) => save_download(name, bytes),
+        Err(e) => notify(tf("Could not download “{}”: {}", &[&name, &e])),
+    }
+}
+
+/// The phone: into the app's Documents, which the Files app shows as
+/// Sophon's folder (`UIFileSharingEnabled`), under a name not taken there.
+#[cfg(target_os = "ios")]
+fn save_download(name: String, bytes: Vec<u8>) {
+    let dir = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default().join("Documents");
+    let target = free_path(&dir, &name);
+    match std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&target, &bytes)) {
+        Ok(()) => notify(tf("Saved “{}” to Files › Sophon", &[&target.file_name().and_then(|n| n.to_str()).unwrap_or(&name)])),
+        Err(e) => notify(tf("Could not download “{}”: {}", &[&name, &e.to_string()])),
+    }
+}
+
+/// The desktop: where the save panel says.
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+fn save_download(name: String, bytes: Vec<u8>) {
+    spawn_detached(async move {
+        let dialog = nsh_core::file_dialog::SaveDialog::new().file_name(name.clone());
+        match pick_save_path(dialog).await {
+            Ok(Some(target)) => match std::fs::write(&target, &bytes) {
+                Ok(()) => notify(tf("Saved “{}”", &[target.file_name().and_then(|n| n.to_str()).unwrap_or(&name)])),
+                Err(e) => notify(tf("Could not download “{}”: {}", &[&name, &e.to_string()])),
+            },
+            Ok(None) => {}
+            Err(e) => notify(tf("Could not download “{}”: {}", &[&name, &e])),
+        }
+    });
+}
+
+#[cfg(target_arch = "wasm32")]
+fn save_download(name: String, _bytes: Vec<u8>) {
+    notify(tf("Could not download “{}”: {}", &[&name, "not in the browser yet"]));
+}
+
+/// `dir/name`, or `dir/name (2).ext`, ... when taken.
+#[cfg(target_os = "ios")]
+fn free_path(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s, format!(".{e}")),
+        _ => (name, String::new()),
+    };
+    (1..)
+        .map(|n| if n == 1 { dir.join(name) } else { dir.join(format!("{stem} ({n}){ext}")) })
+        .find(|p| !p.exists())
+        .expect("a free name")
 }
 
 fn uploaded(id: String, result: Result<serde_json::Value, String>) {
@@ -1526,7 +1645,7 @@ fn service_cli() -> Option<std::path::PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
-/// Whether this Mac's service comes with the Paseo app (its updates come
+/// Whether this Mac's service comes with the desktop app (its updates come
 /// with the app's) rather than from npm, whose package the service can
 /// update itself.
 pub(crate) fn service_bundled() -> bool {
@@ -2273,7 +2392,7 @@ fn deliver(agent_id: &str, text: &str, behavior: Option<&'static str>) {
 }
 
 /// A system notification when an agent starts needing you while you look
-/// elsewhere (Paseo's attention notifications); the press opens it.
+/// elsewhere; the press opens it.
 fn notify_attention(next: &Agent) {
     let before = agent(&next.id);
     let needed = |a: &Agent| a.requires_attention || !a.pending.is_empty();
@@ -2638,12 +2757,14 @@ pub(crate) fn apply(event: Event) {
                 }
             }
         }
-        Event::TimelineReset { agent_id, items, older } => {
+        Event::TimelineReset { agent_id, mut items, older, cursor } => {
             let mut opened = false;
             global::<Timeline>().update(|t| {
                 if t.agent_id.as_deref() == Some(agent_id.as_str()) {
                     opened = !t.loaded;
+                    carry_images(&t.items, &mut items);
                     t.items = items;
+                    t.cursor = cursor;
                     t.loaded = true;
                     t.older = older;
                 }
@@ -2669,10 +2790,17 @@ pub(crate) fn apply(event: Event) {
                 s.entries = entries;
             }
         }),
-        Event::TimelineLive { agent_id, item } => global::<Timeline>().update(|t| {
-            if t.agent_id.as_deref() == Some(agent_id.as_str()) {
-                apply_live(&mut t.items, item);
+        Event::TimelineLive { agent_id, item, cursor } => global::<Timeline>().update(|t| {
+            if t.agent_id.as_deref() != Some(agent_id.as_str()) {
+                return;
             }
+            if let Some((epoch, seq)) = cursor {
+                match &t.cursor {
+                    Some((e, end)) if *e == epoch && seq <= *end => return,
+                    _ => t.cursor = Some((epoch, seq)),
+                }
+            }
+            apply_live(&mut t.items, item);
         }),
         Event::Diff { cwd, files, error, too_large } => global::<Changes>().update(|c| {
             if c.cwd == cwd || c.cwd.is_empty() {
@@ -2728,6 +2856,7 @@ pub(crate) fn apply(event: Event) {
             }
             global::<FileTree>().update(|t| {
                 if t.cwd == cwd {
+                    t.listing.remove(&path);
                     t.dirs.insert(path, entries);
                 }
             });
@@ -2831,9 +2960,10 @@ pub(crate) fn apply(event: Event) {
             })
         }),
         Event::Uploaded { id, result } => uploaded(id, result),
+        Event::Downloaded { id, result } => downloaded(id, result),
         Event::PairingOffer { url, relay_enabled, error } => global::<Pairing>().update(|p| {
-            // The QR is Sophon's link (LAN + relay); `url` stays Paseo's for
-            // its own app.
+            // The QR is Sophon's link (LAN + relay); `url` stays the daemon's
+            // relay link, for its own app.
             let link = pairing_link(url.as_deref().filter(|_| relay_enabled));
             *p = Pairing { loaded: true, qr_svg: link.as_deref().and_then(qr_svg), sophon_url: link, url, relay_enabled, error };
         }),

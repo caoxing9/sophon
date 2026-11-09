@@ -266,7 +266,7 @@ fn message_sheet(item: Memo<Option<Item>>) {
     show_sheet(None, items);
 }
 
-/// Rewind from a user message (Paseo's message menu).
+/// Rewind from a user message (the message menu).
 fn user_actions(item: Memo<Option<Item>>) -> View {
     let id = computed(move || match item.get() {
         Some(Item::User { message_id: Some(id), .. }) => Some(id),
@@ -896,14 +896,20 @@ fn thinking(running: Memo<bool>) -> impl IntoElement {
     view().child(dynamic(move || {
         let label = state.get()?;
         Some(untracked(move || {
+            // The words alone, breathing so they read as live.
+            let breath = animated_value(1.0);
+            let half = nsh_core::element::Timing::new(900.0, Easing::EaseInOut);
+            Animation::sequence([Animation::timing(&breath, 0.45, half.clone()), Animation::timing(&breath, 1.0, half)])
+                .looped(None)
+                .start();
             view()
                 .w_full()
                 .max_w(px(CONTENT_MAX_WIDTH + 2.0 * S6))
                 .self_center()
-                // The rows' own inset, so the mark lines up with the text.
+                // The rows' own inset, so the words line up with the text.
                 .px(px(S6))
                 .py(px(S3))
-                .child(working(label))
+                .child(text(label).text_size(px(TEXT_SM)).text_color(FG_MUTED).bind_opacity(&breath))
                 .into_element()
         }))
     }))

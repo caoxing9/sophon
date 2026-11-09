@@ -1,4 +1,4 @@
-//! History, as Paseo's sessions screen: every session, archived included,
+//! History, a sessions screen: every session, archived included,
 //! newest first and searchable; opening an archived one restores it.
 
 use crate::i18n::t;

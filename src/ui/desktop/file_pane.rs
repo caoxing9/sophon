@@ -16,7 +16,7 @@ pub(crate) fn file_pane(path: String) -> impl IntoElement {
     };
     let state = computed(move || file.with(|f| f.as_ref().map(|f| (f.loaded, f.kind.clone(), f.error.clone()))));
     let language = path.rsplit('/').next().unwrap_or(&path).to_owned();
-    let (save_path, edit_path) = (path.clone(), path.clone());
+    let (save_path, edit_path, down_path) = (path.clone(), path.clone(), path.clone());
     view()
         .flex_1()
         .child(
@@ -33,6 +33,9 @@ pub(crate) fn file_pane(path: String) -> impl IntoElement {
                 .child(when(move || file.with(|f| f.as_ref().is_some_and(|f| f.dirty())), || {
                     text(t("Unsaved")).text_size(px(TEXT_SM)).text_color(FG_MUTED)
                 }))
+                // A copy on this device (the host may be another computer):
+                // a file that can't be shown as text too.
+                .child(icon_btn(Icon::Download, Sz::Sm, t("Download…"), move || store::download_file(&down_path)))
                 .child(
                     btn(
                         move || if file.with(|f| f.as_ref().is_some_and(|f| f.saving)) { t("Saving…") } else { t("Save") },

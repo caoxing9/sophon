@@ -1,4 +1,4 @@
-//! Sophon: a native client for the Paseo daemon, built with NSH.
+//! Sophon: a native client for a coding-agent daemon, built with NSH.
 //!
 //! `daemon` owns the WebSocket connection on tokio's threads; `store` holds
 //! the UI state in signals; `ui` draws it.

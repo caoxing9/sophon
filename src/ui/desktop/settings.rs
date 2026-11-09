@@ -31,10 +31,10 @@ pub(crate) fn settings(compact: bool) -> impl IntoElement {
                         ))
                         .child(relay_row())
                         .child(if store::service_bundled() {
-                            // The Paseo app updates its own service.
+                            // The desktop app updates its own service.
                             row(
                                 t("Update service"),
-                                t("The service comes with the Paseo app and updates with it"),
+                                t("The service comes with the desktop daemon app and updates with it"),
                                 view(),
                                 false,
                             )
@@ -53,7 +53,7 @@ pub(crate) fn settings(compact: bool) -> impl IntoElement {
 }
 
 /// The relay this Mac's service registers with, for phones away from home:
-/// Paseo's by default, or the user's own (a Cloudflare Worker, a server).
+/// the default one, or the user's own (a Cloudflare Worker, a server).
 /// It applies when the service restarts; pair the phone again after.
 fn relay_row() -> impl IntoElement {
     let value = signal(crate::daemon::connection::relay_endpoint().unwrap_or_default());
@@ -68,7 +68,7 @@ fn relay_row() -> impl IntoElement {
             .border_color(BORDER)
             .child(text(t("Relay server")).text_size(px(TEXT_BASE)))
             .child(
-                text(t("Where phones reach this Mac away from home. Empty: Paseo's relay. Applies after a service restart"))
+                text(t("Where phones reach this Mac away from home. Empty: the default relay. Applies after a service restart"))
                     .text_size(px(TEXT_SM))
                     .text_color(FG_MUTED),
             )

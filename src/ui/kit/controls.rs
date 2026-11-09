@@ -1,4 +1,4 @@
-//! Sophon's controls on `nsh/base`'s unstyled ones, following Paseo's rules:
+//! Sophon's controls on `nsh/base`'s unstyled ones:
 //! pill buttons in five variants (one accent CTA per surface), two sizes,
 //! icon buttons as circles with a translucent highlight, fields on a muted
 //! fill, segmented controls whose selected segment is a raised surface.
@@ -464,27 +464,22 @@ pub(crate) fn eclipse(size: f32) -> View {
         .looped(None)
         .start();
     let layer = move |asset: ImageAsset| image(asset).absolute().top(px(0.0)).left(px(0.0)).w(px(size)).h(px(size));
-    view()
-        .w(px(size))
-        .h(px(size))
-        .flex_shrink_0()
-        // Each appearance has its own corona (the night's pale glow, the
-        // day's terracotta): the turning layers follow it.
-        .child(dynamic(move || {
-            let corona = if dark() { crate::LOADER_CORONA } else { crate::LOADER_CORONA_LIGHT };
-            Some(untracked(move || {
-                view()
-                    .absolute()
-                    .top(px(0.0))
-                    .left(px(0.0))
-                    .w(px(size))
-                    .h(px(size))
-                    .child(layer(corona).bind_rotate(&forward).bind_opacity(&breath))
-                    .child(layer(corona).bind_rotate(&backward).opacity(0.45))
-                    .into_element()
-            }))
+    // On dark pages the eclipse stands on the page; on light ones in the
+    // icon's night tile, as the Dock shows it: a black moon alone on a
+    // light page reads as a blot.
+    view().w(px(size)).h(px(size)).flex_shrink_0().child(dynamic(move || {
+        let night = dark();
+        Some(untracked(move || {
+            view()
+                .w(px(size))
+                .h(px(size))
+                .when(!night, |v| v.rounded(px(size * 0.24)).overflow_hidden().child(layer(crate::LOADER_SKY)))
+                .child(layer(crate::LOADER_CORONA).bind_rotate(&forward).bind_opacity(&breath))
+                .child(layer(crate::LOADER_CORONA).bind_rotate(&backward).opacity(0.45))
+                .child(layer(crate::LOADER_MOON))
+                .into_element()
         }))
-        .child(layer(crate::LOADER_MOON))
+    }))
 }
 
 /// How far the mark's tile stands off the page.
@@ -495,48 +490,27 @@ pub(crate) enum Lift {
     Large,
 }
 
-/// The mark, still and sharp at any size (the icon's layers, 256 px): on
-/// dark pages the icon's tile, its night sky rounded and lifted; on light
-/// pages the eclipse alone, no tile, its terracotta corona straight on
-/// the page.
+/// The mark, still and sharp at any size (the icon's layers, 256 px): the
+/// icon's tile, its night sky rounded, on light pages as on dark ones (the
+/// Dock's icon is the same tile).
 pub(crate) fn mark(size: f32, lift: Lift) -> View {
     let layer = move |asset: ImageAsset| image(asset).absolute().top(px(0.0)).left(px(0.0)).w(px(size)).h(px(size));
-    view().w(px(size)).h(px(size)).flex_shrink_0().child(dynamic(move || {
-        let night = dark();
-        Some(untracked(move || {
-            if !night {
-                // No tile to fill: the eclipse is drawn larger, its glow
-                // spilling past the mark's box, so the moon reads at the
-                // tile's weight.
-                let big = size * 1.35;
-                let off = (size - big) / 2.0;
-                let wide = move |asset: ImageAsset| image(asset).absolute().top(px(off)).left(px(off)).w(px(big)).h(px(big));
-                return view()
-                    .w(px(size))
-                    .h(px(size))
-                    .child(wide(crate::LOADER_CORONA_LIGHT))
-                    .child(wide(crate::LOADER_MOON))
-                    .into_element();
-            }
-            let tile = view()
-                .w(px(size))
-                .h(px(size))
-                .rounded(px(size * 0.24))
-                .overflow_hidden()
-                .child(layer(crate::LOADER_SKY))
-                .child(layer(crate::LOADER_CORONA))
-                .child(layer(crate::LOADER_MOON));
-            // The shadow sits on a frame of its own: the tile clips.
-            let frame = view().w(px(size)).h(px(size)).rounded(px(size * 0.24));
-            match lift {
-                Lift::Flat => frame,
-                Lift::Small => frame.shadow_sm(),
-                Lift::Large => frame.shadow_lg(),
-            }
-            .child(tile)
-            .into_element()
-        }))
-    }))
+    let tile = view()
+        .w(px(size))
+        .h(px(size))
+        .rounded(px(size * 0.24))
+        .overflow_hidden()
+        .child(layer(crate::LOADER_SKY))
+        .child(layer(crate::LOADER_CORONA))
+        .child(layer(crate::LOADER_MOON));
+    // The shadow sits on a frame of its own: the tile clips.
+    let frame = view().w(px(size)).h(px(size)).flex_shrink_0().rounded(px(size * 0.24));
+    match lift {
+        Lift::Flat => frame,
+        Lift::Small => frame.shadow_sm(),
+        Lift::Large => frame.shadow_lg(),
+    }
+    .child(tile)
 }
 
 /// Loading: the mark with its corona running, under an optional line.

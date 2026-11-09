@@ -5,7 +5,7 @@
 <h1 align="center">Sophon</h1>
 
 <p align="center">
-  One brain, every device: a native client for <a href="https://paseo.sh">Paseo</a> coding agents on macOS and iOS.
+  One brain, every device: a native client for your coding agents on macOS and iOS.
 </p>
 
 <p align="center">
@@ -16,8 +16,8 @@
 
 ---
 
-Your coding agents (Claude Code, Codex and others) run in a [Paseo](https://paseo.sh) daemon on your computer.
-Sophon is the window onto them: start agents, follow their work, review the diffs, answer their questions, from your
+Sophon is based on [Paseo](https://paseo.sh): your coding agents (Claude Code, Codex and others) run in its daemon on
+your computer, and Sophon is the window onto them: start agents, follow their work, review the diffs, answer their questions, from your
 Mac or from your phone, all talking to the same daemon. It is written in Rust with
 [NSH](https://github.com/longbridge/nsh), so it is a real native app on each platform, not a web view.
 
@@ -34,19 +34,22 @@ Mac or from your phone, all talking to the same daemon. It is written in Rust wi
   rewind and fork
 - **Review**: changes list, split/unified diffs, line comments sent back to the agent; commits; commit, push, pull,
   merge, stash; create and merge pull requests with their checks
-- **Terminals and files**: PTY terminal tabs, a file tree and an editor
+- **Terminals and files**: a VS Code-style terminal panel under the workspace (⌃` or ⌘J), a file tree and an editor;
+  download any file of the workspace to the device you are on, from the Mac (a save panel) or the iPhone (Sophon's
+  folder in the Files app), on the LAN or through the relay
 - **Schedules, history and usage**: cron schedules, archived agents, per-provider usage windows
-- **Everywhere**: pair your iPhone by QR code; connects on the LAN directly or anywhere through Paseo's relay,
+- **Everywhere**: pair your iPhone by QR code; connects on the LAN directly or anywhere through the relay,
   end-to-end encrypted (Noise)
-- **Keyboard first**: command palette (⌘K) and shortcuts; desktop notifications when an agent needs you
+- **Keyboard first**: command palette (⌘K) and shortcuts, also while you type in the composer; desktop notifications
+  when an agent needs you
 - **Self-updating**: a sidebar button appears when a new release is out
 
 What is done and what is still missing, item by item: [docs/parity.md](docs/parity.md).
 
 ## Install
 
-You need the [Paseo](https://paseo.sh) daemon running on the computer where your code lives (Sophon connects to it
-on its own once it is up: `paseo daemon start`).
+You need the daemon running on the computer where your code lives (Sophon connects to it on its own once it is up:
+`paseo daemon start`).
 
 ### macOS (14 Sonoma or later)
 
@@ -124,7 +127,7 @@ nsh package --target ios-simulator --icon assets/app-icon/icon-ios-1024.png
 
 | Path | What it is |
 |---|---|
-| `src/daemon/` | The Paseo connection: WebSocket protocol, relay end-to-end encryption, the LAN bridge for phones |
+| `src/daemon/` | The daemon connection: WebSocket protocol, relay end-to-end encryption, the LAN bridge for phones |
 | `src/store.rs` | UI state in signals |
 | `src/ui/kit/` | The design system: controls, icons, menus, tokens |
 | `src/ui/shared/` | Components both platforms use: the timeline, the composer, the agent pane, the project list, dialogs, settings sections |
@@ -164,7 +167,6 @@ the iOS Simulator (downloadable from the run's artifacts).
 
 ## Acknowledgements
 
-- [Paseo](https://paseo.sh) runs the agents and speaks the protocol Sophon connects with; Sophon started from the Paseo app's features and goes its own way from there.
 - [NSH](https://github.com/longbridge/nsh) is the native UI framework Sophon is built on.
 - The name comes from Liu Cixin's *The Three-Body Problem*. Sophon is a fan project, not affiliated with the book's
-  rights holders, Paseo or NSH.
+  rights holders or NSH.

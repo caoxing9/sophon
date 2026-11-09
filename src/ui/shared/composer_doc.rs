@@ -215,6 +215,37 @@ pub(crate) fn register_submit(target: &'static str, submit: impl Fn() + 'static)
     });
 }
 
+thread_local! {
+    /// The app's shortcuts (`nsh/keymap` syntax) for the editor to run
+    /// ([`set_app_keys`]).
+    static APP_KEYS: RefCell<Vec<(String, std::rc::Rc<dyn Fn()>)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The app's shortcuts, which a focused editor would otherwise swallow:
+/// NSH's `RichEditor` binds every Command and Control key while it has the
+/// keyboard and drops those its keymap has no command for. Set before the
+/// composers' sessions are made.
+pub(crate) fn set_app_keys(keys: Vec<(String, std::rc::Rc<dyn Fn()>)>) {
+    APP_KEYS.with_borrow_mut(|k| *k = keys);
+}
+
+/// `shift+mod+t` (`nsh/keymap`) as the editor's keymap names it:
+/// `Shift-Mod-t`.
+fn editor_key_name(keystroke: &str) -> String {
+    keystroke
+        .split('+')
+        .map(|part| match part {
+            "mod" => "Mod",
+            "ctrl" => "Ctrl",
+            "shift" => "Shift",
+            "alt" => "Alt",
+            "cmd" => "Meta",
+            key => key,
+        })
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
 fn new_session(key: &str, text: &str) -> EditorSession {
     let schema = schema();
     let mut bindings = kit::history_keys();
@@ -232,6 +263,24 @@ fn new_session(key: &str, text: &str) -> EditorSession {
                     set_timeout(Duration::ZERO, move || {
                         if let Some(submit) = SUBMITS.with_borrow(|m| m.get(&target).cloned()) {
                             submit();
+                        }
+                    });
+                }
+                true
+            }),
+        ));
+    }
+    // The app's shortcuts, run after the key as the send is.
+    // Commands are `Send`: each holds its shortcut's place in the list.
+    let names: Vec<String> = APP_KEYS.with_borrow(|k| k.iter().map(|(name, _)| editor_key_name(name)).collect());
+    for (i, name) in names.into_iter().enumerate() {
+        bindings.push((
+            name,
+            command(move |_, dispatch| {
+                if dispatch.is_some() {
+                    set_timeout(Duration::ZERO, move || {
+                        if let Some(action) = APP_KEYS.with_borrow(|k| k.get(i).map(|(_, a)| a.clone())) {
+                            action();
                         }
                     });
                 }
@@ -411,6 +460,13 @@ fn sample_schema_doc(schema: &Schema) -> Node {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_shortcuts_are_named_as_the_editor_keymap_names_keys() {
+        assert_eq!(editor_key_name("mod+k"), "Mod-k");
+        assert_eq!(editor_key_name("shift+ctrl+`"), "Shift-Ctrl-`");
+        assert_eq!(editor_key_name("mod+,"), "Mod-,");
+    }
 
     #[test]
     fn a_document_sends_its_text_mentions_and_attachments_in_order() {

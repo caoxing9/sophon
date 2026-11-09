@@ -20,7 +20,11 @@ pub(crate) fn files_page() -> Screen {
     nav_page().key("changes").header_visible(false).title(t("Changes")).child(
         view()
             .flex_1()
-            .child(top_bar(text(t("Changes")).text_size(px(TEXT_BASE)).font_weight(FontWeight(600)), view().w(px(44.0))))
+            .child(top_bar(
+                text(t("Changes")).text_size(px(TEXT_BASE)).font_weight(FontWeight(600)),
+                // All the workspace's files, changed or not.
+                super::glass_button(Icon::Folder, t("Browse files"), || push(Route::Files(".".into()))),
+            ))
             .child(view().flex_1().px_safe_area().child(files())),
     )
 }

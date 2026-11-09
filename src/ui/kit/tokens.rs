@@ -1,5 +1,5 @@
 //! Sophon's design tokens: the "Ivory & Clay" palette (warm, Claude-like), on
-//! Paseo's rhythm — a 14 pt interface base, 12 pt metadata, a 4/8/12/16/24
+//! this rhythm — a 14 pt interface base, 12 pt metadata, a 4/8/12/16/24
 //! spacing ramp, pill buttons 32 pt tall (28 pt in tight chrome), 12 pt
 //! cards. `theme.json` gives `nsh/base` (Markdown, menus) the same colors.
 
@@ -81,7 +81,7 @@ pub(crate) const R_XL: f32 = 12.0;
 pub(crate) const R_FULL: f32 = 999.0;
 
 /// A phone or tablet: the app is a remote for a computer's agents, sized
-/// for fingers (Apple's 44 pt touch target), as Paseo's touch sizing.
+/// for fingers (Apple's 44 pt touch target).
 pub(crate) const MOBILE: bool = cfg!(any(target_os = "ios", target_os = "android", target_arch = "wasm32"));
 
 // Control heights: touch values on mobile, pointer values on desktop.
@@ -93,7 +93,7 @@ pub(crate) const SIDEBAR_WIDTH: f32 = 272.0;
 
 pub(crate) const MONO: &str = "Menlo";
 
-/// Workspace label colors, by Paseo's names.
+/// Workspace label colors, by name.
 pub(crate) fn label_tone(name: &str) -> AdaptiveColor {
     match name {
         "sky" => pair(0x0ea5e9, 0x38bdf8),

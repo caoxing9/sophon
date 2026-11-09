@@ -1,4 +1,4 @@
-//! The Explorer beside a workspace (Paseo's right sidebar): its changed
+//! The Explorer beside a workspace (the right sidebar): its changed
 //! files, live; a file opens its diff as a tab.
 
 use crate::i18n::{t, tf};
@@ -122,6 +122,12 @@ fn tree_row(row: Memo<Option<store::TreeRow>>) -> impl IntoElement {
                         store::open_modal(store::Modal::FileName { op: "rename", path: p1.clone(), name: n1.clone() })
                     }))
                     .child(menu_row(t("Duplicate"), Some(Icon::Copy), None, false, move || store::file_op("duplicate", &p2, "")))
+                    // A copy here, of a file only: the host's, which may be
+                    // another computer.
+                    .when(!e.is_dir, |v| {
+                        let p4 = e.path.clone();
+                        v.child(menu_row(t("Download…"), Some(Icon::Download), None, false, move || store::download_file(&p4)))
+                    })
                     .child(menu_divider())
                     .child(menu_row_danger(t("Delete"), Icon::Trash2, move || store::file_op("delete", &p3, "")))
                     .into_element()
