@@ -2878,3 +2878,54 @@ pub(crate) fn apply(event: Event) {
         Event::Notice(message) => notify(crate::i18n::tr(&message)),
     }
 }
+
+/// ⌘Q (and ⌘W with nothing left to close) asks twice, as Chrome does: the
+/// first press shows a hint, a second within two seconds quits. Holds the
+/// hint's text while it shows.
+#[derive(Clone, Default)]
+struct QuitHint(Option<(u64, &'static str)>);
+
+pub(crate) fn quit_hint() -> Option<&'static str> {
+    global::<QuitHint>().with(|h| h.0.map(|(_, m)| m))
+}
+
+/// Quits when asked again while the hint shows; else shows it.
+pub(crate) fn request_quit(hint: &'static str) {
+    if global::<QuitHint>().with_untracked(|h| h.0.is_some()) {
+        nsh_core::element::desktop::quit();
+        return;
+    }
+    let id = global::<QuitHint>().with_untracked(|h| h.0.map_or(0, |(n, _)| n)) + 1;
+    global::<QuitHint>().set(QuitHint(Some((id, hint))));
+    spawn_detached(async move {
+        nsh_core::element::timer(std::time::Duration::from_millis(2000)).await;
+        global::<QuitHint>().update(|h| {
+            if h.0.is_some_and(|(n, _)| n == id) {
+                h.0 = None;
+            }
+        });
+    });
+}
+
+/// ⌘W: closes what is open, innermost first: a file, diff or sub-agent tab
+/// goes back to the conversation; a conversation or a screen goes back
+/// home; at home, it asks twice and quits.
+pub(crate) fn close_current() {
+    if modal().is_some() {
+        close_modal();
+        return;
+    }
+    match screen() {
+        Screen::Workspace(_) => match tab() {
+            Tab::File(path) => close_file(&path),
+            Tab::Diff(_) | Tab::CommitDiff(..) | Tab::Subagent(..) => {
+                if let Some(w) = current_workspace() {
+                    open_workspace(&w.id);
+                }
+            }
+            Tab::Agent(_) | Tab::Draft => go_home(),
+        },
+        Screen::Home => request_quit("Press ⌘W again to quit Sophon"),
+        _ => go_home(),
+    }
+}

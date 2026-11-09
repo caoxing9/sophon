@@ -10,13 +10,8 @@ use crate::store::{self, ExplorerTab, Modal, Screen, Tab};
 
 /// Binds the app's shortcuts for as long as the shell lives.
 pub(crate) fn bind() {
+    menu();
     on_key("mod+k", |_| store::open_modal(Modal::Palette));
-    on_key("mod+n", |_| store::open_new_workspace(None));
-    on_key("mod+t", |_| {
-        if matches!(store::screen(), Screen::Workspace(_)) {
-            store::open_tab(Tab::Draft);
-        }
-    });
     on_key("shift+mod+t", |_| store::new_terminal());
     // VS Code's: ⌃` shows and hides the terminal panel (⌘J too), ⌃⇧` opens
     // another terminal.
@@ -31,7 +26,6 @@ pub(crate) fn bind() {
     });
     on_key("mod+b", |_| store::toggle_sidebar());
     on_key("mod+e", |_| store::toggle_explorer());
-    on_key("mod+,", |_| store::open_settings());
     for n in 1..=9usize {
         on_key(&format!("mod+{n}"), move |_| {
             if let Some(tab) = store::tab_list().get(n - 1).cloned() {
@@ -39,6 +33,59 @@ pub(crate) fn bind() {
             }
         });
     }
+}
+
+fn new_chat() {
+    if matches!(store::screen(), Screen::Workspace(_)) {
+        store::open_tab(Tab::Draft);
+    }
+}
+
+/// The menu bar, as a Mac app's: ⌘W closes the open tab (not the window),
+/// and ⌘Q asks twice before quitting, as Chrome does; the Edit menu keeps
+/// the text fields' own commands.
+fn menu() {
+    use nsh_core::desktop::MenuRole as R;
+    use nsh_core::element::desktop::{MenuItem as M, set_application_menu};
+    set_application_menu(vec![
+        M::submenu(
+            "Sophon",
+            [
+                M::role(R::About),
+                M::separator(),
+                M::new(t("Settings…")).shortcut("mod+,").on_select(store::open_settings),
+                M::separator(),
+                M::role(R::Hide),
+                M::role(R::HideOthers),
+                M::role(R::ShowAll),
+                M::separator(),
+                M::new(t("Quit Sophon")).shortcut("mod+q").on_select(|| store::request_quit("Press ⌘Q again to quit Sophon")),
+            ],
+        ),
+        M::submenu(
+            t("File"),
+            [
+                M::new(t("New workspace")).shortcut("mod+n").on_select(|| store::open_new_workspace(None)),
+                M::new(t("New chat")).shortcut("mod+t").on_select(new_chat),
+                M::separator(),
+                M::new(t("Close tab")).shortcut("mod+w").on_select(store::close_current),
+            ],
+        ),
+        M::submenu(
+            t("Edit"),
+            [
+                M::role(R::Undo),
+                M::role(R::Redo),
+                M::separator(),
+                M::role(R::Cut),
+                M::role(R::Copy),
+                M::role(R::Paste),
+                M::role(R::SelectAll),
+            ],
+        ),
+        M::submenu(t("View"), [M::role(R::ToggleFullScreen)]),
+        M::submenu(t("Window"), [M::role(R::Minimize), M::role(R::Zoom)]),
+    ]);
 }
 
 /// What the palette lists: actions, then workspaces and the open
@@ -88,7 +135,7 @@ fn run(id: &str) {
             store::open_modal(Modal::ImportSession);
         }
         "toggle-sidebar" => store::toggle_sidebar(),
-        "new-agent" => store::open_tab(Tab::Draft),
+        "new-agent" => new_chat(),
         "new-terminal" => store::new_terminal(),
         "toggle-terminal" => store::toggle_terminal_panel(),
         "toggle-explorer" => store::toggle_explorer(),

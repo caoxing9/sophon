@@ -103,6 +103,36 @@ pub(crate) fn shell() -> impl IntoElement {
         }))
     }))
     .child(sidebar_toggle())
+    .child(quit_hint())
+}
+
+/// "Press ⌘Q again to quit", over the middle of the window while a second
+/// press would quit (Chrome's hint).
+fn quit_hint() -> impl IntoElement {
+    let hint = computed(store::quit_hint);
+    view()
+        .absolute()
+        .top(px(0.0))
+        .bottom(px(0.0))
+        .left(px(0.0))
+        .right(px(0.0))
+        .items_center()
+        .justify_center()
+        .pointer_events(PointerEvents::None)
+        .child(
+            glass_strong(view())
+                .px(px(S6))
+                .py(px(S4))
+                .rounded(px(R_LG + 4.0))
+                .opacity(move || if hint.get().is_some() { 1.0_f32 } else { 0.0 })
+                .transition_opacity()
+                .child(
+                    crate::ui::kit::text(move || hint.get().map(t).unwrap_or_default())
+                        .text_size(px(TEXT_LG))
+                        .font_weight(nsh_core::element::FontWeight(600))
+                        .text_color(FG),
+                ),
+        )
 }
 
 /// The top of the window, where the system title bar was: it drags the
