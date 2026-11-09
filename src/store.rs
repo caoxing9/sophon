@@ -857,6 +857,25 @@ struct ProjectOrder(Vec<String>);
 #[derive(Clone, Default)]
 struct Collapsed(Vec<String>);
 
+/// Models starred in the model picker, as `provider:model`.
+#[derive(Clone, Default)]
+struct FavoriteModels(Vec<String>);
+
+pub(crate) fn favorite_models() -> Vec<String> {
+    global::<FavoriteModels>().with(|f| f.0.clone())
+}
+
+pub(crate) fn toggle_favorite_model(key: &str) {
+    global::<FavoriteModels>().update(|f| {
+        if let Some(i) = f.0.iter().position(|k| k == key) {
+            f.0.remove(i);
+        } else {
+            f.0.push(key.to_owned());
+        }
+    });
+    save_prefs();
+}
+
 pub(crate) fn is_collapsed(project_id: &str) -> bool {
     global::<Collapsed>().with(|c| c.0.iter().any(|id| id == project_id))
 }
@@ -1679,6 +1698,7 @@ fn save_prefs() {
         "lastWorkspace": global::<LastOpen>().with_untracked(|l| l.workspace.clone()),
         "lastAgent": global::<LastOpen>().with_untracked(|l| l.agent.clone()),
         "collapsedProjects": global::<Collapsed>().with_untracked(|c| c.0.clone()),
+        "favoriteModels": global::<FavoriteModels>().with_untracked(|f| f.0.clone()),
         "language": crate::i18n::lang_untracked().as_str(),
         "appearance": match global::<Theme>().with_untracked(|t| t.0) {
             nsh_core::platform::Appearance::Light => "light",
@@ -1714,6 +1734,7 @@ pub(crate) fn load_prefs() {
     let string = |k: &str| v.get(k).and_then(serde_json::Value::as_str).map(str::to_owned);
     global::<LastOpen>().set(LastOpen { workspace: string("lastWorkspace"), agent: string("lastAgent"), done: false });
     global::<Collapsed>().set(Collapsed(strings("collapsedProjects")));
+    global::<FavoriteModels>().set(FavoriteModels(strings("favoriteModels")));
     if let Some(h) = v.get("terminalHeight").and_then(serde_json::Value::as_f64) {
         global::<TerminalPanel>().update(|p| p.height = (h as f32).clamp(120.0, 900.0));
     }

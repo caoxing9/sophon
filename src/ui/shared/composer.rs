@@ -585,96 +585,18 @@ fn model_name(id: &str) -> String {
     format!("{name} {}", version.join("."))
 }
 
+/// The model picker ([`super::model_picker`]), showing the model's name.
 fn model_picker(live: bool) -> impl IntoElement {
-    let label = computed(move || {
+    let name = computed(move || {
         let c = store::controls(live);
         let provider = store::provider(&c.provider);
-        let p_label = provider.as_ref().map(|p| p.label.clone()).unwrap_or_else(|| c.provider.clone());
-        let m_label = c
-            .model
+        c.model
             .as_deref()
-            .and_then(|m| provider.as_ref().and_then(|p| p.model(m)).map(|m| m.label.clone()).or(Some(model_name(m))));
-        match m_label {
-            Some(m) => format!("{p_label} · {m}"),
-            None => p_label,
-        }
+            .map(|m| provider.as_ref().and_then(|p| p.model(m)).map(|m| m.label.clone()).unwrap_or_else(|| model_name(m)))
+            .or_else(|| provider.as_ref().map(|p| p.label.clone()))
+            .unwrap_or_default()
     });
-    dropup(picker_trigger(Some(Icon::Bot), move || label.get())).child(model_rows(live, true))
-}
-
-/// The models to pick from, as menu rows (in a scroll of their own when
-/// `scrolled`).
-fn model_rows(live: bool, scrolled: bool) -> impl IntoElement {
-    view().child(dynamic(move || {
-        let c = store::controls(live);
-        let providers = store::providers();
-        Some(untracked(move || {
-            let mut list = view();
-            for p in providers.iter().filter(|p| p.enabled) {
-                // A live agent keeps its provider; it lists only its models.
-                if live && p.id != c.provider {
-                    continue;
-                }
-                list = list.child(menu_heading(if p.available() {
-                    p.label.clone()
-                } else {
-                    tf("{} · not available", &[&p.label])
-                }));
-                if p.models.is_empty() {
-                    let id = p.id.clone();
-                    list = list.child(
-                        menu_row(p.label.clone(), None, None, c.provider == p.id, move || {
-                            store::set_control(live, Control::Provider(id.clone()))
-                        })
-                        .disabled(!p.available() || live),
-                    );
-                    continue;
-                }
-                for m in &p.models {
-                    let (pid, mid) = (p.id.clone(), m.id.clone());
-                    let checked = c.provider == p.id && c.model.as_deref() == Some(m.id.as_str());
-                    list = list.child(
-                        menu_row(m.label.clone(), None, Some(m.description.clone().into()), checked, move || {
-                            if !live {
-                                store::set_control(false, Control::Provider(pid.clone()));
-                            }
-                            store::set_control(live, Control::Model(mid.clone()));
-                        })
-                        .disabled(!p.available()),
-                    );
-                }
-            }
-            // A live agent keeps its provider: another vendor's model
-            // continues the conversation in that vendor's own agent (a
-            // fork), where its sign-in belongs.
-            if live {
-                let others: Vec<_> = providers.iter().filter(|p| p.enabled && p.available() && p.id != c.provider).collect();
-                if !others.is_empty() {
-                    list = list.child(menu_divider()).child(menu_heading(t("Continue in another agent"))).child(
-                        text(t("A new agent, with this conversation"))
-                            .text_size(px(TEXT_XS))
-                            .text_color(FG_FAINT)
-                            .px(px(S3))
-                            .pb(px(S1)),
-                    );
-                }
-                for p in others {
-                    if p.models.is_empty() {
-                        let pid = p.id.clone();
-                        list = list.child(menu_row(p.label.clone(), None, None, false, move || store::continue_in(&pid, "")));
-                        continue;
-                    }
-                    for m in &p.models {
-                        let (pid, mid) = (p.id.clone(), m.id.clone());
-                        list = list.child(menu_row(format!("{} · {}", p.label, m.label), None, None, false, move || {
-                            store::continue_in(&pid, &mid)
-                        }));
-                    }
-                }
-            }
-            if scrolled { menu_scroll(420.0, list).into_element() } else { list.into_element() }
-        }))
-    }))
+    super::model_picker::model_picker(live, name)
 }
 
 fn thinking_options(live: bool) -> Vec<crate::daemon::model::Opt> {
