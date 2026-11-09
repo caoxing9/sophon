@@ -34,6 +34,8 @@ pub(crate) enum Phase {
     Available,
     /// Downloading: the share received, 0 to 1.
     Downloading(f32),
+    /// Downloaded and checked: a restart puts it in place.
+    Ready,
     /// Swapping the app; it restarts next.
     Installing,
     /// The last attempt failed.
@@ -48,6 +50,9 @@ pub(crate) struct UpdateState {
     pub(crate) version: Option<String>,
     /// Its release notes.
     pub(crate) notes: Option<String>,
+    /// Every release since the running one, newest first: its version and
+    /// notes (Markdown), for the update dialog.
+    pub(crate) changes: Vec<(String, String)>,
     /// Where to get it by hand when the app cannot replace itself.
     pub(crate) url: Option<String>,
     /// Whether the app can replace itself here.
@@ -61,8 +66,9 @@ pub(crate) fn state() -> UpdateState {
 
 #[cfg(not(target_arch = "wasm32"))]
 enum Msg {
-    Found(Available, bool, Option<String>),
+    Found(Available, bool, Option<String>, Vec<(String, String)>),
     Progress(f32),
+    Downloaded,
     Installing,
     Ready,
     Failed(String),
@@ -168,25 +174,43 @@ fn start_desktop() {
         let can_install = installation.as_ref().is_some_and(Installation::can_install);
         let page = config.github.as_ref().map(|repo| format!("https://github.com/{repo}/releases/latest"));
         std::thread::sleep(Duration::from_secs(5));
+        let current = config.version.clone();
         loop {
             match check(&config) {
                 Ok(Some(update)) => {
-                    let _ = tx.send(Msg::Found(update.clone(), can_install, page.clone()));
-                    // Wait for the user's go (or the next check).
-                    if go_rx.recv_timeout(CHECK_EVERY).is_ok() {
-                        let Some(installation) = &installation else { continue };
-                        let progress = |p: f32| {
-                            let _ = tx.send(Msg::Progress(p));
-                        };
-                        let done = download(&update, progress).and_then(|archive| {
-                            let _ = tx.send(Msg::Installing);
-                            installation.install(&archive).map_err(|e| e.to_string())
-                        });
-                        let _ = tx.send(match done {
-                            Ok(()) => Msg::Ready,
-                            Err(e) => Msg::Failed(e),
-                        });
+                    let changes = config.github.as_deref().map(|repo| changes_since(repo, &current)).unwrap_or_default();
+                    let installable = can_install && update.sha256.is_some();
+                    let _ = tx.send(Msg::Found(update.clone(), installable, page.clone(), changes));
+                    let Some(installation) = installation.as_ref().filter(|_| installable) else {
+                        // Only a page to open: look again later.
+                        std::thread::sleep(CHECK_EVERY);
+                        continue;
+                    };
+                    // Fetched quietly, so the update is one restart away
+                    // by the time it is offered.
+                    let progress = |p: f32| {
+                        let _ = tx.send(Msg::Progress(p));
+                    };
+                    let archive = match download(&update, progress) {
+                        Ok(archive) => archive,
+                        Err(e) => {
+                            let _ = tx.send(Msg::Failed(e));
+                            // A retry (or the next check) starts over.
+                            let _ = go_rx.recv_timeout(CHECK_EVERY);
+                            continue;
+                        }
+                    };
+                    let _ = tx.send(Msg::Downloaded);
+                    // Wait for the user's go; a newer release by then is
+                    // fetched in its place.
+                    if go_rx.recv_timeout(CHECK_EVERY).is_err() {
+                        continue;
                     }
+                    let _ = tx.send(Msg::Installing);
+                    let _ = tx.send(match installation.install(&archive) {
+                        Ok(()) => Msg::Ready,
+                        Err(e) => Msg::Failed(e.to_string()),
+                    });
                     continue;
                 }
                 Ok(None) => {}
@@ -203,16 +227,16 @@ fn start_desktop() {
         while let Some(msg) = rx.recv().await {
             let s = global::<UpdateState>();
             match msg {
-                Msg::Found(a, can_install, page) => s.update(|s| {
+                Msg::Found(a, can_install, page, changes) => s.update(|s| {
                     s.version = Some(a.version);
                     s.notes = a.notes;
+                    s.changes = changes;
                     s.url = page.or(Some(a.url));
-                    s.can_install = can_install && a.sha256.is_some();
-                    if !matches!(s.phase, Phase::Downloading(_) | Phase::Installing) {
-                        s.phase = Phase::Available;
-                    }
+                    s.can_install = can_install;
+                    s.phase = Phase::Available;
                 }),
                 Msg::Progress(p) => s.update(|s| s.phase = Phase::Downloading(p)),
+                Msg::Downloaded => s.update(|s| s.phase = Phase::Ready),
                 Msg::Installing => s.update(|s| s.phase = Phase::Installing),
                 Msg::Failed(e) => s.update(|s| s.phase = Phase::Failed(e)),
                 Msg::Ready => nsh_core::element::desktop::restart(),
@@ -224,8 +248,8 @@ fn start_desktop() {
 #[derive(Clone, Default)]
 struct Installer(Option<std::sync::Arc<std::sync::Mutex<std::sync::mpsc::Sender<()>>>>);
 
-/// Downloads and installs the update on offer, then restarts; where the app
-/// cannot replace itself, opens the release instead.
+/// Puts the downloaded update in place and restarts; after a failure,
+/// tries again; where the app cannot replace itself, opens the release.
 pub(crate) fn install() {
     let s = state();
     if !s.can_install {
@@ -234,10 +258,71 @@ pub(crate) fn install() {
         }
         return;
     }
-    global::<UpdateState>().update(|s| s.phase = Phase::Downloading(0.0));
+    match s.phase {
+        Phase::Ready => global::<UpdateState>().update(|s| s.phase = Phase::Installing),
+        Phase::Failed(_) => global::<UpdateState>().update(|s| s.phase = Phase::Downloading(0.0)),
+        _ => return,
+    }
     if let Some(tx) = global::<Installer>().with_untracked(|i| i.0.clone())
         && let Ok(tx) = tx.lock()
     {
         let _ = tx.send(());
+    }
+}
+
+/// The releases of `repo` newer than `current`, newest first, with their
+/// notes: GitHub's API, one call per check (well inside its limit for
+/// callers with no token). None when it cannot be reached; the dialog then
+/// shows the manifest's notes.
+#[cfg(not(target_arch = "wasm32"))]
+fn changes_since(repo: &str, current: &str) -> Vec<(String, String)> {
+    let Ok(bytes) = curl(&format!("https://api.github.com/repos/{repo}/releases?per_page=30")) else {
+        return vec![];
+    };
+    let Ok(serde_json::Value::Array(releases)) = serde_json::from_slice(&bytes) else {
+        return vec![];
+    };
+    releases
+        .iter()
+        .filter(|r| !r["draft"].as_bool().unwrap_or(false) && !r["prerelease"].as_bool().unwrap_or(false))
+        .filter_map(|r| {
+            let version = r["tag_name"].as_str()?.trim_start_matches('v').to_owned();
+            newer(&version, current).then(|| (version, r["body"].as_str().unwrap_or_default().trim().to_owned()))
+        })
+        .collect()
+}
+
+/// Whether version `a` comes after `b`, compared part by part as numbers
+/// (`0.1.10` after `0.1.9`).
+pub(crate) fn newer(a: &str, b: &str) -> bool {
+    let parts = |v: &str| v.split(['.', '-', '+']).map(|p| p.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>();
+    parts(a) > parts(b)
+}
+
+/// A pretend update for looking at the dialog in development:
+/// `SOPHON_PREVIEW_UPDATE=1 nsh run`.
+pub(crate) fn preview() {
+    if std::env::var_os("SOPHON_PREVIEW_UPDATE").is_none() {
+        return;
+    }
+    global::<UpdateState>().update(|s| {
+        s.version = Some("0.1.2".into());
+        s.can_install = true;
+        s.phase = Phase::Ready;
+        s.changes = vec![
+            ("0.1.2".into(), "### Fixes\n- Choose folder… opens the folder dialog again.\n- Tool details spring open under their row.".into()),
+            ("0.1.1".into(), "### Features\n- Inline chips in the composer, with previews.\n- `Cmd+V` pastes images and files.".into()),
+        ];
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn versions_compare_as_numbers() {
+        assert!(super::newer("0.1.10", "0.1.9"));
+        assert!(super::newer("1.0.0", "0.9.9"));
+        assert!(!super::newer("0.1.0", "0.1.0"));
+        assert!(!super::newer("0.1.0", "0.2.0"));
     }
 }

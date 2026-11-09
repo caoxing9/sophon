@@ -580,6 +580,8 @@ pub(crate) enum Modal {
     RenameProject { id: String, name: String },
     SwitchBranch,
     ToolDetail { name: String, kind: String, detail: serde_json::Value, error: Option<String> },
+    /// A newer version: what changed since this one, and a restart to it.
+    Update,
     ImportSession,
     RestartDaemon,
     Usage,

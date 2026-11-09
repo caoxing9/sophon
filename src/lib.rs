@@ -69,6 +69,7 @@ pub fn App() -> impl IntoElement {
     if is_desktop() && !cfg!(target_arch = "wasm32") {
         store::start_bridge();
         update::start();
+        update::preview();
     }
     let _ = request_notification_permission();
     view()
