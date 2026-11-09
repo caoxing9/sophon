@@ -31,7 +31,17 @@ struct Row {
     agent: String,
     model: String,
     name: String,
+    /// Through a gateway the agent was pointed at (Magpie): a
+    /// `provider/model` id, not one of the agent's own.
+    gateway: bool,
+    /// A subscription signed in to another client (Copilot's, ChatGPT's
+    /// through Magpie): its account answers for the use.
+    subscription: bool,
 }
+
+/// The `provider/` prefixes of models a gateway serves from a subscription
+/// signed in elsewhere (Magpie's signed-in agents as providers).
+const SUBSCRIPTIONS: &[&str] = &["claude", "codex", "copilot", "devin", "grok", "cursor", "gemini", "antigravity", "qoder"];
 
 impl Row {
     fn key(&self) -> String {
@@ -45,18 +55,27 @@ fn rows_of(p: &Provider) -> Vec<Row> {
     p.models
         .iter()
         .filter(|m| p.id != "claude" || !m.id.contains('/'))
-        .map(|m| Row { provider: p.id.clone(), agent: p.label.clone(), model: m.id.clone(), name: m.label.clone() })
+        .map(|m| {
+            let prefix = m.id.split_once('/').map(|(p, _)| p);
+            Row {
+                provider: p.id.clone(),
+                agent: p.label.clone(),
+                model: m.id.clone(),
+                name: m.label.clone(),
+                gateway: prefix.is_some() || m.description.contains("via magpie"),
+                subscription: prefix.is_some_and(|p| SUBSCRIPTIONS.contains(&p)),
+            }
+        })
         .collect()
 }
 
-/// The agent's mark: Claude's, else a glyph.
+/// The agent's mark: Claude's and Codex's (OpenAI's) own, else a glyph.
 fn mark(provider: &str, size: f32) -> impl IntoElement {
-    let glyph = match provider {
-        "claude" => Icon::Claude,
-        "codex" => Icon::Code,
-        _ => Icon::Cpu,
-    };
-    icon(glyph, size).text_color(FG_MUTED)
+    match provider {
+        "claude" => icon(Icon::Claude, size),
+        "codex" => icon(Icon::Codex, size).text_color(FG),
+        _ => icon(Icon::Cpu, size).text_color(FG_MUTED),
+    }
 }
 
 /// The picker: its pill (the agent's mark and the model) and its panel.
@@ -231,7 +250,27 @@ fn list(live: bool, open: Signal<bool>, providers: Memo<Vec<Provider>>, tab: Sig
                 return note(why.into(), String::new());
             }
             let show_agent = !needle.is_empty() || tab == Tab::Favorites;
+            // The agent's own models first, then those a gateway serves.
+            let mut rows = rows;
+            rows.sort_by_key(|r| r.gateway);
+            let mut gateway_heading = false;
             for r in rows {
+                if r.gateway && !gateway_heading && matches!(tab, Tab::Agent(_)) && needle.is_empty() {
+                    gateway_heading = true;
+                    body = body.child(
+                        view()
+                            .px(px(S2))
+                            .pt(px(S3))
+                            .pb(px(S1))
+                            .gap(px(2.0))
+                            .child(text(t("Through Magpie")).text_size(px(TEXT_XS)).font_weight(FontWeight(500)).text_color(FG_FAINT))
+                            .child(
+                                text(t("Still this agent's harness; the requests go to another provider"))
+                                    .text_size(px(TEXT_XS))
+                                    .text_color(FG_FAINT),
+                            ),
+                    );
+                }
                 let selected = r.provider == c.provider && c.model.as_deref() == Some(r.model.as_str());
                 body = body.child(row(live, open, r, selected, show_agent, &favs));
             }
@@ -265,6 +304,18 @@ fn row(live: bool, open: Signal<bool>, r: Row, selected: bool, show_agent: bool,
                 .gap(px(S2))
                 .px(px(6.0))
                 .child(text(r.name.clone()).text_size(px(TEXT_BASE)).text_color(FG).number_of_lines(1).flex_1().min_w(px(0.0)))
+                .when(r.subscription, |v| {
+                    v.child(
+                        view()
+                            .px(px(5.0))
+                            .h(px(16.0))
+                            .justify_center()
+                            .rounded(px(R_SM))
+                            .border_1()
+                            .border_color(tint(WARNING, 0.5))
+                            .child(text(t("Subscription")).text_size(px(10.0)).text_color(WARNING)),
+                    )
+                })
                 .when(show_agent, |v| v.child(text(r.agent.clone()).text_size(px(TEXT_XS)).text_color(FG_FAINT))),
         )
         .child(
