@@ -97,41 +97,9 @@ fn header(compact: bool) -> impl IntoElement {
                 .number_of_lines(1)
                 .flex_shrink(1.0),
         )
-        .child(dynamic(move || {
-            let branch = ws.with(|w| w.as_ref().and_then(|w| w.branch.clone()))?;
-            let worktree = ws.with(|w| w.as_ref().is_some_and(|w| w.is_worktree()));
-            Some(untracked(move || {
-                view()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(5.0))
-                    .h(px(22.0))
-                    .px(px(S2))
-                    .rounded(px(R_FULL))
-                    .bg(SURFACE2)
-                    .child(icon(if worktree { Icon::GitBranch } else { Icon::GitCommitHorizontal }, 13.0).text_color(FG_MUTED))
-                    .child(text(branch.clone()).text_size(px(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1))
-            }))
-        }))
-        .child(
-            text(move || {
-                ws.with(|w| match w {
-                    Some(w) if w.additions + w.deletions > 0 => format!("+{}  −{}", w.additions, w.deletions),
-                    _ => String::new(),
-                })
-            })
-            .text_size(px(TEXT_SM))
-            .font_family(|| MONO)
-            .text_color(FG_MUTED),
-        )
         .child(view().flex_1())
         .child(scripts_menu())
         .child(super::git::git_controls())
-        .when(!compact, |v| v.child(text(move || ws.with(|w| w.as_ref().map(|w| w.directory.clone()).unwrap_or_default()))
-            .text_size(px(TEXT_SM))
-            .text_color(FG_FAINT)
-            .number_of_lines(1)
-            .flex_shrink(1.0)))
         .when(!compact, |v| v.child(icon_btn(Icon::PanelRight, Sz::Sm, t("Toggle explorer"), store::toggle_explorer)))
 }
 

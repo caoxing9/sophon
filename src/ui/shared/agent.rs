@@ -39,6 +39,7 @@ pub(crate) fn agent_pane(bar: bool) -> impl IntoElement {
                 .pb(px(if MOBILE { S2 } else { S4 }))
                 .child(timeline::tracks())
                 .child(timeline::permissions())
+                .when(!MOBILE, |v| v.child(context_bar()))
                 .child(composer::composer(Target::Agent, t("Message the agent…"))),
         )
 }
@@ -215,3 +216,92 @@ pub(crate) fn dropup_or_down_outline() -> impl IntoElement {
     }))
 }
 
+
+/// Where the agent works, over the composer: the computer, the folder and
+/// branch, and the uncommitted changes (a press shows them).
+fn context_bar() -> impl IntoElement {
+    let ws = computed(store::current_workspace);
+    let host = computed(|| {
+        let named = store::current_host().map(|h| h.name);
+        match store::conn() {
+            store::Conn::Connected { hostname, .. } => named.unwrap_or(if hostname.is_empty() { t("This Mac").into() } else { hostname }),
+            _ => named.unwrap_or_else(|| t("This Mac").into()),
+        }
+    });
+    let folder = computed(move || {
+        ws.with(|w| w.as_ref().map(|w| w.directory.trim_end_matches('/').rsplit('/').next().unwrap_or_default().to_owned()).unwrap_or_default())
+    });
+    let branch = computed(move || ws.with(|w| w.as_ref().and_then(|w| w.branch.clone())));
+    let diff = computed(move || ws.with(|w| w.as_ref().map(|w| (w.additions, w.deletions)).unwrap_or_default()));
+    let item = |glyph: Icon, label: Memo<String>| {
+        view()
+            .flex_row()
+            .items_center()
+            .gap(px(6.0))
+            .min_w(px(0.0))
+            .flex_shrink(1.0)
+            .child(icon(glyph, 14.0).text_color(FG_MUTED))
+            .child(text(move || label.get()).text_size(px(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1))
+    };
+    let divider = || view().w(px(1.0)).h(px(14.0)).bg(BORDER);
+    view()
+        .flex_row()
+        .items_center()
+        .gap(px(S3))
+        .h(px(34.0))
+        // As wide as the composer under it.
+        .w_full()
+        .max_w(px(CONTENT_MAX_WIDTH))
+        .self_center()
+        .mb(px(S2))
+        .pl(px(S3))
+        .pr(px(S1))
+        .rounded(px(R_LG))
+        .bg(tint(SURFACE1, 0.7))
+        .border_1()
+        .border_color(tint(BORDER, 0.7))
+        .child(item(Icon::Monitor, host))
+        .child(divider())
+        .child(item(Icon::Folder, folder))
+        .child(dynamic(move || {
+            branch.get()?;
+            Some(untracked(move || {
+                view()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(S3))
+                    .min_w(px(0.0))
+                    .flex_shrink(1.0)
+                    .child(divider())
+                    .child(item(Icon::GitBranch, computed(move || branch.get().unwrap_or_default())))
+                    .into_element()
+            }))
+        }))
+        .child(view().flex_1())
+        .child(dynamic(move || {
+            let (add, del) = diff.get();
+            (add + del > 0).then(|| {
+                untracked(move || {
+                    nsh_base::button()
+                        .on_press(|| {
+                            if !store::explorer_open() {
+                                store::toggle_explorer();
+                            }
+                            store::set_explorer_tab(store::ExplorerTab::Changes);
+                        })
+                        .accessibility_label(t("Show changes"))
+                        .flex_row()
+                        .items_center()
+                        .gap(px(6.0))
+                        .h(px(24.0))
+                        .px(px(S2))
+                        .rounded(px(R_MD))
+                        .bg(tint(SUCCESS, 0.08))
+                        .hover(|s| s.bg(tint(SUCCESS, 0.14)))
+                        .child(text(format!("+{add}")).text_size(px(TEXT_SM)).font_family(|| MONO).text_color(SUCCESS))
+                        .child(text(format!("−{del}")).text_size(px(TEXT_SM)).font_family(|| MONO).text_color(DANGER))
+                        .into_element()
+                })
+            })
+        }))
+}
