@@ -8,6 +8,7 @@ use crate::ui::kit::text;
 
 use crate::ui::kit::*;
 use crate::store;
+use crate::ui::shared::preview;
 
 pub(crate) fn file_pane(path: String) -> impl IntoElement {
     let file = {
@@ -47,19 +48,24 @@ pub(crate) fn file_pane(path: String) -> impl IntoElement {
                     .disabled(move || !file.with(|f| f.as_ref().is_some_and(|f| f.dirty()))),
                 ),
         )
-        .child(dynamic(move || {
+        // A PDF, an image, a video: shown as what it is.
+        .when(preview::kind_of(&path).is_some(), |v| v.child(preview::file_preview(path.clone())))
+        .when(preview::kind_of(&path).is_none(), |v| v.child(dynamic(move || {
             let (loaded, kind, error) = state.get()?;
             let language = language.clone();
             let edit_path = edit_path.clone();
+            let other = edit_path.clone();
             Some(untracked(move || {
+                // Too large to read as text, or not text: it still
+                // downloads, and opens in its own app.
                 if let Some(e) = error {
-                    return note(Icon::CircleAlert, e);
+                    return preview::fallback(other, Icon::CircleAlert, e);
                 }
                 if !loaded {
                     return note(Icon::RotateCw, t("Loading…").into());
                 }
                 if kind != "text" {
-                    return note(Icon::Info, tf("This {} file can't be shown as text", &[&kind.to_string()]));
+                    return preview::fallback(other, Icon::File, tf("This {} file can't be shown as text", &[&kind.to_string()]));
                 }
                 editor()
                     .value(move || file.with(|f| f.as_ref().map(|f| SharedString::from(f.text.clone()))))
@@ -69,7 +75,7 @@ pub(crate) fn file_pane(path: String) -> impl IntoElement {
                     .flex_1()
                     .into_element()
             }))
-        }))
+        })))
 }
 
 fn note(glyph: Icon, message: String) -> AnyElement {

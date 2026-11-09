@@ -1207,7 +1207,7 @@ fn arrangement(now: &[(String, bool)], ids: &[String]) -> Option<Vec<(usize, boo
 
 /// Files on their way here, by request id: their path in the workspace.
 #[derive(Clone, Default)]
-struct Downloads(HashMap<String, String>);
+struct Downloads(HashMap<String, (String, bool)>);
 
 /// Saves the workspace's file `path` on this device, whatever its size or
 /// kind: on the Mac where the save panel says, on the phone in Sophon's
@@ -1219,7 +1219,7 @@ pub(crate) fn download_file(path: &str) {
     }
     let id = uuid::Uuid::new_v4().to_string();
     global::<Downloads>().update(|d| {
-        d.0.insert(id.clone(), path.to_owned());
+        d.0.insert(id.clone(), (path.to_owned(), false));
     });
     notify(tf("Downloading “{}”…", &[file_name(path)]));
     send(Command::Download { id, cwd, path: path.to_owned() });
@@ -1227,7 +1227,55 @@ pub(crate) fn download_file(path: &str) {
 
 /// Whether `path` is on its way here.
 pub(crate) fn downloading(path: &str) -> bool {
-    global::<Downloads>().with(|d| d.0.values().any(|p| p == path))
+    global::<Downloads>().with(|d| d.0.values().any(|(p, preview)| p == path && !preview))
+}
+
+/// A file's bytes for its preview (a PDF, an image, a video): on their
+/// way, here, or why not.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Preview {
+    Loading,
+    Ready(std::rc::Rc<Vec<u8>>),
+    Failed(String),
+    TooLarge,
+}
+
+#[derive(Clone, Default)]
+struct Previews(HashMap<String, Preview>);
+
+/// The largest file previewed; a larger one downloads.
+pub(crate) const PREVIEW_MAX_BYTES: u64 = 100 * 1024 * 1024;
+
+/// The open workspace's file `path` for its preview, fetched whole (the
+/// read a text file takes stops at 2 MB) the first time it is asked for.
+pub(crate) fn preview(path: &str) -> Preview {
+    if let Some(p) = global::<Previews>().with(|p| p.0.get(path).cloned()) {
+        return p;
+    }
+    let state = match (tree_cwd(), entry_size(path)) {
+        (None, _) => Preview::Failed(t("No workspace is open").into()),
+        (_, Some(size)) if size > PREVIEW_MAX_BYTES => Preview::TooLarge,
+        (Some(cwd), _) => {
+            let id = uuid::Uuid::new_v4().to_string();
+            untracked(|| global::<Downloads>().update(|d| {
+                d.0.insert(id.clone(), (path.to_owned(), true));
+            }));
+            send(Command::Download { id, cwd, path: path.to_owned() });
+            Preview::Loading
+        }
+    };
+    untracked(|| global::<Previews>().update(|p| {
+        p.0.insert(path.to_owned(), state.clone());
+    }));
+    state
+}
+
+/// The size of the workspace's file `path` as its folder's listing gave it.
+fn entry_size(path: &str) -> Option<u64> {
+    let dir = path.rsplit_once('/').map(|(d, _)| d).unwrap_or(ROOT);
+    global::<FileTree>().with_untracked(|t| {
+        t.dirs.get(dir).and_then(|entries| entries.iter().find(|e| e.path == path)).map(|e| e.size)
+    })
 }
 
 fn file_name(path: &str) -> &str {
@@ -1235,9 +1283,20 @@ fn file_name(path: &str) -> &str {
 }
 
 fn downloaded(id: String, result: Result<Vec<u8>, String>) {
-    let mut path = None;
-    global::<Downloads>().update(|d| path = d.0.remove(&id));
-    let Some(path) = path else { return };
+    let mut entry = None;
+    global::<Downloads>().update(|d| entry = d.0.remove(&id));
+    let Some((path, for_preview)) = entry else { return };
+    if for_preview {
+        let state = match result {
+            Ok(bytes) if bytes.len() as u64 > PREVIEW_MAX_BYTES => Preview::TooLarge,
+            Ok(bytes) => Preview::Ready(std::rc::Rc::new(bytes)),
+            Err(e) => Preview::Failed(e),
+        };
+        global::<Previews>().update(|p| {
+            p.0.insert(path, state);
+        });
+        return;
+    }
     let name = file_name(&path).to_owned();
     match result {
         Ok(bytes) => save_download(name, bytes),
