@@ -79,17 +79,10 @@ pub(crate) fn timeline() -> impl IntoElement {
                 .on_load_more_at_start(store::load_older)
                 .load_more_at_start_threshold(1.0)
                 .flex_1())
-                .child(when(store::has_older, || {
-                    view().absolute().top(px(S2)).left(px(0.0)).right(px(0.0)).items_center().child(
-                        btn(
-                            || if store::loading_older() { t("Loading…") } else { t("Load earlier messages") },
-                            Variant::Secondary,
-                            Sz::Sm,
-                            Some(Icon::ChevronUp),
-                            store::load_older,
-                        )
-                        .shadow_sm(),
-                    )
+                // Earlier pages load by themselves as the start nears: a
+                // small loader says so while one is on its way, no button.
+                .child(when(store::loading_older, || {
+                    view().absolute().top(px(S2)).left(px(0.0)).right(px(0.0)).items_center().child(eclipse(24.0))
                 }))
                 .into_element()
         }))
