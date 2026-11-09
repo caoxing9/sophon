@@ -27,10 +27,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-26   # Apple silicon
+          - runner: macos-26   # Apple silicon (Intel Macs are not built)
             arch: aarch64
-          - runner: macos-26-intel   # Intel
-            arch: x86_64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -183,8 +181,7 @@ jobs:
         run: |
           V=$(scripts/version.sh)
           scripts/write-cask.sh "$V" \
-            "$(shasum -a 256 dist/Sophon-$V-macos-aarch64.tar.gz | cut -d' ' -f1)" \
-            "$(shasum -a 256 dist/Sophon-$V-macos-x86_64.tar.gz | cut -d' ' -f1)" > Casks/sophon.rb
+            "$(shasum -a 256 dist/Sophon-$V-macos-aarch64.tar.gz | cut -d' ' -f1)" > Casks/sophon.rb
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Casks/sophon.rb

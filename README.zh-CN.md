@@ -41,7 +41,7 @@ Sophon 用 Rust 和 [NSH](https://github.com/longbridge/nsh) 编写，在每个�
 
 需要在存放代码的电脑上运行守护进程（`paseo daemon start`），Sophon 会自动连上它。
 
-### macOS（14 Sonoma 及以上）
+### macOS（14 Sonoma 及以上，Apple 芯片）
 
 **Homebrew**
 
@@ -60,7 +60,7 @@ curl -fsSL https://raw.githubusercontent.com/caoxing9/sophon/main/install.sh | s
 `SOPHON_DIR=…` 指定目录，`SOPHON_NO_OPEN=1` 装完不自动打开。
 
 **手动安装**：在 [Releases](https://github.com/caoxing9/sophon/releases/latest) 下载
-`Sophon-<版本>-macos-aarch64.dmg`（Apple 芯片）或 `…-x86_64.dmg`（Intel）。
+`Sophon-<版本>-macos-aarch64.dmg`。
 
 > Sophon 目前只做了 ad hoc 签名，还没有经过 Apple 公证。如果 macOS 拒绝打开，运行一次下面的命令即可（Homebrew 和安装脚本会自动处理）：
 >
@@ -140,8 +140,8 @@ Release 和 `latest.json`（已安装的应用从这里获取更新），并更�
 
 | 文件 | 用途 |
 |---|---|
-| `Sophon-<v>-macos-{aarch64,x86_64}.dmg` | 手动安装 |
-| `Sophon-<v>-macos-{aarch64,x86_64}.tar.gz` | 安装脚本、Homebrew 和应用内更新 |
+| `Sophon-<v>-macos-aarch64.dmg` | 手动安装 |
+| `Sophon-<v>-macos-aarch64.tar.gz` | 安装脚本、Homebrew 和应用内更新 |
 | `Sophon-<v>-ios-simulator.zip` | iOS 模拟器 |
 | `latest.json` | 更新源 |
 

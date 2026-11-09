@@ -19,7 +19,7 @@ fail() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 [ "$(uname -s)" = "Darwin" ] || fail "Sophon runs on macOS."
 case "$(uname -m)" in
   arm64) ARCH="aarch64" ;;
-  x86_64) ARCH="x86_64" ;;
+  x86_64) fail "Sophon runs on Apple silicon Macs only." ;;
   *) fail "unsupported CPU: $(uname -m)" ;;
 esac
 
