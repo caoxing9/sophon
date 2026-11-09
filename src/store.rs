@@ -2232,13 +2232,22 @@ pub(crate) fn scroll_timeline_to(index: usize) {
 /// Brings the conversation to its end (a message just sent), once the
 /// new row is laid out.
 pub(crate) fn scroll_timeline_to_end() {
-    spawn(async {
-        nsh_core::element::timer(std::time::Duration::from_millis(60)).await;
-        TIMELINE_LIST.with_borrow(|l| {
-            if let Some(list) = l {
-                list.scroll_to_end(true);
-            }
-        });
+    scroll_timeline_end_after(&[60], true);
+}
+
+/// Jumps to the end at each delay (milliseconds): the rows' first layout
+/// uses estimated heights, so a conversation just opened is brought to its
+/// end again once its messages have measured themselves.
+fn scroll_timeline_end_after(delays: &'static [u64], animated: bool) {
+    spawn(async move {
+        for d in delays {
+            nsh_core::element::timer(std::time::Duration::from_millis(*d)).await;
+            TIMELINE_LIST.with_borrow(|l| {
+                if let Some(list) = l {
+                    list.scroll_to_end(animated);
+                }
+            });
+        }
     });
 }
 
@@ -2456,13 +2465,20 @@ pub(crate) fn apply(event: Event) {
                 }
             }
         }
-        Event::TimelineReset { agent_id, items, older } => global::<Timeline>().update(|t| {
-            if t.agent_id.as_deref() == Some(agent_id.as_str()) {
-                t.items = items;
-                t.loaded = true;
-                t.older = older;
+        Event::TimelineReset { agent_id, items, older } => {
+            let mut opened = false;
+            global::<Timeline>().update(|t| {
+                if t.agent_id.as_deref() == Some(agent_id.as_str()) {
+                    opened = !t.loaded;
+                    t.items = items;
+                    t.loaded = true;
+                    t.older = older;
+                }
+            });
+            if opened {
+                scroll_timeline_end_after(&[30, 120, 250], false);
             }
-        }),
+        }
         Event::TimelineOlder { agent_id, items, older } => global::<Timeline>().update(|t| {
             if t.agent_id.as_deref() == Some(agent_id.as_str()) {
                 let mut merged = items;

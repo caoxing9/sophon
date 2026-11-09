@@ -42,7 +42,7 @@ fn welcome(open_scan: impl Fn() + Clone + 'static) -> impl IntoElement {
                     .w_full()
                     .items_center()
                     .justify_center()
-                    .child(image(crate::LOGO).w(px(96.0)).h(px(96.0)).rounded(px(22.0)).shadow_lg())
+                    .child(mark(96.0, Lift::Large))
                     .child(
                         view()
                             .items_center()

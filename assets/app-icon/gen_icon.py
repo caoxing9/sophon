@@ -1,5 +1,9 @@
 import math, random, sys
 random.seed(11)
+# `gen_icon.py out.svg [layer] [light]`: light is the daytime eclipse for
+# light pages (a warm dawn sky, the corona the noon sun's white gold, drawn plainly
+# rather than screened, so it shows on cream); dark is the night sky.
+LIGHT = len(sys.argv) > 3 and sys.argv[3] == "light"
 R=236; C=512
 def streams(n, lmin, lmax, wmin, wmax, amin, amax):
     o=[]
@@ -22,7 +26,10 @@ for i in range(170):
     stars+=f'<circle cx="{x:.0f}" cy="{y:.0f}" r="{r}" fill="#fff" opacity="{a:.2f}"/>'
 for (x,y,r) in [(150,180,4),(860,150,3.6),(120,760,3.4),(905,820,4.2),(690,95,3)]:
     stars+=f'<circle cx="{x}" cy="{y}" r="{r*4}" fill="url(#twk)"/><circle cx="{x}" cy="{y}" r="{r}" fill="#fff"/>'
-fades=''.join(f'<radialGradient id="fade{k}" gradientUnits="userSpaceOnUse" cx="512" cy="512" r="{r}"><stop offset="{R/r:.3f}" stop-color="{c}"/><stop offset="1" stop-color="{c}" stop-opacity="0"/></radialGradient>' for k,(r,c) in enumerate([(420,"#ffd6bd"),(470,"#ffb48a"),(390,"#fff1e6")]))
+if LIGHT:
+    stars=''
+fade_colors=[(420,"#f2c14e"),(470,"#e9b23a"),(390,"#f7d77e")] if LIGHT else [(420,"#ffd6bd"),(470,"#ffb48a"),(390,"#fff1e6")]
+fades=''.join(f'<radialGradient id="fade{k}" gradientUnits="userSpaceOnUse" cx="512" cy="512" r="{r}"><stop offset="{R/r:.3f}" stop-color="{c}"/><stop offset="1" stop-color="{c}" stop-opacity="0"/></radialGradient>' for k,(r,c) in enumerate(fade_colors))
 svg=f'''<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024"><defs>
 <radialGradient id="bg" cx=".5" cy=".46" r=".78"><stop offset="0" stop-color="#1e1a30"/><stop offset=".5" stop-color="#0f0d1c"/><stop offset="1" stop-color="#040309"/></radialGradient>
 <radialGradient id="twk"><stop offset="0" stop-color="#dfe6ff" stop-opacity=".7"/><stop offset="1" stop-color="#dfe6ff" stop-opacity="0"/></radialGradient>
@@ -35,6 +42,7 @@ svg=f'''<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewB
 <linearGradient id="rim" x1=".15" y1="0" x2=".85" y2="1"><stop offset="0" stop-color="#fffaf5"/><stop offset=".55" stop-color="#ffd9c2" stop-opacity=".8"/><stop offset="1" stop-color="#ffb48a" stop-opacity=".45"/></linearGradient>
 <filter id="b2" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024"><feGaussianBlur stdDeviation="3"/></filter>
 <filter id="b9" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024"><feGaussianBlur stdDeviation="14"/></filter>
+<filter id="b30" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024"><feGaussianBlur stdDeviation="30"/></filter>
 <filter id="b5" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024"><feGaussianBlur stdDeviation="5"/></filter>
 <filter id="grain" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024"><feTurbulence type="fractalNoise" baseFrequency=".85" numOctaves="2" seed="4"/><feColorMatrix type="saturate" values="0"/><feComponentTransfer><feFuncA type="table" tableValues="0 .5"/></feComponentTransfer></filter>
 </defs>
@@ -43,11 +51,42 @@ svg=f'''<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewB
 # The icon in layers too, for the loading mark (the corona turns between a
 # still sky and a still moon): `gen_icon.py out.svg [sky|corona|moon]`.
 sky=f'''<rect width="1024" height="1024" fill="url(#bg)"/><rect width="1024" height="1024" fill="url(#neb)"/>{stars}'''
-corona=f'''<circle cx="512" cy="512" r="470" fill="url(#glow)"/>
-<g filter="url(#b9)" style="mix-blend-mode:screen">{streams(22,70,200,14,30,.22,.45)}</g>
-<g filter="url(#b2)" style="mix-blend-mode:screen">{streams(150,20,150,1.4,3.2,.12,.42)}</g>
-<circle cx="512" cy="512" r="300" fill="url(#inner)"/>
+def lobes(base, reach, seed, points=144):
+    """A closed, uneven outline round the sun: its radius swells along the
+    corona's tilted axis and wavers with a few random harmonics, as a real
+    corona's light does, never a circle."""
+    rnd = random.Random(seed)
+    waves = [(k, rnd.uniform(.25, 1) / k ** .6, rnd.uniform(0, 2 * math.pi)) for k in range(2, 9)]
+    pts = []
+    for i in range(points):
+        t = 2 * math.pi * i / points
+        axis = abs(math.cos(t - math.radians(-28))) ** 3
+        wobble = sum(a * math.sin(k * t + ph) for k, a, ph in waves) / 2.2
+        r = base + reach * max(.08, .35 + .75 * axis + .45 * wobble)
+        pts.append(f"{C + r * math.cos(t):.1f},{C + r * math.sin(t):.1f}")
+    return "M" + " L".join(pts) + " Z"
+if LIGHT:
+    # Daylight: the glow an uneven halo, long along its axis, its
+    # streamers longer and plainer, so the shape reads on a light page.
+    glow_shape = f'''<g filter="url(#b30)"><path d="{lobes(R, 135, 5)}" fill="#f4cd5e" opacity=".45"/>
+<path d="{lobes(R, 80, 9)}" fill="#f8dc86" opacity=".6"/></g>'''
+    long_streams = streams(26, 110, 260, 10, 24, .35, .6)
+    fine_streams = streams(170, 30, 190, 1.4, 3.4, .2, .55)
+    # No ring: the brightest light is uneven too, spilling past the moon
+    # where the corona is strong and barely at all where it is weak, as
+    # if the moon only covered it.
+    core = f'''<g filter="url(#b9)"><path d="{lobes(R - 30, 95, 13)}" fill="#fbe6a0" opacity=".9"/></g>
+<g filter="url(#b5)"><path d="{lobes(R - 30, 50, 17)}" fill="#fffaf0" opacity=".95"/></g>'''
+else:
+    glow_shape = '<circle cx="512" cy="512" r="470" fill="url(#glow)"/>'
+    long_streams = streams(22, 70, 200, 14, 30, .22, .45)
+    fine_streams = streams(150, 20, 150, 1.4, 3.2, .12, .42)
+    core = f'''<circle cx="512" cy="512" r="300" fill="url(#inner)"/>
 <circle cx="512" cy="512" r="{R+3}" fill="none" stroke="#fff6ef" stroke-width="10" filter="url(#b5)" opacity=".9"/>'''
+corona=f'''{glow_shape}
+<g filter="url(#b9)" style="mix-blend-mode:screen">{long_streams}</g>
+<g filter="url(#b2)" style="mix-blend-mode:screen">{fine_streams}</g>
+{core}'''
 moon=f'''<circle cx="512" cy="512" r="{R}" fill="url(#disc)"/>
 <circle cx="512" cy="512" r="{R}" fill="url(#limb)"/>
 <circle cx="512" cy="512" r="{R-1}" fill="none" stroke="url(#rim)" stroke-width="2.5"/>'''
@@ -55,4 +94,21 @@ grain='''<rect width="1024" height="1024" filter="url(#grain)" opacity=".12" sty
 layer=sys.argv[2] if len(sys.argv)>2 else "all"
 body={"all":sky+"\n"+corona+"\n"+moon+"\n"+grain,"sky":sky+"\n"+grain,"corona":corona,"moon":moon}[layer]
 svg=svg.replace("{BODY}",body)
+if LIGHT:
+    for old, new in [
+        # A warm dawn sky, lightest round the sun.
+        ('<stop offset="0" stop-color="#1e1a30"/><stop offset=".5" stop-color="#0f0d1c"/><stop offset="1" stop-color="#040309"/>',
+         '<stop offset="0" stop-color="#fffaf4"/><stop offset=".55" stop-color="#f9eadf"/><stop offset="1" stop-color="#efd3c0"/>'),
+        ('stop-color="#3a2a5c" stop-opacity=".35"', 'stop-color="#f2b89a" stop-opacity=".28"'),
+        ('stop-color="#3a2a5c" stop-opacity="0"', 'stop-color="#f2b89a" stop-opacity="0"'),
+        # The glow and streamers in terracotta, laid on rather than screened.
+        ('<stop offset=".48" stop-color="#ff9f70" stop-opacity=".55"/><stop offset=".62" stop-color="#e2754a" stop-opacity=".22"/><stop offset="1" stop-color="#b8462a" stop-opacity="0"/>',
+         '<stop offset=".48" stop-color="#f6cf5f" stop-opacity=".55"/><stop offset=".64" stop-color="#efc04a" stop-opacity=".2"/><stop offset="1" stop-color="#efc04a" stop-opacity="0"/>'),
+        ('style="mix-blend-mode:screen"', ''),
+        ('<stop offset=".76" stop-color="#fff3ea" stop-opacity="1"/><stop offset=".82" stop-color="#ffd0b2" stop-opacity=".75"/><stop offset=".92" stop-color="#ff9a68" stop-opacity=".2"/>',
+         '<stop offset=".76" stop-color="#fffdf2" stop-opacity="1"/><stop offset=".82" stop-color="#fbe7a6" stop-opacity=".9"/><stop offset=".92" stop-color="#f2c75a" stop-opacity=".35"/>'),
+        # The ring round the moon: bright amber, not white on cream.
+        ('stroke="#fff6ef" stroke-width="10"', 'stroke="#ffffff" stroke-width="10"'),
+    ]:
+        svg = svg.replace(old, new)
 open(sys.argv[1],'w').write(svg)

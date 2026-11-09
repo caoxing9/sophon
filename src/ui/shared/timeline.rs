@@ -71,7 +71,9 @@ pub(crate) fn timeline() -> impl IntoElement {
                 .initial_scroll_index(count.saturating_sub(1))
                 .follow_end(px(40.0))
                 .content_padding_top(px(S4))
-                .content_padding_bottom(px(200.0))
+                // The phone's composer floats over the end; the desktop's
+                // sits below the list.
+                .content_padding_bottom(px(if MOBILE { 200.0 } else { S4 }))
                 .footer(thinking(running))
                 // Earlier pages come as the conversation nears its start.
                 .on_load_more_at_start(store::load_older)

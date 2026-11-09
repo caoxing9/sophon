@@ -432,44 +432,79 @@ pub(crate) fn eclipse(size: f32) -> View {
         .looped(None)
         .start();
     let layer = move |asset: ImageAsset| image(asset).absolute().top(px(0.0)).left(px(0.0)).w(px(size)).h(px(size));
-    // The corona is a pale glow made for the dark: on a light page it is
-    // drawn in the accent instead, so the ring still shows round the moon.
-    let glow = move |asset: ImageAsset| layer(asset).tint_color(ACCENT);
     view()
         .w(px(size))
         .h(px(size))
         .flex_shrink_0()
+        // Each appearance has its own corona (the night's pale glow, the
+        // day's terracotta): the turning layers follow it.
         .child(dynamic(move || {
-            let light = !dark();
+            let corona = if dark() { crate::LOADER_CORONA } else { crate::LOADER_CORONA_LIGHT };
             Some(untracked(move || {
-                let main = if light { glow(crate::LOADER_CORONA) } else { layer(crate::LOADER_CORONA) };
-                let back = if light { glow(crate::LOADER_CORONA).opacity(0.3) } else { layer(crate::LOADER_CORONA).opacity(0.45) };
                 view()
                     .absolute()
                     .top(px(0.0))
                     .left(px(0.0))
                     .w(px(size))
                     .h(px(size))
-                    .child(main.bind_rotate(&forward).bind_opacity(&breath))
-                    .child(back.bind_rotate(&backward))
+                    .child(layer(corona).bind_rotate(&forward).bind_opacity(&breath))
+                    .child(layer(corona).bind_rotate(&backward).opacity(0.45))
                     .into_element()
             }))
         }))
         .child(layer(crate::LOADER_MOON))
 }
 
-/// The mark, still and sharp at any size (the icon's layers, 256 px).
-pub(crate) fn mark(size: f32) -> View {
-    let layer = |asset: ImageAsset| image(asset).absolute().top(px(0.0)).left(px(0.0)).w(px(size)).h(px(size));
-    view()
-        .w(px(size))
-        .h(px(size))
-        .flex_shrink_0()
-        .rounded(px(size * 0.24))
-        .overflow_hidden()
-        .child(layer(crate::LOADER_SKY))
-        .child(layer(crate::LOADER_CORONA))
-        .child(layer(crate::LOADER_MOON))
+/// How far the mark's tile stands off the page.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Lift {
+    Flat,
+    Small,
+    Large,
+}
+
+/// The mark, still and sharp at any size (the icon's layers, 256 px): on
+/// dark pages the icon's tile, its night sky rounded and lifted; on light
+/// pages the eclipse alone, no tile, its terracotta corona straight on
+/// the page.
+pub(crate) fn mark(size: f32, lift: Lift) -> View {
+    let layer = move |asset: ImageAsset| image(asset).absolute().top(px(0.0)).left(px(0.0)).w(px(size)).h(px(size));
+    view().w(px(size)).h(px(size)).flex_shrink_0().child(dynamic(move || {
+        let night = dark();
+        Some(untracked(move || {
+            if !night {
+                // No tile to fill: the eclipse is drawn larger, its glow
+                // spilling past the mark's box, so the moon reads at the
+                // tile's weight.
+                let big = size * 1.35;
+                let off = (size - big) / 2.0;
+                let wide = move |asset: ImageAsset| image(asset).absolute().top(px(off)).left(px(off)).w(px(big)).h(px(big));
+                return view()
+                    .w(px(size))
+                    .h(px(size))
+                    .child(wide(crate::LOADER_CORONA_LIGHT))
+                    .child(wide(crate::LOADER_MOON))
+                    .into_element();
+            }
+            let tile = view()
+                .w(px(size))
+                .h(px(size))
+                .rounded(px(size * 0.24))
+                .overflow_hidden()
+                .child(layer(crate::LOADER_SKY))
+                .child(layer(crate::LOADER_CORONA))
+                .child(layer(crate::LOADER_MOON));
+            // The shadow sits on a frame of its own: the tile clips.
+            let frame = view().w(px(size)).h(px(size)).rounded(px(size * 0.24));
+            match lift {
+                Lift::Flat => frame,
+                Lift::Small => frame.shadow_sm(),
+                Lift::Large => frame.shadow_lg(),
+            }
+            .child(tile)
+            .into_element()
+        }))
+    }))
 }
 
 /// Loading: the mark with its corona running, under an optional line.

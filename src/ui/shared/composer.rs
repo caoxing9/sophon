@@ -71,6 +71,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                             .multiline(true)
                             .submit_behavior(SubmitBehavior::Newline)
                             .on_change(move |v: &str| set_text(v))
+                            .on_paste(attach_pasted)
                             .on_content_size_change(move |size: &Size<Points>| {
                                 height.set(size.height.clamp(px(22.0), px(160.0)).0);
                             })
@@ -149,6 +150,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                 .multiline(true)
                 .submit_behavior(SubmitBehavior::Submit)
                 .on_change(move |v: &str| set_text(v))
+                .on_paste(attach_pasted)
                 .on_submit(move |_: &str| submit())
                 .on_content_size_change(move |size: &Size<Points>| {
                     height.set(size.height.clamp(px(22.0), px(220.0)).0);
@@ -855,6 +857,70 @@ fn mic_button(text_value: Memo<String>, set_text: impl Fn(&str) + Copy + 'static
         }))
 }
 
+/// Cmd+V / Ctrl+V: what was pasted besides text goes with the message, as
+/// Paseo's composer takes it: images (a screenshot) as images, other files
+/// uploaded to the host, and files copied in Finder read and uploaded too
+/// (the host may be another computer). The text itself is inserted as
+/// usual.
+fn attach_pasted(e: &nsh_core::PasteEvent) {
+    use base64::Engine;
+    let mut images = vec![];
+    for f in &e.files {
+        if f.mime.starts_with("image/") {
+            images.push(crate::daemon::connection::ImageInput {
+                name: f.name.clone(),
+                mime: f.mime.clone(),
+                data: base64::engine::general_purpose::STANDARD.encode(&f.data),
+            });
+        } else {
+            store::attach_file(f.name.clone(), f.mime.clone(), f.data.clone());
+        }
+    }
+    if !images.is_empty() {
+        store::add_images(images);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    for uri in &e.uris {
+        let Some(path) = uri.strip_prefix("file://") else { continue };
+        let path = std::path::PathBuf::from(percent_decode(path));
+        if path.is_dir() {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&path) else { continue };
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
+        let mime = nsh_core::picker::mime_for_file(&name, &bytes).to_owned();
+        if mime.starts_with("image/") {
+            store::add_images(vec![crate::daemon::connection::ImageInput {
+                name,
+                mime,
+                data: base64::engine::general_purpose::STANDARD.encode(&bytes),
+            }]);
+        } else {
+            store::attach_file(name, mime, bytes);
+        }
+    }
+}
+
+/// A `file:` URL's path with its `%XX` escapes decoded.
+#[cfg(not(target_arch = "wasm32"))]
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// The image on the clipboard, attached to the message.
 fn paste_image_into_composer() {
     spawn(async move {
@@ -875,4 +941,13 @@ fn paste_image_into_composer() {
             _ => store::notify(t("Could not read the pasted image").into()),
         }
     });
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    #[test]
+    fn decodes_file_url_paths() {
+        assert_eq!(super::percent_decode("/Users/a/My%20Shot%E5%9B%BE.png"), "/Users/a/My Shot图.png");
+        assert_eq!(super::percent_decode("/tmp/100%"), "/tmp/100%");
+    }
 }

@@ -191,7 +191,8 @@ fn foot(tab: Signal<HomeTab>) -> impl IntoElement {
         .bottom(px(0.0))
         .pb_safe_area()
         .pointer_events(nsh_core::PointerEvents::BoxNone)
-        .child(
+        // Only the conversations offer a new one.
+        .child(when(move || tab.get() == HomeTab::Chats, move ||
             view().flex_row().justify_end().px(px(S6)).pb(px(S3)).pointer_events(nsh_core::PointerEvents::BoxNone).child(
                 liquid_glass(view()).w(px(56.0)).h(px(56.0)).rounded(px(R_FULL)).shadow_lg().child(
                     button()
@@ -208,7 +209,7 @@ fn foot(tab: Signal<HomeTab>) -> impl IntoElement {
                         .child(icon(Icon::SquarePen, 22.0).text_color(FG)),
                 ),
             ),
-        )
+        ))
         .child(
             tab_bar()
                 .items(vec![
