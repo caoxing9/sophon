@@ -154,31 +154,63 @@ pub(crate) fn segmented<T: Clone + PartialEq + 'static>(
     on_select: impl Fn(T) + Clone + 'static,
 ) -> View {
     let selected = computed(selected);
-    let mut row = view().flex_row().p(px(3.0)).gap(px(2.0)).rounded(px(R_FULL)).bg(SURFACE2).self_start();
-    for (value, label) in options {
+    let values: Vec<T> = options.iter().map(|(v, _)| v.clone()).collect();
+    // Where each option sits in the row (x, width), measured.
+    let frames = signal(vec![(0.0f32, 0.0f32); options.len()]);
+    let at = computed(move || {
+        let s = selected.get();
+        let i = values.iter().position(|v| *v == s).unwrap_or(0);
+        frames.with(|f| f.get(i).copied().unwrap_or_default())
+    });
+    // One thumb under the options that slides to the picked one, springing
+    // as iOS's segmented control does, rather than each option lighting up.
+    let thumb = view()
+        .absolute()
+        .top(px(3.0))
+        .bottom(px(3.0))
+        .left(move || Length::from(px(at.get().0)))
+        .w(move || Length::from(px(at.get().1)))
+        .opacity(move || if at.get().1 > 0.0 { 1.0_f32 } else { 0.0 })
+        .rounded(px(R_FULL))
+        .bg(SURFACE0)
+        .border_1()
+        .border_color(BORDER);
+    let mut row = view().flex_row().p(px(3.0)).gap(px(2.0)).rounded(px(R_FULL)).bg(SURFACE2).self_start().child(thumb);
+    for (i, (value, label)) in options.into_iter().enumerate() {
         let is_on = {
             let value = value.clone();
             computed(move || selected.get() == value)
         };
         let pick = on_select.clone();
-        row = row.child(
+        row = row.child(view().on_layout(move |b: &Bounds<Points>| {
+            let frame = (b.origin.x.0, b.size.width.0);
+            if frames.with_untracked(|f| f.get(i) != Some(&frame)) {
+                frames.update(|f| f[i] = frame);
+            }
+        }).child(
             button()
-                .on_press(move || pick(value.clone()))
+                .on_press(move || {
+                    animate_layout(nsh_core::LayoutAnimation {
+                        create: None,
+                        update: Some(nsh_core::LayoutTransition::new(nsh_core::LayoutCurve::Spring { damping: 0.86 }, 320.0)),
+                        delete: None,
+                    });
+                    pick(value.clone())
+                })
                 .h(px(CONTROL_SM - 2.0))
                 .px(px(S3))
                 .items_center()
                 .justify_center()
                 .rounded(px(R_FULL))
-                .bg(move || if is_on.get() { SURFACE0 } else { SURFACE2 })
-                .shadow_sm_if(is_on)
                 .hover(|s| s.opacity(0.85))
                 .child(
                     text(label)
                         .text_size(px(TEXT_SM))
                         .font_weight(FontWeight(500))
-                        .text_color(move || if is_on.get() { FG } else { FG_MUTED }),
+                        .text_color(move || if is_on.get() { FG } else { FG_MUTED })
+                        .transition_colors(),
                 ),
-        );
+        ));
     }
     row
 }
