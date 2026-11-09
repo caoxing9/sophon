@@ -1211,6 +1211,15 @@ pub(crate) fn bridge_addr() -> Option<String> {
     BRIDGE.with_borrow(|b| b.as_ref().map(|b| b.addr.clone()))
 }
 
+/// Runs `future` owned by nothing, so it outlives what started it: a
+/// dialog opened from a menu row must still answer once the menu closes
+/// (or its list redraws), which disposes the row and every task under it.
+pub(crate) fn spawn_detached(future: impl std::future::Future<Output = ()> + 'static) {
+    Owner::detached().run(|| {
+        spawn(future);
+    });
+}
+
 /// Pairs from a scanned `sophon://pair…` link (the system camera opens it).
 pub(crate) fn watch_pairing_links() {
     spawn(async move {
