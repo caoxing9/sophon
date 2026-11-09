@@ -776,7 +776,7 @@ fn insert_into(key: &str, chips: &[Chip]) {
 }
 
 fn pick_images_into(key: String) {
-    spawn(async move {
+    store::spawn_detached(async move {
         let mut req = nsh_core::picker::PickRequest::default();
         req.limit = 6;
         req.max_dimension = Some(nsh_core::geometry::DevicePixels(2048));
@@ -796,7 +796,7 @@ fn pick_images_into(key: String) {
 
 /// Files from the device: uploaded to the host, then sent as attachments.
 fn pick_files_into(key: String) {
-    spawn(async move {
+    store::spawn_detached(async move {
         let picked = pick_files(nsh_core::picker::FilePickRequest::new(true, 10)).await;
         for f in picked {
             insert_file(&key, f.name.clone(), f.mime.clone(), f.data.bytes().to_vec());
@@ -1021,7 +1021,7 @@ fn percent_decode(s: &str) -> String {
 
 /// The image on the clipboard, attached to the message as a chip.
 fn paste_image_into(key: String) {
-    spawn(async move {
+    store::spawn_detached(async move {
         let Some(img) = clipboard_image().await else {
             store::notify(t("No image on the clipboard").into());
             return;

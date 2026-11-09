@@ -257,7 +257,7 @@ fn add_project() -> View {
     let name = signal(String::new());
     let repo = signal(String::new());
     let pick_parent = move || {
-        spawn(async move {
+        store::spawn_detached(async move {
             let dialog = nsh_core::file_dialog::OpenDialog::folders().title(t("Choose where it goes"));
             if let Ok(Some(paths)) = pick_paths(dialog).await
                 && let Some(p) = paths.into_iter().next()
@@ -280,7 +280,7 @@ fn add_project() -> View {
                     .gap(px(S3))
                     .child(text(t("Pick a folder on this computer; Sophon lists it with your projects")).text_size(px(TEXT_SM)).text_color(FG_MUTED))
                     .child(actions(btn(t("Choose folder…"), Variant::Primary, Sz::Md, Some(Icon::FolderOpen), || {
-                        spawn(async move {
+                        store::spawn_detached(async move {
                             let dialog = nsh_core::file_dialog::OpenDialog::folders().title(t("Add a project folder"));
                             if let Ok(Some(paths)) = pick_paths(dialog).await
                                 && let Some(p) = paths.into_iter().next()
