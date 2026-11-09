@@ -34,15 +34,19 @@ pub(crate) fn workspace(compact: bool) -> impl IntoElement {
     });
     let fits = computed(move || !compact && window().width >= px(900.0));
     let show_explorer = computed(move || fits.get() && store::explorer_open());
+    let bar = computed(nsh_core::element::desktop::title_bar);
+    // The explorer takes the window's whole height beside the workspace's
+    // column (header, tabs, pane, terminals), up into the title bar.
     view()
         .flex_1()
-        .child(header(compact))
+        .flex_row()
         .child(
             view()
                 .flex_1()
-                .flex_row()
+                .min_w(px(0.0))
+                .child(header(compact, show_explorer))
                 .child(
-                    view().flex_1().min_w(px(0.0)).child(tabs()).child(dynamic(move || {
+                    view().flex_1().child(tabs()).child(dynamic(move || {
                         let pane = pane.get();
                         Some(untracked(move || match pane.clone() {
                             Pane::Draft => agent::draft_pane().into_element(),
@@ -54,23 +58,24 @@ pub(crate) fn workspace(compact: bool) -> impl IntoElement {
                         }))
                     }))
                     .child(when(store::terminal_panel_open, terminal::terminal_panel)),
-                )
-                .child(when(fits, move || {
-                    // Mounted while it fits; the toggle slides it in and out
-                    // (its width eases, the panel keeps its own).
-                    view()
-                        .flex_shrink_0()
-                        .items_start()
-                        .overflow_hidden()
-                        .w(move || Length::from(px(if show_explorer.get() { explorer::EXPLORER_WIDTH + 10.0 } else { 0.0 })))
-                        .opacity(move || if show_explorer.get() { 1.0_f32 } else { 0.0 })
-                        .transition_opacity()
-                        .child(explorer::explorer().flex_1())
-                })),
+                ),
         )
+        .child(when(fits, move || {
+            // Mounted while it fits; the toggle slides it in and out
+            // (its width eases, the panel keeps its own).
+            view()
+                .flex_shrink_0()
+                .items_start()
+                .overflow_hidden()
+                .mt(move || Length::from(px(-bar.get().top.0)))
+                .w(move || Length::from(px(if show_explorer.get() { explorer::EXPLORER_WIDTH + 10.0 } else { 0.0 })))
+                .opacity(move || if show_explorer.get() { 1.0_f32 } else { 0.0 })
+                .transition_opacity()
+                .child(explorer::explorer().flex_1())
+        }))
 }
 
-fn header(compact: bool) -> impl IntoElement {
+fn header(compact: bool, explorer_shown: Memo<bool>) -> impl IntoElement {
     let ws = computed(store::current_workspace);
     let bar = computed(nsh_core::element::desktop::title_bar);
     // Beside the window's buttons, in the title bar's height, rather than a
@@ -100,7 +105,10 @@ fn header(compact: bool) -> impl IntoElement {
         .child(view().flex_1())
         .child(scripts_menu())
         .child(super::git::git_controls())
-        .when(!compact, |v| v.child(icon_btn(Icon::PanelRight, Sz::Sm, t("Toggle explorer"), store::toggle_explorer)))
+        // The explorer has its own toggle while it shows.
+        .when(!compact, |v| {
+            v.child(when(move || !explorer_shown.get(), || icon_btn(Icon::PanelRight, Sz::Sm, t("Toggle explorer"), store::toggle_explorer)))
+        })
 }
 
 /// The tab strip: one tab per agent, then "+" for a new agent here.

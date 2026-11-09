@@ -27,7 +27,18 @@ pub(crate) fn explorer() -> View {
         .rounded(px(R_GLASS))
         .overflow_hidden()
         .child(
-            view().px(px(S3)).pt(px(S2)).pb(px(S1)).child(segmented(
+            // In the title bar's height (the panel starts there), dragging
+            // the window; its own toggle at the end puts it away.
+            view()
+                .flex_row()
+                .items_center()
+                .gap(px(S2))
+                .pl(px(S3))
+                .pr(px(S2))
+                .pt(px(S2))
+                .pb(px(S1))
+                .window_drag(true)
+                .child(segmented(
                 vec![
                     (ExplorerTab::Changes, t("Changes").into()),
                     (ExplorerTab::Files, t("Files").into()),
@@ -35,7 +46,9 @@ pub(crate) fn explorer() -> View {
                 ],
                 store::explorer_tab,
                 store::set_explorer_tab,
-            )),
+            ))
+                .child(view().flex_1())
+                .child(icon_btn(Icon::PanelRight, Sz::Sm, t("Toggle explorer"), store::toggle_explorer)),
         )
         // The three pages side by side, the row sliding to the picked one
         // with the thumb above, as a pager does; each keeps its scroll.
