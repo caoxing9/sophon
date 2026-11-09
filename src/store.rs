@@ -1854,8 +1854,11 @@ pub(crate) fn start_service() {
     spawn(async move {
         let result = rx.recv().await;
         global::<Starting>().set(Starting(false));
-        if let Some(Err(e)) = result {
-            global::<AutoStart>().update(|a| a.error = Some(e));
+        match result {
+            Some(Err(e)) => global::<AutoStart>().update(|a| a.error = Some(e)),
+            // Up: connect now rather than after the wait between attempts
+            // (up to 30 s once a few have failed).
+            _ => send(Command::Reconnect),
         }
     });
 }

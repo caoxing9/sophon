@@ -19,6 +19,9 @@ use super::model::{Agent, DiffFile, Item, Project, Provider, Workspace};
 pub enum Command {
     /// Show an agent: load its tail and stream it live.
     Open(String),
+    /// Try the service again now, not after the wait between attempts
+    /// (the app just started it).
+    Reconnect,
     /// `behavior`: `steer` or `interrupt` while a turn runs.
     /// `message_id`: the id the host echoes the message back with, so the
     /// copy shown at once is not shown twice.
@@ -549,6 +552,11 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
                         backoff = Duration::from_secs(1);
                         break;
                     }
+                    // Just started: try now, then again soon.
+                    Some(Command::Reconnect) => {
+                        backoff = Duration::from_millis(250);
+                        break;
+                    }
                     Some(_) => { let _ = events.send(Event::Notice("Not connected to the service".into())); }
                 },
             }
@@ -1030,7 +1038,7 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
     match cmd {
         Command::Open(id) => timeline_requests(&id, pending),
         // Sent by the session itself, with its binary frames.
-        Command::Upload { .. } | Command::Download { .. } => vec![],
+        Command::Upload { .. } | Command::Download { .. } | Command::Reconnect => vec![],
         Command::Send { agent_id, text, behavior, images, attachments, message_id } => {
             let mut msg = json!({
                 "type": "send_agent_message_request",
