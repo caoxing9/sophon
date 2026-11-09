@@ -16,9 +16,23 @@ test("opens the new workspace screen", async () => {
   expect(app.texts()).toContain("Import session");
 });
 
-test("attaches a pasted screenshot", async () => {
+test("attaches a pasted screenshot as a chip in the text", async () => {
   const app = await open(".", { width: 1100, height: 760 });
   await app.press("New workspace >> nth=0");
-  await app.paste("What should the agent do?", { files: ["assets/loader/moon@2x.png"] });
+  // The placeholder, after the empty line's zero-width filler.
+  expect(app.texts().some((t) => t.endsWith("What should the agent do?"))).toBe(true);
+  // The composer is a rich editor: its native input sits inside it.
+  await app.paste("id:composer", { files: ["assets/loader/moon@2x.png"] });
+  // The chip, named as the file, inline in the composer's text.
   expect(app.texts()).toContain("moon@2x.png");
+  expect(app.count("label:moon@2x.png")).toBe(1);
+});
+
+test("Backspace deletes a chip as one unit", async () => {
+  const app = await open(".", { width: 1100, height: 760 });
+  await app.press("New workspace >> nth=0");
+  await app.paste("id:composer", { files: ["assets/loader/moon@2x.png"] });
+  expect(app.count("label:moon@2x.png")).toBe(1);
+  await app.keyboard.press("backspace");
+  expect(app.count("label:moon@2x.png")).toBe(0);
 });

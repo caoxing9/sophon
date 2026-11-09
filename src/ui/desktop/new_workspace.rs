@@ -156,7 +156,7 @@ fn project_picker(label: Memo<String>) -> impl IntoElement {
             }
             list.child(menu_divider())
                 .child(menu_row(t("Choose folder…"), Some(Icon::FolderOpen), None, false, || {
-                    spawn(async move {
+                    store::spawn_detached(async move {
                         if let Ok(Some(paths)) = pick_paths(OpenDialog::folders().title(t("Choose a project folder"))).await
                             && let Some(path) = paths.into_iter().next()
                         {

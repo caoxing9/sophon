@@ -4,10 +4,15 @@
 //! change the agent) and a new one (`Target::Form`, controls fill the form).
 
 use crate::i18n::{t, tf};
-use nsh_base::{button, input};
-use nsh_core::{element::FontWeight, prelude::*};
+use nsh_base::{
+    button,
+    rich_editor::view::{EditorSession, PartStyles, RichEditorClasses, RichEditorPastedFiles, RichEditorStyles, rich_editor},
+};
+use nsh_core::{element::{FontWeight, StyleRefinement}, prelude::*};
+use nsh_base::text_view::PartStyle;
 use crate::ui::kit::text;
 
+use super::{chips, composer_doc::{self, Chip, Kind}};
 use crate::ui::kit::*;
 use crate::store::{self, Control};
 
@@ -17,9 +22,42 @@ pub(crate) enum Target {
     Form,
 }
 
+/// The composer's document as the rest of the composer reads it: which
+/// editor (`key`, the agent's or the form's) and a revision bumped on every
+/// change of its text or caret, which what derives from it tracks.
+#[derive(Clone, Copy)]
+struct Doc {
+    key: Memo<Option<String>>,
+    rev: Signal<u64>,
+}
+
+impl Doc {
+    /// The editor, untracked.
+    fn session(&self) -> Option<EditorSession> {
+        self.key.get_untracked().and_then(|k| composer_doc::existing(&k))
+    }
+
+    /// The editor, tracking its changes.
+    fn tracked(&self) -> Option<EditorSession> {
+        self.rev.get();
+        self.key.get().and_then(|k| composer_doc::existing(&k))
+    }
+
+    fn bump(&self) {
+        self.rev.update(|r| *r += 1);
+    }
+}
+
 pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement {
     let live = target == Target::Agent;
-    // The text: the agent's kept draft, or the form's prompt.
+    let key = computed(move || match target {
+        Target::Agent => store::selected_id().map(|id| format!("agent:{id}")),
+        Target::Form => Some("form".to_owned()),
+    });
+    let doc = Doc { key, rev: signal(0_u64) };
+    // The draft as text: the agent's kept draft, or the form's prompt. The
+    // editor writes it on every change; a change from elsewhere (the form
+    // cleared once its agent starts) replaces the editor's text.
     let text_value = computed(move || match target {
         Target::Agent => store::selected_id().map(|id| store::draft(&id)).unwrap_or_default(),
         Target::Form => store::form().prompt,
@@ -32,20 +70,62 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         }
         Target::Form => store::edit_form(|f| f.prompt = v.to_owned()),
     };
-    let submit = move || match target {
-        Target::Agent => {
-            if let Some(id) = store::selected_id()
-                && store::send_message(&store::draft(&id))
+    effect(move || {
+        let want = text_value.get();
+        let Some(key) = key.get() else { return };
+        untracked(|| {
+            if let Some(session) = composer_doc::existing(&key)
+                && composer_doc::outgoing(session.state().doc()).text != want
             {
-                store::set_draft(&id, "");
+                composer_doc::set_text(&session, &want);
+            }
+        });
+    });
+    // A chip whose attachment went (sent, or its upload failed) goes too.
+    effect(move || {
+        let known = store::known_attachments();
+        let Some(key) = key.get() else { return };
+        untracked(|| {
+            if let Some(session) = composer_doc::existing(&key) {
+                composer_doc::remove_chips(&session, |id| !known.contains(id));
+            }
+            chips::forget_images_except(&known);
+        });
+    });
+    let changed = move || {
+        doc.bump();
+        let Some(session) = doc.session() else { return };
+        let out = composer_doc::outgoing(session.state().doc());
+        if text_value.get_untracked() != out.text {
+            set_text(&out.text);
+        }
+        store::sync_attachments(&out.attachments);
+    };
+    let submit = move || {
+        let Some(session) = doc.session() else { return };
+        let out = composer_doc::outgoing(session.state().doc());
+        store::sync_attachments(&out.attachments);
+        match target {
+            Target::Agent => {
+                if let Some(id) = store::selected_id()
+                    && store::send_message(&out.text)
+                {
+                    store::set_draft(&id, "");
+                    // A queued message leaves its attachments for the one
+                    // sent next; their chips stay.
+                    composer_doc::keep_only_chips(&session, &store::pending_attachment_ids());
+                }
+            }
+            Target::Form => {
+                set_text(&out.text);
+                store::submit_form();
             }
         }
-        Target::Form => store::submit_form(),
     };
+    composer_doc::register_submit(if live { "agent" } else { "form" }, submit);
     let running = computed(move || live && store::selected_agent().is_some_and(|a| a.is_running()));
     let busy = computed(move || !live && store::form().busy);
-    let empty = computed(move || text_value.with(|t| t.trim().is_empty()) && store::pending_images().is_empty() && store::pending_files().is_empty());
-    let height = signal(22.0_f32);
+    let empty = computed(move || doc.tracked().is_none_or(|s| composer_doc::outgoing(s.state().doc()).is_empty()));
 
     if MOBILE {
         // One glass card, as Lody's: the text on top, a bar under it with
@@ -56,8 +136,8 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         return view()
             .w_full()
             .child(queue_track(live))
-            .child(image_tray())
-            .child(suggest_panel(target, text_value, set_text))
+            .child(suggest_panel(target, doc))
+            .child(chips::preview_layer(key))
             .child(
                 liquid_glass(view())
                     .rounded(px(24.0))
@@ -65,24 +145,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                     .pt(px(S3))
                     .pb(px(S2))
                     .gap(px(S2))
-                    .child(
-                        input()
-                            .value(move || text_value.get())
-                            .multiline(true)
-                            .submit_behavior(SubmitBehavior::Newline)
-                            .on_change(move |v: &str| set_text(v))
-                            .on_paste(attach_pasted)
-                            .on_content_size_change(move |size: &Size<Points>| {
-                                height.set(size.height.clamp(px(22.0), px(160.0)).0);
-                            })
-                            .caret_color(|| color(ACCENT))
-                            .selection_color(|| color(tint(ACCENT, 0.3)))
-                            .h(move || px(height.get() + 2.0))
-                            .text_size(px(TEXT_LG))
-                            .line_height(px(22.0))
-                            .text_color(FG)
-                            .px(px(S1)),
-                    )
+                    .child(editor(doc, text_value, placeholder, TEXT_LG, 160.0, changed).px(px(S1)))
                     .child(
                         view()
                             .flex_row()
@@ -90,11 +153,13 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                             .gap(px(S2))
                             .child(
                                 nsh_base::button()
-                                    .on_press(|| {
+                                    .on_press(move || {
+                                        let Some(key) = key.get_untracked() else { return };
                                         dismiss_keyboard();
+                                        let (images, files) = (key.clone(), key);
                                         show_sheet(None, vec![
-                                            SheetItem::new(t("Photo Library"), pick_images_into_composer).icon(Icon::Image),
-                                            SheetItem::new(t("Choose Files"), pick_files_into_composer).icon(Icon::Folder),
+                                            SheetItem::new(t("Photo Library"), move || pick_images_into(images.clone())).icon(Icon::Image),
+                                            SheetItem::new(t("Choose Files"), move || pick_files_into(files.clone())).icon(Icon::Folder),
                                         ]);
                                     })
                                     .accessibility_label(t("Attach"))
@@ -134,38 +199,22 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
             .into_element();
     }
 
+    let with_key = move |f: fn(String)| move || {
+        if let Some(k) = key.get_untracked() {
+            f(k)
+        }
+    };
     view()
         .w_full()
         .max_w(px(CONTENT_MAX_WIDTH))
         .self_center()
         .child(queue_track(live))
-        .child(image_tray())
-        .child(suggest_panel(target, text_value, set_text))
+        .child(suggest_panel(target, doc))
+        .child(chips::preview_layer(key))
         .child(glass_strong(view())
         .w_full()
         .rounded(px(24.0))
-        .child(
-            input()
-                .value(move || text_value.get())
-                .multiline(true)
-                .submit_behavior(SubmitBehavior::Submit)
-                .on_change(move |v: &str| set_text(v))
-                .on_paste(attach_pasted)
-                .on_submit(move |_: &str| submit())
-                .on_content_size_change(move |size: &Size<Points>| {
-                    height.set(size.height.clamp(px(22.0), px(220.0)).0);
-                })
-                .placeholder(placeholder)
-                .caret_color(|| color(ACCENT))
-                .selection_color(|| color(tint(ACCENT, 0.3)))
-                .h(move || px(height.get() + 4.0))
-                .text_size(px(TEXT_CONTENT))
-                .line_height(px(22.0))
-                .text_color(FG)
-                .mx(px(S4))
-                .mt(px(14.0))
-                .mb(px(S1)),
-        )
+        .child(editor(doc, text_value, placeholder, TEXT_CONTENT, 220.0, changed).mx(px(S4)).mt(px(14.0)).mb(px(S1)))
         .child(
             view()
                 .flex_row()
@@ -195,11 +244,11 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                             .label(t("Attach"))
                             .child(icon(Icon::Paperclip, 16.0).text_color(FG_MUTED)),
                     )
-                    .child(menu_row(t("Choose images…"), Some(Icon::Image), None, false, pick_images_into_composer))
-                    .child(menu_row(t("Choose files…"), Some(Icon::File), None, false, pick_files_into_composer))
-                    .child(menu_row(t("Paste image"), Some(Icon::Copy), None, false, paste_image_into_composer)),
+                    .child(menu_row(t("Choose images…"), Some(Icon::Image), None, false, with_key(pick_images_into)))
+                    .child(menu_row(t("Choose files…"), Some(Icon::File), None, false, with_key(pick_files_into)))
+                    .child(menu_row(t("Paste image"), Some(Icon::Copy), None, false, with_key(paste_image_into))),
                 )
-                .child(mic_button(text_value, set_text))
+                .child(mic_button(doc))
                 .child(model_picker(live))
                 .child(thinking_picker(live))
                 .child(mode_picker(live))
@@ -210,6 +259,64 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         .into_element()
 }
 
+/// The text field: the composer's `RichEditor`, made again for each
+/// editor (`key`), growing with its text up to `max_height`, then
+/// scrolling.
+fn editor(
+    doc: Doc,
+    text_value: Memo<String>,
+    placeholder: &'static str,
+    size: f32,
+    max_height: f32,
+    changed: impl Fn() + Copy + 'static,
+) -> View {
+    let key = doc.key;
+    let mut styles = RichEditorStyles::default();
+    let typography = |s: StyleRefinement| s.text_size(px(size)).line_height(px(22.0)).text_color(FG);
+    styles.root = Some(PartStyle(typography(StyleRefinement::default()).into()));
+    styles.caret = Some(PartStyle(StyleRefinement::default().bg(ACCENT).into()));
+    styles.selection = Some(PartStyle(StyleRefinement::default().bg(tint(ACCENT, 0.3)).into()));
+    styles.placeholder = Some(PartStyle(StyleRefinement::default().text_color(FG_FAINT).into()));
+    let mut nodes = PartStyles::default();
+    nodes.0.insert("paragraph".into(), typography(StyleRefinement::default()).into());
+    // The editor wraps each chip in a box of its node's part: that box is
+    // the inline attachment, so its alignment centres the chip on the
+    // line's x height (CSS's `vertical-align: middle`) instead of standing
+    // it on the baseline. Chips are no taller than the line, so lines with
+    // and without them are the same height.
+    let mut classes = RichEditorClasses::default();
+    classes.nodes = Some(
+        [composer_doc::ATTACHMENT, composer_doc::MENTION].into_iter().map(|chip| (chip.to_owned(), "align-middle".to_owned())).collect(),
+    );
+    styles.nodes = Some(nodes);
+    view().test_id("composer").child(dynamic(move || {
+        let key = key.get()?;
+        let styles = styles.clone();
+        let classes = classes.clone();
+        Some(untracked(move || {
+            let session = composer_doc::session(&key, || text_value.get_untracked());
+            let mut el = rich_editor()
+                .editor(session)
+                .styles(styles)
+                .classes(classes.clone())
+                .accessibility_label(SharedString::from(t("Message")))
+                .on_change(move |_: &_| changed())
+                .on_selection_change(move |_: &_| doc.bump())
+                .on_paste_files({
+                    let key = key.clone();
+                    move |p: &RichEditorPastedFiles| attach_pasted(&key, p)
+                })
+                .w_full()
+                .flex_row()
+                .min_h(px(22.0))
+                .max_h(px(max_height));
+            if !placeholder.is_empty() {
+                el = el.placeholder(SharedString::from(placeholder));
+            }
+            el
+        }))
+    }))
+}
 /// The agent's settings in a line: model · thinking · mode.
 fn settings_summary(live: bool) -> String {
     let c = store::controls(live);
@@ -300,22 +407,32 @@ enum Trigger {
     Mention(String),
 }
 
-fn trigger_of(text: &str) -> Option<Trigger> {
-    if let Some(rest) = text.strip_prefix('/')
-        && !rest.contains(char::is_whitespace)
+/// The trigger in `before` (the text before the caret; chips and line
+/// breaks read as U+FFFC): a `/command` the text starts with, or the
+/// `@query` the caret ends.
+fn trigger_of(before: &str) -> Option<Trigger> {
+    let gap = |c: char| c.is_whitespace() || c == '\u{FFFC}';
+    if let Some(rest) = before.strip_prefix('/')
+        && !rest.contains(gap)
     {
         return Some(Trigger::Slash(rest.to_owned()));
     }
-    let last = text.rsplit(char::is_whitespace).next()?;
+    let last = before.rsplit(gap).next()?;
     last.strip_prefix('@').map(|q| Trigger::Mention(q.to_owned()))
 }
 
+/// The trigger at the editor's caret, and the caret's position.
+fn trigger_at(session: &EditorSession) -> Option<(Trigger, usize)> {
+    let (before, head) = composer_doc::before_caret(&session.state())?;
+    Some((trigger_of(&before)?, head))
+}
+
 /// The slash-command or file list over the composer.
-fn suggest_panel(target: Target, text_value: Memo<String>, set_text: impl Fn(&str) + Copy + 'static) -> impl IntoElement {
-    let trigger = computed(move || text_value.with(|t| trigger_of(t)));
+fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
+    let trigger = computed(move || doc.tracked().and_then(|s| trigger_at(&s)).map(|(t, _)| t));
     view().child(dynamic(move || {
         let trigger = trigger.get()?;
-        let rows: Vec<(Icon, String, String, String)> = match &trigger {
+        let rows: Vec<(Icon, String, String, String, bool)> = match &trigger {
             Trigger::Slash(prefix) => {
                 let agent = store::selected_id()?;
                 store::commands(&agent)
@@ -324,7 +441,7 @@ fn suggest_panel(target: Target, text_value: Memo<String>, set_text: impl Fn(&st
                     .take(8)
                     .map(|c| {
                         let insert = format!("/{} ", c.name);
-                        (if c.skill { Icon::Sparkles } else { Icon::Slash }, format!("/{}", c.name), c.description, insert)
+                        (if c.skill { Icon::Sparkles } else { Icon::Slash }, format!("/{}", c.name), c.description, insert, false)
                     })
                     .collect()
             }
@@ -338,7 +455,7 @@ fn suggest_panel(target: Target, text_value: Memo<String>, set_text: impl Fn(&st
                     .take(8)
                     .map(|(path, dir)| {
                         let rel = path.strip_prefix(&cwd).map(|p| p.trim_start_matches('/').to_owned()).unwrap_or(path);
-                        (if dir { Icon::Folder } else { Icon::FileText }, rel.clone(), String::new(), rel)
+                        (if dir { Icon::Folder } else { Icon::FileText }, rel.clone(), String::new(), rel, dir)
                     })
                     .collect()
             }
@@ -348,20 +465,24 @@ fn suggest_panel(target: Target, text_value: Memo<String>, set_text: impl Fn(&st
         }
         Some(untracked(move || {
             let mut list = card().mb(px(S2)).p(px(S1)).bg(POPOVER).shadow_md();
-            for (glyph, label, detail, insert) in rows.clone() {
-                let trig = trigger.clone();
+            for (glyph, label, detail, insert, dir) in rows.clone() {
                 list = list.child(
                     button()
                         .on_press(move || {
-                            let text = text_value.get_untracked();
-                            let next = match &trig {
-                                Trigger::Slash(_) => insert.clone(),
+                            // Where the caret is now: the list may be a
+                            // keystroke behind it.
+                            let Some(session) = doc.session() else { return };
+                            let Some((trigger, head)) = trigger_at(&session) else { return };
+                            match trigger {
+                                // A command replaces what was typed.
+                                Trigger::Slash(_) => composer_doc::replace_text(&session, 1, head, &insert),
+                                // A path becomes a chip in place of its query.
                                 Trigger::Mention(q) => {
-                                    let cut = text.len() - q.len() - 1;
-                                    format!("{}@{} ", &text[..cut], insert)
+                                    let from = head - q.encode_utf16().count() - 1;
+                                    composer_doc::insert_mention(&session, from, head, &insert, dir);
                                 }
-                            };
-                            set_text(&next);
+                            }
+                            session.focus();
                         })
                         .flex_row()
                         .items_center()
@@ -625,8 +746,37 @@ pub(crate) fn hint(message: impl Fn() -> Option<(String, bool)> + 'static) -> im
     }))
 }
 
-fn pick_images_into_composer() {
-    spawn(async move {
+/// Adds `images` to the message and their chips to composer `key`'s text,
+/// at the caret.
+fn insert_images(key: &str, images: Vec<crate::daemon::connection::ImageInput>) {
+    let chips: Vec<Chip> = images
+        .into_iter()
+        .map(|img| {
+            let (name, mime) = (img.name.clone(), img.mime.clone());
+            Chip { id: store::add_image(img), kind: Kind::Image, name, mime }
+        })
+        .collect();
+    insert_into(key, &chips);
+}
+
+/// Starts uploading a file and puts its chip in composer `key`'s text.
+fn insert_file(key: &str, name: String, mime: String, bytes: Vec<u8>) {
+    if let Some(id) = store::attach_file(name.clone(), mime.clone(), bytes) {
+        insert_into(key, &[Chip { id, kind: Kind::File, name, mime }]);
+    }
+}
+
+fn insert_into(key: &str, chips: &[Chip]) {
+    if let Some(session) = composer_doc::existing(key) {
+        composer_doc::insert_chips(&session, chips);
+        if !MOBILE {
+            session.focus();
+        }
+    }
+}
+
+fn pick_images_into(key: String) {
+    store::spawn_detached(async move {
         let mut req = nsh_core::picker::PickRequest::default();
         req.limit = 6;
         req.max_dimension = Some(nsh_core::geometry::DevicePixels(2048));
@@ -640,76 +790,18 @@ fn pick_images_into_composer() {
                 data: base64::engine::general_purpose::STANDARD.encode(f.data.bytes()),
             })
             .collect::<Vec<_>>();
-        if !images.is_empty() {
-            store::add_images(images);
-        }
+        insert_images(&key, images);
     });
 }
 
 /// Files from the device: uploaded to the host, then sent as attachments.
-fn pick_files_into_composer() {
-    spawn(async move {
+fn pick_files_into(key: String) {
+    store::spawn_detached(async move {
         let picked = pick_files(nsh_core::picker::FilePickRequest::new(true, 10)).await;
         for f in picked {
-            store::attach_file(f.name.clone(), f.mime.clone(), f.data.bytes().to_vec());
+            insert_file(&key, f.name.clone(), f.mime.clone(), f.data.bytes().to_vec());
         }
     });
-}
-
-/// What waits to go with the message: images, and files (dimmed while
-/// they upload).
-fn image_tray() -> impl IntoElement {
-    let images = computed(|| store::pending_images().into_iter().map(|i| i.name).collect::<Vec<_>>());
-    let files = computed(|| store::pending_files().into_iter().map(|f| (f.uploading(), f.name)).collect::<Vec<_>>());
-    view().child(dynamic(move || {
-        let names = images.get();
-        let files = files.get();
-        if names.is_empty() && files.is_empty() {
-            return None;
-        }
-        Some(untracked(move || {
-            let mut row = view().flex_row().flex_wrap().gap(px(S2)).mb(px(S2));
-            for (i, (uploading, name)) in files.clone().into_iter().enumerate() {
-                row = row.child(
-                    view()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(6.0))
-                        .h(px(30.0))
-                        .pl(px(S2))
-                        .pr(px(2.0))
-                        .rounded(px(R_LG))
-                        .border_1()
-                        .border_color(BORDER)
-                        .bg(SURFACE1)
-                        .opacity(if uploading { 0.55 } else { 1.0 })
-                        .child(icon(Icon::FileText, 14.0).text_color(FG_MUTED))
-                        .child(text(name).text_size(px(TEXT_SM)).number_of_lines(1).max_w(px(180.0)))
-                        .when(uploading, |v| v.child(text(t("Uploading…")).text_size(px(TEXT_XS)).text_color(FG_MUTED)))
-                        .child(icon_btn(Icon::X, Sz::Sm, t("Remove file"), move || store::remove_file(i))),
-                );
-            }
-            for (i, name) in names.clone().into_iter().enumerate() {
-                row = row.child(
-                    view()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(6.0))
-                        .h(px(30.0))
-                        .pl(px(S2))
-                        .pr(px(2.0))
-                        .rounded(px(R_LG))
-                        .border_1()
-                        .border_color(BORDER)
-                        .bg(SURFACE1)
-                        .child(icon(Icon::Image, 14.0).text_color(FG_MUTED))
-                        .child(text(name).text_size(px(TEXT_SM)).number_of_lines(1).max_w(px(180.0)))
-                        .child(icon_btn(Icon::X, Sz::Sm, t("Remove image"), move || store::remove_image(i))),
-                );
-            }
-            row
-        }))
-    }))
 }
 
 /// How full the agent's context window is, and what it cost.
@@ -805,8 +897,10 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-/// Dictation: speech to text into the composer, with the system recognizer.
-fn mic_button(text_value: Memo<String>, set_text: impl Fn(&str) + Copy + 'static) -> impl IntoElement {
+/// Dictation: speech to text into the composer at the caret, with the
+/// system recognizer. Each result is the whole transcript so far, so it
+/// replaces what the previous one inserted.
+fn mic_button(doc: Doc) -> impl IntoElement {
     let on = global::<Dictating>();
     nsh_base::button()
         .on_press(move || {
@@ -818,17 +912,24 @@ fn mic_button(text_value: Memo<String>, set_text: impl Fn(&str) + Copy + 'static
                 });
                 return;
             }
-            let base = text_value.get_untracked();
-            let session = std::rc::Rc::new(std::cell::RefCell::new(recognize_speech(nsh_core::speech::SpeechRequest::default())));
+            let Some(session) = doc.session() else { return };
+            let state = session.state();
+            let at = state.selection().from();
+            // A space from the text before, unless at a line's start.
+            let spaced = at > 1
+                && state.doc().text_between(at - 1, at, Some("\n"), Some(composer_doc::OBJECT)).chars().all(|c| !c.is_whitespace());
+            let inserted = std::rc::Rc::new(std::cell::Cell::new(0usize));
+            let speech = std::rc::Rc::new(std::cell::RefCell::new(recognize_speech(nsh_core::speech::SpeechRequest::default())));
             on.update(|d| d.0 = true);
-            SPEECH.with_borrow_mut(|s| *s = Some(session.clone()));
+            SPEECH.with_borrow_mut(|s| *s = Some(speech.clone()));
             spawn(async move {
                 // Borrowed only while polled, so Stop can reach the session.
-                while let Some(ev) = std::future::poll_fn(|cx| session.borrow_mut().poll_next(cx)).await {
+                while let Some(ev) = std::future::poll_fn(|cx| speech.borrow_mut().poll_next(cx)).await {
                     match ev {
                         nsh_core::speech::SpeechEvent::Result { text, .. } => {
-                            let joined = if base.trim().is_empty() { text } else { format!("{} {text}", base.trim_end()) };
-                            set_text(&joined);
+                            let text = if spaced { format!(" {text}") } else { text };
+                            composer_doc::replace_text(&session, at, at + inserted.get(), &text);
+                            inserted.set(text.encode_utf16().count());
                         }
                         nsh_core::speech::SpeechEvent::End { error } => {
                             if let Some(e) = error {
@@ -857,12 +958,11 @@ fn mic_button(text_value: Memo<String>, set_text: impl Fn(&str) + Copy + 'static
         }))
 }
 
-/// Cmd+V / Ctrl+V: what was pasted besides text goes with the message, as
-/// Paseo's composer takes it: images (a screenshot) as images, other files
-/// uploaded to the host, and files copied in Finder read and uploaded too
-/// (the host may be another computer). The text itself is inserted as
-/// usual.
-fn attach_pasted(e: &nsh_core::PasteEvent) {
+/// Cmd+V / Ctrl+V of files: chips at the caret, as Paseo's composer takes
+/// them: images (a screenshot) as images, other files uploaded to the
+/// host, and files copied in Finder read and uploaded too (the host may be
+/// another computer). Text pastes into the editor itself.
+fn attach_pasted(key: &str, e: &RichEditorPastedFiles) {
     use base64::Engine;
     let mut images = vec![];
     for f in &e.files {
@@ -873,12 +973,10 @@ fn attach_pasted(e: &nsh_core::PasteEvent) {
                 data: base64::engine::general_purpose::STANDARD.encode(&f.data),
             });
         } else {
-            store::attach_file(f.name.clone(), f.mime.clone(), f.data.clone());
+            insert_file(key, f.name.clone(), f.mime.clone(), f.data.clone());
         }
     }
-    if !images.is_empty() {
-        store::add_images(images);
-    }
+    insert_images(key, images);
     #[cfg(not(target_arch = "wasm32"))]
     for uri in &e.uris {
         let Some(path) = uri.strip_prefix("file://") else { continue };
@@ -890,13 +988,13 @@ fn attach_pasted(e: &nsh_core::PasteEvent) {
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
         let mime = nsh_core::picker::mime_for_file(&name, &bytes).to_owned();
         if mime.starts_with("image/") {
-            store::add_images(vec![crate::daemon::connection::ImageInput {
+            insert_images(key, vec![crate::daemon::connection::ImageInput {
                 name,
                 mime,
                 data: base64::engine::general_purpose::STANDARD.encode(&bytes),
             }]);
         } else {
-            store::attach_file(name, mime, bytes);
+            insert_file(key, name, mime, bytes);
         }
     }
 }
@@ -921,9 +1019,9 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// The image on the clipboard, attached to the message.
-fn paste_image_into_composer() {
-    spawn(async move {
+/// The image on the clipboard, attached to the message as a chip.
+fn paste_image_into(key: String) {
+    store::spawn_detached(async move {
         let Some(img) = clipboard_image().await else {
             store::notify(t("No image on the clipboard").into());
             return;
@@ -932,7 +1030,7 @@ fn paste_image_into_composer() {
             Ok(resp) if resp.ok() => {
                 use base64::Engine;
                 let mime = resp.header("content-type").unwrap_or("image/png").to_owned();
-                store::add_images(vec![crate::daemon::connection::ImageInput {
+                insert_images(&key, vec![crate::daemon::connection::ImageInput {
                     name: t("Pasted image").into(),
                     mime,
                     data: base64::engine::general_purpose::STANDARD.encode(&resp.body),

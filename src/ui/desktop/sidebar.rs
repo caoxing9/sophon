@@ -186,7 +186,18 @@ fn footer() -> impl IntoElement {
 fn update_pill() -> impl IntoElement {
     use crate::update::{self, Phase};
     let st = computed(update::state);
-    let shown = computed(move || st.with(|s| s.version.is_some() && s.phase != Phase::Idle));
+    // Offered once it is one restart away (fetched in the background), or
+    // when there is only a page to open, or to retry.
+    let shown = computed(move || {
+        st.with(|s| {
+            s.version.is_some()
+                && match s.phase {
+                    Phase::Ready | Phase::Installing | Phase::Failed(_) => true,
+                    Phase::Available => !s.can_install,
+                    _ => false,
+                }
+        })
+    });
     when(shown, move || {
         let label = move || {
             st.with(|s| {
@@ -210,7 +221,7 @@ fn update_pill() -> impl IntoElement {
             button()
                 .on_press(move || {
                     if !busy.get_untracked() {
-                        update::install()
+                        store::open_modal(store::Modal::Update)
                     }
                 })
                 .accessibility_label(crate::i18n::t("Update the app"))

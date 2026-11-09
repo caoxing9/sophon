@@ -79,17 +79,10 @@ pub(crate) fn timeline() -> impl IntoElement {
                 .on_load_more_at_start(store::load_older)
                 .load_more_at_start_threshold(1.0)
                 .flex_1())
-                .child(when(store::has_older, || {
-                    view().absolute().top(px(S2)).left(px(0.0)).right(px(0.0)).items_center().child(
-                        btn(
-                            || if store::loading_older() { t("Loading…") } else { t("Load earlier messages") },
-                            Variant::Secondary,
-                            Sz::Sm,
-                            Some(Icon::ChevronUp),
-                            store::load_older,
-                        )
-                        .shadow_sm(),
-                    )
+                // Earlier pages load by themselves as the start nears: a
+                // small loader says so while one is on its way, no button.
+                .child(when(store::loading_older, || {
+                    view().absolute().top(px(S2)).left(px(0.0)).right(px(0.0)).items_center().child(eclipse(24.0))
                 }))
                 .into_element()
         }))
@@ -308,17 +301,41 @@ fn user_actions(item: Memo<Option<Item>>) -> View {
     }))
 }
 
+/// Tool calls open under their rows, by call id: the list recycles its
+/// rows, so what is open is kept here rather than in a row.
+#[derive(Clone, Default)]
+struct OpenTools(std::collections::HashSet<String>);
+
+/// A tool call: its icon, name, summary and state. Pressed, on the desktop
+/// it opens in place (its command and output, its diff, what it found),
+/// the rows below gliding down; on the phone its detail comes up in a
+/// sheet.
 fn tool_row(item: Memo<Option<Item>>) -> impl IntoElement {
     let tool = computed(move || match item.get() {
         Some(Item::Tool { name, kind, status, summary, .. }) => (name, kind, status, summary),
         _ => Default::default(),
     });
+    let call = computed(move || match item.get() {
+        Some(Item::Tool { call_id, .. }) => call_id,
+        _ => String::new(),
+    });
+    let open = computed(move || !MOBILE && call.with(|c| global::<OpenTools>().with(|o| o.0.contains(c))));
     let glyph = computed(move || tool.with(|(n, k, ..)| tool_icon(k, n)));
-    nsh_base::button()
+    let header = nsh_base::button()
         .on_press(move || {
-            if let Some(Item::Tool { name, detail, .. }) = item.get_untracked() {
-                store::open_modal(store::Modal::ToolDetail { name, detail });
+            let Some(Item::Tool { call_id, name, kind, detail, error, .. }) = item.get_untracked() else { return };
+            if !super::tool_detail::has_body(&detail, error.as_deref()) {
+                return;
             }
+            if MOBILE {
+                store::open_modal(store::Modal::ToolDetail { name, kind, detail, error });
+                return;
+            }
+            global::<OpenTools>().update(|o| {
+                if !o.0.remove(&call_id) {
+                    o.0.insert(call_id);
+                }
+            });
         })
         .flex_row()
         .items_center()
@@ -347,6 +364,21 @@ fn tool_row(item: Memo<Option<Item>>) -> impl IntoElement {
                 .flex_1(),
         )
         .child(dynamic(move || {
+            // A chevron that turns as the detail opens, where there is one
+            // (the phone opens a sheet instead).
+            let expandable = !MOBILE
+                && item.with(|i| matches!(i, Some(Item::Tool { detail, error, .. }) if super::tool_detail::has_body(detail, error.as_deref())));
+            expandable.then(|| {
+                untracked(move || {
+                    icon(Icon::ChevronRight, 13.0)
+                        .text_color(FG_FAINT)
+                        .rotate(move || Radians(if open.get() { std::f32::consts::FRAC_PI_2 } else { 0.0 }))
+                        .transition_transform()
+                        .into_element()
+                })
+            })
+        }))
+        .child(dynamic(move || {
             let status = tool.with(|(_, _, s, _)| s.clone());
             Some(untracked(move || match status.as_str() {
                 "running" => status_dot(|| Status::Running).into_element(),
@@ -354,7 +386,26 @@ fn tool_row(item: Memo<Option<Item>>) -> impl IntoElement {
                 "canceled" => icon(Icon::CircleX, 14.0).text_color(FG_FAINT).into_element(),
                 _ => icon(Icon::Check, 14.0).text_color(SUCCESS).into_element(),
             }))
-        }))
+        }));
+    // The detail springs open under the row (the sidebar's reveal): its
+    // height grows from nothing and what follows glides down with it.
+    nsh_base::collapsible()
+        .open(move || open.get())
+        .reveal(true)
+        .content(view().child(dynamic(move || {
+            let Some(Item::Tool { kind, detail, error, .. }) = item.get() else { return None };
+            // Indented under the row's name, past its icon.
+            Some(untracked(move || {
+                view()
+                    .pl(px(S2 + 15.0 + S2))
+                    .pr(px(S2))
+                    .pt(px(S1))
+                    .pb(px(S2))
+                    .child(super::tool_detail::tool_body(&kind, &detail, error.as_deref()))
+                    .into_element()
+            }))
+        })))
+        .child(header)
 }
 
 fn todo_card(item: Memo<Option<Item>>) -> impl IntoElement {

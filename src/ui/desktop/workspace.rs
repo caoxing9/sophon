@@ -48,7 +48,7 @@ pub(crate) fn workspace(compact: bool) -> impl IntoElement {
                         let pane = pane.get();
                         Some(untracked(move || match pane.clone() {
                             Pane::Draft => agent::draft_pane().into_element(),
-                            Pane::Agent => agent::agent_pane(true).into_element(),
+                            Pane::Agent => agent::agent_pane(false).into_element(),
                             Pane::Diff(p) => explorer::diff_pane(p).into_element(),
                             Pane::Terminal(id) => terminal::terminal_pane(id).into_element(),
                             Pane::File(p) => file_pane::file_pane(p).into_element(),
@@ -74,12 +74,23 @@ pub(crate) fn workspace(compact: bool) -> impl IntoElement {
 
 fn header(compact: bool) -> impl IntoElement {
     let ws = computed(store::current_workspace);
+    let bar = computed(nsh_core::element::desktop::title_bar);
+    // Beside the window's buttons, in the title bar's height, rather than a
+    // row of its own under it: up over the strip that keeps the bar's room,
+    // clear of the traffic lights and the sidebar toggle when the sidebar
+    // is folded away. It drags the window, as the strip did.
+    let inline = !compact && !MOBILE;
     view()
         .flex_row()
         .items_center()
         .gap(px(S2))
-        .h(px(48.0))
-        .px(px(S4))
+        .h(move || Length::from(px(if inline { bar.get().top.0.max(40.0) } else { 48.0 })))
+        .mt(move || Length::from(px(if inline { -bar.get().top.0 } else { 0.0 })))
+        .pl(move || {
+            Length::from(px(if inline && store::sidebar_hidden() && bar.get().top.0 > 0.0 { bar.get().left.0 + 40.0 } else { S4 }))
+        })
+        .pr(px(S3))
+        .window_drag(true)
         .when(compact, |v| v.child(icon_btn(Icon::ArrowLeft, Sz::Sm, t("Back"), store::go_home)))
         .child(
             text(move || ws.with(|w| w.as_ref().map(|w| w.name.clone()).unwrap_or_default()))
@@ -134,7 +145,10 @@ fn tabs() -> impl IntoElement {
         .items_center()
         .gap(px(S1))
         .h(px(40.0))
-        .px(px(S4))
+        .pl(px(S4))
+        .pr(px(S3))
+        .border_b_1()
+        .border_color(tint(BORDER, 0.6))
         .child(each(
             move || agents.get(),
             |a| a.id.clone(),
@@ -201,30 +215,32 @@ fn tabs() -> impl IntoElement {
         .child(dynamic(|| {
             let draft = store::tab() == Tab::Draft;
             Some(untracked(move || {
-                let plus = dropdown(
-                    view()
-                        .w(px(CONTROL_SM))
-                        .h(px(CONTROL_SM))
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(R_FULL))
-                        .hover(|s| s.bg(highlight()))
-                        .label(t("New tab"))
-                        .child(icon(Icon::Plus, 16.0).text_color(FG_MUTED)),
-                )
-                .child(menu_row(t("New agent"), Some(Icon::Bot), None, false, || store::open_tab(Tab::Draft)))
-                .child(menu_row(t("New terminal"), Some(Icon::SquareTerminal), None, false, store::new_terminal));
+                // "+" starts a new conversation here, straight away.
+                let plus = button()
+                    .on_press(|| store::open_tab(Tab::Draft))
+                    .accessibility_label(t("New chat"))
+                    .w(px(CONTROL_SM))
+                    .h(px(CONTROL_SM))
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(R_FULL))
+                    .hover(|s| s.bg(highlight()))
+                    .child(icon(Icon::Plus, 16.0).text_color(FG_MUTED));
                 let mut row = view().flex_row().items_center().gap(px(S1)).ml(px(2.0));
                 if draft {
                     row = row.child(
                         tab_shell(true, || store::open_tab(Tab::Draft))
                             .child(icon(Icon::SquarePen, 14.0).text_color(FG_MUTED))
-                            .child(text(t("New agent")).text_size(px(TEXT_SM)).text_color(FG)),
+                            .child(text(t("New chat")).text_size(px(TEXT_SM)).text_color(FG)),
                     );
                 }
                 row.child(plus).into_element()
             }))
         }))
+        .child(view().flex_1().min_w(px(S4)))
+        // The open agent's state and actions, at the strip's end rather
+        // than on a bar of their own.
+        .child(when(|| matches!(store::tab(), Tab::Agent(_)), agent::agent_tools))
 }
 
 fn tab_shell(selected: bool, on_press: impl Fn() + 'static) -> nsh_base::ButtonElement {

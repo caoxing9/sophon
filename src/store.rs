@@ -579,7 +579,9 @@ pub(crate) enum Modal {
     AddProject,
     RenameProject { id: String, name: String },
     SwitchBranch,
-    ToolDetail { name: String, detail: String },
+    ToolDetail { name: String, kind: String, detail: serde_json::Value, error: Option<String> },
+    /// A newer version: what changed since this one, and a restart to it.
+    Update,
     ImportSession,
     RestartDaemon,
     Usage,
@@ -913,10 +915,6 @@ pub(crate) fn timeline_loaded() -> bool {
     global::<Timeline>().with(|t| t.loaded)
 }
 
-pub(crate) fn has_older() -> bool {
-    global::<Timeline>().with(|t| t.older.is_some())
-}
-
 pub(crate) fn loading_older() -> bool {
     global::<Timeline>().with(|t| t.loading_older)
 }
@@ -932,9 +930,19 @@ pub(crate) fn load_older() {
 }
 
 /// Images waiting to go with the next message, per composer (an agent's
-/// id, or "" for the new-agent form).
+/// id, or "" for the new-agent form). Each is a chip in the composer's
+/// text, which names it by `id`; the bytes stay here, out of the document.
 #[derive(Clone, Default)]
-struct PendingImages(HashMap<String, Vec<ImageInput>>);
+struct PendingImages(HashMap<String, Vec<PendingImage>>);
+
+#[derive(Clone, Debug, PartialEq)]
+struct PendingImage {
+    id: String,
+    image: ImageInput,
+    /// Its chip was deleted. Kept (not sent) rather than dropped, so an
+    /// undo that brings the chip back finds the image again.
+    detached: bool,
+}
 
 fn image_key() -> String {
     match (screen(), tab()) {
@@ -945,32 +953,35 @@ fn image_key() -> String {
 
 pub(crate) fn pending_images() -> Vec<ImageInput> {
     let key = image_key();
-    global::<PendingImages>().with(|p| p.0.get(&key).cloned().unwrap_or_default())
+    global::<PendingImages>()
+        .with(|p| p.0.get(&key).map(|l| l.iter().filter(|i| !i.detached).map(|i| i.image.clone()).collect()).unwrap_or_default())
 }
 
-pub(crate) fn add_images(images: Vec<ImageInput>) {
+/// Adds an image to this composer's message: the id its chip names it by.
+pub(crate) fn add_image(image: ImageInput) -> String {
+    let id = uuid::Uuid::new_v4().to_string();
     let key = image_key();
-    global::<PendingImages>().update(|p| p.0.entry(key).or_default().extend(images));
+    global::<PendingImages>()
+        .update(|p| p.0.entry(key).or_default().push(PendingImage { id: id.clone(), image, detached: false }));
+    id
 }
 
-pub(crate) fn remove_image(index: usize) {
-    let key = image_key();
-    global::<PendingImages>().update(|p| {
-        if let Some(list) = p.0.get_mut(&key)
-            && index < list.len()
-        {
-            list.remove(index);
-        }
-    });
+/// The image a chip names, in whichever composer it waits.
+pub(crate) fn pending_image(id: &str) -> Option<ImageInput> {
+    global::<PendingImages>().with(|p| p.0.values().flatten().find(|i| i.id == id).map(|i| i.image.clone()))
 }
 
 /// A file going with the next message: uploading to the host until
 /// `attachment` (what names it in the message) arrives.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PendingFile {
-    id: String,
+    pub(crate) id: String,
     pub(crate) name: String,
+    pub(crate) mime: String,
+    pub(crate) size: usize,
     attachment: Option<serde_json::Value>,
+    /// Its chip was deleted (see [`PendingImage::detached`]).
+    detached: bool,
 }
 
 impl PendingFile {
@@ -987,33 +998,103 @@ const FILE_MAX_BYTES: usize = 50 * 1024 * 1024;
 
 pub(crate) fn pending_files() -> Vec<PendingFile> {
     let key = image_key();
-    global::<PendingFiles>().with(|p| p.0.get(&key).cloned().unwrap_or_default())
+    global::<PendingFiles>().with(|p| p.0.get(&key).map(|l| l.iter().filter(|f| !f.detached).cloned().collect()).unwrap_or_default())
 }
 
-/// Starts uploading `bytes` to the host; the file shows in the composer
-/// meanwhile and goes with the message once it is there.
-pub(crate) fn attach_file(name: String, mime: String, bytes: Vec<u8>) {
+/// The file a chip names, in whichever composer it waits.
+pub(crate) fn pending_file(id: &str) -> Option<PendingFile> {
+    global::<PendingFiles>().with(|p| p.0.values().flatten().find(|f| f.id == id).cloned())
+}
+
+/// Starts uploading `bytes` to the host; the file's chip shows it
+/// meanwhile and it goes with the message once it is there. The id its
+/// chip names it by; none when it is too large.
+pub(crate) fn attach_file(name: String, mime: String, bytes: Vec<u8>) -> Option<String> {
     if bytes.len() > FILE_MAX_BYTES {
         notify(tf("“{}” is over 50 MB", &[&name]));
-        return;
+        return None;
     }
     let id = uuid::Uuid::new_v4().to_string();
     let key = image_key();
-    global::<PendingFiles>().update(|p| {
-        p.0.entry(key).or_default().push(PendingFile { id: id.clone(), name: name.clone(), attachment: None })
-    });
-    send(Command::Upload { id, name, mime, bytes });
+    let file = PendingFile { id: id.clone(), name: name.clone(), mime: mime.clone(), size: bytes.len(), attachment: None, detached: false };
+    global::<PendingFiles>().update(|p| p.0.entry(key).or_default().push(file));
+    send(Command::Upload { id: id.clone(), name, mime, bytes });
+    Some(id)
 }
 
-pub(crate) fn remove_file(index: usize) {
+/// This composer's attachments still to send (not detached), images then
+/// files.
+pub(crate) fn pending_attachment_ids() -> Vec<String> {
     let key = image_key();
-    global::<PendingFiles>().update(|p| {
-        if let Some(list) = p.0.get_mut(&key)
-            && index < list.len()
-        {
-            list.remove(index);
-        }
+    let mut ids: Vec<String> = global::<PendingImages>()
+        .with_untracked(|p| p.0.get(&key).map(|l| l.iter().filter(|i| !i.detached).map(|i| i.id.clone()).collect()).unwrap_or_default());
+    global::<PendingFiles>()
+        .with_untracked(|p| ids.extend(p.0.get(&key).into_iter().flatten().filter(|f| !f.detached).map(|f| f.id.clone())));
+    ids
+}
+
+/// Every image and file id that waits in a composer, sent or not yet
+/// (tracked: the composer drops chips whose attachment went away, as one
+/// that failed to upload or was just sent).
+pub(crate) fn known_attachments() -> std::collections::HashSet<String> {
+    let mut ids: std::collections::HashSet<String> =
+        global::<PendingImages>().with(|p| p.0.values().flatten().map(|i| i.id.clone()).collect());
+    global::<PendingFiles>().with(|p| ids.extend(p.0.values().flatten().map(|f| f.id.clone())));
+    ids
+}
+
+/// Makes this composer's attachments those its chips name (`ids`, in the
+/// text's order): one whose chip is gone is detached and not sent, one
+/// whose chip came back (undo) attached again, and the message carries
+/// them in the chips' order. Writes only when something changed, as it
+/// runs on every edit.
+pub(crate) fn sync_attachments(ids: &[String]) {
+    let key = image_key();
+    let images = global::<PendingImages>()
+        .with_untracked(|p| p.0.get(&key).map(|l| l.iter().map(|i| (i.id.clone(), i.detached)).collect::<Vec<_>>()));
+    if let Some(order) = images.and_then(|now| arrangement(&now, ids)) {
+        global::<PendingImages>().update(|p| {
+            if let Some(list) = p.0.get_mut(&key) {
+                let mut old: Vec<Option<PendingImage>> = std::mem::take(list).into_iter().map(Some).collect();
+                for (i, detached) in order {
+                    if let Some(mut item) = old.get_mut(i).and_then(Option::take) {
+                        item.detached = detached;
+                        list.push(item);
+                    }
+                }
+            }
+        });
+    }
+    let files = global::<PendingFiles>()
+        .with_untracked(|p| p.0.get(&key).map(|l| l.iter().map(|f| (f.id.clone(), f.detached)).collect::<Vec<_>>()));
+    if let Some(order) = files.and_then(|now| arrangement(&now, ids)) {
+        global::<PendingFiles>().update(|p| {
+            if let Some(list) = p.0.get_mut(&key) {
+                let mut old: Vec<Option<PendingFile>> = std::mem::take(list).into_iter().map(Some).collect();
+                for (i, detached) in order {
+                    if let Some(mut item) = old.get_mut(i).and_then(Option::take) {
+                        item.detached = detached;
+                        list.push(item);
+                    }
+                }
+            }
+        });
+    }
+}
+
+/// How a list of `(id, detached)` should be arranged for chips `ids`: each
+/// item's index and whether it is detached, the chips' first in their
+/// order, then the detached in theirs; `None` when it already is.
+fn arrangement(now: &[(String, bool)], ids: &[String]) -> Option<Vec<(usize, bool)>> {
+    let rank = |id: &String| ids.iter().position(|x| x == id);
+    let mut order: Vec<usize> = (0..now.len()).collect();
+    order.sort_by_key(|&i| match rank(&now[i].0) {
+        Some(r) => (0, r),
+        None => (1, i),
     });
+    let next: Vec<(usize, bool)> = order.into_iter().map(|i| (i, rank(&now[i].0).is_none())).collect();
+    let same = next.iter().enumerate().all(|(n, &(i, detached))| n == i && now[i].1 == detached);
+    (!same).then_some(next)
 }
 
 fn uploaded(id: String, result: Result<serde_json::Value, String>) {
@@ -1024,7 +1105,9 @@ fn uploaded(id: String, result: Result<serde_json::Value, String>) {
                     Ok(att) => list[i].attachment = Some(att.clone()),
                     Err(e) => {
                         let f = list.remove(i);
-                        notify(tf("Could not upload “{}”: {}", &[&f.name, e]));
+                        if !f.detached {
+                            notify(tf("Could not upload “{}”: {}", &[&f.name, e]));
+                        }
                     }
                 }
                 return;
@@ -1038,18 +1121,20 @@ pub(crate) fn uploading() -> bool {
     pending_files().iter().any(PendingFile::uploading)
 }
 
+/// This composer's files, in their chips' order; the detached ones go.
 fn take_files() -> Vec<serde_json::Value> {
     let key = image_key();
     let mut out = vec![];
     global::<PendingFiles>().update(|p| out = p.0.remove(&key).unwrap_or_default());
-    out.into_iter().filter_map(|f| f.attachment).collect()
+    out.into_iter().filter(|f| !f.detached).filter_map(|f| f.attachment).collect()
 }
 
+/// This composer's images, in their chips' order; the detached ones go.
 fn take_images() -> Vec<ImageInput> {
     let key = image_key();
     let mut out = vec![];
     global::<PendingImages>().update(|p| out = p.0.remove(&key).unwrap_or_default());
-    out
+    out.into_iter().filter(|i| !i.detached).map(|i| i.image).collect()
 }
 
 /// A saved remote daemon.
@@ -1122,6 +1207,15 @@ pub(crate) fn pairing_link(relay_link: Option<&str>) -> Option<String> {
 
 pub(crate) fn bridge_addr() -> Option<String> {
     BRIDGE.with_borrow(|b| b.as_ref().map(|b| b.addr.clone()))
+}
+
+/// Runs `future` owned by nothing, so it outlives what started it: a
+/// dialog opened from a menu row must still answer once the menu closes
+/// (or its list redraws), which disposes the row and every task under it.
+pub(crate) fn spawn_detached(future: impl std::future::Future<Output = ()> + 'static) {
+    Owner::detached().run(|| {
+        spawn(future);
+    });
 }
 
 /// Pairs from a scanned `sophon://pair…` link (the system camera opens it).
