@@ -189,7 +189,7 @@ pub(crate) fn send_review(path: Option<&str>, note: &str) -> bool {
     let what = path.map(|p| format!("`{p}`")).unwrap_or_else(|| "the uncommitted changes".into());
     let text = format!("Review of {what}:\n\n{}", note.trim());
     let behavior = agent.is_running().then_some("steer");
-    send(Command::Send { agent_id: agent.id.clone(), text, behavior, images: vec![], attachments: vec![] });
+    send(Command::Send { agent_id: agent.id.clone(), text, behavior, images: vec![], attachments: vec![], message_id: uuid::Uuid::new_v4().to_string() });
     notify(tf("Review sent to “{}”", &[&agent.title]));
     true
 }
@@ -2250,25 +2250,26 @@ fn deliver(agent_id: &str, text: &str, behavior: Option<&'static str>) {
     let images = if mine { take_images() } else { vec![] };
     let attachments = if mine { take_files() } else { vec![] };
     let mut shown = text.to_owned();
-    if !images.is_empty() {
-        shown.push_str(&format!("\n\n[{} image(s)]", images.len()));
-    }
     for a in &attachments {
         if let Some(name) = a.get("fileName").and_then(serde_json::Value::as_str) {
             shown.push_str(&format!("\n📎 {name}"));
         }
     }
+    // Shown at once under the id the host echoes it back with, which then
+    // replaces nothing and adds nothing (the echo has the text alone).
+    let message_id = uuid::Uuid::new_v4().to_string();
+    let thumbs = images.iter().map(|i| format!("data:{};base64,{}", i.mime, i.data)).collect();
     let mut shown_here = false;
     global::<Timeline>().update(|t| {
         if t.agent_id.as_deref() == Some(agent_id) {
-            t.items.push(Item::User { text: shown.trim().to_owned(), message_id: None });
+            t.items.push(Item::User { text: shown.trim().to_owned(), message_id: Some(message_id.clone()), images: thumbs });
             shown_here = true;
         }
     });
     if shown_here {
         scroll_timeline_to_end();
     }
-    send(Command::Send { agent_id: agent_id.to_owned(), text: text.to_owned(), behavior, images, attachments });
+    send(Command::Send { agent_id: agent_id.to_owned(), text: text.to_owned(), behavior, images, attachments, message_id });
 }
 
 /// A system notification when an agent starts needing you while you look

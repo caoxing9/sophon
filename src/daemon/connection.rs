@@ -20,7 +20,9 @@ pub enum Command {
     /// Show an agent: load its tail and stream it live.
     Open(String),
     /// `behavior`: `steer` or `interrupt` while a turn runs.
-    Send { agent_id: String, text: String, behavior: Option<&'static str>, images: Vec<ImageInput>, attachments: Vec<Value> },
+    /// `message_id`: the id the host echoes the message back with, so the
+    /// copy shown at once is not shown twice.
+    Send { agent_id: String, text: String, behavior: Option<&'static str>, images: Vec<ImageInput>, attachments: Vec<Value>, message_id: String },
     /// Uploads a file to the host for the next message; answered by
     /// [`Event::Uploaded`] with the same `id`.
     Upload { id: String, name: String, mime: String, bytes: Vec<u8> },
@@ -979,12 +981,12 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
         Command::Open(id) => timeline_requests(&id, pending),
         // Sent by the session itself, with its binary frames.
         Command::Upload { .. } => vec![],
-        Command::Send { agent_id, text, behavior, images, attachments } => {
+        Command::Send { agent_id, text, behavior, images, attachments, message_id } => {
             let mut msg = json!({
                 "type": "send_agent_message_request",
                 "agentId": agent_id,
                 "text": text,
-                "messageId": uuid::Uuid::new_v4().to_string(),
+                "messageId": message_id,
             });
             if let Some(b) = behavior {
                 msg["activeTurnBehavior"] = json!(b);

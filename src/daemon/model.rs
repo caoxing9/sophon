@@ -390,7 +390,9 @@ impl Permission {
 /// One row of an agent's conversation.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
-    User { text: String, message_id: Option<String> },
+    /// `images`: what was attached, as data URIs, for the bubble's
+    /// thumbnails (the host's echo of a message carries its text only).
+    User { text: String, message_id: Option<String>, images: Vec<String> },
     Assistant { text: String },
     Reasoning { text: String },
     /// `kind` is the detail type: `shell`, `read`, `edit`, `write`, `search`, `fetch`, `sub_agent`, ...
@@ -407,7 +409,7 @@ impl Item {
     pub fn from_json(v: &Value) -> Option<Self> {
         let text = || str_of(v, "text").unwrap_or_default();
         Some(match v.get("type")?.as_str()? {
-            "user_message" => Item::User { text: text(), message_id: str_of(v, "messageId") },
+            "user_message" => Item::User { text: text(), message_id: str_of(v, "messageId"), images: vec![] },
             "assistant_message" => Item::Assistant { text: text() },
             "reasoning" => Item::Reasoning { text: text() },
             "tool_call" => Item::Tool {
@@ -477,9 +479,9 @@ pub fn apply_live(items: &mut Vec<Item>, incoming: Item) {
                 None => items.push(incoming),
             }
         }
-        Item::User { ref text, ref message_id } => {
+        Item::User { ref text, ref message_id, .. } => {
             let duplicate = items.iter().rev().take(4).any(|i| match i {
-                Item::User { text: t, message_id: m } => {
+                Item::User { text: t, message_id: m, .. } => {
                     (message_id.is_some() && m == message_id) || (m.is_none() && t == text)
                 }
                 _ => false,
@@ -635,7 +637,7 @@ mod tests {
 
     #[test]
     fn assistant_deltas_merge_into_one_row() {
-        let mut items = vec![Item::User { text: "hi".into(), message_id: None }];
+        let mut items = vec![Item::User { text: "hi".into(), message_id: None, images: vec![] }];
         apply_live(&mut items, Item::Assistant { text: "Hel".into() });
         apply_live(&mut items, Item::Assistant { text: "lo".into() });
         assert_eq!(items.len(), 2);
@@ -663,8 +665,8 @@ mod tests {
 
     #[test]
     fn echoed_user_message_is_not_duplicated() {
-        let mut items = vec![Item::User { text: "fix it".into(), message_id: Some("m1".into()) }];
-        apply_live(&mut items, Item::User { text: "fix it".into(), message_id: Some("m1".into()) });
+        let mut items = vec![Item::User { text: "fix it".into(), message_id: Some("m1".into()), images: vec![] }];
+        apply_live(&mut items, Item::User { text: "fix it".into(), message_id: Some("m1".into()), images: vec![] });
         assert_eq!(items.len(), 1);
     }
 
