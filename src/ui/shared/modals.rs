@@ -130,6 +130,7 @@ fn body(m: Modal) -> View {
             .child(view().items_center().child(view().w(px(36.0)).h(px(5.0)).rounded(px(R_FULL)).bg(tint(FG, 0.18))))
             .child(text(name).text_size(px(TEXT_LG)).font_weight(FontWeight(600)).number_of_lines(1))
             .child(scroll().flex_shrink(1.0).child(crate::ui::shared::tool_detail::tool_body(&kind, &detail, error.as_deref()))),
+        Modal::Update => update_dialog(),
         Modal::RenameProject { id, name } => rename(t("Rename project"), name, move |v| store::rename_project(&id, v)),
         Modal::ArchiveWorkspace { id, name } => sheet(t("Archive workspace"))
             .child(
@@ -689,4 +690,91 @@ fn pair_device() -> View {
             }))
         }))
         .child(actions(view()))
+}
+
+/// What changed since the running version, release by release, and a
+/// restart into the new one (already downloaded in the background).
+fn update_dialog() -> View {
+    use crate::update::{self, Phase};
+    let st = update::state();
+    let version = st.version.clone().unwrap_or_default();
+    let mut changes = st.changes.clone();
+    if changes.is_empty() {
+        changes.push((version.clone(), st.notes.clone().unwrap_or_default()));
+    }
+    let mut list = view().px(px(S6)).py(px(S4)).gap(px(S4));
+    for (i, (v, notes)) in changes.into_iter().enumerate() {
+        if i > 0 {
+            list = list.child(view().h(px(1.0)).bg(BORDER));
+        }
+        let notes = if notes.trim().is_empty() { t("No notes for this release").to_owned() } else { notes };
+        list = list.child(
+            view()
+                .gap(px(S2))
+                .child(text(format!("v{v}")).text_size(px(TEXT_LG)).font_weight(FontWeight(600)))
+                .child(
+                    nsh_base::text_view()
+                        .markdown(move || Some(SharedString::from(notes.clone())))
+                        .selectable(true)
+                        .gap_2()
+                        .text_size(px(TEXT_BASE))
+                        .line_height(px(22.0))
+                        .text_color(FG),
+                ),
+        );
+    }
+    let state = computed(update::state);
+    let primary = dynamic(move || {
+        let (phase, can_install) = state.with(|s| (s.phase.clone(), s.can_install));
+        Some(untracked(move || {
+            let (label, icon_) = match phase {
+                _ if !can_install => (t("Download").to_owned(), Icon::ExternalLink),
+                Phase::Installing => (t("Installing…").to_owned(), Icon::RotateCw),
+                Phase::Failed(_) => (t("Retry").to_owned(), Icon::RotateCw),
+                _ => (t("Restart to update").to_owned(), Icon::RotateCw),
+            };
+            btn(label, Variant::Primary, Sz::Md, Some(icon_), update::install).into_element()
+        }))
+    });
+    let failed = computed(move || state.with(|s| match &s.phase {
+        Phase::Failed(e) => Some(e.clone()),
+        _ => None,
+    }));
+    glass_strong(view())
+        .w(px(620.0))
+        .max_w(relative(0.92))
+        .max_h(relative(0.86))
+        .rounded(px(22.0))
+        .overflow_hidden()
+        .child(
+            view()
+                .flex_row()
+                .items_baseline()
+                .gap(px(S3))
+                .px(px(S6))
+                .pt(px(S6))
+                .pb(px(S4))
+                .border_b_1()
+                .border_color(BORDER)
+                .child(text(tf("Update to {}", &[&format!("v{version}")])).text_size(px(TEXT_LG)).font_weight(FontWeight(600)))
+                .child(text(tf("Changes since {}", &[&format!("v{}", st.current)])).text_size(px(TEXT_SM)).text_color(FG_MUTED).flex_1().number_of_lines(1)),
+        )
+        .child(scroll().flex_shrink(1.0).child(list))
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .justify_end()
+                .gap(px(S2))
+                .px(px(S6))
+                .py(px(S4))
+                .border_t_1()
+                .border_color(BORDER)
+                .child(dynamic(move || {
+                    let e = failed.get()?;
+                    Some(untracked(move || text(e.clone()).text_size(px(TEXT_SM)).text_color(DANGER).flex_1().number_of_lines(2).into_element()))
+                }))
+                .child(btn(t("Later"), Variant::Ghost, Sz::Md, None, store::close_modal))
+                .child(primary),
+        )
 }

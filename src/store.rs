@@ -580,6 +580,8 @@ pub(crate) enum Modal {
     RenameProject { id: String, name: String },
     SwitchBranch,
     ToolDetail { name: String, kind: String, detail: serde_json::Value, error: Option<String> },
+    /// A newer version: what changed since this one, and a restart to it.
+    Update,
     ImportSession,
     RestartDaemon,
     Usage,
@@ -911,10 +913,6 @@ pub(crate) fn item_keys() -> Vec<String> {
 
 pub(crate) fn timeline_loaded() -> bool {
     global::<Timeline>().with(|t| t.loaded)
-}
-
-pub(crate) fn has_older() -> bool {
-    global::<Timeline>().with(|t| t.older.is_some())
 }
 
 pub(crate) fn loading_older() -> bool {
