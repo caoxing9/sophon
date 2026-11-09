@@ -1,4 +1,4 @@
-//! Paseo's relay, end to end encrypted (`docs/relay-endpoint-security.md`):
+//! The relay, end to end encrypted (`docs/relay-endpoint-security.md`):
 //! the relay forwards frames between a client and a daemon it cannot read.
 //!
 //! - Pairing gives the daemon's id, its static X25519 key and the relay:
@@ -109,8 +109,8 @@ fn percent_decode(s: &str) -> String {
 pub struct Handshake {
     state: snow::HandshakeState,
     hello: String,
-    /// The legacy box key: daemons older than the protected mode (Paseo
-    /// < 0.13) answer the legacy hello only.
+    /// The legacy box key: daemons older than the protected mode (before
+    /// 0.13) answer the legacy hello only.
     legacy: crypto_box::SalsaBox,
 }
 

@@ -18,7 +18,6 @@ enum Pane {
     Draft,
     Agent,
     Diff(Option<String>),
-    Terminal(String),
     File(String),
     Subagent(String, String),
     CommitDiff(String, String),
@@ -29,50 +28,54 @@ pub(crate) fn workspace(compact: bool) -> impl IntoElement {
         Tab::Draft => Pane::Draft,
         Tab::Agent(_) => Pane::Agent,
         Tab::Diff(p) => Pane::Diff(p),
-        Tab::Terminal(id) => Pane::Terminal(id),
         Tab::File(p) => Pane::File(p),
         Tab::Subagent(parent, id) => Pane::Subagent(parent, id),
         Tab::CommitDiff(sha, path) => Pane::CommitDiff(sha, path),
     });
     let fits = computed(move || !compact && window().width >= px(900.0));
     let show_explorer = computed(move || fits.get() && store::explorer_open());
+    let bar = computed(nsh_core::element::desktop::title_bar);
+    // The explorer takes the window's whole height beside the workspace's
+    // column (header, tabs, pane, terminals), up into the title bar.
     view()
         .flex_1()
-        .child(header(compact))
+        .flex_row()
         .child(
             view()
                 .flex_1()
-                .flex_row()
+                .min_w(px(0.0))
+                .child(header(compact, show_explorer))
                 .child(
-                    view().flex_1().min_w(px(0.0)).child(tabs()).child(dynamic(move || {
+                    view().flex_1().child(tabs()).child(dynamic(move || {
                         let pane = pane.get();
                         Some(untracked(move || match pane.clone() {
                             Pane::Draft => agent::draft_pane().into_element(),
                             Pane::Agent => agent::agent_pane(false).into_element(),
                             Pane::Diff(p) => explorer::diff_pane(p).into_element(),
-                            Pane::Terminal(id) => terminal::terminal_pane(id).into_element(),
                             Pane::File(p) => file_pane::file_pane(p).into_element(),
                             Pane::Subagent(parent, id) => timeline::subagent_pane(parent, id).into_element(),
                             Pane::CommitDiff(sha, path) => explorer::commit_diff_pane(sha, path).into_element(),
                         }))
-                    })),
-                )
-                .child(when(fits, move || {
-                    // Mounted while it fits; the toggle slides it in and out
-                    // (its width eases, the panel keeps its own).
-                    view()
-                        .flex_shrink_0()
-                        .items_start()
-                        .overflow_hidden()
-                        .w(move || Length::from(px(if show_explorer.get() { explorer::EXPLORER_WIDTH + 10.0 } else { 0.0 })))
-                        .opacity(move || if show_explorer.get() { 1.0_f32 } else { 0.0 })
-                        .transition_opacity()
-                        .child(explorer::explorer().flex_1())
-                })),
+                    }))
+                    .child(when(store::terminal_panel_open, terminal::terminal_panel)),
+                ),
         )
+        .child(when(fits, move || {
+            // Mounted while it fits; the toggle slides it in and out
+            // (its width eases, the panel keeps its own).
+            view()
+                .flex_shrink_0()
+                .items_start()
+                .overflow_hidden()
+                .mt(move || Length::from(px(-bar.get().top.0)))
+                .w(move || Length::from(px(if show_explorer.get() { explorer::EXPLORER_WIDTH + 10.0 } else { 0.0 })))
+                .opacity(move || if show_explorer.get() { 1.0_f32 } else { 0.0 })
+                .transition_opacity()
+                .child(explorer::explorer().flex_1())
+        }))
 }
 
-fn header(compact: bool) -> impl IntoElement {
+fn header(compact: bool, explorer_shown: Memo<bool>) -> impl IntoElement {
     let ws = computed(store::current_workspace);
     let bar = computed(nsh_core::element::desktop::title_bar);
     // Beside the window's buttons, in the title bar's height, rather than a
@@ -99,42 +102,15 @@ fn header(compact: bool) -> impl IntoElement {
                 .number_of_lines(1)
                 .flex_shrink(1.0),
         )
-        .child(dynamic(move || {
-            let branch = ws.with(|w| w.as_ref().and_then(|w| w.branch.clone()))?;
-            let worktree = ws.with(|w| w.as_ref().is_some_and(|w| w.is_worktree()));
-            Some(untracked(move || {
-                view()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(5.0))
-                    .h(px(22.0))
-                    .px(px(S2))
-                    .rounded(px(R_FULL))
-                    .bg(SURFACE2)
-                    .child(icon(if worktree { Icon::GitBranch } else { Icon::GitCommitHorizontal }, 13.0).text_color(FG_MUTED))
-                    .child(text(branch.clone()).text_size(px(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1))
-            }))
-        }))
-        .child(
-            text(move || {
-                ws.with(|w| match w {
-                    Some(w) if w.additions + w.deletions > 0 => format!("+{}  −{}", w.additions, w.deletions),
-                    _ => String::new(),
-                })
-            })
-            .text_size(px(TEXT_SM))
-            .font_family(|| MONO)
-            .text_color(FG_MUTED),
-        )
         .child(view().flex_1())
         .child(scripts_menu())
         .child(super::git::git_controls())
-        .when(!compact, |v| v.child(text(move || ws.with(|w| w.as_ref().map(|w| w.directory.clone()).unwrap_or_default()))
-            .text_size(px(TEXT_SM))
-            .text_color(FG_FAINT)
-            .number_of_lines(1)
-            .flex_shrink(1.0)))
-        .when(!compact, |v| v.child(icon_btn(Icon::PanelRight, Sz::Sm, t("Toggle explorer"), store::toggle_explorer)))
+        // The terminal panel, as VS Code's ⌃` and ⌘J.
+        .when(!compact, |v| v.child(icon_btn(Icon::PanelBottom, Sz::Sm, t("Toggle terminal  ⌃`"), store::toggle_terminal_panel)))
+        // The explorer has its own toggle while it shows.
+        .when(!compact, |v| {
+            v.child(when(move || !explorer_shown.get(), || icon_btn(Icon::PanelRight, Sz::Sm, t("Toggle explorer"), store::toggle_explorer)))
+        })
 }
 
 /// The tab strip: one tab per agent, then "+" for a new agent here.
@@ -156,11 +132,6 @@ fn tabs() -> impl IntoElement {
                 let id = a.get_untracked().id;
                 agent_tab(id)
             },
-        ))
-        .child(each(
-            store::terminals,
-            |t| t.id.clone(),
-            |t, _| terminal_tab(t.get_untracked()),
         ))
         .child(each(store::open_files, |p| p.clone(), |p, _| file_tab(p.get_untracked())))
         .child(dynamic(|| {
@@ -291,25 +262,6 @@ fn file_tab(path: String) -> impl IntoElement {
                 .child(text(label).text_size(px(TEXT_SM)).text_color(if on { FG } else { FG_MUTED }).number_of_lines(1))
                 .child(when(dirty, || view().w(px(6.0)).h(px(6.0)).rounded(px(R_FULL)).bg(FG_MUTED)))
                 .child(close_button(t("Close file"), move || store::close_file(&close)))
-        }))
-    }))
-}
-
-fn terminal_tab(t: crate::daemon::connection::TerminalInfo) -> impl IntoElement {
-    let id = t.id.clone();
-    let selected = {
-        let id = id.clone();
-        computed(move || store::tab() == Tab::Terminal(id.clone()))
-    };
-    let label = t.title.clone().unwrap_or_else(|| t.name.clone());
-    view().child(dynamic(move || {
-        let on = selected.get();
-        let (open_id, kill_id, label) = (id.clone(), id.clone(), label.clone());
-        Some(untracked(move || {
-            tab_shell(on, move || store::open_tab(Tab::Terminal(open_id.clone())))
-                .child(icon(Icon::SquareTerminal, 14.0).text_color(FG_MUTED))
-                .child(text(label).text_size(px(TEXT_SM)).text_color(if on { FG } else { FG_MUTED }).number_of_lines(1))
-                .child(close_button(crate::i18n::t("Close terminal"), move || store::kill_terminal(&kill_id)))
         }))
     }))
 }

@@ -1,10 +1,9 @@
-# Paseo parity checklist
+# Feature checklist
 
-Sophon's target is feature parity with the Paseo app (`ref/paseo/packages/app`).
+Sophon's feature checklist against the daemon's protocol.
 Each line: feature — daemon messages — priority/size. `[x]` done, `[~]` partial, `[ ]` todo.
-Paseo source paths are under `ref/paseo/packages/app/src` unless noted.
 
-## Navigation (Paseo's structure)
+## Navigation
 
 - Sidebar: header items (New workspace, History, Search, Schedules) → pinned → Project → Workspace rows
   (status dot, title, PR badge, diff stat). **Agents are tabs inside a workspace, not sidebar rows.**
@@ -61,7 +60,7 @@ Paseo source paths are under `ref/paseo/packages/app/src` unless noted.
 - [x] Host: status, version, update and restart daemon — `daemon.update.request`, `restart_server_request`
 - [x] Usage: per-provider plan windows (used %, resets) — `provider.usage.list.request`
 - [~] Dictation into the composer with the system speech recognizer (mic button) — daemon realtime voice mode todo
-- [x] Multi-host + pairing: host switcher; Paseo relay E2EE (Noise NK protected + legacy NaCl box); pairing QR (`sophon://pair`, camera scan via URL scheme); Sophon LAN bridge (Noise NK + token) with relay fallback; direct LAN / Tailscale / wss addresses with password
+- [x] Multi-host + pairing: host switcher; relay E2EE (Noise NK protected + legacy NaCl box); pairing QR (`sophon://pair`, camera scan via URL scheme); Sophon LAN bridge (Noise NK + token) with relay fallback; direct LAN / Tailscale / wss addresses with password
 - [~] Notifications: desktop system notifications on attention / approval / finish (press opens the agent) — workspace recovery and labels done
 - [ ] Plugins — JS bundles; likely partial parity only (L)
 - Out of scope: Electron browser pane.

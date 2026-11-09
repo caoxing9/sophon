@@ -1,4 +1,4 @@
-//! Lucide icons (ISC), the set Paseo uses, drawn as native vector shapes
+//! Lucide icons (ISC), drawn as native vector shapes
 //! tinted by the text color (`stroke="currentColor"`).
 
 use std::{cell::RefCell, collections::HashMap};
@@ -38,6 +38,7 @@ pub(crate) enum Icon {
     ExternalLink,
     Eye,
     EyeOff,
+    Download,
     File,
     FileDiff,
     FileText,
@@ -61,7 +62,9 @@ pub(crate) enum Icon {
     ListTodo,
     Maximize2,
     Mic,
+    Monitor,
     MicOff,
+    PanelBottom,
     PanelLeft,
     PanelRight,
     Paperclip,
@@ -123,6 +126,7 @@ fn markup(icon: Icon) -> &'static str {
         Icon::EyeOff => include_str!("../../../assets/icons/eye-off.svg"),
         Icon::File => include_str!("../../../assets/icons/file.svg"),
         Icon::FileDiff => include_str!("../../../assets/icons/file-diff.svg"),
+        Icon::Download => include_str!("../../../assets/icons/download.svg"),
         Icon::FileText => include_str!("../../../assets/icons/file-text.svg"),
         Icon::Folder => include_str!("../../../assets/icons/folder.svg"),
         Icon::FolderOpen => include_str!("../../../assets/icons/folder-open.svg"),
@@ -146,8 +150,10 @@ fn markup(icon: Icon) -> &'static str {
         Icon::ClipboardPaste => include_str!("../../../assets/icons/clipboard-paste.svg"),
         Icon::ListTodo => include_str!("../../../assets/icons/list-todo.svg"),
         Icon::Maximize2 => include_str!("../../../assets/icons/maximize-2.svg"),
+        Icon::Monitor => include_str!("../../../assets/icons/monitor.svg"),
         Icon::Mic => include_str!("../../../assets/icons/mic.svg"),
         Icon::MicOff => include_str!("../../../assets/icons/mic-off.svg"),
+        Icon::PanelBottom => include_str!("../../../assets/icons/panel-bottom.svg"),
         Icon::PanelLeft => include_str!("../../../assets/icons/panel-left.svg"),
         Icon::PanelRight => include_str!("../../../assets/icons/panel-right.svg"),
         Icon::Paperclip => include_str!("../../../assets/icons/paperclip.svg"),
@@ -181,7 +187,7 @@ thread_local! {
     static SOURCES: RefCell<HashMap<Icon, ImageSrc>> = RefCell::new(HashMap::new());
 }
 
-/// The icon's source, its stroke thinned to Paseo's 1.5 (made once).
+/// The icon's source, its stroke thinned to 1.5 (made once).
 fn source(icon: Icon) -> ImageSrc {
     SOURCES.with_borrow_mut(|cache| {
         cache

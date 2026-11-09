@@ -1,4 +1,4 @@
-//! The desktop shell, as Paseo's: a pinned sidebar of projects and
+//! The desktop shell: a pinned sidebar of projects and
 //! workspaces beside the main surface on wide windows; on narrow ones, one
 //! at a time. What only the desktop has (tabs, the explorer, git, terminals,
 //! new workspaces, history, schedules, shortcuts) lives here.
@@ -26,7 +26,7 @@ use nsh_core::{
 use crate::store::{self, Screen};
 use crate::ui::{kit::*, shared::{modals, notice}};
 
-/// Paseo's compact / wide boundary.
+/// The compact / wide boundary.
 const SPLIT_WIDTH: f32 = 600.0;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -39,7 +39,7 @@ enum Layout {
 pub(crate) fn shell() -> impl IntoElement {
     if is_desktop() {
         shortcuts::bind();
-        // Paseo's / Claude's look: no system bar, the traffic lights sit
+        // Claude's look: no system bar, the traffic lights sit
         // on the app's own surface.
         set_title_bar(TitleBarStyle::Hidden, Some(px(44.0)));
     }
@@ -103,6 +103,36 @@ pub(crate) fn shell() -> impl IntoElement {
         }))
     }))
     .child(sidebar_toggle())
+    .child(quit_hint())
+}
+
+/// "Press ⌘Q again to quit", over the middle of the window while a second
+/// press would quit (Chrome's hint).
+fn quit_hint() -> impl IntoElement {
+    let hint = computed(store::quit_hint);
+    view()
+        .absolute()
+        .top(px(0.0))
+        .bottom(px(0.0))
+        .left(px(0.0))
+        .right(px(0.0))
+        .items_center()
+        .justify_center()
+        .pointer_events(PointerEvents::None)
+        .child(
+            glass_strong(view())
+                .px(px(S6))
+                .py(px(S4))
+                .rounded(px(R_LG + 4.0))
+                .opacity(move || if hint.get().is_some() { 1.0_f32 } else { 0.0 })
+                .transition_opacity()
+                .child(
+                    crate::ui::kit::text(move || hint.get().map(t).unwrap_or_default())
+                        .text_size(px(TEXT_LG))
+                        .font_weight(nsh_core::element::FontWeight(600))
+                        .text_color(FG),
+                ),
+        )
 }
 
 /// The top of the window, where the system title bar was: it drags the

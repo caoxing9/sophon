@@ -3,7 +3,7 @@ name = "sophon-relay"
 version = "0.1.0"
 edition = "2024"
 publish = false
-description = "A relay for Sophon and Paseo: forwards end-to-end encrypted sessions between a computer and its phones"
+description = "A relay for Sophon: forwards end-to-end encrypted sessions between a computer and its phones"
 
 # Built on its own (a server binary), apart from the app.
 [workspace]

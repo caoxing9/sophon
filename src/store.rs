@@ -2,7 +2,7 @@
 //! the conversation and nothing else. Screens read through these functions
 //! and change state only here: by applying daemon events or sending commands.
 //!
-//! Navigation follows Paseo: the sidebar lists projects and their
+//! Navigation: the sidebar lists projects and their
 //! workspaces; a workspace shows its agents as tabs, plus a draft tab that
 //! starts a new agent there. "New workspace" is its own screen.
 
@@ -15,7 +15,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::daemon::{
     Agent, Command, Event, Item, Project, Provider, Workspace,
     connection::{CreateAgent, ImageInput, SlashCommand},
-    model::apply_live,
+    model::{apply_live, carry_images},
 };
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -45,7 +45,6 @@ pub(crate) enum Tab {
     Agent(String),
     /// The workspace's uncommitted changes: one file, or all (`None`).
     Diff(Option<String>),
-    Terminal(String),
     File(String),
     /// A sub-agent of an agent, read-only: (parent, sub-agent).
     Subagent(String, String),
@@ -59,6 +58,8 @@ struct FileTree {
     cwd: String,
     dirs: HashMap<String, Vec<crate::daemon::connection::DirEntry>>,
     expanded: std::collections::HashSet<String>,
+    /// Folders asked for and not listed yet.
+    listing: std::collections::HashSet<String>,
 }
 
 /// A file open in a tab: what is on disk and what the editor holds.
@@ -190,7 +191,7 @@ pub(crate) fn send_review(path: Option<&str>, note: &str) -> bool {
     let what = path.map(|p| format!("`{p}`")).unwrap_or_else(|| "the uncommitted changes".into());
     let text = format!("Review of {what}:\n\n{}", note.trim());
     let behavior = agent.is_running().then_some("steer");
-    send(Command::Send { agent_id: agent.id.clone(), text, behavior, images: vec![], attachments: vec![] });
+    send(Command::Send { agent_id: agent.id.clone(), text, behavior, images: vec![], attachments: vec![], message_id: uuid::Uuid::new_v4().to_string() });
     notify(tf("Review sent to “{}”", &[&agent.title]));
     true
 }
@@ -219,6 +220,13 @@ pub(crate) fn toggle_dir(path: &str) {
 }
 
 pub(crate) fn open_file(path: &str) {
+    load_file(path);
+    open_tab(Tab::File(path.to_owned()));
+}
+
+/// Reads the workspace's file `path` into [`file`] once, without a tab
+/// (the phone shows it on a page of its own).
+pub(crate) fn load_file(path: &str) {
     let Some(cwd) = tree_cwd() else { return };
     let known = global::<Files>().with_untracked(|f| f.0.contains_key(path));
     if !known {
@@ -227,7 +235,28 @@ pub(crate) fn open_file(path: &str) {
         });
         send(Command::ReadFile { cwd, path: path.to_owned() });
     }
-    open_tab(Tab::File(path.to_owned()));
+}
+
+/// The open workspace's folder `dir` (`.`, its root): folders first, then
+/// files, by name; `None` until listed, which this asks for.
+pub(crate) fn dir_entries(dir: &str) -> Option<Vec<crate::daemon::connection::DirEntry>> {
+    let cwd = tree_cwd()?;
+    if global::<FileTree>().with_untracked(|t| t.cwd != cwd) {
+        global::<FileTree>().update(|t| *t = FileTree { cwd: cwd.clone(), ..Default::default() });
+    }
+    let listed = global::<FileTree>().with(|t| t.dirs.get(dir).cloned());
+    let Some(mut entries) = listed else {
+        let asked = global::<FileTree>().with_untracked(|t| t.listing.contains(dir));
+        if !asked {
+            untracked(|| global::<FileTree>().update(|t| {
+                t.listing.insert(dir.to_owned());
+            }));
+            send(Command::ListDir { cwd, path: dir.to_owned() });
+        }
+        return None;
+    };
+    entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    Some(entries)
 }
 
 pub(crate) fn file(path: &str) -> Option<OpenFile> {
@@ -379,16 +408,85 @@ pub(crate) fn terminal_resize(id: &str, rows: u16, cols: u16) {
 pub(crate) fn new_terminal() {
     if let Some(w) = current_workspace() {
         send(Command::CreateTerminal { cwd: w.directory, workspace_id: w.id });
+        set_terminal_panel(true);
     }
 }
 
 pub(crate) fn kill_terminal(id: &str) {
     global::<Terminals>().update(|t| t.list.retain(|x| x.id != id));
     send(Command::KillTerminal(id.to_owned()));
-    if tab() == Tab::Terminal(id.to_owned())
-        && let Some(w) = current_workspace()
-    {
-        open_workspace(&w.id);
+    // The last one closed folds the panel away, as VS Code's does.
+    if terminals().is_empty() {
+        set_terminal_panel(false);
+    }
+}
+
+/// The desktop's terminal panel under the workspace (VS Code's): whether
+/// it is open, its height, and the terminal it shows.
+#[derive(Clone, PartialEq)]
+struct TerminalPanel {
+    open: bool,
+    height: f32,
+    active: Option<String>,
+}
+
+impl Default for TerminalPanel {
+    fn default() -> Self {
+        TerminalPanel { open: false, height: 280.0, active: None }
+    }
+}
+
+pub(crate) fn terminal_panel_open() -> bool {
+    global::<TerminalPanel>().with(|p| p.open)
+}
+
+pub(crate) fn terminal_panel_height() -> f32 {
+    global::<TerminalPanel>().with(|p| p.height)
+}
+
+pub(crate) fn set_terminal_panel_height(h: f32) {
+    global::<TerminalPanel>().update(|p| p.height = h.clamp(120.0, 900.0));
+}
+
+/// Keeps the height a drag ended on, for the next launch.
+pub(crate) fn save_terminal_panel_height() {
+    save_prefs();
+}
+
+/// The terminal the panel shows: the one picked last, else the first.
+pub(crate) fn active_terminal() -> Option<String> {
+    let list = terminals();
+    let picked = global::<TerminalPanel>().with(|p| p.active.clone());
+    picked.filter(|id| list.iter().any(|t| &t.id == id)).or_else(|| list.first().map(|t| t.id.clone()))
+}
+
+pub(crate) fn show_terminal(id: &str) {
+    global::<TerminalPanel>().update(|p| {
+        p.active = Some(id.to_owned());
+        p.open = true;
+    });
+}
+
+fn set_terminal_panel(open: bool) {
+    if terminal_panel_open() != open {
+        animate_panels();
+        global::<TerminalPanel>().update(|p| p.open = open);
+    }
+}
+
+/// ⌃` (and ⌘J): shows the panel, starting a terminal when there is none;
+/// hides it when shown.
+pub(crate) fn toggle_terminal_panel() {
+    if current_workspace().is_none() {
+        return;
+    }
+    if terminal_panel_open() {
+        set_terminal_panel(false);
+    } else {
+        if terminals().is_empty() {
+            new_terminal();
+        }
+        set_terminal_panel(true);
     }
 }
 
@@ -488,7 +586,6 @@ pub(crate) fn toggle_sidebar() {
 pub(crate) fn tab_list() -> Vec<Tab> {
     let Some(w) = current_workspace() else { return vec![] };
     let mut tabs: Vec<Tab> = workspace_agents(&w.id).into_iter().map(|a| Tab::Agent(a.id)).collect();
-    tabs.extend(terminals().into_iter().map(|t| Tab::Terminal(t.id)));
     tabs.extend(open_files().into_iter().map(Tab::File));
     tabs
 }
@@ -514,6 +611,13 @@ pub(crate) fn explorer_tab() -> ExplorerTab {
 }
 
 pub(crate) fn set_explorer_tab(tab: ExplorerTab) {
+    // The pages slide to it (and the switch's thumb with them), whoever
+    // asks: the switch, Browse files, the diff count over the composer.
+    animate_layout(nsh_core::LayoutAnimation {
+        create: None,
+        update: Some(nsh_core::LayoutTransition::new(nsh_core::LayoutCurve::Spring { damping: 0.86 }, 320.0)),
+        delete: None,
+    });
     global::<Explorer>().update(|e| e.tab = tab);
     if tab == ExplorerTab::Commits {
         load_commits();
@@ -543,6 +647,9 @@ struct Timeline {
     /// The cursor of the page before `items`, while there is older history.
     older: Option<serde_json::Value>,
     loading_older: bool,
+    /// The epoch and last seq `items` hold: live events at or before it
+    /// are repeats.
+    cursor: Option<(String, u64)>,
 }
 /// Messages waiting for the running turn to end, per agent.
 #[derive(Clone, Default)]
@@ -555,7 +662,7 @@ struct Suggestions {
     entries: Vec<(String, bool)>,
 }
 
-/// What Return does while the agent is running (Paseo's "Sending" setting).
+/// What Return does while the agent is running (the "Sending" setting).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) enum SendBehavior {
     /// Adds the message to the running turn.
@@ -620,7 +727,7 @@ pub(crate) enum NoticeAction {
 
 #[derive(Clone, Default)]
 struct Notice(Option<(u64, String, Option<NoticeAction>)>);
-/// Unsent composer text per agent (Paseo keeps drafts per agent).
+/// Unsent composer text per agent.
 #[derive(Clone, Default)]
 struct Drafts(HashMap<String, String>);
 
@@ -993,7 +1100,7 @@ impl PendingFile {
 #[derive(Clone, Default)]
 struct PendingFiles(HashMap<String, Vec<PendingFile>>);
 
-/// The largest file the host takes (Paseo's limit).
+/// The largest file the host takes.
 const FILE_MAX_BYTES: usize = 50 * 1024 * 1024;
 
 pub(crate) fn pending_files() -> Vec<PendingFile> {
@@ -1095,6 +1202,92 @@ fn arrangement(now: &[(String, bool)], ids: &[String]) -> Option<Vec<(usize, boo
     let next: Vec<(usize, bool)> = order.into_iter().map(|i| (i, rank(&now[i].0).is_none())).collect();
     let same = next.iter().enumerate().all(|(n, &(i, detached))| n == i && now[i].1 == detached);
     (!same).then_some(next)
+}
+
+/// Files on their way here, by request id: their path in the workspace.
+#[derive(Clone, Default)]
+struct Downloads(HashMap<String, String>);
+
+/// Saves the workspace's file `path` on this device, whatever its size or
+/// kind: on the Mac where the save panel says, on the phone in Sophon's
+/// folder of the Files app.
+pub(crate) fn download_file(path: &str) {
+    let Some(cwd) = tree_cwd() else { return };
+    if downloading(path) {
+        return;
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    global::<Downloads>().update(|d| {
+        d.0.insert(id.clone(), path.to_owned());
+    });
+    notify(tf("Downloading “{}”…", &[file_name(path)]));
+    send(Command::Download { id, cwd, path: path.to_owned() });
+}
+
+/// Whether `path` is on its way here.
+pub(crate) fn downloading(path: &str) -> bool {
+    global::<Downloads>().with(|d| d.0.values().any(|p| p == path))
+}
+
+fn file_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+fn downloaded(id: String, result: Result<Vec<u8>, String>) {
+    let mut path = None;
+    global::<Downloads>().update(|d| path = d.0.remove(&id));
+    let Some(path) = path else { return };
+    let name = file_name(&path).to_owned();
+    match result {
+        Ok(bytes) => save_download(name, bytes),
+        Err(e) => notify(tf("Could not download “{}”: {}", &[&name, &e])),
+    }
+}
+
+/// The phone: into the app's Documents, which the Files app shows as
+/// Sophon's folder (`UIFileSharingEnabled`), under a name not taken there.
+#[cfg(target_os = "ios")]
+fn save_download(name: String, bytes: Vec<u8>) {
+    let dir = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default().join("Documents");
+    let target = free_path(&dir, &name);
+    match std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&target, &bytes)) {
+        Ok(()) => notify(tf("Saved “{}” to Files › Sophon", &[&target.file_name().and_then(|n| n.to_str()).unwrap_or(&name)])),
+        Err(e) => notify(tf("Could not download “{}”: {}", &[&name, &e.to_string()])),
+    }
+}
+
+/// The desktop: where the save panel says.
+#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+fn save_download(name: String, bytes: Vec<u8>) {
+    spawn_detached(async move {
+        let dialog = nsh_core::file_dialog::SaveDialog::new().file_name(name.clone());
+        match pick_save_path(dialog).await {
+            Ok(Some(target)) => match std::fs::write(&target, &bytes) {
+                Ok(()) => notify(tf("Saved “{}”", &[target.file_name().and_then(|n| n.to_str()).unwrap_or(&name)])),
+                Err(e) => notify(tf("Could not download “{}”: {}", &[&name, &e.to_string()])),
+            },
+            Ok(None) => {}
+            Err(e) => notify(tf("Could not download “{}”: {}", &[&name, &e])),
+        }
+    });
+}
+
+#[cfg(target_arch = "wasm32")]
+fn save_download(name: String, _bytes: Vec<u8>) {
+    notify(tf("Could not download “{}”: {}", &[&name, "not in the browser yet"]));
+}
+
+/// `dir/name`, or `dir/name (2).ext`, ... when taken.
+#[cfg(target_os = "ios")]
+fn free_path(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s, format!(".{e}")),
+        _ => (name, String::new()),
+    };
+    (1..)
+        .map(|n| if n == 1 { dir.join(name) } else { dir.join(format!("{stem} ({n}){ext}")) })
+        .find(|p| !p.exists())
+        .expect("a free name")
 }
 
 fn uploaded(id: String, result: Result<serde_json::Value, String>) {
@@ -1360,6 +1553,7 @@ fn save_prefs() {
         "sidebarHidden": global::<SidebarHidden>().with_untracked(|h| h.0),
         "explorerOpen": global::<Explorer>().with_untracked(|e| e.open),
         "sidebarWidth": global::<SidebarWidth>().with_untracked(|w| w.0),
+        "terminalHeight": global::<TerminalPanel>().with_untracked(|p| p.height),
         "projectOrder": global::<ProjectOrder>().with_untracked(|o| o.0.clone()),
         "lastWorkspace": global::<LastOpen>().with_untracked(|l| l.workspace.clone()),
         "lastAgent": global::<LastOpen>().with_untracked(|l| l.agent.clone()),
@@ -1399,6 +1593,9 @@ pub(crate) fn load_prefs() {
     let string = |k: &str| v.get(k).and_then(serde_json::Value::as_str).map(str::to_owned);
     global::<LastOpen>().set(LastOpen { workspace: string("lastWorkspace"), agent: string("lastAgent"), done: false });
     global::<Collapsed>().set(Collapsed(strings("collapsedProjects")));
+    if let Some(h) = v.get("terminalHeight").and_then(serde_json::Value::as_f64) {
+        global::<TerminalPanel>().update(|p| p.height = (h as f32).clamp(120.0, 900.0));
+    }
     if let Some(w) = v.get("sidebarWidth").and_then(serde_json::Value::as_f64) {
         global::<SidebarWidth>().set(SidebarWidth((w as f32).clamp(SIDEBAR_MIN, SIDEBAR_MAX)));
     }
@@ -1448,7 +1645,7 @@ fn service_cli() -> Option<std::path::PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
-/// Whether this Mac's service comes with the Paseo app (its updates come
+/// Whether this Mac's service comes with the desktop app (its updates come
 /// with the app's) rather than from npm, whose package the service can
 /// update itself.
 pub(crate) fn service_bundled() -> bool {
@@ -1854,7 +2051,7 @@ pub(crate) fn open_tab(tab: Tab) {
     }
     let agent_id = match &tab {
         Tab::Agent(id) => Some(id.clone()),
-        Tab::Draft | Tab::Diff(_) | Tab::Terminal(_) | Tab::File(_) | Tab::Subagent(..) | Tab::CommitDiff(..) => None,
+        Tab::Draft | Tab::Diff(_) | Tab::File(_) | Tab::Subagent(..) | Tab::CommitDiff(..) => None,
     };
     if let (Tab::CommitDiff(sha, path), Some(cwd)) = (&tab, current_workspace().map(|w| w.directory)) {
         global::<CommitDiffState>().update(|c| c.0 = None);
@@ -1863,7 +2060,7 @@ pub(crate) fn open_tab(tab: Tab) {
     if let Tab::Subagent(parent, id) = &tab {
         send(Command::SubagentTimeline { parent: parent.clone(), id: id.clone() });
     }
-    if matches!(tab, Tab::Diff(_) | Tab::Terminal(_) | Tab::File(_) | Tab::Subagent(..) | Tab::CommitDiff(..)) {
+    if matches!(tab, Tab::Diff(_) | Tab::File(_) | Tab::Subagent(..) | Tab::CommitDiff(..)) {
         global::<Nav>().update(|n| n.tab = tab);
         return;
     }
@@ -2172,29 +2369,30 @@ fn deliver(agent_id: &str, text: &str, behavior: Option<&'static str>) {
     let images = if mine { take_images() } else { vec![] };
     let attachments = if mine { take_files() } else { vec![] };
     let mut shown = text.to_owned();
-    if !images.is_empty() {
-        shown.push_str(&format!("\n\n[{} image(s)]", images.len()));
-    }
     for a in &attachments {
         if let Some(name) = a.get("fileName").and_then(serde_json::Value::as_str) {
             shown.push_str(&format!("\n📎 {name}"));
         }
     }
+    // Shown at once under the id the host echoes it back with, which then
+    // replaces nothing and adds nothing (the echo has the text alone).
+    let message_id = uuid::Uuid::new_v4().to_string();
+    let thumbs = images.iter().map(|i| format!("data:{};base64,{}", i.mime, i.data)).collect();
     let mut shown_here = false;
     global::<Timeline>().update(|t| {
         if t.agent_id.as_deref() == Some(agent_id) {
-            t.items.push(Item::User { text: shown.trim().to_owned(), message_id: None });
+            t.items.push(Item::User { text: shown.trim().to_owned(), message_id: Some(message_id.clone()), images: thumbs });
             shown_here = true;
         }
     });
     if shown_here {
         scroll_timeline_to_end();
     }
-    send(Command::Send { agent_id: agent_id.to_owned(), text: text.to_owned(), behavior, images, attachments });
+    send(Command::Send { agent_id: agent_id.to_owned(), text: text.to_owned(), behavior, images, attachments, message_id });
 }
 
 /// A system notification when an agent starts needing you while you look
-/// elsewhere (Paseo's attention notifications); the press opens it.
+/// elsewhere; the press opens it.
 fn notify_attention(next: &Agent) {
     let before = agent(&next.id);
     let needed = |a: &Agent| a.requires_attention || !a.pending.is_empty();
@@ -2559,12 +2757,14 @@ pub(crate) fn apply(event: Event) {
                 }
             }
         }
-        Event::TimelineReset { agent_id, items, older } => {
+        Event::TimelineReset { agent_id, mut items, older, cursor } => {
             let mut opened = false;
             global::<Timeline>().update(|t| {
                 if t.agent_id.as_deref() == Some(agent_id.as_str()) {
                     opened = !t.loaded;
+                    carry_images(&t.items, &mut items);
                     t.items = items;
+                    t.cursor = cursor;
                     t.loaded = true;
                     t.older = older;
                 }
@@ -2590,10 +2790,17 @@ pub(crate) fn apply(event: Event) {
                 s.entries = entries;
             }
         }),
-        Event::TimelineLive { agent_id, item } => global::<Timeline>().update(|t| {
-            if t.agent_id.as_deref() == Some(agent_id.as_str()) {
-                apply_live(&mut t.items, item);
+        Event::TimelineLive { agent_id, item, cursor } => global::<Timeline>().update(|t| {
+            if t.agent_id.as_deref() != Some(agent_id.as_str()) {
+                return;
             }
+            if let Some((epoch, seq)) = cursor {
+                match &t.cursor {
+                    Some((e, end)) if *e == epoch && seq <= *end => return,
+                    _ => t.cursor = Some((epoch, seq)),
+                }
+            }
+            apply_live(&mut t.items, item);
         }),
         Event::Diff { cwd, files, error, too_large } => global::<Changes>().update(|c| {
             if c.cwd == cwd || c.cwd.is_empty() {
@@ -2612,7 +2819,7 @@ pub(crate) fn apply(event: Event) {
                     t.list.push(info);
                 }
             });
-            open_tab(Tab::Terminal(id));
+            show_terminal(&id);
         }
         Event::TerminalOutput { terminal_id, data, reset } => {
             TERM_OUT.with_borrow_mut(|out| {
@@ -2649,6 +2856,7 @@ pub(crate) fn apply(event: Event) {
             }
             global::<FileTree>().update(|t| {
                 if t.cwd == cwd {
+                    t.listing.remove(&path);
                     t.dirs.insert(path, entries);
                 }
             });
@@ -2752,9 +2960,10 @@ pub(crate) fn apply(event: Event) {
             })
         }),
         Event::Uploaded { id, result } => uploaded(id, result),
+        Event::Downloaded { id, result } => downloaded(id, result),
         Event::PairingOffer { url, relay_enabled, error } => global::<Pairing>().update(|p| {
-            // The QR is Sophon's link (LAN + relay); `url` stays Paseo's for
-            // its own app.
+            // The QR is Sophon's link (LAN + relay); `url` stays the daemon's
+            // relay link, for its own app.
             let link = pairing_link(url.as_deref().filter(|_| relay_enabled));
             *p = Pairing { loaded: true, qr_svg: link.as_deref().and_then(qr_svg), sophon_url: link, url, relay_enabled, error };
         }),
@@ -2798,5 +3007,70 @@ pub(crate) fn apply(event: Event) {
         Event::Branches { list, .. } => global::<BranchesState>().update(|b| b.0 = list),
         Event::Schedules(list) => global::<SchedulesState>().update(|s| s.0 = Some(list)),
         Event::Notice(message) => notify(crate::i18n::tr(&message)),
+    }
+}
+
+/// ⌘Q (and ⌘W with nothing left to close) asks twice, as Chrome does: the
+/// first press shows a hint, a second within two seconds quits. Holds the
+/// hint's text while it shows.
+#[derive(Clone, Default)]
+struct QuitHint(Option<(u64, &'static str)>);
+
+pub(crate) fn quit_hint() -> Option<&'static str> {
+    global::<QuitHint>().with(|h| h.0.map(|(_, m)| m))
+}
+
+/// Quits when asked again while the hint shows; else shows it.
+pub(crate) fn request_quit(hint: &'static str) {
+    if global::<QuitHint>().with_untracked(|h| h.0.is_some()) {
+        nsh_core::element::desktop::quit();
+        return;
+    }
+    let id = global::<QuitHint>().with_untracked(|h| h.0.map_or(0, |(n, _)| n)) + 1;
+    global::<QuitHint>().set(QuitHint(Some((id, hint))));
+    spawn_detached(async move {
+        nsh_core::element::timer(std::time::Duration::from_millis(2000)).await;
+        global::<QuitHint>().update(|h| {
+            if h.0.is_some_and(|(n, _)| n == id) {
+                h.0 = None;
+            }
+        });
+    });
+}
+
+/// Whether the keyboard is in the terminal panel (⌘W then ends the
+/// terminal shown there, not a tab above).
+#[derive(Clone, Default)]
+struct TerminalFocus(bool);
+
+pub(crate) fn set_terminal_focused(on: bool) {
+    global::<TerminalFocus>().set(TerminalFocus(on));
+}
+
+/// ⌘W: closes the tab where the keyboard is, and nothing wider: the
+/// terminal shown in the panel when it has the focus; else a file, diff,
+/// sub-agent or new-chat tab (back to the conversation). A conversation
+/// itself, or a screen with no tabs, stays: quitting is ⌘Q's.
+pub(crate) fn close_current() {
+    if modal().is_some() {
+        close_modal();
+        return;
+    }
+    let Screen::Workspace(_) = screen() else { return };
+    if terminal_panel_open() && global::<TerminalFocus>().with_untracked(|f| f.0) {
+        if let Some(id) = active_terminal() {
+            kill_terminal(&id);
+        }
+        return;
+    }
+    match tab() {
+        Tab::File(path) => close_file(&path),
+        Tab::Subagent(parent, _) => open_tab(Tab::Agent(parent)),
+        Tab::Diff(_) | Tab::CommitDiff(..) | Tab::Draft => {
+            if let Some(w) = current_workspace() {
+                open_workspace(&w.id);
+            }
+        }
+        Tab::Agent(_) => {}
     }
 }

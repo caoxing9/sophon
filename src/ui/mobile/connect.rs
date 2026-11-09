@@ -1,7 +1,7 @@
-//! With no computer paired, Paseo's welcome screen: the mark, a line on
+//! With no computer paired, the welcome screen: the mark, a line on
 //! what to do, and the ways to connect (scanning the computer's QR code
 //! first, then a direct address or a pasted pairing link), settings and the
-//! version under them. Scanning opens the camera in a card with Paseo's
+//! version under them. Scanning opens the camera in a card with a
 //! corner frame; a pairing code connects at once.
 
 use crate::i18n::t;
@@ -202,7 +202,7 @@ fn scan(back: impl Fn() + Clone + 'static) -> impl IntoElement {
         )
 }
 
-/// Paseo's scan frame: four accent corners around a 260 pt square.
+/// The scan frame: four accent corners around a 260 pt square.
 fn frame() -> impl IntoElement {
     let corner = |top: bool, left: bool| {
         let mut v = view().absolute().w(px(36.0)).h(px(36.0)).border_color(ACCENT);

@@ -150,6 +150,7 @@ fn agent_sheet() {
     let Some(a) = store::selected_agent() else { return };
     let (rename, archive, title) = (a.id.clone(), a.id.clone(), a.title.clone());
     let mut items = vec![
+        SheetItem::new(t("Browse files"), || push(Route::Files(".".into()))).icon(Icon::Folder),
         SheetItem::new(t("Fork into new agent"), store::fork_selected).icon(Icon::GitCompare),
         SheetItem::new(t("Rename"), move || store::open_modal(store::Modal::RenameAgent { id: rename.clone(), name: title.clone() })).icon(Icon::Pencil),
     ];

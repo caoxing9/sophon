@@ -1,4 +1,4 @@
-//! Dialogs: a centered card over a dimmed backdrop (Paseo's adaptive modal
+//! Dialogs: a centered card over a dimmed backdrop (an adaptive modal
 //! on desktop), for renames and confirmations.
 
 use crate::i18n::{t, tf};
@@ -675,12 +675,12 @@ fn pair_device() -> View {
                 if st.relay_enabled {
                     ways = ways.child(badge(t("Anywhere · relay"), ACCENT));
                 }
-                let (sophon_link, paseo_link) = (link.clone(), st.url.clone());
+                let (sophon_link, daemon_link) = (link.clone(), st.url.clone());
                 let mut buttons = view().flex_row().gap(px(S2)).child(btn(t("Copy link"), Variant::Secondary, Sz::Md, Some(Icon::Copy), move || {
                     set_clipboard(sophon_link.clone());
                     store::notify(t("Pairing link copied").into());
                 }));
-                if let Some(pl) = paseo_link.filter(|_| st.relay_enabled) {
+                if let Some(pl) = daemon_link.filter(|_| st.relay_enabled) {
                     buttons = buttons.child(btn(t("Copy relay link"), Variant::Ghost, Sz::Md, None, move || {
                         set_clipboard(pl.clone());
                         store::notify(t("Relay pairing link copied").into());

@@ -32,8 +32,7 @@ fn popup(s: StyleRefinement) -> StyleRefinement {
 
 /// A menu that opens under `trigger`.
 pub(crate) fn dropdown(trigger: impl IntoElement) -> MenuElement {
-    // A menu over the keyboard is half hidden: it goes first, as Paseo's
-    // pickers dismiss it.
+    // A menu over the keyboard is half hidden: it goes first.
     menu().offset(px(6.0)).popup_style(popup).trigger(trigger).on_open(|| {
         if MOBILE {
             dismiss_keyboard();

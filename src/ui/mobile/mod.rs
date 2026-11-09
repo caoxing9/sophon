@@ -11,6 +11,7 @@
 
 mod add_project;
 mod changes;
+mod files;
 mod chat;
 mod connect;
 mod home;
@@ -34,6 +35,9 @@ pub(crate) enum Route {
     Chat,
     Changes,
     Diff(String),
+    /// A folder of the workspace (`.`, its root), and a file of it.
+    Files(String),
+    File(String),
     /// A sub-agent's timeline: (parent agent, sub-agent).
     Subagent(String, String),
 }
@@ -46,6 +50,8 @@ impl Route {
             Route::Chat => "chat".into(),
             Route::Changes => "changes".into(),
             Route::Diff(p) => format!("diff:{p}"),
+            Route::Files(p) => format!("files:{p}"),
+            Route::File(p) => format!("file:{p}"),
             Route::Subagent(_, id) => format!("sub:{id}"),
         }
     }
@@ -182,6 +188,8 @@ fn stack() -> impl IntoElement {
                     Route::Chat => chat::page(),
                     Route::Changes => changes::files_page(),
                     Route::Diff(path) => changes::diff_page(path.clone()),
+                    Route::Files(dir) => files::dir_page(dir.clone()),
+                    Route::File(path) => files::file_page(path.clone()),
                     Route::Subagent(parent, id) => chat::subagent_page(parent.clone(), id.clone()),
                 };
                 page.on_dismiss(move || popped(&gone))

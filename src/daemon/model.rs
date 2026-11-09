@@ -1,6 +1,6 @@
 //! The client's view of daemon data, decoded leniently from the wire JSON.
 //!
-//! The Paseo wire contract is append-only: new fields, message types and enum
+//! The wire contract is append-only: new fields, message types and enum
 //! values appear without notice, so everything here reads from
 //! `serde_json::Value` and ignores what it does not know.
 
@@ -390,7 +390,9 @@ impl Permission {
 /// One row of an agent's conversation.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
-    User { text: String, message_id: Option<String> },
+    /// `images`: what was attached, as data URIs, for the bubble's
+    /// thumbnails (the host's echo of a message carries its text only).
+    User { text: String, message_id: Option<String>, images: Vec<String> },
     Assistant { text: String },
     Reasoning { text: String },
     /// `kind` is the detail type: `shell`, `read`, `edit`, `write`, `search`, `fetch`, `sub_agent`, ...
@@ -407,7 +409,7 @@ impl Item {
     pub fn from_json(v: &Value) -> Option<Self> {
         let text = || str_of(v, "text").unwrap_or_default();
         Some(match v.get("type")?.as_str()? {
-            "user_message" => Item::User { text: text(), message_id: str_of(v, "messageId") },
+            "user_message" => Item::User { text: text(), message_id: str_of(v, "messageId"), images: vec![] },
             "assistant_message" => Item::Assistant { text: text() },
             "reasoning" => Item::Reasoning { text: text() },
             "tool_call" => Item::Tool {
@@ -452,7 +454,7 @@ impl Item {
     }
 }
 
-/// Applies a live stream item the way Paseo's own client does: assistant and
+/// Applies a live stream item the way the daemon's own client does: assistant and
 /// reasoning text arrive as deltas appended to the row being written, tool
 /// calls replace their earlier state by `callId`, and an echoed user message
 /// that is already shown (sent from here) is not added twice.
@@ -477,9 +479,9 @@ pub fn apply_live(items: &mut Vec<Item>, incoming: Item) {
                 None => items.push(incoming),
             }
         }
-        Item::User { ref text, ref message_id } => {
+        Item::User { ref text, ref message_id, .. } => {
             let duplicate = items.iter().rev().take(4).any(|i| match i {
-                Item::User { text: t, message_id: m } => {
+                Item::User { text: t, message_id: m, .. } => {
                     (message_id.is_some() && m == message_id) || (m.is_none() && t == text)
                 }
                 _ => false,
@@ -489,6 +491,36 @@ pub fn apply_live(items: &mut Vec<Item>, incoming: Item) {
             }
         }
         other => items.push(other),
+    }
+}
+
+/// The host's rows for a refetched timeline, keeping the images the rows
+/// shown before had: the host's copy of a user message carries its text
+/// alone, so without this a reset (a finished turn's) drops the thumbnails.
+/// Matched by message id, else by text.
+pub fn carry_images(old: &[Item], new: &mut [Item]) {
+    let had: Vec<(&Option<String>, &String, &Vec<String>)> = old
+        .iter()
+        .filter_map(|i| match i {
+            Item::User { text, message_id, images } if !images.is_empty() => Some((message_id, text, images)),
+            _ => None,
+        })
+        .collect();
+    if had.is_empty() {
+        return;
+    }
+    for item in new.iter_mut() {
+        let Item::User { text, message_id, images } = item else { continue };
+        if !images.is_empty() {
+            continue;
+        }
+        let found = had
+            .iter()
+            .find(|(m, _, _)| message_id.is_some() && *m == message_id)
+            .or_else(|| had.iter().find(|(_, t, _)| t.trim() == text.trim()));
+        if let Some((_, _, i)) = found {
+            *images = (*i).clone();
+        }
     }
 }
 
@@ -635,7 +667,7 @@ mod tests {
 
     #[test]
     fn assistant_deltas_merge_into_one_row() {
-        let mut items = vec![Item::User { text: "hi".into(), message_id: None }];
+        let mut items = vec![Item::User { text: "hi".into(), message_id: None, images: vec![] }];
         apply_live(&mut items, Item::Assistant { text: "Hel".into() });
         apply_live(&mut items, Item::Assistant { text: "lo".into() });
         assert_eq!(items.len(), 2);
@@ -662,9 +694,20 @@ mod tests {
     }
 
     #[test]
+    fn a_refetch_keeps_the_images_sent_with_a_message() {
+        let old = vec![Item::User { text: "look".into(), message_id: Some("m1".into()), images: vec!["data:x".into()] }];
+        let mut new = vec![
+            Item::User { text: "look".into(), message_id: Some("m1".into()), images: vec![] },
+            Item::Assistant { text: "ok".into() },
+        ];
+        carry_images(&old, &mut new);
+        assert!(matches!(&new[0], Item::User { images, .. } if images == &vec!["data:x".to_owned()]));
+    }
+
+    #[test]
     fn echoed_user_message_is_not_duplicated() {
-        let mut items = vec![Item::User { text: "fix it".into(), message_id: Some("m1".into()) }];
-        apply_live(&mut items, Item::User { text: "fix it".into(), message_id: Some("m1".into()) });
+        let mut items = vec![Item::User { text: "fix it".into(), message_id: Some("m1".into()), images: vec![] }];
+        apply_live(&mut items, Item::User { text: "fix it".into(), message_id: Some("m1".into()), images: vec![] });
         assert_eq!(items.len(), 1);
     }
 

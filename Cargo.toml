@@ -15,6 +15,7 @@ tokio = { version = "1", default-features = false, features = ["sync", "macros"]
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 snow = "0.9"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 crypto_box = { version = "0.9", features = ["std"] }

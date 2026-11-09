@@ -1,4 +1,4 @@
-//! Settings sections, in Paseo's shape: each a label over a card of rows,
+//! Settings sections: each a label over a card of rows,
 //! controls in the rows' trailing slot. The desktop and the phone each
 //! assemble their page from them.
 

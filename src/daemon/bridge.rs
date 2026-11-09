@@ -2,7 +2,7 @@
 //! directly, without the relay round trip and without exposing the daemon.
 //!
 //! The daemon keeps listening on loopback only. The bridge listens on the
-//! LAN, runs the same end to end handshake as Paseo's relay (Noise NK, with
+//! LAN, runs the same end to end handshake as the relay (Noise NK, with
 //! the bridge's own static key from the pairing QR), then requires the
 //! pairing token as the first sealed frame. Only then does it open a socket
 //! to the local daemon, adding this machine's local credential to the

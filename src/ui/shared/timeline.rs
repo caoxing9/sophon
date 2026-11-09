@@ -130,9 +130,7 @@ fn row(at: Position, running: Memo<bool>) -> impl IntoElement {
             Some(untracked(move || match kind {
                 // The phone: no button on the bubble; a tap opens its
                 // actions, copying among them.
-                RowKind::User if MOBILE => nsh_base::button()
-                    .self_end()
-                    .max_w(relative(0.82))
+                RowKind::User if MOBILE => user_row(item, nsh_base::button()
                     .px(px(14.0))
                     .py(px(9.0))
                     .rounded(px(18.0))
@@ -140,14 +138,12 @@ fn row(at: Position, running: Memo<bool>) -> impl IntoElement {
                     .active(|s| s.opacity(0.7))
                     .on_press(move || message_sheet(item))
                     .accessibility_label(t("Message actions"))
-                    .child(text(text_of).text_size(px(TEXT_CONTENT)).line_height(px(22.0)).text_color(FG))
+                    .child(text(text_of).text_size(px(TEXT_CONTENT)).line_height(px(22.0)).text_color(FG)))
                     .into_element(),
                 // The desktop: its actions show while the pointer is on it.
                 RowKind::User => {
                     let hover = signal(false);
-                    view()
-                    .self_end()
-                    .max_w(relative(0.82))
+                    user_row(item, view()
                     .on_mouse_enter(move |_: &MouseEvent| hover.set(true))
                     .on_mouse_leave(move |_: &MouseEvent| hover.set(false))
                     .child(user_actions(item).opacity(move || if hover.get() { 1.0_f32 } else { 0.0 }).transition_opacity())
@@ -161,7 +157,7 @@ fn row(at: Position, running: Memo<bool>) -> impl IntoElement {
                             .line_height(px(22.0))
                             .text_color(FG)
                             .selectable(true),
-                    )
+                    ))
                     .into_element()
                 }
                 RowKind::Assistant => text_view()
@@ -215,6 +211,34 @@ fn row(at: Position, running: Memo<bool>) -> impl IntoElement {
     ))
 }
 
+/// A user message on the right: the images it carried as thumbnails over
+/// its bubble (no bubble when it was images alone).
+fn user_row(item: Memo<Option<Item>>, bubble: impl IntoElement + 'static) -> impl IntoElement {
+    let (images, has_text) = item.with_untracked(|i| match i {
+        Some(Item::User { images, text, .. }) => (images.clone(), !text.trim().is_empty()),
+        _ => (vec![], true),
+    });
+    let mut thumbs = view().flex_row().flex_wrap().justify_end().gap(px(6.0));
+    for uri in &images {
+        thumbs = thumbs.child(
+            image(SharedString::from(uri.clone()))
+                .w(px(132.0))
+                .h(px(132.0))
+                .object_fit(nsh_core::ResizeMode::Cover)
+                .rounded(px(14.0))
+                .border_1()
+                .border_color(tint(BORDER, 0.8)),
+        );
+    }
+    view()
+        .self_end()
+        .items_end()
+        .gap(px(6.0))
+        .max_w(relative(0.82))
+        .when(!images.is_empty(), |v| v.child(thumbs))
+        .when(has_text, |v| v.child(bubble))
+}
+
 fn tool_icon(kind: &str, name: &str) -> Icon {
     match kind {
         "shell" => Icon::Terminal,
@@ -231,7 +255,7 @@ fn tool_icon(kind: &str, name: &str) -> Icon {
 
 /// A user message's actions on the phone: copy it, or rewind to it.
 fn message_sheet(item: Memo<Option<Item>>) {
-    let Some(Item::User { text: body, message_id }) = item.get_untracked() else { return };
+    let Some(Item::User { text: body, message_id, .. }) = item.get_untracked() else { return };
     let mut items = vec![SheetItem::new(t("Copy"), move || set_clipboard(body.clone())).icon(Icon::Copy)];
     if let Some(id) = message_id {
         let (a, b, c) = (id.clone(), id.clone(), id);
@@ -242,7 +266,7 @@ fn message_sheet(item: Memo<Option<Item>>) {
     show_sheet(None, items);
 }
 
-/// Rewind from a user message (Paseo's message menu).
+/// Rewind from a user message (the message menu).
 fn user_actions(item: Memo<Option<Item>>) -> View {
     let id = computed(move || match item.get() {
         Some(Item::User { message_id: Some(id), .. }) => Some(id),
@@ -872,14 +896,20 @@ fn thinking(running: Memo<bool>) -> impl IntoElement {
     view().child(dynamic(move || {
         let label = state.get()?;
         Some(untracked(move || {
+            // The words alone, breathing so they read as live.
+            let breath = animated_value(1.0);
+            let half = nsh_core::element::Timing::new(900.0, Easing::EaseInOut);
+            Animation::sequence([Animation::timing(&breath, 0.45, half.clone()), Animation::timing(&breath, 1.0, half)])
+                .looped(None)
+                .start();
             view()
                 .w_full()
                 .max_w(px(CONTENT_MAX_WIDTH + 2.0 * S6))
                 .self_center()
-                // The rows' own inset, so the mark lines up with the text.
+                // The rows' own inset, so the words line up with the text.
                 .px(px(S6))
                 .py(px(S3))
-                .child(working(label))
+                .child(text(label).text_size(px(TEXT_SM)).text_color(FG_MUTED).bind_opacity(&breath))
                 .into_element()
         }))
     }))

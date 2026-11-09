@@ -5,7 +5,6 @@ import { expect, open, test } from "nsh/test";
 
 test("shows the sidebar and its entry points", async () => {
   const app = await open(".", { width: 1100, height: 760 });
-  expect(app.texts()).toContain("Sophon");
   expect(app.texts()).toContain("Add project");
   expect(app.texts()).toContain("New workspace");
 });

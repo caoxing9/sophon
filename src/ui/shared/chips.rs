@@ -37,13 +37,14 @@ fn attr<'a>(node: &'a Node, name: &str) -> &'a str {
 
 /// A chip's box: a little under the line's height (centred on its x height,
 /// it then reaches no further than the text), the accent faint around and
-/// under it.
+/// under it, a little apart from the text after it.
 fn chip_box(el: nsh_base::ButtonElement) -> nsh_base::ButtonElement {
     el.flex_row()
         .items_center()
         .gap(px(4.0))
         .h(px(18.0))
-        .mx(px(1.0))
+        .ml(px(1.0))
+        .mr(px(4.0))
         .rounded(px(R_MD))
         .border_1()
         .border_color(tint(ACCENT, 0.18))
@@ -66,9 +67,14 @@ impl NodeView for AttachmentView {
             computed(move || !image && store::pending_file(&id).is_none_or(|f| f.uploading()))
         };
         let fade = animated_value(if uploading.get_untracked() { 0.5 } else { 1.0 });
+        // Only a change animates: the chip is made again with each edit of
+        // its line, and starting the fade then would only cost a frame.
+        let was = std::cell::Cell::new(uploading.get_untracked());
         effect(move || {
-            let to = if uploading.get() { 0.5 } else { 1.0 };
-            fade.timing(to, 180.0, Easing::EaseOut);
+            let now = uploading.get();
+            if was.replace(now) != now {
+                fade.timing(if now { 0.5 } else { 1.0 }, 180.0, Easing::EaseOut);
+            }
         });
         let lead = if image {
             match thumbnail(&id) {
@@ -108,8 +114,9 @@ impl NodeView for MentionView {
             .items_center()
             .gap(px(3.0))
             .h(px(18.0))
-            .mx(px(1.0))
-            .px(px(5.0))
+            .ml(px(1.0))
+            .mr(px(4.0))
+                .px(px(5.0))
             .rounded(px(R_MD))
             .border_1()
             .border_color(tint(ACCENT, 0.18))
@@ -126,20 +133,44 @@ fn image_el(uri: SharedString) -> nsh_core::element::Image {
 }
 
 thread_local! {
-    /// Pending images' data URIs by id, made once: a chip renders again with
-    /// each edit of its line, and the image cache keys on the URI.
+    /// The chips' thumbnails by image id, made once. A chip is made again
+    /// with each edit of its line, and an image source's `data:` URI is
+    /// decoded and hashed each time it is set: the screenshot itself (a
+    /// few MB) made every keystroke take ~90 ms, a 42 px thumbnail (a few
+    /// KB) takes nothing.
     static URIS: RefCell<HashMap<String, SharedString>> = RefCell::new(HashMap::new());
 }
 
-/// The pending image `id`'s data URI.
+/// The side of a chip's thumbnail in pixels: 14 pt at 3x.
+const THUMB_PX: u32 = 42;
+
+/// The pending image `id`'s chip thumbnail (the image itself when it does
+/// not decode).
 fn thumbnail(id: &str) -> Option<SharedString> {
     if let Some(uri) = URIS.with_borrow(|m| m.get(id).cloned()) {
         return Some(uri);
     }
     let img = store::pending_image(id)?;
-    let uri = SharedString::from(format!("data:{};base64,{}", img.mime, img.data));
+    let uri = SharedString::from(small(&img.data).unwrap_or_else(|| format!("data:{};base64,{}", img.mime, img.data)));
     URIS.with_borrow_mut(|m| m.insert(id.to_owned(), uri.clone()));
     Some(uri)
+}
+
+/// The image (base64) filling a `THUMB_PX` square, as a PNG data URI.
+fn small(data: &str) -> Option<String> {
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let bytes = b64.decode(data).ok()?;
+    let thumb = image::load_from_memory(&bytes).ok()?.resize_to_fill(THUMB_PX, THUMB_PX, image::imageops::FilterType::Triangle);
+    let mut png = std::io::Cursor::new(Vec::new());
+    thumb.write_to(&mut png, image::ImageFormat::Png).ok()?;
+    Some(format!("data:image/png;base64,{}", b64.encode(png.into_inner())))
+}
+
+/// The pending image `id` at full size, for its preview.
+fn full_image(id: &str) -> Option<SharedString> {
+    let img = store::pending_image(id)?;
+    Some(SharedString::from(format!("data:{};base64,{}", img.mime, img.data)))
 }
 
 /// Forgets the data URIs of images no composer holds any more.
@@ -213,7 +244,7 @@ fn backdrop(alpha: f32) -> nsh_base::ButtonElement {
 fn image_preview(id: &str, name: String) -> impl IntoElement {
     let grow = animated_value(0.94);
     grow.spring(1.0, Spring { stiffness: 380.0, damping: 30.0, ..Spring::default() });
-    let uri = thumbnail(id);
+    let uri = full_image(id);
     dialog().animation(ModalAnimation::Fade).on_cancel(close_preview).flex_1().child(
         view()
             .flex_1()
@@ -323,7 +354,7 @@ fn file_sheet(composer: String, id: String) {
 }
 
 /// A size for people: bytes, KB or MB.
-fn format_size(bytes: usize) -> String {
+pub(crate) fn format_size(bytes: usize) -> String {
     match bytes {
         b if b < 1024 => format!("{b} B"),
         b if b < 1024 * 1024 => format!("{:.0} KB", b as f64 / 1024.0),

@@ -1,4 +1,4 @@
-//! A tool call's detail, laid out by what the call was (Paseo's tool
+//! A tool call's detail, laid out by what the call was (the tool
 //! detail types): a command and its output, a file and its diff, a search
 //! and what it found, a page and what it returned. The desktop shows it
 //! under the call's row, the phone in a sheet; both use this.

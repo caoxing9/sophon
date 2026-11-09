@@ -1,4 +1,4 @@
-//! The New workspace screen, as Paseo's: a hero title, the project and
+//! The New workspace screen: a hero title, the project and
 //! isolation pickers, and the composer with its agent controls; one request
 //! makes the workspace and starts its first agent.
 
@@ -42,7 +42,7 @@ pub(crate) fn new_workspace(compact: bool) -> impl IntoElement {
         })
         .child(
             view().flex_1().justify_center().px(px(S8)).pb(px(S8 * 2.0)).child(
-                // One column for everything, as Paseo's: the title, the
+                // One column for everything: the title, the
                 // pickers, the composer and what is under it share edges.
                 view()
                     .w_full()
