@@ -23,7 +23,7 @@ env:
 jobs:
   nsh:
     name: nsh CLI
-    runs-on: macos-15
+    runs-on: macos-26
     outputs:
       rev: ${{ steps.nsh.outputs.rev }}
     steps:
@@ -46,7 +46,7 @@ jobs:
   check:
     name: Check and Rust tests
     needs: nsh
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
@@ -61,7 +61,7 @@ jobs:
   ui:
     name: UI tests
     needs: nsh
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
@@ -74,7 +74,7 @@ jobs:
   macos:
     name: Package macOS
     needs: nsh
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
@@ -91,7 +91,7 @@ jobs:
   ios:
     name: Package iOS simulator
     needs: nsh
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup

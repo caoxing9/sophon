@@ -14,6 +14,12 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: The newest Xcode (the newest SDKs)
+      shell: bash
+      run: |
+        X=$(ls -d /Applications/Xcode_*.app | grep -iv beta | sort -V | tail -n 1)
+        sudo xcode-select -s "$X"
+        xcodebuild -version
     - name: Temporary files
       shell: bash
       run: |

@@ -27,13 +27,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15   # Apple silicon
+          - runner: macos-26   # Apple silicon
             arch: aarch64
-          - runner: macos-15-intel   # Intel
+          - runner: macos-26-intel   # Intel
             arch: x86_64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+      - name: The newest Xcode (the newest SDKs)
+        run: |
+          X=$(ls -d /Applications/Xcode_*.app | grep -iv beta | sort -V | tail -n 1)
+          sudo xcode-select -s "$X"
+          xcodebuild -version
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -65,12 +70,17 @@ jobs:
             .nsh/out/*.dmg
 
   ios:
-    runs-on: macos-15
+    runs-on: macos-26
     env:
       HAS_SIGNING: ${{ secrets.IOS_CERT_P12 != '' && secrets.IOS_PROFILE != '' }}
       HAS_ASC: ${{ secrets.ASC_KEY_P8 != '' }}
     steps:
       - uses: actions/checkout@v4
+      - name: The newest Xcode (the newest SDKs)
+        run: |
+          X=$(ls -d /Applications/Xcode_*.app | grep -iv beta | sort -V | tail -n 1)
+          sudo xcode-select -s "$X"
+          xcodebuild -version
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-ios, aarch64-apple-ios-sim
@@ -135,7 +145,7 @@ jobs:
 
   release:
     needs: [macos, ios]
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
         with:
