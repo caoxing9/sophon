@@ -113,7 +113,9 @@ fn host_body() -> View {
                                 match conn.get() {
                                     Conn::Starting | Conn::Connecting(_) => match name { Some(n) => tf("Connecting to {}…", &[&n]), None => t("Connecting…").to_owned() },
                                     Conn::Connected { hostname, .. } => name.unwrap_or(if hostname.is_empty() { t("This Mac").into() } else { hostname }),
-                                    Conn::Down(_) => tf("{} offline", &[&name.unwrap_or_else(|| t("Host").into())]),
+                                    // This Mac's service is being started, not offline.
+                                    Conn::Down(_) if name.is_none() && store::service_start_error().is_none() => t("Starting the service…").to_owned(),
+                                    Conn::Down(_) => tf("{} offline", &[&name.unwrap_or_else(|| t("This Mac").into())]),
                                 }
                             })
                             .text_size(px(TEXT_BASE))
@@ -150,10 +152,16 @@ fn nav_item(
 
 fn empty_list() -> impl IntoElement {
     let conn = computed(store::conn);
-    let down = computed(move || matches!(conn.get(), Conn::Down(_)));
+    let failed = computed(store::service_start_error);
+    // This Mac's service starts on its own: a button only when that failed.
+    let retry = computed(move || matches!(conn.get(), Conn::Down(_)) && store::current_host().is_none() && failed.get().is_some());
     view().flex_1().px(px(S4)).pt(px(S4)).gap(px(S3)).items_start().child(
         text(move || match conn.get() {
-            Conn::Down(_) => t("The Sophon service isn't running on this Mac").to_owned(),
+            Conn::Down(_) if store::current_host().is_some() => String::new(),
+            Conn::Down(_) => match failed.get() {
+                Some(e) => tf("The service on this Mac did not start: {}", &[&e]),
+                None => t("Starting the service…").to_owned(),
+            },
             Conn::Connected { .. } => t("No projects yet").to_owned(),
             _ => String::new(),
         })
@@ -161,12 +169,12 @@ fn empty_list() -> impl IntoElement {
         .line_height(px(18.0))
         .text_color(FG_MUTED),
     )
-    .child(when(down, || {
+    .child(when(retry, || {
         btn(
-            move || -> SharedString { if store::service_starting() { t("Starting the service…").into() } else { t("Start service").into() } },
-            Variant::Primary,
+            move || -> SharedString { if store::service_starting() { t("Starting the service…").into() } else { t("Try again").into() } },
+            Variant::Secondary,
             Sz::Sm,
-            Some(Icon::Play),
+            Some(Icon::RotateCw),
             store::start_service,
         )
     }))

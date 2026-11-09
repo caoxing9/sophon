@@ -1803,6 +1803,33 @@ pub(crate) fn service_starting() -> bool {
     global::<Starting>().with(|s| s.0)
 }
 
+/// The service's start this run: tried on its own once the connection to
+/// this Mac's service fails (the app starts it, as a Mac app starts what it
+/// needs), and why it failed, if it did.
+#[derive(Clone, Default, PartialEq)]
+struct AutoStart {
+    tried: bool,
+    error: Option<String>,
+}
+
+/// Why this Mac's service could not be started, if starting it failed.
+pub(crate) fn service_start_error() -> Option<String> {
+    global::<AutoStart>().with(|a| a.error.clone())
+}
+
+/// This Mac's service is down: start it, once a run (a service stopped on
+/// purpose afterwards stays stopped; Start service starts it again).
+fn auto_start_service() {
+    if crate::ui::kit::MOBILE || cfg!(target_arch = "wasm32") || current_host().is_some() {
+        return;
+    }
+    if global::<AutoStart>().with_untracked(|a| a.tried) {
+        return;
+    }
+    global::<AutoStart>().update(|a| a.tried = true);
+    start_service();
+}
+
 /// Starts the agent service on this Mac; the connection, which retries on
 /// its own, picks it up.
 pub(crate) fn start_service() {
@@ -1810,9 +1837,10 @@ pub(crate) fn start_service() {
         return;
     }
     let Some(cli) = service_cli() else {
-        notify(crate::i18n::tf("Couldn't start the service: {}", &["paseo CLI not found"]));
+        global::<AutoStart>().update(|a| a.error = Some(t("The service is not installed on this Mac").into()));
         return;
     };
+    global::<AutoStart>().update(|a| a.error = None);
     global::<Starting>().set(Starting(true));
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Result<(), String>>();
     std::thread::spawn(move || {
@@ -1827,7 +1855,7 @@ pub(crate) fn start_service() {
         let result = rx.recv().await;
         global::<Starting>().set(Starting(false));
         if let Some(Err(e)) = result {
-            notify(crate::i18n::tf("Couldn't start the service: {}", &[&e]));
+            global::<AutoStart>().update(|a| a.error = Some(e));
         }
     });
 }
@@ -2848,7 +2876,10 @@ pub(crate) fn apply(event: Event) {
                 notify(t("The service restarted").into());
             }
         }
-        Event::Disconnected { reason } => global::<ConnState>().update(|c| c.0 = Conn::Down(reason)),
+        Event::Disconnected { reason } => {
+            global::<ConnState>().update(|c| c.0 = Conn::Down(reason));
+            auto_start_service();
+        }
         Event::ProjectsReset(list) => global::<Projects>().update(|p| p.0 = list),
         Event::ProjectUpsert(project) => global::<Projects>().update(|p| {
             p.0.retain(|x| x.id != project.id);
