@@ -52,7 +52,7 @@ fn host_line() -> impl IntoElement {
                     }));
                 for h in hosts.clone() {
                     let id = h.id.clone();
-                    m = m.child(menu_row(h.name.clone(), Some(Icon::Server), None, current.as_deref() == Some(h.id.as_str()), move || {
+                    m = m.child(menu_row(h.label(), Some(Icon::Server), None, current.as_deref() == Some(h.id.as_str()), move || {
                         store::switch_host(Some(id.clone()))
                     }));
                 }
@@ -63,7 +63,12 @@ fn host_line() -> impl IntoElement {
                     }))
                     .child(menu_row(t("Pair a device…"), Some(Icon::Link2), None, false, store::open_pairing));
                 if let Some(cur) = store::current_host() {
-                    m = m.child(menu_row_danger(t("Remove this host"), Icon::Trash2, move || store::remove_host(&cur.id)));
+                    let (id, name) = (cur.id.clone(), cur.label());
+                    m = m
+                        .child(menu_row(t("Rename this host…"), Some(Icon::Pencil), None, false, move || {
+                            store::open_modal(store::Modal::RenameHost { id: id.clone(), name: name.clone() })
+                        }))
+                        .child(menu_row_danger(t("Remove this host"), Icon::Trash2, move || store::remove_host(&cur.id)));
                 }
                 m.into_element()
             }))
@@ -72,7 +77,7 @@ fn host_line() -> impl IntoElement {
 
 fn host_body() -> View {
     let conn = computed(store::conn);
-    let remote = computed(|| store::current_host().map(|h| h.name));
+    let remote = computed(|| store::current_host().map(|h| h.label()));
     view()
         .flex_row()
         .items_center()
@@ -87,12 +92,15 @@ fn host_body() -> View {
         .hover(|s| s.bg(highlight()))
         .child(
             // The host alone: the mark beside it says whose app this is.
+            // A long name ends in an ellipsis inside the row.
             view()
                 .flex_1()
+                .min_w(px(0.0))
                 .child(
                     view()
                         .flex_row()
                         .items_center()
+                        .min_w(px(0.0))
                         .gap(px(5.0))
                         .child(status_dot(move || match conn.get() {
                             Conn::Connected { .. } => Status::Done,
@@ -110,7 +118,9 @@ fn host_body() -> View {
                             })
                             .text_size(px(TEXT_BASE))
                             .font_weight(FontWeight(500))
-                            .number_of_lines(1),
+                            .number_of_lines(1)
+                            .flex_shrink(1.0)
+                            .min_w(px(0.0)),
                         ),
                 ),
         )

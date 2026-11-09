@@ -115,7 +115,7 @@ fn saved_hosts() -> impl IntoElement {
                         .when(i > 0, |v| v.border_t_1().border_color(BORDER))
                         .active(|s| s.bg(highlight()))
                         .child(icon(Icon::Server, 18.0).text_color(FG_MUTED))
-                        .child(text(h.name.clone()).text_size(px(TEXT_BASE)).number_of_lines(1).flex_1())
+                        .child(text(h.label()).text_size(px(TEXT_BASE)).number_of_lines(1).flex_1())
                         .child(icon(Icon::ChevronRight, 16.0).text_color(FG_FAINT)),
                 );
             }

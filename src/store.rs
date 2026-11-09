@@ -679,6 +679,7 @@ pub(crate) enum SendBehavior {
 pub(crate) enum Modal {
     RenameWorkspace { id: String, name: String },
     RenameAgent { id: String, name: String },
+    RenameHost { id: String, name: String },
     ArchiveWorkspace { id: String, name: String },
     Commit,
     Palette,
@@ -1339,6 +1340,66 @@ pub(crate) struct HostProfile {
     pub(crate) password: Option<String>,
 }
 
+impl HostProfile {
+    /// What the host is called: its name, or, while it has none of its own
+    /// (an address pasted with no name; earlier versions stored the address
+    /// as the name, a pairing link's keys and token included), the address's
+    /// host, never the link.
+    pub(crate) fn label(&self) -> String {
+        if !self.name.trim().is_empty() && !is_address(&self.name) {
+            return self.name.trim().to_owned();
+        }
+        address_label(&self.url)
+    }
+
+    /// Whether the host has a name of its own.
+    pub(crate) fn named(&self) -> bool {
+        !self.name.trim().is_empty() && !is_address(&self.name)
+    }
+}
+
+/// A pasted address rather than a name.
+fn is_address(text: &str) -> bool {
+    let t = text.trim();
+    t.contains("://") || t.contains("#offer=") || t.contains("token=")
+}
+
+/// A short label for a daemon's address: a pairing link's LAN address (no
+/// port), an URL's host, else "Remote host" (a link through the relay only).
+fn address_label(url: &str) -> String {
+    let url = url.trim();
+    if let Some(query) = url.strip_prefix("sophon://pair?") {
+        if let Some(lan) = query.split('&').find_map(|kv| kv.strip_prefix("lan=")) {
+            let host = lan.rsplit_once(':').map(|(h, _)| h).unwrap_or(lan);
+            if !host.is_empty() {
+                return host.to_owned();
+            }
+        }
+        return t("Remote host").to_owned();
+    }
+    if url.contains("#offer=") {
+        return t("Remote host").to_owned();
+    }
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let host = host.rsplit_once(':').filter(|(_, p)| p.chars().all(|c| c.is_ascii_digit())).map(|(h, _)| h).unwrap_or(host);
+    if host.is_empty() { t("Remote host").to_owned() } else { host.to_owned() }
+}
+
+/// Renames saved host `id`.
+pub(crate) fn rename_host(id: &str, name: &str) {
+    let name = name.trim();
+    if name.is_empty() {
+        return;
+    }
+    global::<Hosts>().update(|h| {
+        if let Some(p) = h.list.iter_mut().find(|p| p.id == id) {
+            p.name = name.to_owned();
+        }
+    });
+    save_hosts();
+}
+
 #[derive(Clone, Default)]
 struct Hosts {
     list: Vec<HostProfile>,
@@ -1513,7 +1574,8 @@ pub(crate) fn add_host(name: &str, url: &str, password: &str) {
     let id = format!("host_{}", uuid::Uuid::new_v4().simple());
     let profile = HostProfile {
         id: id.clone(),
-        name: if name.trim().is_empty() { url.trim().to_owned() } else { name.trim().to_owned() },
+        // No name: the host's own once connected (see `Event::Connected`).
+        name: name.trim().to_owned(),
         url: url.trim().to_owned(),
         password: Some(password.to_owned()).filter(|p| !p.is_empty()),
     };
@@ -2692,6 +2754,12 @@ pub(crate) fn apply(event: Event) {
             }
         }),
         Event::Connected { hostname, version } => {
+            // A saved host with no name of its own takes the computer's.
+            if !hostname.trim().is_empty() {
+                if let Some(h) = current_host().filter(|h| !h.named()) {
+                    rename_host(&h.id, &hostname);
+                }
+            }
             global::<ConnState>().update(|c| {
                 c.0 = Conn::Connected { hostname, version, url: c.1.clone() };
             });

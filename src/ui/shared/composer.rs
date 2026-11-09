@@ -324,7 +324,7 @@ fn settings_summary(live: bool) -> String {
     let model = c
         .model
         .as_deref()
-        .and_then(|m| provider.as_ref().and_then(|p| p.model(m)).map(|m| m.label.clone()))
+        .and_then(|m| provider.as_ref().and_then(|p| p.model(m)).map(|m| m.label.clone()).or(Some(model_name(m))))
         .or_else(|| provider.as_ref().map(|p| p.label.clone()))
         .unwrap_or_default();
     let thinking = thinking_options(live);
@@ -340,7 +340,7 @@ fn options_sheet(live: bool) {
     let model = c
         .model
         .as_deref()
-        .and_then(|m| provider.as_ref().and_then(|p| p.model(m)).map(|m| m.label.clone()))
+        .and_then(|m| provider.as_ref().and_then(|p| p.model(m)).map(|m| m.label.clone()).or(Some(model_name(m))))
         .or_else(|| provider.as_ref().map(|p| p.label.clone()))
         .unwrap_or_default();
     let mut items = vec![SheetItem::new(tf("Model · {}", &[&model]), move || model_sheet(live)).icon(Icon::Bot)];
@@ -567,6 +567,24 @@ fn disc(running: Memo<bool>, busy: Memo<bool>, empty: Memo<bool>, submit: impl F
     }))
 }
 
+/// A model the provider does not list (a default the daemon keeps, from
+/// another Claude Code version) by a short name: `claude-opus-5-5` as
+/// `Opus 5.5`; any other id as it is.
+fn model_name(id: &str) -> String {
+    let Some(rest) = id.strip_prefix("claude-") else { return id.to_owned() };
+    let mut parts = rest.split('-');
+    let Some(family) = parts.next().filter(|f| !f.is_empty() && f.chars().all(|c| c.is_ascii_alphabetic())) else {
+        return id.to_owned();
+    };
+    let version: Vec<&str> = parts.take_while(|p| p.len() <= 2 && p.chars().all(|c| c.is_ascii_digit())).collect();
+    if version.is_empty() {
+        return id.to_owned();
+    }
+    let mut name = family.to_owned();
+    name[..1].make_ascii_uppercase();
+    format!("{name} {}", version.join("."))
+}
+
 fn model_picker(live: bool) -> impl IntoElement {
     let label = computed(move || {
         let c = store::controls(live);
@@ -575,7 +593,7 @@ fn model_picker(live: bool) -> impl IntoElement {
         let m_label = c
             .model
             .as_deref()
-            .and_then(|m| provider.as_ref().and_then(|p| p.model(m)).map(|m| m.label.clone()).or(Some(m.to_owned())));
+            .and_then(|m| provider.as_ref().and_then(|p| p.model(m)).map(|m| m.label.clone()).or(Some(model_name(m))));
         match m_label {
             Some(m) => format!("{p_label} · {m}"),
             None => p_label,
@@ -1074,5 +1092,16 @@ mod tests {
     fn decodes_file_url_paths() {
         assert_eq!(super::percent_decode("/Users/a/My%20Shot%E5%9B%BE.png"), "/Users/a/My Shot图.png");
         assert_eq!(super::percent_decode("/tmp/100%"), "/tmp/100%");
+    }
+}
+
+#[cfg(test)]
+mod model_name_tests {
+    #[test]
+    fn a_claude_id_reads_as_its_family_and_version() {
+        assert_eq!(super::model_name("claude-opus-5-5"), "Opus 5.5");
+        assert_eq!(super::model_name("claude-haiku-4-5-20251001"), "Haiku 4.5");
+        assert_eq!(super::model_name("claude-sonnet-5"), "Sonnet 5");
+        assert_eq!(super::model_name("gpt-6-sol"), "gpt-6-sol");
     }
 }

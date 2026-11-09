@@ -222,7 +222,7 @@ pub(crate) fn dropup_or_down_outline() -> impl IntoElement {
 fn context_bar() -> impl IntoElement {
     let ws = computed(store::current_workspace);
     let host = computed(|| {
-        let named = store::current_host().map(|h| h.name);
+        let named = store::current_host().map(|h| h.label());
         match store::conn() {
             store::Conn::Connected { hostname, .. } => named.unwrap_or(if hostname.is_empty() { t("This Mac").into() } else { hostname }),
             _ => named.unwrap_or_else(|| t("This Mac").into()),
@@ -241,7 +241,14 @@ fn context_bar() -> impl IntoElement {
             .min_w(px(0.0))
             .flex_shrink(1.0)
             .child(icon(glyph, 14.0).text_color(FG_MUTED))
-            .child(text(move || label.get()).text_size(px(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1))
+            .child(
+                text(move || label.get())
+                    .text_size(px(TEXT_SM))
+                    .text_color(FG_MUTED)
+                    .number_of_lines(1)
+                    .flex_shrink(1.0)
+                    .min_w(px(0.0)),
+            )
     };
     let divider = || view().w(px(1.0)).h(px(14.0)).bg(BORDER);
     view()
@@ -260,6 +267,8 @@ fn context_bar() -> impl IntoElement {
         .bg(tint(SURFACE1, 0.7))
         .border_1()
         .border_color(tint(BORDER, 0.7))
+        // Nothing past its edge: a long name ends in an ellipsis.
+        .overflow_hidden()
         .child(item(Icon::Monitor, host))
         .child(divider())
         .child(item(Icon::Folder, folder))

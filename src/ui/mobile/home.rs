@@ -136,7 +136,7 @@ fn host_chip() -> impl IntoElement {
     let conn = computed(store::conn);
     let name = computed(move || match conn.get() {
         Conn::Connected { hostname, .. } if !hostname.is_empty() => hostname,
-        _ => store::current_host().map(|h| h.name).unwrap_or_default(),
+        _ => store::current_host().map(|h| h.label()).unwrap_or_default(),
     });
     button()
         .on_press(move || {
@@ -151,7 +151,7 @@ fn host_chip() -> impl IntoElement {
                 .map(|h| {
                     let on = current.as_deref() == Some(h.id.as_str());
                     let id = h.id.clone();
-                    SheetItem::new(h.name.clone(), move || store::switch_host(Some(id.clone()))).icon(Icon::Server).checked(on)
+                    SheetItem::new(h.label(), move || store::switch_host(Some(id.clone()))).icon(Icon::Server).checked(on)
                 })
                 .collect();
             items.push(SheetItem::new(t("Pair another computer"), || store::switch_host(None)).icon(Icon::Plus));

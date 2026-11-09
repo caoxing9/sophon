@@ -86,6 +86,9 @@ fn body(m: Modal) -> View {
         Modal::RenameAgent { id, name } => rename(t("Rename agent"), name, move |v| {
             store::rename_agent(&id, v);
         }),
+        Modal::RenameHost { id, name } => rename(t("Rename host"), name, move |v| {
+            store::rename_host(&id, v);
+        }),
         Modal::Commit => commit(),
         Modal::Palette => view(),
         Modal::NewSchedule => new_schedule(),
