@@ -581,6 +581,13 @@ pub(crate) fn explorer_tab() -> ExplorerTab {
 }
 
 pub(crate) fn set_explorer_tab(tab: ExplorerTab) {
+    // The pages slide to it (and the switch's thumb with them), whoever
+    // asks: the switch, Browse files, the diff count over the composer.
+    animate_layout(nsh_core::LayoutAnimation {
+        create: None,
+        update: Some(nsh_core::LayoutTransition::new(nsh_core::LayoutCurve::Spring { damping: 0.86 }, 320.0)),
+        delete: None,
+    });
     global::<Explorer>().update(|e| e.tab = tab);
     if tab == ExplorerTab::Commits {
         load_commits();

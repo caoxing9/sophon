@@ -37,14 +37,30 @@ pub(crate) fn explorer() -> View {
                 store::set_explorer_tab,
             )),
         )
-        .child(dynamic(move || {
-            let t = tab.get();
-            Some(untracked(move || match t {
-                ExplorerTab::Changes => changes_view().into_element(),
-                ExplorerTab::Files => files_view().into_element(),
-                ExplorerTab::Commits => commits_view().into_element(),
-            }))
-        }))
+        // The three pages side by side, the row sliding to the picked one
+        // with the thumb above, as a pager does; each keeps its scroll.
+        .child(
+            view().flex_1().overflow_hidden().child(
+                view()
+                    .flex_1()
+                    .flex_row()
+                    .w(px(EXPLORER_WIDTH * 3.0))
+                    // Moved by its frame, not a transform, so the pages
+                    // coming in are laid out where they show; the switch's
+                    // layout spring (the thumb's) carries it.
+                    .ml(move || {
+                        let i = match tab.get() {
+                            ExplorerTab::Changes => 0.0,
+                            ExplorerTab::Files => 1.0,
+                            ExplorerTab::Commits => 2.0,
+                        };
+                        Length::from(px(-i * EXPLORER_WIDTH))
+                    })
+                    .child(view().w(px(EXPLORER_WIDTH)).child(changes_view().flex_1()))
+                    .child(view().w(px(EXPLORER_WIDTH)).child(files_view().flex_1()))
+                    .child(view().w(px(EXPLORER_WIDTH)).child(commits_view().flex_1())),
+            ),
+        )
 }
 
 fn files_view() -> View {
@@ -53,7 +69,7 @@ fn files_view() -> View {
         let empty = rows.with(Vec::is_empty);
         Some(untracked(move || {
             if empty {
-                return empty_note(Icon::RotateCw, t("Loading files…").into()).into_element();
+                return loading_state().into_element();
             }
             virtual_list(move || rows.with(Vec::len), move |at: nsh_core::element::Position| {
                 let row = computed(move || rows.with(|r| r.get(at.index()).cloned()));
@@ -179,13 +195,13 @@ fn changes_view() -> View {
             let (loaded, empty, error) = changes.with(|c| (c.loaded, c.files.is_empty(), c.error.clone()));
             Some(untracked(move || {
                 if let Some(e) = error.clone() {
-                    return empty_note(Icon::CircleAlert, e).into_element();
+                    return git_error(e).into_element();
                 }
                 if !loaded {
-                    return empty_note(Icon::RotateCw, t("Loading changes…").into()).into_element();
+                    return loading_state().into_element();
                 }
                 if empty {
-                    return empty_note(Icon::CircleCheck, t("No uncommitted changes").into()).into_element();
+                    return empty_state(Icon::CircleCheck, t("No uncommitted changes"), t("The working tree is clean")).into_element();
                 }
                 let count = move || changes.with(|c| c.files.len());
                 view()
@@ -227,6 +243,55 @@ fn empty_note(glyph: Icon, message: String) -> View {
         .p(px(S4))
         .child(icon(glyph, 15.0).text_color(FG_FAINT))
         .child(text(message).text_size(px(TEXT_SM)).text_color(FG_MUTED).flex_1())
+}
+
+/// An empty panel's message, centered: a glyph on a soft disc, a title and
+/// a line under it.
+fn empty_state(glyph: Icon, title: &'static str, detail: &'static str) -> View {
+    view()
+        .flex_1()
+        .items_center()
+        .justify_center()
+        .gap(px(S2))
+        .px(px(S6))
+        .pb(px(48.0))
+        .child(
+            view()
+                .w(px(44.0))
+                .h(px(44.0))
+                .mb(px(S1))
+                .rounded(px(R_FULL))
+                .items_center()
+                .justify_center()
+                .bg(SURFACE2)
+                .child(icon(glyph, 20.0).text_color(FG_MUTED)),
+        )
+        .child(text(title).text_size(px(TEXT_BASE)).font_weight(FontWeight(600)).text_color(FG).text_center())
+        .child(text(detail).text_size(px(TEXT_SM)).line_height(px(19.0)).text_color(FG_MUTED).text_center())
+}
+
+/// Git could not answer: a folder outside Git says so in words (its files
+/// still browse), anything else shows the message.
+fn git_error(e: String) -> View {
+    if e.to_lowercase().contains("not a git repository") {
+        return empty_state(Icon::GitBranch, t("Not a Git repository"), t("Changes and commits show for folders under Git; the files are still here"))
+            .child(view().mt(px(S2)).child(btn(t("Browse files"), Variant::Secondary, Sz::Sm, Some(Icon::FolderTree), || {
+                store::set_explorer_tab(ExplorerTab::Files)
+            })));
+    }
+    view()
+        .flex_1()
+        .items_center()
+        .justify_center()
+        .gap(px(S2))
+        .px(px(S6))
+        .child(icon(Icon::CircleAlert, 20.0).text_color(DANGER))
+        .child(text(t("Couldn't read Git")).text_size(px(TEXT_BASE)).font_weight(FontWeight(600)).text_color(FG))
+        .child(text(e).text_size(px(TEXT_SM)).text_color(FG_MUTED).text_center().selectable(true))
+}
+
+fn loading_state() -> View {
+    view().flex_1().items_center().justify_center().pb(px(48.0)).child(eclipse(28.0))
 }
 
 fn split_path(path: &str) -> (String, String) {
@@ -619,9 +684,9 @@ fn commits_view() -> View {
     view().flex_1().child(dynamic(move || {
         let state = data.get();
         Some(untracked(move || match state.clone() {
-            None => empty_note(Icon::RotateCw, t("Loading commits…").into()).into_element(),
-            Some((_, Some(e))) => empty_note(Icon::CircleAlert, e).into_element(),
-            Some((list, None)) if list.is_empty() => empty_note(Icon::GitCommitHorizontal, t("No commits yet").into()).into_element(),
+            None => loading_state().into_element(),
+            Some((_, Some(e))) => git_error(e).into_element(),
+            Some((list, None)) if list.is_empty() => empty_state(Icon::GitCommitHorizontal, t("No commits yet"), t("Commits show here once there are some")).into_element(),
             Some((list, None)) => {
                 let mut col = view().gap(px(2.0)).py(px(S1));
                 for c in list {
