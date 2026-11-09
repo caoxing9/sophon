@@ -2907,25 +2907,39 @@ pub(crate) fn request_quit(hint: &'static str) {
     });
 }
 
-/// ⌘W: closes what is open, innermost first: a file, diff or sub-agent tab
-/// goes back to the conversation; a conversation or a screen goes back
-/// home; at home, it asks twice and quits.
+/// Whether the keyboard is in the terminal panel (⌘W then ends the
+/// terminal shown there, not a tab above).
+#[derive(Clone, Default)]
+struct TerminalFocus(bool);
+
+pub(crate) fn set_terminal_focused(on: bool) {
+    global::<TerminalFocus>().set(TerminalFocus(on));
+}
+
+/// ⌘W: closes the tab where the keyboard is, and nothing wider: the
+/// terminal shown in the panel when it has the focus; else a file, diff,
+/// sub-agent or new-chat tab (back to the conversation). A conversation
+/// itself, or a screen with no tabs, stays: quitting is ⌘Q's.
 pub(crate) fn close_current() {
     if modal().is_some() {
         close_modal();
         return;
     }
-    match screen() {
-        Screen::Workspace(_) => match tab() {
-            Tab::File(path) => close_file(&path),
-            Tab::Diff(_) | Tab::CommitDiff(..) | Tab::Subagent(..) => {
-                if let Some(w) = current_workspace() {
-                    open_workspace(&w.id);
-                }
+    let Screen::Workspace(_) = screen() else { return };
+    if terminal_panel_open() && global::<TerminalFocus>().with_untracked(|f| f.0) {
+        if let Some(id) = active_terminal() {
+            kill_terminal(&id);
+        }
+        return;
+    }
+    match tab() {
+        Tab::File(path) => close_file(&path),
+        Tab::Subagent(parent, _) => open_tab(Tab::Agent(parent)),
+        Tab::Diff(_) | Tab::CommitDiff(..) | Tab::Draft => {
+            if let Some(w) = current_workspace() {
+                open_workspace(&w.id);
             }
-            Tab::Agent(_) | Tab::Draft => go_home(),
-        },
-        Screen::Home => request_quit("Press ⌘W again to quit Sophon"),
-        _ => go_home(),
+        }
+        Tab::Agent(_) => {}
     }
 }

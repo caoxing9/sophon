@@ -58,7 +58,13 @@ pub(crate) fn terminal_pane(id: String) -> impl IntoElement {
 /// it, and a top edge that drags its height. ⌃` shows and hides it.
 pub(crate) fn terminal_panel() -> impl IntoElement {
     let active = computed(store::active_terminal);
+    // Where the keyboard is decides what ⌘W closes.
+    let panel = element_ref();
+    panel.on_focus_in(|| store::set_terminal_focused(true));
+    panel.on_focus_out(|| store::set_terminal_focused(false));
+    cleanup(|| store::set_terminal_focused(false));
     view()
+        .element_ref(&panel)
         .flex_shrink_0()
         .h(move || Length::from(px(store::terminal_panel_height())))
         .border_t_1()

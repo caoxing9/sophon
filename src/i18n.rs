@@ -170,7 +170,6 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Update to {}", "更新到 {}"),
     ("New chat", "新对话"),
     ("Press ⌘Q again to quit Sophon", "再按一次 ⌘Q 退出 Sophon"),
-    ("Press ⌘W again to quit Sophon", "再按一次 ⌘W 退出 Sophon"),
     ("Settings…", "设置…"),
     ("Quit Sophon", "退出 Sophon"),
     ("File", "文件"),
