@@ -35,30 +35,29 @@ pub(crate) fn workspace(compact: bool) -> impl IntoElement {
     let fits = computed(move || !compact && window().width >= px(900.0));
     let show_explorer = computed(move || fits.get() && store::explorer_open());
     let bar = computed(nsh_core::element::desktop::title_bar);
-    // The explorer takes the window's whole height beside the workspace's
-    // column (header, tabs, pane, terminals), up into the title bar.
-    view()
+    // The workspace's column (header, tabs, pane) beside the explorer, which
+    // reaches up into the title bar; the terminals under both, the window's
+    // whole width, as wide output wants.
+    let top = view()
         .flex_1()
+        .min_h(px(0.0))
         .flex_row()
         .child(
             view()
                 .flex_1()
                 .min_w(px(0.0))
                 .child(header(compact, show_explorer))
-                .child(
-                    view().flex_1().child(tabs()).child(dynamic(move || {
-                        let pane = pane.get();
-                        Some(untracked(move || match pane.clone() {
-                            Pane::Draft => agent::draft_pane().into_element(),
-                            Pane::Agent => agent::agent_pane(false).into_element(),
-                            Pane::Diff(p) => explorer::diff_pane(p).into_element(),
-                            Pane::File(p) => file_pane::file_pane(p).into_element(),
-                            Pane::Subagent(parent, id) => timeline::subagent_pane(parent, id).into_element(),
-                            Pane::CommitDiff(sha, path) => explorer::commit_diff_pane(sha, path).into_element(),
-                        }))
+                .child(view().flex_1().child(tabs()).child(dynamic(move || {
+                    let pane = pane.get();
+                    Some(untracked(move || match pane.clone() {
+                        Pane::Draft => agent::draft_pane().into_element(),
+                        Pane::Agent => agent::agent_pane(false).into_element(),
+                        Pane::Diff(p) => explorer::diff_pane(p).into_element(),
+                        Pane::File(p) => file_pane::file_pane(p).into_element(),
+                        Pane::Subagent(parent, id) => timeline::subagent_pane(parent, id).into_element(),
+                        Pane::CommitDiff(sha, path) => explorer::commit_diff_pane(sha, path).into_element(),
                     }))
-                    .child(when(store::terminal_panel_open, terminal::terminal_panel)),
-                ),
+                }))),
         )
         .child(when(fits, move || {
             // Mounted while it fits; the toggle slides it in and out
@@ -72,7 +71,8 @@ pub(crate) fn workspace(compact: bool) -> impl IntoElement {
                 .opacity(move || if show_explorer.get() { 1.0_f32 } else { 0.0 })
                 .transition_opacity()
                 .child(explorer::explorer().flex_1())
-        }))
+        }));
+    view().flex_1().child(top).child(when(store::terminal_panel_open, terminal::terminal_panel))
 }
 
 fn header(compact: bool, explorer_shown: Memo<bool>) -> impl IntoElement {
