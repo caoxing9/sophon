@@ -2846,6 +2846,91 @@ mod tests {
 
     #[test]
     #[ignore]
+    fn agent_instance_add_and_remove_live() {
+        // The local daemon: an API-key instance (a fake key, never used)
+        // goes into its config, shows as a provider, then goes again.
+        use super::super::agents::{Base, KeyInstance, key_instance_patch, remove_patch};
+        const ID: &str = "sophon-live-test";
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let (ev_tx, mut ev_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+            tokio::spawn(run(ev_tx, cmd_rx));
+            loop {
+                if let Some(Event::Connected { .. }) = ev_rx.recv().await { break; }
+            }
+            let k = KeyInstance {
+                label: "Sophon live test".into(),
+                base: Base::Claude,
+                base_url: "https://example.invalid/anthropic".into(),
+                key: "not-a-key".into(),
+                models: vec![("test-model".into(), "Test Model".into())],
+                extra_env: vec![],
+                claude_dir: None,
+            };
+            let t0 = std::time::Instant::now();
+            cmd_tx.send(Command::SetConfig(key_instance_patch(ID, &k))).unwrap();
+            cmd_tx.send(Command::RefreshProviders).unwrap();
+            let shown = tokio::time::timeout(Duration::from_secs(30), async {
+                loop {
+                    if let Some(Event::Providers(list)) = ev_rx.recv().await {
+                        if let Some(p) = list.iter().find(|p| p.id == ID) {
+                            return (p.label.clone(), p.models.len(), p.status.clone());
+                        }
+                    }
+                }
+            })
+            .await;
+            println!("added: {shown:?} after {} ms", t0.elapsed().as_millis());
+            let t1 = std::time::Instant::now();
+            cmd_tx.send(Command::SetConfig(remove_patch(ID))).unwrap();
+            cmd_tx.send(Command::RefreshProviders).unwrap();
+            let gone = tokio::time::timeout(Duration::from_secs(30), async {
+                loop {
+                    if let Some(Event::Providers(list)) = ev_rx.recv().await {
+                        if !list.iter().any(|p| p.id == ID) { return; }
+                    }
+                }
+            })
+            .await;
+            println!("removed: {} after {} ms", gone.is_ok(), t1.elapsed().as_millis());
+            assert!(shown.is_ok(), "the instance never showed");
+            assert!(gone.is_ok(), "the instance never went");
+        });
+    }
+
+    #[test]
+    #[ignore]
+    fn agent_enable_toggle_live() {
+        // The local daemon: `pi` (off here) on, then off again.
+        use super::super::agents::enable_patch;
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let (ev_tx, mut ev_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+            tokio::spawn(run(ev_tx, cmd_rx));
+            loop {
+                if let Some(Event::Connected { .. }) = ev_rx.recv().await { break; }
+            }
+            for on in [true, false] {
+                cmd_tx.send(Command::SetConfig(enable_patch("pi", on))).unwrap();
+                cmd_tx.send(Command::RefreshProviders).unwrap();
+                let seen = tokio::time::timeout(Duration::from_secs(30), async {
+                    loop {
+                        if let Some(Event::Providers(list)) = ev_rx.recv().await {
+                            if list.iter().any(|p| p.id == "pi" && p.enabled == on) { return; }
+                        }
+                    }
+                })
+                .await;
+                println!("pi enabled={on}: {}", seen.is_ok());
+                assert!(seen.is_ok());
+            }
+        });
+    }
+
+    #[test]
+    #[ignore]
     fn upload_live() {
         // The local daemon; uploads a file and prints the attachment.
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();

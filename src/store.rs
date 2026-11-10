@@ -1156,6 +1156,22 @@ pub(crate) fn set_group_open(id: &str, open: bool) {
     global::<Timeline>().update(|t| {
         t.folds.insert(id.to_owned(), open);
     });
+    if open {
+        // At the end of the conversation the list keeps its end in place,
+        // so the calls push the summary up out of view: bring it back near
+        // the top once they are laid out, where it folds them again.
+        let id = id.to_owned();
+        set_timeout(std::time::Duration::from_millis(60), move || {
+            let row = untracked(display_rows).iter().position(|r| matches!(r, crate::fold::Row::Group(g) if g.id == id));
+            if let Some(row) = row {
+                TIMELINE_LIST.with_borrow(|l| {
+                    if let Some(list) = l {
+                        list.scroll_to_index(row as u32, nsh_core::geometry::Percentage(0.1), px(0.0), true);
+                    }
+                });
+            }
+        });
+    }
 }
 
 pub(crate) fn timeline_loaded() -> bool {
@@ -1714,6 +1730,14 @@ fn open_prompt_link(link: crate::prompt_link::PromptLink) {
         // Navigating now would be undone by restoring the last workspace
         // and by the first providers resetting the form.
         global::<PromptLinks>().update(|p| p.waiting = Some(link));
+        // A host with no agents never lists providers: open it anyway
+        // after a while rather than hold it for good.
+        set_timeout(std::time::Duration::from_secs(5), || {
+            prompt_links_known(|p| {
+                p.workspaces_known = true;
+                p.providers_known = true;
+            })
+        });
         return;
     }
     let current = untracked(|| current_workspace().map(|w| w.id));
