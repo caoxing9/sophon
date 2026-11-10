@@ -413,39 +413,68 @@ pub(crate) fn ambient() -> View {
         .child(glow(tint(ACCENT, 0.07), Some(260.0), Some(420.0), 520.0))
 }
 
-/// The mark, loading: the eclipse alone (no sky, no tile), its corona
-/// alive around a still moon. Two copies of the corona turn opposite ways
-/// at different speeds (9 s and 13 s a turn), the first also breathing
-/// (1.7 s): as their streamers cross, the light shifts unevenly, as a
-/// corona's does, never in one steady beat. All natively, animated values
-/// bound to rotation and opacity: no layout or engine work per frame.
+/// Loading: an eclipse passing, drawn rather than the icon's layers (no
+/// tile, no box, on light pages and dark): the sun, a disc of the accent;
+/// the moon, a disc of the page, sliding in from the left until it covers
+/// the sun; at totality the corona flares round it and fades; the moon
+/// slides on and the sun comes back. 2.4 s a pass, eased at both ends. All
+/// natively, animated values bound to translation, scale and opacity: no
+/// layout or engine work per frame.
 pub(crate) fn eclipse(size: f32) -> View {
-    let forward = animated_value(0.0);
-    let backward = animated_value(0.0);
-    let breath = animated_value(1.0);
-    Animation::timing(&forward, 360.0, nsh_core::element::Timing::new(9000.0, Easing::Linear)).looped(None).start();
-    Animation::timing(&backward, -360.0, nsh_core::element::Timing::new(13000.0, Easing::Linear)).looped(None).start();
-    let half = nsh_core::element::Timing::new(850.0, Easing::EaseInOut);
-    Animation::sequence([Animation::timing(&breath, 0.72, half.clone()), Animation::timing(&breath, 1.0, half)])
-        .looped(None)
-        .start();
-    let layer = move |asset: ImageAsset| image(asset).absolute().top(px(0.0)).left(px(0.0)).w(px(size)).h(px(size));
-    // On dark pages the eclipse stands on the page; on light ones in the
-    // icon's night tile, as the Dock shows it: a black moon alone on a
-    // light page reads as a blot.
-    view().w(px(size)).h(px(size)).flex_shrink_0().child(dynamic(move || {
-        let night = dark();
-        Some(untracked(move || {
-            view()
-                .w(px(size))
-                .h(px(size))
-                .when(!night, |v| v.rounded(px(size * 0.24)).overflow_hidden().child(layer(crate::LOADER_SKY)))
-                .child(layer(crate::LOADER_CORONA).bind_rotate(&forward).bind_opacity(&breath))
-                .child(layer(crate::LOADER_CORONA).bind_rotate(&backward).opacity(0.45))
-                .child(layer(crate::LOADER_MOON))
-                .into_element()
-        }))
-    }))
+    let disc = size * 0.62;
+    let travel = disc * 1.05;
+    let moon_x = animated_value(-travel);
+    let corona = animated_value(0.0);
+    let flare = animated_value(0.9);
+    let glide = nsh_core::element::Timing::new(1000.0, Easing::EaseInOut);
+    Animation::sequence([
+        Animation::timing(&moon_x, 0.0, glide.clone()),
+        Animation::delay(250.0),
+        Animation::timing(&moon_x, travel, glide),
+        Animation::delay(150.0),
+        Animation::timing(&moon_x, -travel, nsh_core::element::Timing::new(0.0, Easing::Linear)),
+    ])
+    .looped(None)
+    .start();
+    // The corona: dark until the moon nearly covers the sun, a flare at
+    // totality (brightening and opening out), gone as the moon moves on.
+    let quiet = nsh_core::element::Timing::new(0.0, Easing::Linear);
+    Animation::sequence([
+        Animation::delay(820.0),
+        Animation::timing(&corona, 1.0, nsh_core::element::Timing::new(260.0, Easing::EaseOut)),
+        Animation::timing(&corona, 0.0, nsh_core::element::Timing::new(420.0, Easing::EaseIn)),
+        Animation::delay(900.0),
+    ])
+    .looped(None)
+    .start();
+    Animation::sequence([
+        Animation::delay(820.0),
+        Animation::timing(&flare, 1.12, nsh_core::element::Timing::new(680.0, Easing::EaseOut)),
+        Animation::timing(&flare, 0.9, quiet),
+        Animation::delay(900.0),
+    ])
+    .looped(None)
+    .start();
+    let centered = move |d: f32| view().absolute().top(px((size - d) / 2.0)).left(px((size - d) / 2.0)).w(px(d)).h(px(d)).rounded(px(R_FULL));
+    view()
+        .w(px(size))
+        .h(px(size))
+        .flex_shrink_0()
+        // The moon only passes in front of the sun: clipped to it.
+        .child(
+            centered(size * 0.86)
+                .when(size >= 32.0, |v| v.border_2())
+                .when(size < 32.0, |v| v.border_1())
+                .border_color(tint(ACCENT, 0.55))
+                .bind_opacity(&corona)
+                .bind_scale(&flare),
+        )
+        .child(
+            centered(disc)
+                .bg(ACCENT)
+                .overflow_hidden()
+                .child(view().w(px(disc)).h(px(disc)).rounded(px(R_FULL)).bg(SURFACE0).bind_translate_x(&moon_x)),
+        )
 }
 
 /// How far the mark's tile stands off the page.
