@@ -157,7 +157,7 @@ impl Handshake {
             let binary = v.pointer("/capabilities/binaryCiphertext").and_then(Value::as_bool) == Some(true);
             let b = Arc::new(self.legacy);
             return Ok(Some((
-                Sender { mode: Mode::Legacy(b.clone()), nonce: 0, binary },
+                Sender { mode: Mode::Legacy(b.clone()), nonce: 0, binary, hash: None },
                 Receiver { mode: Mode::Legacy(b), nonce: 0, binary },
             )));
         };
@@ -170,12 +170,13 @@ impl Handshake {
             return Err((self, "Relay handshake: unsupported parameters".into()));
         }
         let binary = payload[1] & 0x01 != 0;
+        let hash = self.state.get_handshake_hash().to_vec();
         let transport = match self.state.into_stateless_transport_mode() {
             Ok(t) => Arc::new(t),
             Err(e) => return Err((Self::dead(), format!("Relay handshake failed: {e}"))),
         };
         Ok(Some((
-            Sender { mode: Mode::Protected(transport.clone()), nonce: 0, binary },
+            Sender { mode: Mode::Protected(transport.clone()), nonce: 0, binary, hash: Some(hash) },
             Receiver { mode: Mode::Protected(transport), nonce: 0, binary },
         )))
     }
@@ -228,9 +229,20 @@ pub struct Sender {
     mode: Mode,
     nonce: u64,
     binary: bool,
+    /// The Noise handshake hash, the same on both ends of one session.
+    hash: Option<Vec<u8>>,
 }
 
 impl Sender {
+    /// Six digits both ends of this session show, `123 456`: equal only
+    /// when no one sits in between, so a person comparing them on the phone
+    /// and the Mac knows the phone talks to that Mac.
+    pub fn pairing_code(&self) -> Option<String> {
+        let h = self.hash.as_ref()?;
+        let n = u32::from_be_bytes([h[0], h[1], h[2], h[3]]) % 1_000_000;
+        Some(format!("{:03} {:03}", n / 1000, n % 1000))
+    }
+
     /// Whether the channel is the protected (Noise) one.
     pub fn protected(&self) -> bool {
         self.mode.protected()
@@ -510,10 +522,11 @@ pub fn respond(local_private: &[u8; 32], hello_text: &str) -> Result<(String, Se
     let mut buf = [0u8; 256];
     let m = state.write_message(&[0x01, if binary { 0x01 } else { 0x00 }], &mut buf).map_err(|e| e.to_string())?;
     let ready = json!({ "type": "e2ee_ready", "protected": { "v": 1, "message": B64.encode(&buf[..m]) } }).to_string();
+    let hash = state.get_handshake_hash().to_vec();
     let t = Arc::new(state.into_stateless_transport_mode().map_err(|e| e.to_string())?);
     Ok((
         ready,
-        Sender { mode: Mode::Protected(t.clone()), nonce: 0, binary },
+        Sender { mode: Mode::Protected(t.clone()), nonce: 0, binary, hash: Some(hash) },
         Receiver { mode: Mode::Protected(t), nonce: 0, binary },
     ))
 }

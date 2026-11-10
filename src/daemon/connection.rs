@@ -8,6 +8,7 @@
 
 use std::{collections::HashMap, path::PathBuf, time::Duration};
 
+use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use serde_json::{Value, json};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use super::rt::{self, Message};
@@ -577,7 +578,12 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
     let mut backoff = Duration::from_secs(1);
     loop {
         let endpoint = match &remote {
-            Some(r) => endpoint_for(r, lan_index),
+            Some(r) => {
+                // Where its bridge is on this network now, if it is here:
+                // first, before the addresses pairing gave.
+                let found = if lan_index == 0 { find_bridge(r, Duration::from_millis(1500)).await } else { None };
+                endpoint_for(r, lan_index, found)
+            }
             None => discover(),
         };
         let lan_attempt = endpoint.bridge_token.is_some();
@@ -674,10 +680,11 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
 
 /// Where a saved host's session goes: its LAN bridge, its relay, or its
 /// direct address.
-fn endpoint_for(r: &RemoteHost, lan_index: usize) -> Endpoint {
+fn endpoint_for(r: &RemoteHost, lan_index: usize, found: Option<String>) -> Endpoint {
     if let Some(link) = super::relay::PairingLink::parse(&r.url) {
         let candidate = link.lan.clone().and_then(|(addrs, key, token)| {
-            let list: Vec<&str> = addrs.split(',').filter(|a| !a.is_empty()).collect();
+            let mut list: Vec<&str> = found.as_deref().into_iter().collect();
+            list.extend(addrs.split(',').filter(|a| !a.is_empty() && Some(*a) != found.as_deref()));
             // Without a relay, keep cycling through the addresses.
             let i = if link.relay.is_none() && !list.is_empty() { lan_index % list.len() } else { lan_index };
             list.get(i).map(|a| (a.to_string(), key, token))
@@ -696,6 +703,7 @@ fn endpoint_for(r: &RemoteHost, lan_index: usize) -> Endpoint {
                 }),
                 bridge_token: Some(token),
                 lan_probe: vec![],
+                lan_key: None,
             };
         }
         if let Some(offer) = link.relay {
@@ -704,6 +712,7 @@ fn endpoint_for(r: &RemoteHost, lan_index: usize) -> Endpoint {
                 .as_ref()
                 .map(|(addrs, ..)| addrs.split(',').filter(|a| !a.is_empty()).map(str::to_owned).collect())
                 .unwrap_or_default();
+            let lan_key = link.lan.as_ref().map(|(_, key, _)| B64.encode(key));
             return Endpoint {
                 url: offer.ws_url(),
                 local_credential: None,
@@ -711,10 +720,33 @@ fn endpoint_for(r: &RemoteHost, lan_index: usize) -> Endpoint {
                 relay: Some(offer),
                 bridge_token: None,
                 lan_probe,
+                lan_key,
             };
         }
     }
-    Endpoint { url: r.ws_url(), local_credential: None, password: r.password.clone(), relay: None, bridge_token: None, lan_probe: vec![] }
+    Endpoint { url: r.ws_url(), local_credential: None, password: r.password.clone(), relay: None, bridge_token: None, lan_probe: vec![], lan_key: None }
+}
+
+/// A paired host's bridge on this network now, found by its key.
+async fn find_bridge(r: &RemoteHost, wait: Duration) -> Option<String> {
+    let (_, key, _) = super::relay::PairingLink::parse(&r.url)?.lan?;
+    find_key(B64.encode(key), wait).await
+}
+
+/// The address Bonjour finds the bridge with `key` (base64) at, on a thread
+/// of its own (the lookup blocks).
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+async fn find_key(key: String, wait: Duration) -> Option<String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(super::bonjour::find(&key, wait));
+    });
+    rx.await.ok().flatten()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+async fn find_key(_key: String, _wait: Duration) -> Option<String> {
+    None
 }
 
 enum Exit {
@@ -794,7 +826,7 @@ async fn session(
         tx.seal = Some(sender);
         unseal = Some(receiver);
         if let Some(token) = &endpoint.bridge_token {
-            send(&mut tx, &json!({ "type": "sophon_bridge_auth", "token": token })).await?;
+            send(&mut tx, &json!({ "type": "sophon_bridge_auth", "token": token, "device": crate::lan::device_name() })).await?;
         }
     }
 
@@ -847,8 +879,12 @@ async fn session(
             _ = &mut hello_deadline, if !connected => {
                 return Err("The daemon did not answer the handshake".into());
             }
-            _ = lan_check.tick(), if connected && !endpoint.lan_probe.is_empty() => {
-                for addr in &endpoint.lan_probe {
+            _ = lan_check.tick(), if connected && (!endpoint.lan_probe.is_empty() || endpoint.lan_key.is_some()) => {
+                let found = match &endpoint.lan_key {
+                    Some(key) => find_key(key.clone(), Duration::from_millis(1000)).await,
+                    None => None,
+                };
+                for addr in found.iter().chain(&endpoint.lan_probe) {
                     if rt::reachable(addr, Duration::from_millis(800)).await {
                         log::info!("the LAN bridge at {addr} answers: leaving the relay");
                         return Ok(Exit::Lan);
@@ -2529,6 +2565,8 @@ pub struct Endpoint {
     /// once iOS grants local network access, whose prompt fails the first
     /// attempt).
     pub lan_probe: Vec<String>,
+    /// The bridge's key (base64), to find it on the LAN by Bonjour.
+    pub lan_key: Option<String>,
 }
 
 /// The relay this Mac's service registers with (`daemon.relay.endpoint` in
@@ -2603,7 +2641,7 @@ pub fn discover() -> Endpoint {
         .flatten()
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty());
-    Endpoint { url: format!("ws://{listen}/ws"), local_credential, password: None, relay: None, bridge_token: None, lan_probe: vec![] }
+    Endpoint { url: format!("ws://{listen}/ws"), local_credential, password: None, relay: None, bridge_token: None, lan_probe: vec![], lan_key: None }
 }
 
 /// A stable id, so a reconnect within the daemon's grace period resumes the
@@ -3024,7 +3062,7 @@ mod tests {
     #[test]
     #[ignore]
     fn bridge_live() {
-        let info = super::super::bridge::start().expect("bridge");
+        let (info, _events) = super::super::bridge::start().expect("bridge");
         let link = super::super::relay::PairingLink::format(Some((&info.addr, &info.key, &info.token)), None);
         println!("pairing link: {link}");
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();

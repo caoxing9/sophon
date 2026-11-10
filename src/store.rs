@@ -783,6 +783,12 @@ pub(crate) enum Modal {
     RestartDaemon,
     AddHost,
     PairDevice,
+    /// A phone nearby asks to pair with this Mac, showing `code` too.
+    ApprovePairing { id: u64, device: String, code: String },
+    /// Pairing with a computer nearby ([`crate::lan::pairing`]).
+    PairNearby,
+    /// Every paired device must pair again.
+    RevokeDevices,
     Labels { workspace: String },
     ProjectSettings { root: String, name: String },
     /// Names a new file or folder in `dir`, or renames `path`.
@@ -807,7 +813,14 @@ pub(crate) fn open_modal(m: Modal) {
 }
 
 pub(crate) fn close_modal() {
+    let was = global::<ModalState>().with_untracked(|s| s.0.clone());
     global::<ModalState>().update(|s| s.0 = None);
+    // Dismissed without an answer: the waiting side hears no at once.
+    match was {
+        Some(Modal::ApprovePairing { .. }) => crate::lan::answer_pairing(false),
+        Some(Modal::PairNearby) => crate::lan::cancel_pairing(),
+        _ => {}
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -1663,48 +1676,34 @@ pub(crate) struct Pairing {
     pub(crate) error: Option<String>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-type BridgeInfo = crate::daemon::bridge::BridgeInfo;
-/// A page runs no bridge.
-#[cfg(target_arch = "wasm32")]
-#[derive(Clone)]
-struct BridgeInfo {
-    addr: String,
-    key: [u8; 32],
-    token: String,
-}
-
-thread_local! {
-    static BRIDGE: RefCell<Option<BridgeInfo>> = const { RefCell::new(None) };
-}
-
 /// Starts the LAN bridge (desktops), so paired phones on this network skip
-/// the relay.
+/// the relay, and phones nearby can ask to pair.
 pub(crate) fn start_bridge() {
-    #[cfg(target_arch = "wasm32")]
-    let info: Option<BridgeInfo> = None;
     #[cfg(not(target_arch = "wasm32"))]
-    let info = crate::daemon::bridge::start();
-    if info.is_none() {
-        log::warn!("the LAN bridge could not start; phones pair through the relay only");
+    match crate::daemon::bridge::start() {
+        Some((_, events)) => crate::lan::watch_bridge(events),
+        None => log::warn!("the LAN bridge could not start; phones pair through the relay only"),
     }
-    BRIDGE.with_borrow_mut(|b| *b = info);
 }
 
-/// The link a phone pairs with: the LAN bridge and the daemon's relay.
+/// The link a phone pairs with: the LAN bridge (at its addresses now) and
+/// the daemon's relay.
 pub(crate) fn pairing_link(relay_link: Option<&str>) -> Option<String> {
-    let lan = BRIDGE.with_borrow(|b| b.clone());
+    #[cfg(not(target_arch = "wasm32"))]
+    let lan = crate::daemon::bridge::info().map(|b| (b.addr, b.key, b.token));
+    #[cfg(target_arch = "wasm32")]
+    let lan: Option<(String, [u8; 32], String)> = None;
     if lan.is_none() && relay_link.is_none() {
         return None;
     }
-    Some(crate::daemon::relay::PairingLink::format(
-        lan.as_ref().map(|b| (b.addr.as_str(), &b.key, b.token.as_str())),
-        relay_link,
-    ))
+    Some(crate::daemon::relay::PairingLink::format(lan.as_ref().map(|(a, k, t)| (a.as_str(), k, t.as_str())), relay_link))
 }
 
 pub(crate) fn bridge_addr() -> Option<String> {
-    BRIDGE.with_borrow(|b| b.as_ref().map(|b| b.addr.clone()))
+    #[cfg(not(target_arch = "wasm32"))]
+    return crate::daemon::bridge::info().map(|b| b.addr);
+    #[cfg(target_arch = "wasm32")]
+    None
 }
 
 /// Runs `future` owned by nothing, so it outlives what started it: a
@@ -2054,7 +2053,7 @@ pub(crate) fn set_appearance(appearance: nsh_core::platform::Appearance) {
 
 /// The service's command line: on the PATH, or inside the desktop app that
 /// ships it.
-fn service_cli() -> Option<std::path::PathBuf> {
+pub(crate) fn service_cli() -> Option<std::path::PathBuf> {
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
     let mut candidates: Vec<std::path::PathBuf> = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).map(|d| d.join("paseo")).collect())

@@ -16,9 +16,20 @@
   "ios": {
     "infoPlist": {
       "NSCameraUsageDescription": "Sophon uses the camera to scan the pairing QR code your computer shows.",
-      "NSLocalNetworkUsageDescription": "Sophon connects to the computer your agents run on over the local network.",
+      "NSLocalNetworkUsageDescription": "Sophon finds and connects to the computers your agents run on over the local network.",
       "UIFileSharingEnabled": true,
-      "LSSupportsOpeningDocumentsInPlace": true
+      "LSSupportsOpeningDocumentsInPlace": true,
+      "NSBonjourServices": [
+        "_sophon._tcp"
+      ]
+    }
+  },
+  "macos": {
+    "infoPlist": {
+      "NSBonjourServices": [
+        "_sophon._tcp"
+      ],
+      "NSLocalNetworkUsageDescription": "Sophon lets your phone find this Mac on the local network, and finds other computers running Sophon."
     }
   }
 }

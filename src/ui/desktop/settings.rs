@@ -48,10 +48,60 @@ pub(crate) fn settings(compact: bool) -> impl IntoElement {
                             )
                         }),
                 ))
+                .child(section(t("Devices"), devices_card()))
                 .child(section(t("Host behavior"), behavior_card()))
                 .child(section(t("Coding agents"), crate::ui::shared::agents::agents_card(true)))
                 .child(section(t("Text generation"), text_generation_card())),
         ))
+}
+
+/// The devices that reach this Mac through its LAN bridge: those connected
+/// now (each can be cut off) and those paired on the LAN (each can be
+/// forgotten), and unpairing everything, the QR's token included. Devices
+/// on the relay reach the service directly and are not seen here.
+fn devices_card() -> impl IntoElement {
+    crate::lan::load_devices();
+    card().child(dynamic(|| {
+        let connected = crate::lan::connected();
+        let paired = crate::lan::paired();
+        Some(untracked(move || {
+            let mut c = view();
+            let mut first = true;
+            let mut line = |c: View, label: String, hint: String, control: AnyElement| {
+                let r = row(label, hint, control, first);
+                first = false;
+                c.child(r)
+            };
+            for d in &connected {
+                let conn = d.conn;
+                c = line(
+                    c,
+                    d.device.clone(),
+                    t("Connected now, over the LAN").to_owned(),
+                    btn(t("Disconnect"), Variant::Outline, Sz::Sm, None, move || crate::lan::disconnect(conn)).into_element(),
+                );
+            }
+            for p in paired.iter().filter(|p| !connected.iter().any(|c| c.device_id.as_deref() == Some(p.id.as_str()))) {
+                let id = p.id.clone();
+                c = line(
+                    c,
+                    p.name.clone(),
+                    t("Paired on the LAN").to_owned(),
+                    btn(t("Remove"), Variant::Outline, Sz::Sm, None, move || crate::lan::revoke(&id)).into_element(),
+                );
+            }
+            if connected.is_empty() && paired.is_empty() {
+                c = line(c, t("No device connected").to_owned(), t("Phones on this network find this Mac and ask to pair; you allow each one here").to_owned(), view().into_element());
+            }
+            c.child(row(
+                t("Unpair every device"),
+                t("Devices paired by QR code or on the LAN must pair again"),
+                btn(t("Unpair all…"), Variant::Outline, Sz::Sm, None, || store::open_modal(store::Modal::RevokeDevices)),
+                false,
+            ))
+            .into_element()
+        }))
+    }))
 }
 
 /// The relay this Mac's service registers with, for phones away from home:

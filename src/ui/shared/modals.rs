@@ -100,6 +100,19 @@ fn body(m: Modal) -> View {
         Modal::RemoveAgent { id, label } => crate::ui::shared::agents::remove_agent(id, label),
         Modal::AddHost => add_host(),
         Modal::PairDevice => pair_device(),
+        Modal::ApprovePairing { device, code, .. } => approve_pairing(device, code),
+        Modal::PairNearby => pair_nearby(),
+        Modal::RevokeDevices => sheet(t("Unpair every device"))
+            .child(
+                text(t("Every phone and computer paired with this Mac, by QR code or on the LAN, must pair again. Connected ones are cut off now"))
+                    .text_size(px(TEXT_BASE))
+                    .line_height(px(20.0))
+                    .text_color(FG_MUTED),
+            )
+            .child(actions(btn(t("Unpair all"), Variant::Destructive, Sz::Md, Some(Icon::Trash2), || {
+                crate::lan::revoke_all();
+                store::close_modal();
+            }))),
         Modal::Labels { workspace } => labels(workspace),
         Modal::ProjectSettings { name, .. } => project_settings(name),
         Modal::FileName { op, path, name } => rename(
@@ -536,6 +549,7 @@ fn add_host() -> View {
     let password = signal(String::new());
     sheet(t("Add host"))
         .w(px(520.0))
+        .child(nearby_list())
         .child(
             text(t("Paste a pairing link (Settings → Pair a device on the other machine) to connect from anywhere through the encrypted relay, or a LAN / Tailscale address, or a tunnel URL"))
                 .text_size(px(TEXT_SM))
@@ -584,6 +598,119 @@ fn add_host() -> View {
             })
             .disabled(move || url.with(|u| u.trim().is_empty())),
         ))
+}
+
+/// The six digits of a pairing session, large, to compare.
+fn pairing_code(code: &str) -> View {
+    view()
+        .self_center()
+        .px(px(S6))
+        .py(px(S3))
+        .rounded(px(R_LG))
+        .bg(SURFACE2)
+        .child(text(code.to_owned()).text_size(px(32.0)).font_weight(FontWeight(500)).font_family(|| MONO))
+}
+
+/// This Mac: a phone nearby asks to pair.
+fn approve_pairing(device: String, code: String) -> View {
+    sheet(t("Pairing request"))
+        .child(
+            text(tf("“{}” on this network asks to connect to this Mac. Allowed, it can use your agents here, from anywhere", &[&device]))
+                .text_size(px(TEXT_BASE))
+                .line_height(px(20.0))
+                .text_color(FG_MUTED),
+        )
+        .child(pairing_code(&code))
+        .child(text(t("Allow only if the device shows the same code")).text_size(px(TEXT_SM)).text_color(FG_MUTED).self_center())
+        .child(
+            view()
+                .flex_row()
+                .justify_end()
+                .gap(px(S2))
+                .child(btn(t("Deny"), Variant::Secondary, Sz::Md, None, || crate::lan::answer_pairing(false)))
+                .child(btn(t("Allow"), Variant::Primary, Sz::Md, Some(Icon::Check), || crate::lan::answer_pairing(true))),
+        )
+}
+
+/// A phone (or another Mac): pairing with a computer nearby.
+fn pair_nearby() -> View {
+    let p = computed(crate::lan::pairing);
+    sheet(t("Pair with a computer")).child(dynamic(move || {
+        let st = p.get();
+        Some(untracked(move || {
+            let mut v = view().gap(px(S4));
+            if let Some(e) = &st.error {
+                v = v.child(text(e.clone()).text_size(px(TEXT_BASE)).text_color(DANGER));
+            } else if let Some(code) = &st.code {
+                v = v
+                    .child(
+                        text(tf("Allow it on “{}”. The code there must be the same as this one", &[&st.name]))
+                            .text_size(px(TEXT_BASE))
+                            .line_height(px(20.0))
+                            .text_color(FG_MUTED),
+                    )
+                    .child(pairing_code(code));
+            } else {
+                v = v.child(text(tf("Connecting to “{}”…", &[&st.name])).text_size(px(TEXT_BASE)).text_color(FG_MUTED));
+            }
+            v.child(view().flex_row().justify_end().child(btn(
+                if st.error.is_some() { t("Close") } else { t("Cancel") },
+                Variant::Secondary,
+                Sz::Md,
+                None,
+                store::close_modal,
+            )))
+            .into_element()
+        }))
+    }))
+}
+
+/// The computers on this network: one paired already connects at once,
+/// another asks to pair. Searches when shown.
+pub(crate) fn nearby_list() -> View {
+    crate::lan::scan();
+    view().gap(px(S2)).child(dynamic(|| {
+        let list = crate::lan::nearby();
+        let scanning = crate::lan::scanning();
+        let scanned = crate::lan::scanned();
+        Some(untracked(move || {
+            let head = view()
+                .flex_row()
+                .items_center()
+                .gap(px(S2))
+                .child(text(t("On this network")).text_size(px(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG_MUTED).flex_1())
+                .child(if scanning {
+                    text(t("Searching…")).text_size(px(TEXT_SM)).text_color(FG_FAINT).into_element()
+                } else {
+                    icon_btn(Icon::RotateCw, Sz::Sm, t("Search again"), crate::lan::scan).into_element()
+                });
+            let mut c = card();
+            if list.is_empty() {
+                let note = if scanned && !scanning { t("No computer running Sophon found on this network") } else { t("Searching…") };
+                c = c.child(view().px(px(S4)).py(px(S3)).child(text(note).text_size(px(TEXT_SM)).text_color(FG_MUTED)));
+            }
+            for (i, n) in list.into_iter().enumerate() {
+                let paired = n.host.is_some();
+                let name = n.name.clone();
+                c = c.child(
+                    nsh_base::button()
+                        .on_press(move || crate::lan::connect(n.clone()))
+                        .flex_row()
+                        .items_center()
+                        .gap(px(S3))
+                        .h(px(52.0))
+                        .px(px(S4))
+                        .when(i > 0, |v| v.border_t_1().border_color(BORDER))
+                        .active(|s| s.bg(highlight()))
+                        .hover(|s| s.bg(highlight()))
+                        .child(icon(Icon::Monitor, 18.0).text_color(FG_MUTED))
+                        .child(text(name).text_size(px(TEXT_BASE)).number_of_lines(1).flex_1())
+                        .child(text(if paired { t("Paired") } else { t("Pair") }).text_size(px(TEXT_SM)).text_color(if paired { FG_MUTED } else { ACCENT })),
+                );
+            }
+            view().gap(px(S2)).child(head).child(c).into_element()
+        }))
+    }))
 }
 
 fn pair_device() -> View {

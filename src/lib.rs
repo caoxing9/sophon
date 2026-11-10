@@ -12,6 +12,7 @@ mod awake;
 pub mod daemon;
 mod fold;
 mod i18n;
+mod lan;
 mod platform;
 mod prompt_link;
 mod store;
