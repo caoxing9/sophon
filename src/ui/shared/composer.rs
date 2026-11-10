@@ -385,7 +385,7 @@ fn model_sheet(live: bool) {
         if live && p.id != c.provider {
             continue;
         }
-        for m in &p.models {
+        for m in p.models.iter().filter(|m| !store::forbidden_model(&m.id, &m.label)) {
             let checked = c.provider == p.id && c.model.as_deref() == Some(m.id.as_str());
             let (pid, mid) = (p.id.clone(), m.id.clone());
             let label = if live { m.label.clone() } else { format!("{} · {}", p.label, m.label) };

@@ -39,9 +39,7 @@ struct Row {
     subscription: bool,
 }
 
-/// The `provider/` prefixes of models a gateway serves from a subscription
-/// signed in elsewhere (Magpie's signed-in agents as providers).
-const SUBSCRIPTIONS: &[&str] = &["claude", "codex", "copilot", "devin", "grok", "cursor", "gemini", "antigravity", "qoder"];
+
 
 impl Row {
     fn key(&self) -> String {
@@ -55,6 +53,8 @@ fn rows_of(p: &Provider) -> Vec<Row> {
     p.models
         .iter()
         .filter(|m| p.id != "claude" || !m.id.contains('/'))
+        // A Claude model through a subscription is not offered at all.
+        .filter(|m| !store::forbidden_model(&m.id, &m.label))
         .map(|m| {
             let prefix = m.id.split_once('/').map(|(p, _)| p);
             Row {
@@ -63,7 +63,7 @@ fn rows_of(p: &Provider) -> Vec<Row> {
                 model: m.id.clone(),
                 name: m.label.clone(),
                 gateway: prefix.is_some() || m.description.contains("via magpie"),
-                subscription: prefix.is_some_and(|p| SUBSCRIPTIONS.contains(&p)),
+                subscription: prefix.is_some_and(|p| store::SUBSCRIPTION_PREFIXES.contains(&p)),
             }
         })
         .collect()

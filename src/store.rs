@@ -2305,9 +2305,46 @@ fn default_provider(list: &[Provider], current: &str) -> String {
 }
 
 /// Fills the provider's defaults (model, its thinking level, mode).
+/// The `provider/` prefixes of models a gateway serves from a subscription
+/// signed in to another client (Magpie's signed-in agents as providers).
+pub(crate) const SUBSCRIPTION_PREFIXES: &[&str] =
+    &["claude", "codex", "copilot", "devin", "grok", "cursor", "gemini", "antigravity", "qoder"];
+
+/// Not allowed: a Claude model through a subscription. Claude's own outside
+/// Claude Code (`claude/…` through a gateway: Anthropic counts it as another
+/// client's use of the subscription), or another client's (`copilot/claude-…`,
+/// `cursor/claude-…`: that account answers for it). A Claude model on an API
+/// key, through any gateway, stays allowed.
+pub(crate) fn forbidden_model(model_id: &str, label: &str) -> bool {
+    let Some((prefix, rest)) = model_id.split_once('/') else { return false };
+    if !SUBSCRIPTION_PREFIXES.contains(&prefix) {
+        return false;
+    }
+    let claude = |s: &str| {
+        let s = s.to_lowercase();
+        s.contains("claude") || s.split(|c: char| !c.is_alphanumeric()).any(|w| matches!(w, "opus" | "sonnet" | "haiku" | "fable"))
+    };
+    prefix == "claude" || claude(rest) || claude(label)
+}
+
+/// Whether `provider`'s `model` is refused ([`forbidden_model`]); says so.
+fn refuse_model(provider_id: &str, model: &str) -> bool {
+    let label = provider(provider_id).and_then(|p| p.model(model).map(|m| m.label.clone())).unwrap_or_default();
+    if forbidden_model(model, &label) {
+        notify(t("Claude models run only in Claude Code, on your own Claude account: not through another client's subscription").into());
+        return true;
+    }
+    false
+}
+
 fn apply_provider_defaults(f: &mut Form) {
     let Some(p) = provider(&f.provider) else { return };
-    let model = p.default_model().cloned();
+    // A refused default gives way to the first allowed model.
+    let model = p
+        .default_model()
+        .filter(|m| !forbidden_model(&m.id, &m.label))
+        .or_else(|| p.models.iter().find(|m| !forbidden_model(&m.id, &m.label)))
+        .cloned();
     f.model = model.as_ref().map(|m| m.id.clone());
     f.thinking = model.and_then(|m| m.default_thinking.or_else(|| m.thinking.first().map(|t| t.id.clone())));
     f.mode = p.default_mode.clone().or_else(|| p.modes.first().map(|m| m.id.clone()));
@@ -2422,6 +2459,12 @@ pub(crate) fn controls(live: bool) -> Controls {
 }
 
 pub(crate) fn set_control(live: bool, change: Control) {
+    if let Control::Model(m) = &change {
+        let provider_id = if live { selected_agent().map(|a| a.provider).unwrap_or_default() } else { form().provider };
+        if refuse_model(&provider_id, m) {
+            return;
+        }
+    }
     let refresh = !live && matches!(change, Control::Provider(_) | Control::Model(_));
     if live {
         let Some(agent_id) = selected_id() else { return };
@@ -2471,6 +2514,9 @@ pub(crate) fn set_control(live: bool, change: Control) {
 pub(crate) fn submit_form() {
     let f = form();
     if f.busy || f.path.trim().is_empty() || f.provider.is_empty() {
+        return;
+    }
+    if f.model.as_deref().is_some_and(|m| refuse_model(&f.provider, m)) {
         return;
     }
     if uploading() {
@@ -2803,6 +2849,9 @@ struct Handoff(Option<(String, String, String)>);
 /// one.
 pub(crate) fn continue_in(provider: &str, model: &str) {
     let Some(agent) = selected_id() else { return };
+    if refuse_model(provider, model) {
+        return;
+    }
     global::<Handoff>().update(|h| h.0 = Some((agent.clone(), provider.to_owned(), model.to_owned())));
     send(Command::Fork(agent));
 }
@@ -3282,5 +3331,31 @@ pub(crate) fn close_current() {
             }
         }
         Tab::Agent(_) => {}
+    }
+}
+
+#[cfg(test)]
+mod model_rule_tests {
+    use super::forbidden_model;
+
+    #[test]
+    fn a_claude_model_through_a_subscription_is_refused() {
+        // Claude's subscription outside Claude Code.
+        assert!(forbidden_model("claude/claude-sonnet-5", "Claude Sonnet 5 · Claude"));
+        // Claude through Copilot's, Cursor's subscription.
+        assert!(forbidden_model("copilot/claude-sonnet-5", "Claude Sonnet 5 · Copilot"));
+        assert!(forbidden_model("copilot/claude-haiku-5.5", "Claude Haiku 5.5 · Copilot"));
+        assert!(forbidden_model("cursor/opus-5", "Opus 5 · Cursor"));
+    }
+
+    #[test]
+    fn other_models_and_claude_on_an_api_key_stay() {
+        assert!(!forbidden_model("claude-opus-5-5", "Opus 5.5"));
+        assert!(!forbidden_model("gpt-6-sol", "GPT-6-Sol"));
+        assert!(!forbidden_model("copilot/gpt-5.6-luna", "GPT-5.6 Luna · Copilot"));
+        assert!(!forbidden_model("copilot/gemini-3.7-flash", "Gemini 3.7 Flash · Copilot"));
+        assert!(!forbidden_model("codex/gpt-6-astra", "GPT-6-Astra · Codex"));
+        assert!(!forbidden_model("anthropic/claude-sonnet-5", "Claude Sonnet 5 · Anthropic"));
+        assert!(!forbidden_model("teable/claude-opus-5-5", "Claude Opus 5.5 · teable"));
     }
 }
