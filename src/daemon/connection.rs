@@ -2868,6 +2868,38 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A file of a workspace by its path inside it, as the explorer asks:
+    /// `SOPHON_TEST_DOWNLOAD=<cwd>|<path>|<size>`. Read only.
+    #[test]
+    #[ignore]
+    fn download_workspace_file_live() {
+        let Ok(spec) = std::env::var("SOPHON_TEST_DOWNLOAD") else { return };
+        let mut parts = spec.splitn(3, '|');
+        let (cwd, path, size) = (parts.next().unwrap().to_owned(), parts.next().unwrap().to_owned(), parts.next().unwrap().parse::<usize>().unwrap());
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let (ev_tx, mut ev_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+            tokio::spawn(run(ev_tx, cmd_rx));
+            let deadline = tokio::time::sleep(Duration::from_secs(20));
+            tokio::pin!(deadline);
+            loop {
+                tokio::select! {
+                    _ = &mut deadline => panic!("no download answer"),
+                    ev = ev_rx.recv() => match ev.unwrap() {
+                        Event::Connected { .. } => cmd_tx.send(Command::Download { id: "f".into(), cwd: cwd.clone(), path: path.clone() }).unwrap(),
+                        Event::Downloaded { result, .. } => {
+                            println!("downloaded: {:?}", result.as_ref().map(Vec::len));
+                            assert_eq!(result.map(|b| b.len()), Ok(size));
+                            return;
+                        }
+                        _ => {}
+                    },
+                }
+            }
+        });
+    }
+
     #[test]
     fn a_trace_line_keeps_no_secrets() {
         assert_eq!(

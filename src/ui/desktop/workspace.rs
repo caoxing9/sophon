@@ -224,6 +224,8 @@ fn tab_shell(selected: bool, on_press: impl Fn() + 'static) -> nsh_base::ButtonE
         .pl(px(10.0))
         .pr(px(12.0))
         .max_w(px(220.0))
+        .min_w(px(0.0))
+        .flex_shrink(1.0)
         .rounded(px(R_FULL))
         .bg(if selected { tint(ACCENT, 0.10) } else { tint(SURFACE0, 0.0) })
         .hover(|s| s.bg(highlight()))
@@ -259,7 +261,8 @@ fn file_tab(path: String) -> impl IntoElement {
         Some(untracked(move || {
             tab_shell(on, move || store::open_tab(Tab::File(open.clone())))
                 .child(icon(Icon::FileText, 14.0).text_color(FG_MUTED))
-                .child(text(label).text_size(px(TEXT_SM)).text_color(if on { FG } else { FG_MUTED }).number_of_lines(1))
+                // A long name ends in an ellipsis inside the tab.
+                .child(text(label).text_size(px(TEXT_SM)).text_color(if on { FG } else { FG_MUTED }).number_of_lines(1).flex_shrink(1.0).min_w(px(0.0)))
                 .child(when(dirty, || view().w(px(6.0)).h(px(6.0)).rounded(px(R_FULL)).bg(FG_MUTED)))
                 .child(close_button(t("Close file"), move || store::close_file(&close)))
         }))
@@ -293,7 +296,8 @@ fn agent_tab(id: String) -> impl IntoElement {
                         .text_size(px(TEXT_SM))
                         .text_color(if on { FG } else { FG_MUTED })
                         .number_of_lines(1)
-                        .flex_shrink(1.0),
+                        .flex_shrink(1.0)
+                        .min_w(px(0.0)),
                 )
         }))
     }))

@@ -56,6 +56,14 @@ pub(crate) fn file_preview(path: String) -> impl IntoElement {
             Preview::Failed(e) => fallback(path, Icon::CircleAlert, e),
             Preview::TooLarge => fallback(path, Icon::File, t("Too large to preview here").into()),
             Preview::Ready(bytes) => match kind_of(&path) {
+                // The system's PDF view: WebKit's showed some PDFs blank here.
+                Some(Kind::Page("application/pdf")) if cfg!(any(target_os = "macos", target_os = "ios")) => match temp_copy(&path, &bytes) {
+                    Ok(file) => native(crate::platform::PDF_VIEW)
+                        .prop("path", nsh_core::JsonValue::String(file.to_string_lossy().into_owned()))
+                        .flex_1()
+                        .into_element(),
+                    Err(e) => fallback(path, Icon::CircleAlert, e),
+                },
                 Some(Kind::Page(mime)) => {
                     let url = format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes.as_slice()));
                     web_view(url).java_script_enabled(false).incognito(true).flex_1().into_element()

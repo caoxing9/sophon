@@ -53,6 +53,14 @@ fn native(registry: &mut Registry) {
 #[native_components(ios)]
 fn components(components: &nsh_platform_ios::Components) {
     platform::ios_scanner::register(components);
+    platform::pdf::register(components);
+}
+
+/// The app's native components on macOS: the PDF view.
+#[cfg(target_os = "macos")]
+#[native_components(macos)]
+fn components(components: &nsh_platform_macos::Components) {
+    platform::pdf::register(components);
 }
 
 /// The icon in layers, for the loading mark: its sky, its corona (which
