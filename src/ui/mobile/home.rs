@@ -22,6 +22,7 @@ enum HomeTab {
     #[default]
     Chats,
     Projects,
+    Usage,
     Settings,
 }
 
@@ -32,14 +33,15 @@ impl HomeTab {
     fn from_index(i: u32) -> Self {
         match i {
             1 => HomeTab::Projects,
-            2 => HomeTab::Settings,
+            2 => HomeTab::Usage,
+            3 => HomeTab::Settings,
             _ => HomeTab::Chats,
         }
     }
 }
 
 /// Room the floating bar and the new button take at the foot of the lists.
-const BAR_ROOM: f32 = 168.0;
+const BAR_ROOM: f32 = 112.0;
 
 pub(crate) fn home() -> impl IntoElement {
     let tab = signal(HomeTab::Chats);
@@ -52,6 +54,19 @@ pub(crate) fn home() -> impl IntoElement {
             Some(untracked(move || {
                 match current {
                     HomeTab::Settings => view().flex_1().child(settings::settings()).into_element(),
+                    // What the computer's agents used, and their plan
+                    // limits: asked for each time the tab opens.
+                    HomeTab::Usage => {
+                        store::refresh_usage();
+                        view()
+                            .flex_1()
+                            .child(large_header(
+                                t("Usage"),
+                                view().flex_row().items_center().gap(px(S2)).child(host_chip()).child(round_button(Icon::RotateCw, t("Refresh"), store::refresh_usage)),
+                            ))
+                            .child(scroll().flex_1().child(view().px(px(S4)).pt(px(S2)).pb(px(BAR_ROOM)).child(crate::ui::shared::usage::usage_sections())))
+                            .into_element()
+                    }
                     HomeTab::Chats => view()
                         .flex_1()
                         .child(large_header(t("Chats"), host_chip()))
@@ -176,10 +191,12 @@ fn host_chip() -> impl IntoElement {
         .child(icon(Icon::ChevronDown, 12.0).text_color(FG_MUTED))
 }
 
-/// The system tab bar, icons only, with the three tabs; over its right
-/// end, a round glass button that starts a conversation (a screen to pick
-/// its workspace).
+/// The foot: the system tab bar, icons only, with the four tabs, and
+/// beside it (not over it) a round glass button that starts a conversation
+/// (a screen to pick its workspace). The bar keeps its width on the tabs
+/// that offer no new conversation, the button's place left empty.
 fn foot(tab: Signal<HomeTab>) -> impl IntoElement {
+    const NEW: f32 = 56.0;
     view()
         .absolute()
         .left(px(0.0))
@@ -187,37 +204,51 @@ fn foot(tab: Signal<HomeTab>) -> impl IntoElement {
         .bottom(px(0.0))
         .pb_safe_area()
         .pointer_events(nsh_core::PointerEvents::BoxNone)
-        // Only the conversations offer a new one.
-        .child(when(move || tab.get() == HomeTab::Chats, move ||
-            view().flex_row().justify_end().px(px(S6)).pb(px(S3)).pointer_events(nsh_core::PointerEvents::BoxNone).child(
-                liquid_glass(view()).w(px(56.0)).h(px(56.0)).rounded(px(R_FULL)).shadow_lg().child(
-                    button()
-                        .on_press(|| {
-                            dismiss_keyboard();
-                            super::push(super::Route::NewChat);
-                        })
-                        .accessibility_label(t("New conversation"))
-                        .flex_1()
-                        .rounded(px(R_FULL))
-                        .items_center()
-                        .justify_center()
-                        .active(|s| s.opacity(0.6))
-                        .child(icon(Icon::SquarePen, 22.0).text_color(FG)),
-                ),
-            ),
-        ))
         .child(
-            tab_bar()
-                .items(vec![
-                    TabBarItem::new("").icon("bubble.left.and.bubble.right"),
-                    TabBarItem::new("").icon("folder"),
-                    TabBarItem::new("").icon("gearshape"),
-                ])
-                .selected_index(move || tab.get().index())
-                .on_change(move |i: &u32| {
-                    dismiss_keyboard();
-                    tab.set(HomeTab::from_index(*i));
-                }),
+            view()
+                .flex_row()
+                .items_center()
+                .pr(px(S4))
+                .pointer_events(nsh_core::PointerEvents::BoxNone)
+                .child(
+                    view().flex_1().child(
+                        tab_bar()
+                            .items(vec![
+                                TabBarItem::new("").icon("bubble.left.and.bubble.right"),
+                                TabBarItem::new("").icon("folder"),
+                                TabBarItem::new("").icon("chart.bar"),
+                                TabBarItem::new("").icon("gearshape"),
+                            ])
+                            .selected_index(move || tab.get().index())
+                            .on_change(move |i: &u32| {
+                                dismiss_keyboard();
+                                tab.set(HomeTab::from_index(*i));
+                            }),
+                    ),
+                )
+                .child(
+                    // Level with the bar's pill, which sits above the
+                    // middle of the bar's own box.
+                    view().w(px(NEW)).h(px(NEW)).translate_y(DefiniteLength::from(px(-11.0))).pointer_events(nsh_core::PointerEvents::BoxNone).child(
+                        // Only the conversations offer a new one.
+                        when(move || tab.get() == HomeTab::Chats, move || {
+                            liquid_glass(view()).w(px(NEW)).h(px(NEW)).rounded(px(R_FULL)).shadow_lg().child(
+                                button()
+                                    .on_press(|| {
+                                        dismiss_keyboard();
+                                        super::push(super::Route::NewChat);
+                                    })
+                                    .accessibility_label(t("New conversation"))
+                                    .flex_1()
+                                    .rounded(px(R_FULL))
+                                    .items_center()
+                                    .justify_center()
+                                    .active(|s| s.opacity(0.6))
+                                    .child(icon(Icon::SquarePen, 22.0).text_color(FG)),
+                            )
+                        }),
+                    ),
+                ),
         )
 }
 

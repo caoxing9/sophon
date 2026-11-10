@@ -1,6 +1,8 @@
-//! Usage: what the agents used on this computer, from their own session
+//! Usage: what the agents used on the computer, from their own session
 //! logs (tokens, cache, an API-price estimate, by model and by day), and
 //! the plan limits the daemon reports, with their trend and a forecast.
+//! The desktop's page and the phone's tab: the phone has no logs, so the
+//! computer's Sophon reads its own and sends the sums.
 
 use crate::i18n::{t, tf};
 use nsh_base::plot::{Curve, Scale, line, plot};
@@ -43,18 +45,30 @@ pub(crate) fn usage_page(compact: bool) -> impl IntoElement {
     )
 }
 
+/// Both halves without a page around them, for the phone's tab.
+pub(crate) fn usage_sections() -> View {
+    let range = signal(Range::Week);
+    view().gap(px(S6)).child(history_section(range)).child(limits_section())
+}
+
 /// The session-log half: the range switch, totals, the days and the models.
 fn history_section(range: Signal<Range>) -> View {
     let local = computed(store::local_usage);
-    let remote = computed(|| !store::on_this_mac());
+    // The phone's numbers are the computer's own, so nothing to explain.
+    let remote = computed(|| !MOBILE && !store::on_this_mac());
     view()
         .gap(px(S4))
         .child(
+            // On the phone the title and the switch do not fit one line.
             view()
-                .flex_row()
-                .items_center()
+                .when(!MOBILE, |v| v.flex_row().items_center())
                 .gap(px(S3))
-                .child(text(t("This computer's sessions")).text_size(px(TEXT_LG)).font_weight(FontWeight(500)).flex_1())
+                .child(
+                    text(if MOBILE { t("The computer's sessions") } else { t("This computer's sessions") })
+                        .text_size(px(TEXT_LG))
+                        .font_weight(FontWeight(500))
+                        .when(!MOBILE, |v| v.flex_1()),
+                )
                 .child(segmented(
                     vec![(Range::Today, t("Today").into()), (Range::Week, t("7 days").into()), (Range::Month, t("30 days").into())],
                     move || range.get(),
@@ -82,8 +96,8 @@ fn history_section(range: Signal<Range>) -> View {
             let (report, loading) = local.with(|l| (l.report.clone(), l.loading));
             let r = range.get();
             Some(untracked(move || match report {
-                None if cfg!(any(target_os = "ios", target_arch = "wasm32")) => muted(t("Session statistics are read on a computer, from the Sophon desktop app")).into_element(),
                 None if loading => muted(t("Reading session logs…")).into_element(),
+                None if cfg!(any(target_os = "ios", target_arch = "wasm32")) => muted(t("Session statistics come from Sophon on the computer: pair with it there (not with the service alone) to see them")).into_element(),
                 None => muted(t("No session logs found")).into_element(),
                 Some(report) => {
                     let stats = report.range(r).clone();
@@ -198,6 +212,40 @@ fn head_cell(s: &str) -> nsh_core::element::Text {
 fn models_table(stats: &Stats) -> View {
     if stats.models.is_empty() {
         return view().child(muted(t("No sessions in this range")));
+    }
+    // The phone: a model a row, its cost at the end and its tokens under
+    // its name (seven columns do not fit).
+    if MOBILE {
+        let mut c = card();
+        for (i, m) in stats.models.iter().enumerate() {
+            let k = m.totals.tokens;
+            let cost = if m.priced { usage::dollars(m.totals.cost) } else { t("unpriced").to_owned() };
+            c = c.child(
+                view()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(S3))
+                    .px(px(S4))
+                    .py(px(S3))
+                    .when(i > 0, |v| v.border_t_1().border_color(BORDER))
+                    .child(icon(if m.source == usage::Source::Claude { Icon::Claude } else { Icon::Codex }, 16.0).text_color(FG_MUTED))
+                    .child(
+                        view()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .gap(px(2.0))
+                            .child(text(m.model.clone()).text_size(px(TEXT_SM)).font_family(|| MONO).number_of_lines(1))
+                            .child(
+                                text(tf("{} in · {} out · {} cached", &[&usage::compact(k.input), &usage::compact(k.output), &hit_rate(&k)]))
+                                    .text_size(px(TEXT_XS))
+                                    .text_color(FG_FAINT)
+                                    .number_of_lines(1),
+                            ),
+                    )
+                    .child(text(cost).text_size(px(TEXT_SM)).font_family(|| MONO).text_color(if m.priced { FG } else { FG_MUTED })),
+            );
+        }
+        return c;
     }
     let mut c = card().child(
         view()

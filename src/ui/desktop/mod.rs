@@ -14,7 +14,6 @@ mod settings;
 pub(crate) mod shortcuts;
 mod sidebar;
 mod terminal;
-mod usage;
 mod workspace;
 
 use crate::i18n::t;
@@ -266,7 +265,7 @@ fn main(compact: bool) -> impl IntoElement {
                 Main::Settings => settings::settings(compact).into_element(),
                 Main::History => history::history(compact).into_element(),
                 Main::Schedules => schedules::schedules(compact).into_element(),
-                Main::Usage => usage::usage_page(compact).into_element(),
+                Main::Usage => crate::ui::shared::usage::usage_page(compact).into_element(),
                 Main::Workspace => workspace::workspace(compact).into_element(),
             }))
         }))

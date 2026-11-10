@@ -263,9 +263,16 @@ fn refresh_local_usage() {
     });
 }
 
-/// No session logs to read on a phone or in a browser.
+/// A phone or a browser has no session logs: the host's Sophon reads its
+/// own and sends the sums (through its bridge).
 #[cfg(any(target_os = "ios", target_arch = "wasm32"))]
-fn refresh_local_usage() {}
+fn refresh_local_usage() {
+    if global::<LocalUsage>().with_untracked(|u| u.loading) {
+        return;
+    }
+    global::<LocalUsage>().update(|u| u.loading = true);
+    send(Command::HostUsage);
+}
 
 /// Sends review notes on a diff to the workspace's newest agent.
 pub(crate) fn send_review(path: Option<&str>, note: &str) -> bool {
@@ -4098,6 +4105,12 @@ pub(crate) fn apply(event: Event) {
             *p = Pairing { loaded: true, qr_svg: link.as_deref().and_then(qr_svg), sophon_url: link, url, relay_enabled, error };
         }),
         Event::Labels(list) => global::<LabelCatalog>().update(|l| l.0 = list),
+        Event::HostUsage(report) => global::<LocalUsage>().update(|u| {
+            u.loading = false;
+            if let Some(report) = report.as_ref().and_then(crate::usage::Report::from_json) {
+                u.report = Some(report);
+            }
+        }),
         Event::Usage(list) => {
             record_limits(&list);
             global::<UsageState>().update(|u| u.0 = Some(list));

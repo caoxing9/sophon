@@ -30,6 +30,9 @@ pub enum Command {
     /// Asks the host's Sophon (its bridge) for the pictures of a message
     /// this device has none of: sent from another device, or forgotten.
     AskPictures { message_id: String, text: String },
+    /// Asks the host's Sophon for its session-log statistics (a phone has
+    /// no logs of its own).
+    HostUsage,
     /// Uploads a file to the host for the next message; answered by
     /// [`Event::Uploaded`] with the same `id`.
     Upload { id: String, name: String, mime: String, bytes: Vec<u8> },
@@ -521,6 +524,9 @@ pub enum Event {
     /// The conversation shown from this device's copy has everything the
     /// host has now (what came since arrived as `TimelineLive`).
     TimelineSynced { agent_id: String },
+    /// The host's session-log statistics as its Sophon read them
+    /// (`HostUsage`); `None` when this session cannot ask for them.
+    HostUsage(Option<Value>),
     /// The pictures the host's Sophon kept for a message (`AskPictures`).
     Pictures { message_id: String, text: String, pictures: Vec<String> },
     Commands { agent_id: String, list: Vec<SlashCommand> },
@@ -693,6 +699,9 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
                         backoff = Duration::from_secs(1);
                         break;
                     }
+                    // Asked while away: no answer, said so (no notice).
+                    Some(Command::HostUsage) => { let _ = events.send(Event::HostUsage(None)); }
+                    Some(Command::AskPictures { .. }) => {}
                     // Just started: try now, then again soon.
                     Some(Command::Reconnect) => {
                         backoff = Duration::from_millis(250);
@@ -998,6 +1007,14 @@ async fn session(
                 if let Command::Open(id) = &cmd {
                     *open_agent = Some(id.clone());
                 }
+                if let Command::HostUsage = &cmd {
+                    if connected && endpoint.bridge_token.is_some() {
+                        send(&mut tx, &json!({ "type": "sophon_usage_request" })).await?;
+                    } else if events.send(Event::HostUsage(None)).is_err() {
+                        return Ok(Exit::UiGone);
+                    }
+                    continue;
+                }
                 if let Command::AskPictures { message_id, text } = &cmd {
                     // Sophon's bridge answers this, not the service: only
                     // a session that goes through one asks.
@@ -1107,6 +1124,12 @@ async fn session(
                         return Err(format!("The daemon refused this client: {reason}"));
                     }
                     Some("session") => {}
+                    Some("sophon_usage") => {
+                        if events.send(Event::HostUsage(msg.get("report").cloned())).is_err() {
+                            return Ok(Exit::UiGone);
+                        }
+                        continue;
+                    }
                     Some("sophon_pictures") => {
                         let field = |k| msg.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
                         let pictures: Vec<String> = msg
@@ -1335,7 +1358,7 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
     match cmd {
         Command::Open(id) => timeline_requests(&id, pending),
         // Sent by the session itself, with its binary frames.
-        Command::Upload { .. } | Command::Download { .. } | Command::Reconnect | Command::AskPictures { .. } => vec![],
+        Command::Upload { .. } | Command::Download { .. } | Command::Reconnect | Command::AskPictures { .. } | Command::HostUsage => vec![],
         Command::Send { agent_id, text, behavior, images, attachments, message_id } => {
             let mut msg = json!({
                 "type": "send_agent_message_request",

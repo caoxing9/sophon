@@ -137,7 +137,78 @@ pub(crate) struct Report {
     pub(crate) files: usize,
 }
 
+// A report as JSON, for a phone to show the computer's (it has no session
+// logs of its own): the host's Sophon reads them and sends this.
+impl Tokens {
+    fn to_json(self) -> serde_json::Value {
+        serde_json::json!([self.input, self.output, self.cache_read, self.cache_write])
+    }
+    fn from_json(v: &serde_json::Value) -> Option<Self> {
+        let n = |i: usize| v.get(i).and_then(serde_json::Value::as_u64);
+        Some(Tokens { input: n(0)?, output: n(1)?, cache_read: n(2)?, cache_write: n(3)? })
+    }
+}
+
+impl Totals {
+    fn to_json(self) -> serde_json::Value {
+        serde_json::json!({ "t": self.tokens.to_json(), "c": self.cost, "u": self.unpriced, "r": self.responses })
+    }
+    fn from_json(v: &serde_json::Value) -> Option<Self> {
+        Some(Totals {
+            tokens: Tokens::from_json(v.get("t")?)?,
+            cost: v.get("c")?.as_f64()?,
+            unpriced: v.get("u")?.as_u64()?,
+            responses: v.get("r")?.as_u64()?,
+        })
+    }
+}
+
+impl Stats {
+    fn to_json(&self) -> serde_json::Value {
+        let models: Vec<_> = self
+            .models
+            .iter()
+            .map(|m| serde_json::json!({ "s": if m.source == Source::Claude { "claude" } else { "codex" }, "m": m.model, "p": m.priced, "t": m.totals.to_json() }))
+            .collect();
+        serde_json::json!({ "totals": self.totals.to_json(), "models": models, "days": self.days.iter().map(|d| d.to_json()).collect::<Vec<_>>() })
+    }
+    fn from_json(v: &serde_json::Value) -> Option<Self> {
+        let models = v
+            .get("models")?
+            .as_array()?
+            .iter()
+            .filter_map(|m| {
+                Some(ModelRow {
+                    source: if m.get("s")?.as_str()? == "claude" { Source::Claude } else { Source::Codex },
+                    model: m.get("m")?.as_str()?.to_owned(),
+                    priced: m.get("p")?.as_bool()?,
+                    totals: Totals::from_json(m.get("t")?)?,
+                })
+            })
+            .collect();
+        let days = v.get("days")?.as_array()?.iter().filter_map(Totals::from_json).collect();
+        Some(Stats { totals: Totals::from_json(v.get("totals")?)?, models, days })
+    }
+}
+
 impl Report {
+    pub(crate) fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "today": self.today.to_json(), "week": self.week.to_json(), "month": self.month.to_json(),
+            "lastDay": self.last_day, "files": self.files,
+        })
+    }
+
+    pub(crate) fn from_json(v: &serde_json::Value) -> Option<Self> {
+        Some(Report {
+            today: Stats::from_json(v.get("today")?)?,
+            week: Stats::from_json(v.get("week")?)?,
+            month: Stats::from_json(v.get("month")?)?,
+            last_day: v.get("lastDay")?.as_i64()?,
+            files: v.get("files")?.as_u64()? as usize,
+        })
+    }
+
     pub(crate) fn range(&self, r: Range) -> &Stats {
         match r {
             Range::Today => &self.today,
@@ -347,5 +418,17 @@ mod tests {
         assert_eq!(civil(1_794_035_289 / 86_400), (2026, 11, 7));
         assert_eq!(civil(-1), (1969, 12, 31));
         assert_eq!(day_label(1_794_035_289 / 86_400), "11-07");
+    }
+
+    #[test]
+    fn a_report_survives_the_trip_to_a_phone() {
+        let totals = Totals { tokens: Tokens { input: 1, output: 2, cache_read: 3, cache_write: 4 }, cost: 1.5, unpriced: 7, responses: 9 };
+        let stats = Stats {
+            totals,
+            models: vec![ModelRow { source: Source::Codex, model: "gpt".into(), priced: true, totals }],
+            days: vec![totals, Totals::default()],
+        };
+        let report = Report { today: stats.clone(), week: stats.clone(), month: stats, last_day: 20_000, files: 3 };
+        assert_eq!(Report::from_json(&report.to_json()), Some(report));
     }
 }
