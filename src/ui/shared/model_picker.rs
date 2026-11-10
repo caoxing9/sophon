@@ -50,6 +50,30 @@ impl Row {
 /// The models `p` runs itself: Claude Code's are Anthropic's (no
 /// `provider/model` ids of a gateway).
 fn rows_of(p: &Provider) -> Vec<Row> {
+    // Claude Code's own list on this computer first: it names models the
+    // service's built-in list may not have yet.
+    if p.id == "claude" {
+        if let Some(catalog) = store::claude_catalog() {
+            let row = |id: &str, name: &str| Row {
+                provider: p.id.clone(),
+                agent: p.label.clone(),
+                model: id.to_owned(),
+                name: name.to_owned(),
+                gateway: false,
+                subscription: false,
+            };
+            let mut rows: Vec<Row> = catalog.iter().map(|m| row(&m.id, &m.name)).collect();
+            // The service's extras (1M variants), not its bare aliases
+            // (`fable` from settings.json): the catalog names their model.
+            for m in &p.models {
+                let alias = matches!(m.id.as_str(), "opus" | "sonnet" | "haiku" | "fable" | "default");
+                if !alias && !m.id.contains('/') && !rows.iter().any(|r| r.model == m.id) {
+                    rows.push(row(&m.id, &m.label));
+                }
+            }
+            return rows;
+        }
+    }
     p.models
         .iter()
         .filter(|m| p.id != "claude" || !m.id.contains('/'))
@@ -289,7 +313,17 @@ fn list(live: bool, open: Signal<bool>, providers: Memo<Vec<Provider>>, tab: Sig
             // Claude: each family's newest, as Claude Code lists them; the
             // earlier ones folded under a row of their own.
             let older = if tab == Tab::Agent("claude".into()) && needle.is_empty() {
-                older_rows(&rows, c.model.as_deref().unwrap_or(""))
+                let selected = c.model.as_deref().unwrap_or("");
+                match store::claude_catalog() {
+                    // Claude Code's `/model`: its main section first, the rest
+                    // (and the service's extras) folded.
+                    Some(catalog) => rows
+                        .iter()
+                        .filter(|r| r.model != selected && !catalog.iter().any(|m| m.main && m.id == r.model))
+                        .map(Row::key)
+                        .collect(),
+                    None => older_rows(&rows, selected),
+                }
             } else {
                 Default::default()
             };
