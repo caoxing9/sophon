@@ -251,7 +251,16 @@ fn models_table(stats: &Stats) -> View {
 
 /// The plan limits, as the daemon reports them, each with its trend.
 fn limits_section() -> View {
-    let data = computed(store::usage);
+    // Only the agents this host has and has on (still loading counts): the
+    // service also reports providers nobody uses here (a stale Cursor login).
+    let data = computed(|| {
+        let usage = store::usage()?;
+        let agents = store::providers();
+        if agents.is_empty() {
+            return Some(usage);
+        }
+        Some(usage.into_iter().filter(|u| agents.iter().any(|a| a.id == u.id && a.enabled)).collect::<Vec<_>>())
+    });
     let history = computed(store::limit_history);
     view()
         .gap(px(S4))
