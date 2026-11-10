@@ -121,16 +121,14 @@ fn host_body() -> View {
         .items_center()
         .gap(px(S2))
         .px(px(S2))
-        .py(px(S2))
+        // As tall as the rows under it, its status mark where their icons are.
+        .h(px(CONTROL_MD))
         .mb(px(S1))
-        .child(
-            mark(26.0, Lift::Small),
-        )
         .rounded(px(R_LG))
         .hover(|s| s.bg(sidebar_hover()))
         .child(
-            // The host alone: the mark beside it says whose app this is.
-            // A long name ends in an ellipsis inside the row.
+            // The host alone: no app mark beside it, which says nothing
+            // here. A long name ends in an ellipsis inside the row.
             view()
                 .flex_1()
                 .min_w(px(0.0))
