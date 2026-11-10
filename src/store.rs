@@ -2865,9 +2865,16 @@ pub(crate) fn set_control(live: bool, change: Control) {
             apply_provider_defaults(f);
         }
         Control::Model(m) => {
+            // The agent's own list knows its levels (a model the service's
+            // list lacks too); the service's otherwise.
+            let local = local_models(&f.provider).and_then(|l| l.into_iter().find(|x| x.id == m));
             let model = provider(&f.provider).and_then(|p| p.model(&m).cloned());
             f.model = Some(m);
-            if let Some(model) = model {
+            if let Some(local) = local.filter(|l| !l.thinking.is_empty()) {
+                if !local.thinking.iter().any(|(id, _)| Some(id) == f.thinking.as_ref()) {
+                    f.thinking = local.default_thinking.or_else(|| local.thinking.first().map(|(id, _)| id.clone()));
+                }
+            } else if let Some(model) = model {
                 if !model.thinking.iter().any(|t| Some(&t.id) == f.thinking.as_ref()) {
                     f.thinking = model.default_thinking.or_else(|| model.thinking.first().map(|t| t.id.clone()));
                 }
@@ -3328,8 +3335,8 @@ pub(crate) fn apply(event: Event) {
             }
         }
         Event::Providers(list) => {
-            // Claude Code may have learned new models since: read its list again.
-            load_claude_catalog();
+            // The agents may have learned new models since: read their lists again.
+            load_local_models();
             let first = global::<Providers>().with_untracked(|p| p.0.is_empty());
             // An instance just added gets its diagnostic too.
             let (wanted, known) = global::<Diagnostics>().with_untracked(|d| (d.wanted, d.map.keys().cloned().collect::<Vec<_>>()));
@@ -3783,83 +3790,29 @@ mod config_patch_tests {
     }
 }
 
-/// A model of Claude Code's own list (`/model`), as its catalog cache on
-/// this computer has it: `main` for the picker's first section.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct CatalogModel {
-    pub(crate) id: String,
-    pub(crate) name: String,
-    pub(crate) main: bool,
-}
-
+/// Each agent's models as it keeps them on this computer ([`crate::models`]),
+/// by provider id.
 #[derive(Clone, Default)]
-struct ClaudeCatalog(Option<Vec<CatalogModel>>);
+struct LocalModels(HashMap<String, Vec<crate::models::LocalModel>>);
 
-/// Claude Code's own model list, while the host is this computer: it knows
-/// models the service's built-in list does not yet (a release newer than
-/// the service), and which ones `/model` shows first. `None` elsewhere.
-pub(crate) fn claude_catalog() -> Option<Vec<CatalogModel>> {
+/// `provider`'s models as the agent itself lists them, while the host is
+/// this computer: they include models the service's built-in list does not
+/// have yet, in the agent's own order. `None` elsewhere, or for an agent
+/// that keeps no list.
+pub(crate) fn local_models(provider: &str) -> Option<Vec<crate::models::LocalModel>> {
     if crate::ui::kit::MOBILE || current_host().is_some() {
         return None;
     }
-    global::<ClaudeCatalog>().with(|c| c.0.clone())
+    global::<LocalModels>().with(|m| m.0.get(provider).cloned())
 }
 
-/// Reads Claude Code's catalog cache (`<config>/cache/model-catalog/*-cc.json`,
-/// the newest fetched), where it keeps the list `/model` shows.
-pub(crate) fn load_claude_catalog() {
-    #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
-    {
-        let dir = std::env::var_os("CLAUDE_CONFIG_DIR")
-            .map(std::path::PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".claude")));
-        let Some(dir) = dir.map(|d| d.join("cache").join("model-catalog")) else { return };
-        let newest = std::fs::read_dir(&dir)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter(|e| e.file_name().to_string_lossy().ends_with("-cc.json"))
-            .filter_map(|e| std::fs::read_to_string(e.path()).ok())
-            .filter_map(|text| {
-                let v: serde_json::Value = serde_json::from_str(&text).ok()?;
-                Some((v.get("fetchedAt").and_then(serde_json::Value::as_u64).unwrap_or(0), text))
-            })
-            .max_by_key(|(at, _)| *at)
-            .and_then(|(_, text)| parse_claude_catalog(&text));
-        global::<ClaudeCatalog>().set(ClaudeCatalog(newest));
+/// Reads the agents' own model lists again.
+pub(crate) fn load_local_models() {
+    let mut map = HashMap::new();
+    for provider in ["claude", "codex"] {
+        if let Some(list) = crate::models::read_local(provider) {
+            map.insert(provider.to_owned(), list);
+        }
     }
-}
-
-/// The models of a Claude Code catalog cache, in its order.
-#[cfg_attr(any(target_os = "ios", target_arch = "wasm32"), allow(dead_code))]
-fn parse_claude_catalog(text: &str) -> Option<Vec<CatalogModel>> {
-    let v: serde_json::Value = serde_json::from_str(text).ok()?;
-    let models = v.pointer("/catalog/config/models")?.as_array()?;
-    let list: Vec<CatalogModel> = models
-        .iter()
-        .filter_map(|m| {
-            Some(CatalogModel {
-                id: m.get("id")?.as_str()?.to_owned(),
-                name: m.get("name").and_then(serde_json::Value::as_str).map(str::to_owned)?,
-                main: m.get("section").and_then(serde_json::Value::as_str) == Some("main"),
-            })
-        })
-        .collect();
-    (!list.is_empty()).then_some(list)
-}
-
-#[cfg(test)]
-mod claude_catalog_tests {
-    #[test]
-    fn a_catalog_cache_gives_its_models_in_order_with_its_main_section() {
-        let text = r#"{"version":2,"fetchedAt":1,"catalog":{"config":{"models":[
-            {"id":"claude-opus-5-5","name":"Opus 5.5","section":"main"},
-            {"id":"claude-fable-5-2","name":"Fable 5.2","section":"main"},
-            {"id":"claude-opus-5","name":"Opus 5","section":"overflow"},
-            {"name":"no id"}]}}}"#;
-        let list = super::parse_claude_catalog(text).unwrap();
-        let ids: Vec<_> = list.iter().map(|m| (m.id.as_str(), m.main)).collect();
-        assert_eq!(ids, [("claude-opus-5-5", true), ("claude-fable-5-2", true), ("claude-opus-5", false)]);
-        assert!(super::parse_claude_catalog("{}").is_none());
-    }
+    global::<LocalModels>().set(LocalModels(map));
 }

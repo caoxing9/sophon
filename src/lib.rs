@@ -12,6 +12,7 @@ mod i18n;
 mod platform;
 mod prompt_link;
 mod store;
+mod models;
 mod ui;
 mod update;
 mod usage;
@@ -66,7 +67,7 @@ pub fn App() -> impl IntoElement {
     store::load_prefs();
     start_connection();
     store::load_hosts();
-    store::load_claude_catalog();
+    store::load_local_models();
     store::watch_notification_presses();
     store::watch_pairing_links();
     // The web's desktop idiom is still a page: no bridge, no updates.

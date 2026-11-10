@@ -50,29 +50,35 @@ impl Row {
 /// The models `p` runs itself: Claude Code's are Anthropic's (no
 /// `provider/model` ids of a gateway).
 fn rows_of(p: &Provider) -> Vec<Row> {
-    // Claude Code's own list on this computer first: it names models the
-    // service's built-in list may not have yet.
-    if p.id == "claude" {
-        if let Some(catalog) = store::claude_catalog() {
-            let row = |id: &str, name: &str| Row {
+    // The agent's own list on this computer first (Claude Code's catalog,
+    // Codex's): it names models the service's built-in list may not have
+    // yet, in the agent's order.
+    if let Some(local) = store::local_models(&p.id) {
+        let row = |id: &str, name: &str| {
+            let prefix = id.split_once('/').map(|(p, _)| p);
+            Row {
                 provider: p.id.clone(),
                 agent: p.label.clone(),
                 model: id.to_owned(),
                 name: name.to_owned(),
-                gateway: false,
-                subscription: false,
-            };
-            let mut rows: Vec<Row> = catalog.iter().map(|m| row(&m.id, &m.name)).collect();
-            // The service's extras (1M variants), not its bare aliases
-            // (`fable` from settings.json): the catalog names their model.
-            for m in &p.models {
-                let alias = matches!(m.id.as_str(), "opus" | "sonnet" | "haiku" | "fable" | "default");
-                if !alias && !m.id.contains('/') && !rows.iter().any(|r| r.model == m.id) {
-                    rows.push(row(&m.id, &m.label));
-                }
+                gateway: prefix.is_some(),
+                subscription: prefix.is_some_and(|p| store::SUBSCRIPTION_PREFIXES.contains(&p)),
             }
-            return rows;
+        };
+        let mut rows: Vec<Row> = local.iter().map(|m| row(&m.id, &m.name)).collect();
+        // The service's extras (1M variants), not its bare aliases (`fable`
+        // from settings.json): the agent's list names their model.
+        for m in &p.models {
+            let alias = matches!(m.id.as_str(), "opus" | "sonnet" | "haiku" | "fable" | "default");
+            if !alias && !rows.iter().any(|r| r.model == m.id) {
+                rows.push(row(&m.id, &m.label));
+            }
         }
+        return rows
+            .into_iter()
+            .filter(|r| p.id != "claude" || !r.model.contains('/'))
+            .filter(|r| !store::forbidden_model(&r.model, &r.name))
+            .collect();
     }
     p.models
         .iter()
@@ -314,12 +320,12 @@ fn list(live: bool, open: Signal<bool>, providers: Memo<Vec<Provider>>, tab: Sig
             // earlier ones folded under a row of their own.
             let older = if tab == Tab::Agent("claude".into()) && needle.is_empty() {
                 let selected = c.model.as_deref().unwrap_or("");
-                match store::claude_catalog() {
+                match store::local_models("claude") {
                     // Claude Code's `/model`: its main section first, the rest
                     // (and the service's extras) folded.
-                    Some(catalog) => rows
+                    Some(local) => rows
                         .iter()
-                        .filter(|r| r.model != selected && !catalog.iter().any(|m| m.main && m.id == r.model))
+                        .filter(|r| r.model != selected && !local.iter().any(|m| m.main && m.id == r.model))
                         .map(Row::key)
                         .collect(),
                     None => older_rows(&rows, selected),

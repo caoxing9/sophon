@@ -601,6 +601,15 @@ fn model_picker(live: bool) -> impl IntoElement {
 
 fn thinking_options(live: bool) -> Vec<crate::daemon::model::Opt> {
     let c = store::controls(live);
+    // The agent's own list first: its levels for this model.
+    let local = c.model.as_deref().and_then(|m| store::local_models(&c.provider)?.into_iter().find(|x| x.id == m));
+    if let Some(local) = local.filter(|l| !l.thinking.is_empty()) {
+        return local
+            .thinking
+            .into_iter()
+            .map(|(id, label)| crate::daemon::model::Opt { id, label, description: String::new() })
+            .collect();
+    }
     store::provider(&c.provider)
         .and_then(|p| c.model.as_deref().and_then(|m| p.model(m).cloned()).or_else(|| p.default_model().cloned()))
         .map(|m| m.thinking)
