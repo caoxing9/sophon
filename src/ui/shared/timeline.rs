@@ -1128,6 +1128,17 @@ pub(crate) fn find_bar() -> impl IntoElement {
         let count = computed(|| store::find_matches().len());
         let cur = computed(|| store::find().current);
         let asked = computed(|| !store::find().query.trim().is_empty());
+        // The field keeps the keys: Return goes to the next match again and
+        // again, and the arrows hand the focus back after a press.
+        let field = element_ref();
+        let step = {
+            let field = field.clone();
+            move |forward: bool| {
+                store::find_step(forward);
+                field.focus();
+            }
+        };
+        let (previous, next) = (step.clone(), step);
         // A compact panel over the conversation's top right corner, as a
         // browser's or an editor's (the phone: across its top): it covers
         // nothing that the search moves to, and pushes nothing down.
@@ -1148,6 +1159,8 @@ pub(crate) fn find_bar() -> impl IntoElement {
                     .value(|| store::find().query)
                     .on_change(|v: &str| store::set_find_query(v))
                     .on_submit(|_: &str| store::find_step(true))
+                    .submit_behavior(SubmitBehavior::Submit)
+                    .element_ref(&field)
                     .placeholder(t("Find in conversation"))
                     .auto_focus(true)
                     .text_size(px(TEXT_BASE))
@@ -1171,8 +1184,8 @@ pub(crate) fn find_bar() -> impl IntoElement {
                 .flex_shrink_0(),
             )
             .child(view().w(px(1.0)).h(px(18.0)).mx(px(S1)).bg(BORDER))
-            .child(icon_btn(Icon::ChevronUp, Sz::Sm, t("Previous match"), || store::find_step(false)))
-            .child(icon_btn(Icon::ChevronDown, Sz::Sm, t("Next match"), || store::find_step(true)))
+            .child(icon_btn(Icon::ChevronUp, Sz::Sm, t("Previous match"), move || previous(false)))
+            .child(icon_btn(Icon::ChevronDown, Sz::Sm, t("Next match"), move || next(true)))
             .child(icon_btn(Icon::X, Sz::Sm, t("Close find"), store::toggle_find))
     })
 }
