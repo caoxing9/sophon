@@ -65,7 +65,7 @@ fn host_line() -> impl IntoElement {
                     m = m
                         .child(menu_heading(if spaces.is_empty() { t("Hosts") } else { t("Spaces on this Mac") }))
                         .child(menu_row(
-                            if spaces.is_empty() { t("This Mac") } else { t("My space") },
+                            store::my_space_label().unwrap_or_else(|| t("This Mac").to_owned()),
                             Some(Icon::Cpu),
                             None,
                             current.is_none(),
@@ -113,7 +113,9 @@ fn host_line() -> impl IntoElement {
 
 fn host_body() -> View {
     let conn = computed(store::conn);
-    let remote = computed(|| store::current_host().map(|h| h.label()));
+    // Another computer's or space's name; this Mac's first space's once it
+    // has one (renamed, or beside other spaces), else the host's own name.
+    let remote = computed(|| store::current_host().map(|h| h.label()).or_else(store::my_space_label));
     view()
         .flex_row()
         .items_center()
@@ -150,7 +152,7 @@ fn host_body() -> View {
                                     Conn::Starting | Conn::Connecting(_) => match name { Some(n) => tf("Connecting to {}…", &[&n]), None => t("Connecting…").to_owned() },
                                     Conn::Connected { hostname, .. } => name.unwrap_or(if hostname.is_empty() { t("This Mac").into() } else { hostname }),
                                     // This Mac's service is being started, not offline.
-                                    Conn::Down(_) if name.is_none() && store::service_start_error().is_none() => t("Starting the service…").to_owned(),
+                                    Conn::Down(_) if store::current_host().is_none() && store::service_start_error().is_none() => t("Starting the service…").to_owned(),
                                     Conn::Down(_) => tf("{} offline", &[&name.unwrap_or_else(|| t("This Mac").into())]),
                                 }
                             })
@@ -177,6 +179,8 @@ fn nav_item(
         .items_center()
         .gap(px(S2))
         .h(px(CONTROL_MD))
+        // Rows that fill under the pointer keep a hairline apart.
+        .my(px(1.0))
         .px(px(S2))
         .rounded(px(R_LG))
         .bg(move || if active.get() { highlight() } else { tint(SIDEBAR, 0.0) })

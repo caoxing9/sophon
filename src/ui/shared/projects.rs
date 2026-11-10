@@ -93,6 +93,7 @@ fn project_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
         .pl(px(S1))
         .pr(px(2.0))
         .mt(px(S3))
+        .mb(px(2.0))
         .h(px(28.0))
         .rounded(px(R_MD))
         .translate_y(move || DefiniteLength::from(px(drag.get())))
@@ -301,6 +302,8 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
     // one over it (so a chosen row under the pointer darkens a step too).
     view()
         .mx(px(S2))
+        // A hairline between rows that fill under the pointer.
+        .mb(px(2.0))
         .rounded(px(R_LG))
         .bg(move || if selected.get() { SIDEBAR_SELECTED } else { tint(SIDEBAR, 0.0) })
         .transition_colors()
@@ -314,12 +317,11 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
                 .hover(|s| s.bg(highlight()))
                 .transition_colors()
                 .child(main)
-                // The actions only under the pointer or on the chosen row
-                // (always on a phone).
+                // The actions only under the pointer (always on a phone).
                 .when(actions, |v| {
                     v.child(
                         view()
-                            .opacity(move || if MOBILE || selected.get() { 1.0_f32 } else { 0.0 })
+                            .opacity(if MOBILE { 1.0_f32 } else { 0.0 })
                             .group_hover(|s| s.opacity(1.0))
                             .transition_opacity()
                             .child(more),

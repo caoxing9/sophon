@@ -47,7 +47,7 @@ mod imp {
     }
 
     /// The port a service in `home` is set to listen on.
-    fn port_of(home: &Path) -> Option<u16> {
+    pub(crate) fn port_of(home: &Path) -> Option<u16> {
         let text = std::fs::read_to_string(home.join("config.json")).ok()?;
         let v: Value = serde_json::from_str(&text).ok()?;
         v.pointer("/daemon/listen")?.as_str()?.rsplit(':').next()?.parse().ok()
@@ -90,6 +90,12 @@ mod imp {
         std::fs::write(home.join("config.json"), serde_json::to_string_pretty(&config).unwrap_or_default()).map_err(|e| e.to_string())?;
         start(&home)?;
         Ok(home)
+    }
+
+    /// Whether the service of the space in `home` runs (Paseo keeps its pid
+    /// file while it does).
+    pub(crate) fn running(home: &Path) -> bool {
+        home.join("paseo.pid").exists()
     }
 
     /// The first space's folder, Paseo's own.
@@ -145,6 +151,28 @@ mod imp {
 
 #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
 pub(crate) use imp::*;
+
+// A phone or a page has no spaces of its own: the settings that list them
+// are a Mac's.
+#[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+mod none {
+    use std::path::{Path, PathBuf};
+
+    pub(crate) fn home_of_first() -> PathBuf {
+        PathBuf::new()
+    }
+
+    pub(crate) fn port_of(_home: &Path) -> Option<u16> {
+        None
+    }
+
+    pub(crate) fn running(_home: &Path) -> bool {
+        false
+    }
+}
+
+#[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+pub(crate) use none::*;
 
 #[cfg(test)]
 mod tests {

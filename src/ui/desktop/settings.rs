@@ -1,7 +1,7 @@
 //! The desktop's settings page: every section, with what only a desktop
 //! does (pairing a phone, updating and tuning the service).
 
-use crate::i18n::t;
+use crate::i18n::{t, tf};
 use nsh_core::prelude::*;
 
 use crate::store;
@@ -54,11 +54,90 @@ pub(crate) fn settings(compact: bool) -> impl IntoElement {
                     switch(store::local_service, store::set_local_service).accessibility_label(t("Run agents on this Mac")),
                     true,
                 ))))
+                .child(when(store::local_service, || section(t("Spaces"), spaces_card())))
                 .child(section(t("Devices"), devices_card()))
                 .child(section(t("Host behavior"), behavior_card()))
                 .child(section(t("Coding agents"), crate::ui::shared::agents::agents_card(true)))
                 .child(section(t("Text generation"), text_generation_card())),
         ))
+}
+
+/// The spaces on this Mac: each one's name, folder, port and whether its
+/// service runs, to rename, switch to or remove; and a new one.
+fn spaces_card() -> impl IntoElement {
+    card().child(dynamic(|| {
+        let spaces = store::spaces();
+        let current = store::current_host().map(|h| h.id);
+        let mine = store::my_space_label().unwrap_or_else(|| t("My space").to_owned());
+        Some(untracked(move || {
+            let home = std::env::var("HOME").unwrap_or_default();
+            let short = |p: &std::path::Path| {
+                let p = p.to_string_lossy().into_owned();
+                match p.strip_prefix(&home) {
+                    Some(rest) => format!("~{rest}"),
+                    None => p,
+                }
+            };
+            let detail = |folder: &std::path::Path, port: Option<u16>, running: bool| {
+                let mut parts = vec![short(folder)];
+                if let Some(port) = port {
+                    parts.push(tf("port {}", &[&port.to_string()]));
+                }
+                parts.push(if running { t("Running").to_owned() } else { t("Stopped").to_owned() });
+                parts.join(" · ")
+            };
+            let switch_btn = |id: Option<String>, here: bool| -> AnyElement {
+                if here {
+                    text(t("In use")).text_size(px(TEXT_SM)).text_color(FG_MUTED).into_element()
+                } else {
+                    btn(t("Switch"), Variant::Outline, Sz::Sm, None, move || store::switch_host(id.clone())).into_element()
+                }
+            };
+            let first = crate::spaces::home_of_first();
+            let mut c = view().child(row(
+                mine.clone(),
+                detail(&first, crate::spaces::port_of(&first).or(Some(6767)), true),
+                view()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(S1))
+                    .child(switch_btn(None, current.is_none()))
+                    .child(icon_btn(Icon::Pencil, Sz::Sm, t("Rename"), move || {
+                        store::open_modal(store::Modal::RenameMySpace { name: store::settings().my_space_name.unwrap_or_default() })
+                    })),
+                true,
+            ));
+            for h in spaces {
+                let Some(folder) = crate::spaces::home_of(&h.url) else { continue };
+                let here = current.as_deref() == Some(h.id.as_str());
+                let (rename_id, rename_name) = (h.id.clone(), h.label());
+                let (remove_id, remove_name, remove_folder) = (h.id.clone(), h.label(), short(&folder));
+                c = c.child(row(
+                    h.label(),
+                    detail(&folder, crate::spaces::port_of(&folder), crate::spaces::running(&folder)),
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(S1))
+                        .child(switch_btn(Some(h.id.clone()), here))
+                        .child(icon_btn(Icon::Pencil, Sz::Sm, t("Rename"), move || {
+                            store::open_modal(store::Modal::RenameHost { id: rename_id.clone(), name: rename_name.clone() })
+                        }))
+                        .child(icon_btn(Icon::Trash2, Sz::Sm, t("Remove space"), move || {
+                            store::open_modal(store::Modal::RemoveSpace { id: remove_id.clone(), name: remove_name.clone(), folder: remove_folder.clone() })
+                        })),
+                    false,
+                ));
+            }
+            c.child(row(
+                t("New space"),
+                t("Its own projects, conversations and schedules, for another person or another kind of work"),
+                btn(t("New space…"), Variant::Outline, Sz::Sm, Some(Icon::FolderPlus), || store::open_modal(store::Modal::CreateSpace)),
+                false,
+            ))
+            .into_element()
+        }))
+    }))
 }
 
 /// The devices that reach this Mac through its bridge, over the LAN or the

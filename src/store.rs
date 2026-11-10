@@ -769,6 +769,10 @@ pub(crate) enum Modal {
     RenameWorkspace { id: String, name: String },
     RenameAgent { id: String, name: String },
     RenameHost { id: String, name: String },
+    /// Renames the first space on this Mac.
+    RenameMySpace { name: String },
+    /// Removes a space on this Mac (its service stops; its folder stays).
+    RemoveSpace { id: String, name: String, folder: String },
     ArchiveWorkspace { id: String, name: String },
     Commit,
     Palette,
@@ -832,6 +836,8 @@ pub(crate) struct Settings {
     /// This Mac runs agents of its own (its Paseo service). Off: it only
     /// connects to other computers (a partner's Mac with no service).
     pub(crate) local_service: LocalService,
+    /// What the first space on this Mac is called, when renamed.
+    pub(crate) my_space_name: Option<String>,
 }
 
 /// Whether this Mac runs a service of its own (on unless set off; a Mac
@@ -1937,6 +1943,18 @@ pub(crate) fn on_this_mac() -> bool {
     local_service() && current_host().is_none_or(|h| crate::spaces::home_of(&h.url).is_some())
 }
 
+/// What the first space on this Mac is called: its name when renamed, "My
+/// space" once there are others, else nothing (the host shows its name).
+pub(crate) fn my_space_label() -> Option<String> {
+    settings().my_space_name.clone().or_else(|| (!spaces().is_empty()).then(|| t("My space").to_owned()))
+}
+
+/// Renames the first space on this Mac (empty: its default name back).
+pub(crate) fn rename_my_space(name: &str) {
+    let name = name.trim().to_owned();
+    edit_settings(|s| s.my_space_name = Some(name).filter(|n| !n.is_empty()));
+}
+
 /// The spaces on this Mac besides the first: saved hosts at `space:` addresses.
 pub(crate) fn spaces() -> Vec<HostProfile> {
     hosts().into_iter().filter(|h| crate::spaces::home_of(&h.url).is_some()).collect()
@@ -2097,6 +2115,7 @@ fn save_prefs() {
             SendBehavior::Queue => "queue",
         },
         "localService": s.local_service.0,
+        "mySpaceName": s.my_space_name,
         "keepAwake": match s.keep_awake {
             KeepAwake::Off => "off",
             KeepAwake::On => "on",
@@ -2145,10 +2164,12 @@ pub(crate) fn load_prefs() {
     };
     // A Mac without Paseo starts as one that only connects to others.
     let local = v.get("localService").and_then(serde_json::Value::as_bool).unwrap_or_else(|| cfg!(target_arch = "wasm32") || service_cli().is_some());
+    let my_space = v.get("mySpaceName").and_then(serde_json::Value::as_str).map(str::to_owned).filter(|n| !n.trim().is_empty());
     global::<Settings>().update(|s| {
         s.send_behavior = behavior;
         s.keep_awake = keep_awake;
         s.local_service = LocalService(local);
+        s.my_space_name = my_space;
     });
     if let Some(h) = v.get("sidebarHidden").and_then(serde_json::Value::as_bool) {
         global::<SidebarHidden>().update(|s| s.0 = h);

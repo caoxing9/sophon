@@ -89,6 +89,18 @@ fn body(m: Modal) -> View {
         Modal::RenameHost { id, name } => rename(t("Rename host"), name, move |v| {
             store::rename_host(&id, v);
         }),
+        Modal::RenameMySpace { name } => rename(t("Rename space"), name, store::rename_my_space),
+        Modal::RemoveSpace { id, name, folder } => sheet(t("Remove space"))
+            .child(
+                text(tf("“{}” leaves Sophon and its service stops. Its projects and conversations stay in {}, to delete by hand or to bring back", &[&name, &folder]))
+                    .text_size(px(TEXT_BASE))
+                    .line_height(px(20.0))
+                    .text_color(FG_MUTED),
+            )
+            .child(actions(btn(t("Remove"), Variant::Destructive, Sz::Md, Some(Icon::Trash2), move || {
+                store::remove_host(&id);
+                store::close_modal();
+            }))),
         Modal::Commit => commit(),
         Modal::Palette => view(),
         Modal::NewSchedule => new_schedule(),

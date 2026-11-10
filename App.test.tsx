@@ -70,3 +70,11 @@ test("a Mac that runs no agents of its own connects to others", async () => {
   await app.press("label:Run agents on this Mac");
   expect(app.texts()).not.toContain("Connect to the computer your agents run on");
 });
+
+test("settings manage the spaces on this Mac", async () => {
+  const app = await open(".", { width: 1100, height: 900 });
+  await app.press("label:Settings >> nth=0");
+  expect(app.texts()).toContain("Spaces");
+  expect(app.texts()).toContain("My space");
+  expect(app.texts()).toContain("New space…");
+});
