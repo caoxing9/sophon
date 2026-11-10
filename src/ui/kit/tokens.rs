@@ -51,6 +51,12 @@ pub(crate) fn highlight() -> AdaptiveColor {
     AdaptiveColor::new(Hsla::from(rgb(0x3d3929)).opacity(0.06), Hsla::from(rgb(0xfaf9f5)).opacity(0.07))
 }
 
+/// A sidebar row under the pointer: the chosen row's fill, a step lighter,
+/// so the two read as one colour at two strengths.
+pub(crate) fn sidebar_hover() -> AdaptiveColor {
+    SIDEBAR_SELECTED.opacity(0.6)
+}
+
 pub(crate) fn tint(color: AdaptiveColor, alpha: f32) -> AdaptiveColor {
     color.opacity(alpha)
 }

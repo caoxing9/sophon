@@ -127,7 +127,7 @@ fn host_body() -> View {
             mark(26.0, Lift::Small),
         )
         .rounded(px(R_LG))
-        .hover(|s| s.bg(highlight()))
+        .hover(|s| s.bg(sidebar_hover()))
         .child(
             // The host alone: the mark beside it says whose app this is.
             // A long name ends in an ellipsis inside the row.
@@ -179,8 +179,8 @@ fn nav_item(
         .my(px(1.0))
         .px(px(S2))
         .rounded(px(R_LG))
-        .bg(move || if active.get() { highlight() } else { tint(SIDEBAR, 0.0) })
-        .hover(|s| s.bg(highlight()))
+        .bg(move || if active.get() { SIDEBAR_SELECTED } else { tint(SIDEBAR, 0.0) })
+        .hover(|s| s.bg(sidebar_hover()))
         .active(|s| s.opacity(0.7))
         .child(icon(glyph, 16.0).text_color(FG_MUTED))
         .child(text(label).text_size(px(TEXT_BASE)).text_color(FG))

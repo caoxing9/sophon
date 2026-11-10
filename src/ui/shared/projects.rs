@@ -94,14 +94,15 @@ fn project_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
         .pr(px(2.0))
         .mt(px(S3))
         .mb(px(2.0))
-        .h(px(28.0))
-        .rounded(px(R_MD))
+        // As tall and as round as the conversations' rows under it.
+        .h(px(ROW_HEIGHT))
+        .rounded(px(R_LG))
         .translate_y(move || DefiniteLength::from(px(drag.get())))
-        .bg(move || if dragging.get() { highlight() } else { tint(SIDEBAR, 0.0) })
+        .bg(move || if dragging.get() { sidebar_hover() } else { tint(SIDEBAR, 0.0) })
         // Under the pointer: the row fills, its name darkens and its
         // actions appear (out of the way otherwise, as T3's and Lody's).
         .group()
-        .hover(|s| s.bg(highlight()))
+        .hover(|s| s.bg(sidebar_hover()))
         .transition_colors()
         .child(
             button()
@@ -116,7 +117,7 @@ fn project_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
                 .flex_row()
                 .items_center()
                 .gap(px(6.0))
-                .h(px(28.0))
+                .h(px(ROW_HEIGHT))
                 .child(
                     icon(Icon::ChevronDown, 13.0)
                         .text_color(FG_FAINT)
@@ -314,7 +315,7 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
                 .pr(px(S1))
                 .rounded(px(R_LG))
                 .group()
-                .hover(|s| s.bg(highlight()))
+                .hover(|s| s.bg(sidebar_hover()))
                 .transition_colors()
                 .child(main)
                 // The actions only under the pointer (always on a phone).
