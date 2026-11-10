@@ -110,8 +110,8 @@ fn agent_row(p: Provider, d: Option<Diagnostic>, u: Option<store::AgentUpdate>, 
     if !facts.is_empty() {
         body = body.child(muted(facts.join(" · ")));
     }
-    if let (Some(u), Some(path)) = (&u, &d.path) {
-        if let Some(line) = update_line(u, newer.as_deref(), path, editable) {
+    if let Some(u) = &u {
+        if let Some(line) = update_line(u, newer.as_deref()) {
             body = body.child(line);
         }
     }
@@ -142,6 +142,14 @@ fn agent_row(p: Provider, d: Option<Diagnostic>, u: Option<store::AgentUpdate>, 
     }
 
     let mut trailing = view().flex_row().items_center().gap(px(S2));
+    if editable
+        && newer.is_some()
+        && let (Some(u), Some(path)) = (&u, &d.path)
+        && !u.updating
+    {
+        let path = path.clone();
+        trailing = trailing.child(btn(t("Update"), Variant::Outline, Sz::Sm, Some(Icon::Download), move || store::update_agent(&path)));
+    }
     if editable {
         if removable {
             let (id, label) = (p.id.clone(), p.label.clone());
@@ -175,9 +183,9 @@ fn agent_row(p: Provider, d: Option<Diagnostic>, u: Option<store::AgentUpdate>, 
         .child(trailing)
 }
 
-/// A newer version and its update button, the update under way, or why it
-/// failed.
-fn update_line(u: &store::AgentUpdate, newer: Option<&str>, path: &str, editable: bool) -> Option<View> {
+/// A newer version, the update under way, or why it failed. Its button sits
+/// by the switch.
+fn update_line(u: &store::AgentUpdate, newer: Option<&str>) -> Option<View> {
     let row = view().flex_row().flex_wrap().items_center().gap(px(S2));
     if u.updating {
         return Some(row.child(muted(t("Updating…").into())));
@@ -190,12 +198,7 @@ fn update_line(u: &store::AgentUpdate, newer: Option<&str>, path: &str, editable
         });
     }
     let latest = newer?;
-    let mut row = row.child(text(tf("Version {} is out", &[latest])).text_size(px(TEXT_SM)).text_color(ACCENT));
-    if editable {
-        let path = path.to_owned();
-        row = row.child(btn(t("Update"), Variant::Outline, Sz::Sm, Some(Icon::Download), move || store::update_agent(&path)));
-    }
-    Some(row)
+    Some(row.child(text(tf("Version {} is out", &[latest])).text_size(px(TEXT_SM)).text_color(ACCENT)))
 }
 
 fn muted(s: String) -> nsh_core::element::Text {
