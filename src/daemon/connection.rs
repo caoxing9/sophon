@@ -229,13 +229,23 @@ pub struct GitStatus {
     pub managed_worktree: bool,
 }
 
-/// A provider's plan usage: (window label, used %, resets at).
+/// A provider's plan usage and its limit windows.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ProviderUsage {
+    pub id: String,
     pub name: String,
     pub plan: Option<String>,
     pub error: Option<String>,
-    pub windows: Vec<(String, Option<f64>, Option<String>)>,
+    pub windows: Vec<UsageWindow>,
+}
+
+/// A limit window: what it is called, how much is used, when it resets.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct UsageWindow {
+    pub id: String,
+    pub label: String,
+    pub used: Option<f64>,
+    pub resets_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -1988,17 +1998,21 @@ fn handle(
             request_id.and_then(|id| pending.remove(id));
             vec![Event::Usage(list_of(payload, "providers", |p| {
                 let s = |k: &str| p.get(k).and_then(Value::as_str).map(str::to_owned);
+                let name = s("displayName").or_else(|| s("providerId"))?;
                 Some(ProviderUsage {
-                    name: s("displayName").or_else(|| s("providerId"))?,
+                    id: s("providerId").unwrap_or_else(|| name.clone()),
+                    name,
                     plan: s("planLabel"),
                     error: s("error"),
                     windows: list_of(p, "windows", |w| {
-                        Some((
-                            w.get("label")?.as_str()?.to_owned(),
-                            w.get("usedPct").and_then(Value::as_f64)
+                        let label = w.get("label")?.as_str()?.to_owned();
+                        Some(UsageWindow {
+                            id: w.get("id").and_then(Value::as_str).map_or_else(|| label.clone(), str::to_owned),
+                            label,
+                            used: w.get("usedPct").and_then(Value::as_f64)
                                 .or_else(|| w.get("remainingPct").and_then(Value::as_f64).map(|r| 100.0 - r)),
-                            w.get("resetsAt").and_then(Value::as_str).map(str::to_owned),
-                        ))
+                            resets_at: w.get("resetsAt").and_then(Value::as_str).map(str::to_owned),
+                        })
                     }),
                 })
             }))]

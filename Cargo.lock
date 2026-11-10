@@ -3085,6 +3085,7 @@ name = "sophon"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
  "crypto_box",
  "env_logger",
  "futures-util",

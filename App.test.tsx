@@ -35,3 +35,11 @@ test("Backspace deletes a chip as one unit", async () => {
   await app.keyboard.press("backspace");
   expect(app.count("label:moon@2x.png")).toBe(0);
 });
+
+test("opens the usage page from the sidebar", async () => {
+  const app = await open(".", { width: 1100, height: 760 });
+  await app.press("label:Usage");
+  expect(app.texts()).toContain("This computer's sessions");
+  expect(app.texts()).toContain("Plan limits");
+  expect(app.texts()).toContain("7 days");
+});

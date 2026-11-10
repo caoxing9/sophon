@@ -12,6 +12,7 @@ mod platform;
 mod store;
 mod ui;
 mod update;
+mod usage;
 
 /// Randomness on the web: NSH builds with getrandom's `custom` backend,
 /// filled here from the page's `crypto.getRandomValues` (getrandom 0.2's
