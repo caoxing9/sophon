@@ -111,14 +111,6 @@ mod imp {
         paseo(&["daemon", "stop", "--home", &home]).map(|_| ())
     }
 
-    /// The relay pairing link of the space in `home` (blocking): Paseo's
-    /// `#offer=` link, when its relay is on.
-    pub(crate) fn relay_link(home: &Path) -> Option<String> {
-        let home = home.to_string_lossy();
-        let v: Value = serde_json::from_str(&paseo(&["daemon", "pair", "--home", &home, "--json"]).ok()?).ok()?;
-        (v.get("relayEnabled").and_then(Value::as_bool) == Some(true)).then(|| v.get("url")?.as_str().map(str::to_owned)).flatten()
-    }
-
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -140,7 +132,6 @@ mod imp {
             eprintln!("space at {}: {} (credential: {})", space.display(), endpoint.url, endpoint.local_credential.is_some());
             assert_eq!(endpoint.url, format!("ws://127.0.0.1:{port}/ws"));
             assert!(endpoint.local_credential.is_some(), "the running service's credential");
-            assert!(relay_link(&space).is_some_and(|l| l.contains("#offer=")), "its own relay offer");
             stop(&space).expect("stopped");
         }
 

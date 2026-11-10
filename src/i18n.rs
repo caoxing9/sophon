@@ -678,6 +678,8 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Added “{}”", "已添加「{}」"),
     ("Anthropic-compatible endpoint, e.g. https://example.com/anthropic", "兼容 Anthropic 的端点，如 https://example.com/anthropic"),
     ("Check again", "重新检查"),
+    ("Connected now, through the relay", "正通过中转连接"),
+    ("“{}” connected to this Mac", "「{}」连接了这台 Mac"),
     ("Computers", "电脑"),
     ("Connect to the computer your agents run on", "连接运行 Agent 的那台电脑"),
     ("Run agents on this Mac", "在这台 Mac 上运行 Agent"),

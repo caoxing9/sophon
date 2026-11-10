@@ -52,6 +52,8 @@ pub(crate) struct Connected {
     pub(crate) device_id: Option<String>,
     /// The space it reaches, by name; `None`: the first.
     pub(crate) space: Option<String>,
+    /// Through the relay, else over the LAN.
+    pub(crate) relayed: bool,
 }
 
 /// A device paired through the LAN.
@@ -96,7 +98,7 @@ fn refresh() {
         };
         let connected = bridge::connections()
             .into_iter()
-            .map(|c| Connected { conn: c.conn, device: shown(c.device), device_id: c.device_id, space: name_of(c.space) })
+            .map(|c| Connected { conn: c.conn, device: shown(c.device), device_id: c.device_id, space: name_of(c.space), relayed: c.relayed })
             .collect();
         let paired = bridge::devices().into_iter().map(|d| Paired { id: d.id, name: d.name, space: name_of(d.space) }).collect();
         global::<Devices>().set(Devices { connected, paired });
@@ -189,10 +191,10 @@ pub(crate) fn watch_bridge(mut events: tokio::sync::mpsc::UnboundedReceiver<crat
                         let n = nsh_core::notifications::Notification::new(
                             format!("device:{device}"),
                             t("Device connected").to_owned(),
-                            tf("“{}” connected to this Mac over the LAN", &[&device]),
+                            tf("“{}” connected to this Mac", &[&device]),
                         );
                         let _ = show_notification(n);
-                        store::notify(tf("“{}” connected to this Mac over the LAN", &[&device]));
+                        store::notify(tf("“{}” connected to this Mac", &[&device]));
                     }
                 }
                 BridgeEvent::Disconnected { conn } => {
@@ -207,8 +209,9 @@ pub(crate) fn watch_bridge(mut events: tokio::sync::mpsc::UnboundedReceiver<crat
 }
 
 /// Answers the pairing request: allowed, the phone joins `space` (a saved
-/// space's host id; `None`: this Mac's first space) and gets that space's
-/// relay too (so it connects from anywhere), read from its service here.
+/// space's host id; `None`: this Mac's first space) and gets the bridge's
+/// place at the relay too (so it connects from anywhere, still through the
+/// bridge).
 pub(crate) fn answer_pairing(allow: bool, space: Option<String>) {
     let asking = ASKING.with_borrow_mut(Option::take);
     store::close_modal();
@@ -222,27 +225,11 @@ pub(crate) fn answer_pairing(allow: bool, space: Option<String>) {
         let space = space.and_then(|id| store::spaces().into_iter().find(|h| h.id == id));
         let home = space.as_ref().and_then(|h| crate::spaces::home_of(&h.url));
         let name = space.map(|h| format!("{} · {}", device_name(), h.label()));
-        let cli = store::service_cli();
-        std::thread::spawn(move || {
-            #[cfg(not(target_os = "ios"))]
-            let relay = match &home {
-                Some(home) => crate::spaces::relay_link(home),
-                None => cli.and_then(|cli| {
-                    let out = std::process::Command::new(cli).args(["daemon", "pair", "--json"]).output().ok()?;
-                    let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
-                    (v.get("relayEnabled").and_then(serde_json::Value::as_bool) == Some(true))
-                        .then(|| v.get("url")?.as_str().map(str::to_owned))
-                        .flatten()
-                }),
-            };
-            #[cfg(target_os = "ios")]
-            let relay = {
-                let _ = cli;
-                None
-            };
-            let space = home.map(|h| h.to_string_lossy().into_owned());
-            let _ = reply.send(Some(crate::daemon::bridge::PairAnswer { relay, space, name }));
-        });
+        // The bridge's own place at the relay: away from home the device
+        // still comes through the bridge.
+        let relay = crate::daemon::bridge::relay_offer();
+        let space = home.map(|h| h.to_string_lossy().into_owned());
+        let _ = reply.send(Some(crate::daemon::bridge::PairAnswer { relay, space, name }));
     }
     #[cfg(target_arch = "wasm32")]
     {

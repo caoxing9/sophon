@@ -586,7 +586,7 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
             }
             None => discover(),
         };
-        let lan_attempt = endpoint.bridge_token.is_some();
+        let lan_attempt = endpoint.is_lan();
         // The address without a pairing link's key and token.
         trace(&format!("connecting to {}", endpoint.url.split('?').next().unwrap_or("")));
         if events.send(Event::Connecting { url: endpoint.url.clone() }).is_err() {
@@ -711,6 +711,9 @@ fn endpoint_for(r: &RemoteHost, lan_index: usize, found: Option<String>) -> Endp
             };
         }
         if let Some(offer) = link.relay {
+            // Sophon's own place at the relay (the LAN bridge's key): the
+            // device authenticates to it as on the LAN.
+            let bridge_token = link.lan.as_ref().filter(|(_, key, _)| *key == offer.daemon_key).map(|(_, _, token)| token.clone());
             let lan_probe = link
                 .lan
                 .as_ref()
@@ -722,7 +725,7 @@ fn endpoint_for(r: &RemoteHost, lan_index: usize, found: Option<String>) -> Endp
                 local_credential: None,
                 password: r.password.clone().or_else(|| offer.password.clone()),
                 relay: Some(offer),
-                bridge_token: None,
+                bridge_token,
                 lan_probe,
                 lan_key,
             };
@@ -815,7 +818,7 @@ async fn session(
     // Downloads under way: their bytes so far, by request id.
     let mut downloads: HashMap<String, Vec<u8>> = HashMap::new();
     let (sink, mut rx) = rt::timeout(
-        Duration::from_secs(if endpoint.bridge_token.is_some() { 3 } else { 10 }),
+        Duration::from_secs(if endpoint.is_lan() { 3 } else { 10 }),
         rt::connect(endpoint.url.as_str()),
     )
     .await
@@ -2573,6 +2576,13 @@ pub struct Endpoint {
     pub lan_key: Option<String>,
 }
 
+impl Endpoint {
+    /// A LAN bridge's address (tried briefly; the relay comes next).
+    pub fn is_lan(&self) -> bool {
+        self.relay.as_ref().is_some_and(|r| r.server_id == "bridge")
+    }
+}
+
 /// The relay this Mac's service registers with (`daemon.relay.endpoint` in
 /// its config file; the service exposes no call to change it): `None` is
 /// the default relay.
@@ -2580,6 +2590,13 @@ pub fn relay_endpoint() -> Option<String> {
     let text = std::fs::read_to_string(daemon_home().join("config.json")).ok()?;
     let v: Value = serde_json::from_str(&text).ok()?;
     v.pointer("/daemon/relay/endpoint").and_then(Value::as_str).map(str::to_owned).filter(|s| !s.is_empty())
+}
+
+/// Whether the relay the first space sets is reached over TLS, when it says.
+pub fn relay_use_tls() -> Option<bool> {
+    let text = std::fs::read_to_string(daemon_home().join("config.json")).ok()?;
+    let v: Value = serde_json::from_str(&text).ok()?;
+    v.pointer("/daemon/relay/useTls").and_then(Value::as_bool)
 }
 
 /// Sets the relay (`host:port`, TLS when the port is 443; empty: the default),

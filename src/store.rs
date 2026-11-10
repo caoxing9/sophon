@@ -1730,8 +1730,14 @@ pub(crate) fn start_bridge() {
 }
 
 /// The link a phone pairs with: the LAN bridge (at its addresses now) and
-/// the daemon's relay.
-pub(crate) fn pairing_link(relay_link: Option<&str>) -> Option<String> {
+/// its place at the relay, Sophon's own (a device away from home reaches
+/// the bridge, which sees and can cut it off), else the daemon's.
+pub(crate) fn pairing_link(daemon_relay: Option<&str>) -> Option<String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    let own = crate::daemon::bridge::relay_offer();
+    #[cfg(target_arch = "wasm32")]
+    let own: Option<String> = None;
+    let relay_link = own.as_deref().or(daemon_relay);
     // The space in use: its own token, and its name for the device to show.
     let space = current_host().filter(|h| crate::spaces::home_of(&h.url).is_some());
     #[cfg(not(target_arch = "wasm32"))]

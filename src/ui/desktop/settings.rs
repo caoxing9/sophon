@@ -61,10 +61,11 @@ pub(crate) fn settings(compact: bool) -> impl IntoElement {
         ))
 }
 
-/// The devices that reach this Mac through its LAN bridge: those connected
-/// now (each can be cut off) and those paired on the LAN (each can be
-/// forgotten), and unpairing everything, the QR's token included. Devices
-/// on the relay reach the service directly and are not seen here.
+/// The devices that reach this Mac through its bridge, over the LAN or the
+/// relay: those connected now (each can be cut off) and those paired (each
+/// can be forgotten), and unpairing everything, the QR's tokens included.
+/// A device paired before the bridge had its place at the relay may still
+/// reach a service's own relay, which this does not see.
 fn devices_card() -> impl IntoElement {
     crate::lan::load_devices();
     card().child(dynamic(|| {
@@ -83,9 +84,12 @@ fn devices_card() -> impl IntoElement {
                 c = line(
                     c,
                     d.device.clone(),
-                    match &d.space {
-                        Some(space) => format!("{} · {space}", t("Connected now, over the LAN")),
-                        None => t("Connected now, over the LAN").to_owned(),
+                    {
+                        let how = if d.relayed { t("Connected now, through the relay") } else { t("Connected now, over the LAN") };
+                        match &d.space {
+                            Some(space) => format!("{how} · {space}"),
+                            None => how.to_owned(),
+                        }
                     },
                     btn(t("Disconnect"), Variant::Outline, Sz::Sm, None, move || crate::lan::disconnect(conn)).into_element(),
                 );
@@ -96,8 +100,8 @@ fn devices_card() -> impl IntoElement {
                     c,
                     p.name.clone(),
                     match &p.space {
-                        Some(space) => format!("{} · {space}", t("Paired on the LAN")),
-                        None => t("Paired on the LAN").to_owned(),
+                        Some(space) => format!("{} · {space}", t("Paired")),
+                        None => t("Paired").to_owned(),
                     },
                     btn(t("Remove"), Variant::Outline, Sz::Sm, None, move || crate::lan::revoke(&id)).into_element(),
                 );

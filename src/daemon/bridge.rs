@@ -26,9 +26,11 @@ use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::{
-    net::{TcpListener, TcpStream},
+    io::{AsyncRead, AsyncWrite},
+    net::TcpListener,
     sync::{Notify, mpsc, oneshot},
 };
+use tokio_tungstenite::WebSocketStream;
 use super::rt::{Message, from_ws, to_ws};
 
 use super::{connection::discover, relay};
@@ -87,6 +89,8 @@ pub struct Connection {
     pub device_id: Option<String>,
     /// The space it reaches; `None`: the first.
     pub space: Option<String>,
+    /// It came through the relay (else over the LAN).
+    pub relayed: bool,
 }
 
 struct State {
@@ -96,6 +100,8 @@ struct State {
     token: String,
     /// The other spaces' QR tokens, by space.
     space_tokens: Vec<(String, String)>,
+    /// The bridge's id at the relay (`serverId`), its key the LAN's.
+    relay_id: String,
     port: u16,
     devices: Vec<Device>,
     conns: HashMap<u64, (Connection, Arc<Notify>)>,
@@ -117,7 +123,7 @@ fn load_or_create() -> State {
     let fresh = || {
         let (private, public) = relay::generate_key();
         let token = uuid::Uuid::new_v4().simple().to_string();
-        State { private, public, token, space_tokens: vec![], port: 0, devices: vec![], conns: HashMap::new(), next: 1, asking: false, events: None }
+        State { private, public, token, space_tokens: vec![], relay_id: new_relay_id(), port: 0, devices: vec![], conns: HashMap::new(), next: 1, asking: false, events: None }
     };
     let Ok(text) = std::fs::read_to_string(state_path()) else { return fresh() };
     let Ok(v) = serde_json::from_str::<Value>(&text) else { return fresh() };
@@ -147,6 +153,7 @@ fn load_or_create() -> State {
         public,
         token: token.to_owned(),
         space_tokens,
+        relay_id: v.get("relayId").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(new_relay_id),
         port: v.get("port").and_then(Value::as_u64).unwrap_or(0) as u16,
         devices,
         conns: HashMap::new(),
@@ -168,6 +175,7 @@ fn save(s: &State) {
         "port": s.port,
         "devices": devices,
         "spaceTokens": space_tokens,
+        "relayId": s.relay_id,
     });
     if std::fs::write(&path, json.to_string()).is_ok() {
         #[cfg(unix)]
@@ -176,6 +184,34 @@ fn save(s: &State) {
             let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
         }
     }
+}
+
+/// A fresh id at the relay.
+fn new_relay_id() -> String {
+    format!("srv_sophon_{}", uuid::Uuid::new_v4().simple())
+}
+
+/// The relay the bridge registers with: the first space's (`host:port`,
+/// TLS), Paseo's default when it sets none.
+fn relay_target() -> (String, bool) {
+    match super::connection::relay_endpoint() {
+        Some(endpoint) => {
+            let tls = super::connection::relay_use_tls().unwrap_or_else(|| endpoint.ends_with(":443"));
+            (endpoint, tls)
+        }
+        None => (relay::DEFAULT_RELAY.to_owned(), true),
+    }
+}
+
+/// The relay half of a pairing link: Paseo's offer format, naming the
+/// bridge (its relay id and key) at the relay it registers with. A device
+/// reaching it there authenticates to the bridge as on the LAN.
+pub fn relay_offer() -> Option<String> {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let (id, public) = with(|s| (s.relay_id.clone(), s.public))?;
+    let (endpoint, tls) = relay_target();
+    let offer = json!({ "v": 2, "serverId": id, "daemonPublicKeyB64": B64.encode(public), "relay": { "endpoint": endpoint, "useTls": tls } });
+    Some(format!("https://app.paseo.sh/#offer={}", URL_SAFE_NO_PAD.encode(offer.to_string())))
 }
 
 /// The bridge's addresses now: the LAN's, then Tailscale's.
@@ -335,10 +371,15 @@ pub fn start() -> Option<(BridgeInfo, mpsc::UnboundedReceiver<BridgeEvent>)> {
             rt.block_on(async move {
                 let Ok(listener) = TcpListener::from_std(std_listener) else { return };
                 log::info!("LAN bridge listening on port {port}");
+                tokio::spawn(relay_loop());
                 loop {
                     let Ok((stream, peer)) = listener.accept().await else { continue };
                     tokio::spawn(async move {
-                        if let Err(e) = serve(stream).await {
+                        let served = match tokio_tungstenite::accept_async(stream).await {
+                            Ok(ws) => serve(ws, false).await,
+                            Err(e) => Err(e.to_string()),
+                        };
+                        if let Err(e) = served {
                             log::info!("bridge client {peer}: {e}");
                         }
                     });
@@ -364,9 +405,84 @@ fn authorize(token: &str, said: &str) -> Option<(String, Option<String>, Option<
     .flatten()
 }
 
-async fn serve(stream: TcpStream) -> Result<(), String> {
+/// Holds the bridge's place at the relay: a control socket the relay tells
+/// of each device that comes for the bridge, and a data socket per device,
+/// served as a LAN device is. Reconnects, waiting longer each time.
+async fn relay_loop() {
+    let mut wait = Duration::from_secs(1);
+    loop {
+        let (endpoint, tls) = relay_target();
+        let Some(id) = with(|s| s.relay_id.clone()) else { return };
+        let base = format!("{}://{endpoint}/ws?serverId={id}&role=server&v=2", if tls { "wss" } else { "ws" });
+        match tokio::time::timeout(Duration::from_secs(10), tokio_tungstenite::connect_async(base.as_str())).await {
+            Ok(Ok((control, _))) => {
+                log::info!("the bridge is at the relay {endpoint}");
+                wait = Duration::from_secs(1);
+                relay_control(control, &base).await;
+            }
+            Ok(Err(e)) => log::info!("relay {endpoint}: {e}"),
+            Err(_) => log::info!("relay {endpoint}: no answer"),
+        }
+        tokio::time::sleep(wait).await;
+        wait = (wait * 2).min(Duration::from_secs(30));
+    }
+}
+
+/// The relay's control socket, until it closes or goes silent: each device
+/// it names gets a data socket of its own.
+async fn relay_control<S: AsyncRead + AsyncWrite + Unpin>(control: WebSocketStream<S>, base: &str) {
+    let (mut tx, mut rx) = control.split();
+    let open: Arc<Mutex<std::collections::HashSet<String>>> = Arc::default();
+    let mut ping = tokio::time::interval(Duration::from_secs(10));
+    let mut heard = tokio::time::Instant::now();
+    loop {
+        tokio::select! {
+            _ = ping.tick() => {
+                if heard.elapsed() > Duration::from_secs(30) || tx.send(tokio_tungstenite::tungstenite::Message::Ping(Vec::new().into())).await.is_err() {
+                    return;
+                }
+            }
+            frame = rx.next() => {
+                let Some(Ok(frame)) = frame else { return };
+                heard = tokio::time::Instant::now();
+                let Message::Text(text) = from_ws(frame) else { continue };
+                let Ok(v) = serde_json::from_str::<Value>(text.as_str()) else { continue };
+                let ids: Vec<String> = match v.get("type").and_then(Value::as_str) {
+                    Some("ping") => {
+                        let _ = tx.send(to_ws(Message::Text(json!({ "type": "pong" }).to_string()))).await;
+                        continue;
+                    }
+                    Some("connected") => v.get("connectionId").and_then(Value::as_str).map(str::to_owned).into_iter().collect(),
+                    Some("sync") => v.get("connectionIds").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect(),
+                    _ => continue,
+                };
+                for conn in ids {
+                    if conn.is_empty() || !open.lock().is_ok_and(|mut o| o.insert(conn.clone())) {
+                        continue;
+                    }
+                    let (url, open) = (format!("{base}&connectionId={conn}"), open.clone());
+                    tokio::spawn(async move {
+                        let served = match tokio_tungstenite::connect_async(url.as_str()).await {
+                            Ok((ws, _)) => serve(ws, true).await,
+                            Err(e) => Err(e.to_string()),
+                        };
+                        if let Err(e) = served {
+                            log::info!("relayed client {conn}: {e}");
+                        }
+                        if let Ok(mut o) = open.lock() {
+                            o.remove(&conn);
+                        }
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// A device's socket, from the LAN or the relay (`relayed`): the handshake,
+/// its token or a request to pair, then its space's service.
+async fn serve<S: AsyncRead + AsyncWrite + Unpin>(phone: WebSocketStream<S>, relayed: bool) -> Result<(), String> {
     let private = with(|s| s.private).ok_or("no bridge")?;
-    let phone = tokio_tungstenite::accept_async(stream).await.map_err(|e| e.to_string())?;
     let (mut ptx, mut prx) = phone.split();
 
     // 1. The handshake: the phone's hello, our ready (the phone resends its
@@ -419,7 +535,7 @@ async fn serve(stream: TcpStream) -> Result<(), String> {
     let conn = with(|s| {
         let conn = s.next;
         s.next += 1;
-        s.conns.insert(conn, (Connection { conn, device: device.clone(), device_id, space: space.clone() }, cut.clone()));
+        s.conns.insert(conn, (Connection { conn, device: device.clone(), device_id, space: space.clone(), relayed }, cut.clone()));
         conn
     })
     .ok_or("no bridge")?;
@@ -430,12 +546,12 @@ async fn serve(stream: TcpStream) -> Result<(), String> {
     result
 }
 
-type PhoneTx = futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<TcpStream>, tokio_tungstenite::tungstenite::Message>;
-type PhoneRx = futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<TcpStream>>;
+type PhoneTx<S> = futures_util::stream::SplitSink<WebSocketStream<S>, tokio_tungstenite::tungstenite::Message>;
+type PhoneRx<S> = futures_util::stream::SplitStream<WebSocketStream<S>>;
 
 /// Asks the app whether `device` may pair, and answers the phone: a link
 /// with a token of its own, or a refusal.
-async fn pair(device: &str, seal: &relay::Sender, prx: &mut PhoneRx) -> Value {
+async fn pair<S: AsyncRead + AsyncWrite + Unpin>(device: &str, seal: &relay::Sender, prx: &mut PhoneRx<S>) -> Value {
     let refused = json!({ "type": "sophon_pair_denied" });
     let Some(code) = seal.pairing_code() else { return refused };
     let (tx, rx) = oneshot::channel();
@@ -481,9 +597,9 @@ async fn pair(device: &str, seal: &relay::Sender, prx: &mut PhoneRx) -> Value {
 
 /// Frames both ways between the phone and the local daemon, until either
 /// side closes or the app cuts the phone off.
-async fn forward(
-    ptx: &mut PhoneTx,
-    prx: &mut PhoneRx,
+async fn forward<S: AsyncRead + AsyncWrite + Unpin>(
+    ptx: &mut PhoneTx<S>,
+    prx: &mut PhoneRx<S>,
     seal: &mut relay::Sender,
     unseal: &mut relay::Receiver,
     cut: &Notify,
@@ -677,6 +793,67 @@ mod tests {
         assert!(authorize(&lin.token, "x").is_none(), "a space's token changes too");
         assert!(authorize(&qr, "x").is_none(), "the QR's token changed");
         assert!(authorize(&fresh.token, "x").is_some());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A device away from home: through a relay (a local `sophon-relay` at
+    /// `SOPHON_TEST_RELAY`), its pairing link's offer, the handshake with
+    /// the bridge and its token: the bridge counts it, relayed. Its own data
+    /// folder and Paseo home, no service behind.
+    #[test]
+    #[ignore]
+    fn a_relayed_device_comes_through_the_bridge_live() {
+        let Ok(relay_addr) = std::env::var("SOPHON_TEST_RELAY") else { return };
+        let dir = std::env::temp_dir().join(format!("sophon-relay-test-{}", std::process::id()));
+        let paseo = dir.join("paseo");
+        std::fs::create_dir_all(&paseo).unwrap();
+        std::fs::write(paseo.join("config.json"), json!({ "daemon": { "relay": { "endpoint": relay_addr, "useTls": false } } }).to_string()).unwrap();
+        // SAFETY: set before any thread of this test reads them.
+        unsafe {
+            std::env::set_var("SOPHON_DATA_DIR", dir.join("sophon"));
+            std::env::set_var("PASEO_HOME", &paseo);
+        }
+        let (info, mut events) = start().expect("bridge");
+        let link = relay::PairingLink::parse(&relay::PairingLink::format(Some((&info.addr, &info.key, &info.token)), relay_offer().as_deref())).unwrap();
+        let offer = link.relay.clone().expect("the bridge's offer");
+        assert_eq!(offer.daemon_key, info.key, "the bridge's own key at the relay");
+        assert!(offer.server_id.starts_with("srv_sophon_"));
+        assert!(!offer.use_tls);
+
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            // The bridge registers with the relay on its own thread.
+            tokio::time::sleep(Duration::from_millis(800)).await;
+            let (ws, _) = tokio_tungstenite::connect_async(offer.ws_url()).await.expect("the relay");
+            let (mut tx, mut rx) = ws.split();
+            let mut hs = relay::Handshake::start(&offer).unwrap();
+            let (mut seal, _unseal) = loop {
+                tx.send(to_ws(Message::Text(hs.hello().to_owned()))).await.unwrap();
+                let frame = tokio::time::timeout(Duration::from_secs(2), rx.next()).await;
+                if let Ok(Some(Ok(frame))) = frame
+                    && let Message::Text(t) = from_ws(frame)
+                {
+                    match hs.finish(t.as_str()) {
+                        Ok(Some(pair)) => break pair,
+                        Err((back, e)) if e.is_empty() => hs = back,
+                        other => panic!("handshake: {:?}", other.err().map(|(_, e)| e)),
+                    }
+                }
+            };
+            let auth = json!({ "type": "sophon_bridge_auth", "token": info.token, "device": "Away Phone" }).to_string();
+            tx.send(to_ws(seal.seal(Message::Text(auth)).unwrap())).await.unwrap();
+            let came = tokio::time::timeout(Duration::from_secs(5), async {
+                while let Some(e) = events.recv().await {
+                    if let BridgeEvent::Connected { device, .. } = e {
+                        return device;
+                    }
+                }
+                String::new()
+            })
+            .await
+            .expect("the bridge heard the device");
+            assert_eq!(came, "Away Phone");
+        });
         let _ = std::fs::remove_dir_all(dir);
     }
 }
