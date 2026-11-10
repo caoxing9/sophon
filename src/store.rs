@@ -2475,6 +2475,100 @@ pub(crate) fn load_agents() {
     load_diagnostics();
 }
 
+/// A local agent CLI's update: how it was installed, the newest version that
+/// way, and an update under way or failed. By the binary the service runs,
+/// which instances of one CLI share.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct AgentUpdate {
+    pub(crate) install: Option<crate::agent_update::Install>,
+    pub(crate) latest: Option<String>,
+    pub(crate) updating: bool,
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Clone, Default)]
+struct AgentUpdates(HashMap<String, AgentUpdate>);
+
+/// The update of the CLI at `path`, while the host is this computer.
+pub(crate) fn agent_update(path: &str) -> Option<AgentUpdate> {
+    if crate::ui::kit::MOBILE || current_host().is_some() {
+        return None;
+    }
+    global::<AgentUpdates>().with(|u| u.0.get(path).cloned())
+}
+
+/// Looks up the newest version of the CLI at `path`, once a run: a network
+/// or Homebrew call, on a thread of its own.
+#[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+fn check_agent_update(path: String) {
+    if crate::ui::kit::MOBILE || current_host().is_some() || global::<AgentUpdates>().with_untracked(|u| u.0.contains_key(&path)) {
+        return;
+    }
+    let real = std::fs::canonicalize(&path).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| path.clone());
+    let install = crate::agent_update::install_of(&real);
+    global::<AgentUpdates>().update(|u| {
+        u.0.insert(path.clone(), AgentUpdate { install: install.clone(), ..Default::default() });
+    });
+    let Some(install) = install else { return };
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(crate::agent_update::latest(&install));
+    });
+    spawn_detached(async move {
+        // Not found is not shown: the row only offers what it knows.
+        if let Some(Ok(latest)) = rx.recv().await {
+            global::<AgentUpdates>().update(|u| {
+                if let Some(e) = u.0.get_mut(&path) {
+                    e.latest = Some(latest);
+                }
+            });
+        }
+    });
+}
+
+#[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+fn check_agent_update(_path: String) {}
+
+/// Updates the CLI at `path` the way it was installed, then asks the
+/// providers again for their versions. This computer's only.
+#[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+pub(crate) fn update_agent(path: &str) {
+    if crate::ui::kit::MOBILE || current_host().is_some() {
+        return;
+    }
+    let mut install = None;
+    global::<AgentUpdates>().update(|u| {
+        if let Some(e) = u.0.get_mut(path).filter(|e| !e.updating) {
+            install = e.install.clone();
+            if install.is_some() {
+                e.updating = true;
+                e.error = None;
+            }
+        }
+    });
+    let Some(install) = install else { return };
+    let (path, binary) = (path.to_owned(), path.to_owned());
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(crate::agent_update::run_update(&install, &binary));
+    });
+    spawn_detached(async move {
+        let result = rx.recv().await.unwrap_or_else(|| Err("stopped".into()));
+        global::<AgentUpdates>().update(|u| {
+            if let Some(e) = u.0.get_mut(&path) {
+                e.updating = false;
+                e.error = result.as_ref().err().cloned();
+            }
+        });
+        if result.is_ok() {
+            refresh_agents();
+        }
+    });
+}
+
+#[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+pub(crate) fn update_agent(_path: &str) {}
+
 /// Asks the providers again, and their diagnostics.
 pub(crate) fn refresh_agents() {
     global::<Diagnostics>().update(|d| d.map.clear());
@@ -3620,6 +3714,9 @@ pub(crate) fn apply(event: Event) {
         Event::DaemonConfig(cfg) => global::<DaemonConfig>().update(|c| c.0 = Some(cfg)),
         Event::Diagnostic { provider, text } => {
             let d = crate::daemon::agents::parse_diagnostic(&text);
+            if let Some(path) = d.path.clone().filter(|_| d.version.is_some()) {
+                check_agent_update(path);
+            }
             global::<Diagnostics>().update(|x| {
                 x.map.insert(provider, d);
             });

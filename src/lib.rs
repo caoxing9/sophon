@@ -6,6 +6,7 @@
 use nsh_base::theme;
 use nsh_core::{element::{AssetFile, AssetKind}, prelude::*};
 
+mod agent_update;
 pub mod daemon;
 mod fold;
 mod i18n;

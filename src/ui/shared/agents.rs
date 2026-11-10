@@ -26,13 +26,15 @@ pub(crate) fn agents_card(editable: bool) -> impl IntoElement {
         let list = store::providers();
         let cfg = store::daemon_config();
         let diags: Vec<Option<Diagnostic>> = list.iter().map(|p| store::diagnostic(&p.id)).collect();
+        let updates: Vec<Option<store::AgentUpdate>> =
+            diags.iter().map(|d| d.as_ref().and_then(|d| store::agent_update(d.path.as_deref()?))).collect();
         Some(untracked(move || {
             let mut v = view();
             if list.is_empty() {
                 v = v.child(view().px(px(S4)).py(px(S4)).child(text(t("Loading…")).text_size(px(TEXT_SM)).text_color(FG_MUTED)));
             }
-            for (i, (p, d)) in list.into_iter().zip(diags).enumerate() {
-                v = v.child(agent_row(p, d, cfg.as_ref(), editable, i == 0));
+            for (i, ((p, d), u)) in list.into_iter().zip(diags).zip(updates).enumerate() {
+                v = v.child(agent_row(p, d, u, cfg.as_ref(), editable, i == 0));
             }
             if editable {
                 v = v.child(
@@ -60,7 +62,7 @@ pub(crate) fn agents_card(editable: bool) -> impl IntoElement {
     }))
 }
 
-fn agent_row(p: Provider, d: Option<Diagnostic>, cfg: Option<&Value>, editable: bool, first: bool) -> View {
+fn agent_row(p: Provider, d: Option<Diagnostic>, u: Option<store::AgentUpdate>, cfg: Option<&Value>, editable: bool, first: bool) -> View {
     let family = agents::family(&p.id, cfg);
     let on = agents::enabled(cfg, &p);
     let removable = agents::created_by_sophon(cfg, &p.id);
@@ -93,6 +95,14 @@ fn agent_row(p: Provider, d: Option<Diagnostic>, cfg: Option<&Value>, editable: 
     if let Some(v) = &d.version {
         facts.push(v.clone());
     }
+    let installed = d.version.as_deref().and_then(crate::agent_update::version_of);
+    let newer = match (&u, &installed) {
+        (Some(store::AgentUpdate { latest: Some(l), .. }), Some(i)) => crate::agent_update::newer(i, l).then(|| l.clone()),
+        _ => None,
+    };
+    if newer.is_none() && u.as_ref().is_some_and(|u| u.latest.is_some()) {
+        facts.push(t("Up to date").into());
+    }
     if !p.models.is_empty() {
         facts.push(tf("{} models", &[&p.models.len().to_string()]));
     }
@@ -102,6 +112,11 @@ fn agent_row(p: Provider, d: Option<Diagnostic>, cfg: Option<&Value>, editable: 
     }
     if let Some(path) = &d.path {
         body = body.child(muted(path.clone()).font_family(|| MONO).number_of_lines(1));
+    }
+    if let (Some(u), Some(path)) = (&u, &d.path) {
+        if let Some(line) = update_line(u, newer.as_deref(), path, editable) {
+            body = body.child(line);
+        }
     }
     if let Some(line) = login_line(&d) {
         body = body.child(line);
@@ -161,6 +176,29 @@ fn agent_row(p: Provider, d: Option<Diagnostic>, cfg: Option<&Value>, editable: 
         )
         .child(body)
         .child(trailing)
+}
+
+/// A newer version and its update button, the update under way, or why it
+/// failed.
+fn update_line(u: &store::AgentUpdate, newer: Option<&str>, path: &str, editable: bool) -> Option<View> {
+    let row = view().flex_row().flex_wrap().items_center().gap(px(S2));
+    if u.updating {
+        return Some(row.child(muted(t("Updating…").into())));
+    }
+    if let Some(e) = &u.error {
+        let row = row.child(text(tf("Update failed: {}", &[e])).text_size(px(TEXT_SM)).text_color(DANGER));
+        return Some(match &u.install {
+            Some(i) => row.child(muted(tf("Run it yourself: {}", &[&crate::agent_update::command_line(i)])).font_family(|| MONO)),
+            None => row,
+        });
+    }
+    let latest = newer?;
+    let mut row = row.child(text(tf("Version {} is out", &[latest])).text_size(px(TEXT_SM)).text_color(ACCENT));
+    if editable {
+        let path = path.to_owned();
+        row = row.child(btn(t("Update"), Variant::Outline, Sz::Sm, Some(Icon::Download), move || store::update_agent(&path)));
+    }
+    Some(row)
 }
 
 fn muted(s: String) -> nsh_core::element::Text {
