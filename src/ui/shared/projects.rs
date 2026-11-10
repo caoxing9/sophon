@@ -93,10 +93,16 @@ fn project_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
         .pl(px(S1))
         .pr(px(2.0))
         .mt(px(S3))
+        .mb(px(2.0))
         .h(px(28.0))
         .rounded(px(R_MD))
         .translate_y(move || DefiniteLength::from(px(drag.get())))
         .bg(move || if dragging.get() { highlight() } else { tint(SIDEBAR, 0.0) })
+        // Under the pointer: the row fills, its name darkens and its
+        // actions appear (out of the way otherwise, as T3's and Lody's).
+        .group()
+        .hover(|s| s.bg(highlight()))
+        .transition_colors()
         .child(
             button()
                 .on_press(move || {
@@ -123,6 +129,7 @@ fn project_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
                         .text_size(px(TEXT_SM))
                         .font_weight(FontWeight(500))
                         .text_color(FG_MUTED)
+                        .group_hover(|s| s.text_color(FG))
                         .number_of_lines(1)
                         .flex_1(),
                 ),
@@ -147,7 +154,7 @@ fn project_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
     };
     header
         .when(actions, |v| {
-            v.child(icon_btn(Icon::Plus, Sz::Sm, t("New workspace in project"), move || {
+            v.child(view().flex_row().items_center().opacity(if MOBILE { 1.0 } else { 0.0 }).group_hover(|s| s.opacity(1.0)).transition_opacity().child(icon_btn(Icon::Plus, Sz::Sm, t("New workspace in project"), move || {
                 if let Some(p) = project.get_untracked().filter(|p| !p.root_path.is_empty()) {
                     store::open_new_workspace(Some(p.root_path));
                 }
@@ -182,7 +189,7 @@ fn project_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
                             .into_element()
                     }))
                 })),
-            )
+            ))
         })
 }
 
@@ -291,15 +298,35 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
         }))
     }));
 
+    // Two layers: the chosen row's fill below, the pointer's translucent
+    // one over it (so a chosen row under the pointer darkens a step too).
     view()
-        .flex_row()
-        .items_center()
         .mx(px(S2))
-        .pr(px(S1))
+        // A hairline between rows that fill under the pointer.
+        .mb(px(2.0))
         .rounded(px(R_LG))
-        .bg(move || if selected.get() { highlight() } else { tint(SIDEBAR, 0.0) })
-        .hover(|s| s.bg(highlight()))
-        .child(main)
-        .when(actions, |v| v.child(more))
+        .bg(move || if selected.get() { SIDEBAR_SELECTED } else { tint(SIDEBAR, 0.0) })
+        .transition_colors()
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .pr(px(S1))
+                .rounded(px(R_LG))
+                .group()
+                .hover(|s| s.bg(highlight()))
+                .transition_colors()
+                .child(main)
+                // The actions only under the pointer (always on a phone).
+                .when(actions, |v| {
+                    v.child(
+                        view()
+                            .opacity(if MOBILE { 1.0_f32 } else { 0.0 })
+                            .group_hover(|s| s.opacity(1.0))
+                            .transition_opacity()
+                            .child(more),
+                    )
+                }),
+        )
 }
 

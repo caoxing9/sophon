@@ -1,6 +1,7 @@
 //! With no computer paired, the welcome screen: the mark, a line on
 //! what to do, and the ways to connect (scanning the computer's QR code
-//! first, then a direct address or a pasted pairing link), settings and the
+//! first, then a direct address or a pasted pairing link; the computers on
+//! this network, to pair without a QR code), settings and the
 //! version under them. Scanning opens the camera in a card with a
 //! corner frame; a pairing code connects at once.
 
@@ -61,6 +62,7 @@ fn welcome(open_scan: impl Fn() + Clone + 'static) -> impl IntoElement {
                             .child(action(Icon::Link2, t("Direct connection"), false, || store::open_modal(store::Modal::AddHost)))
                             .child(action(Icon::ClipboardPaste, t("Paste pairing link"), false, || store::open_modal(store::Modal::AddHost))),
                     )
+                    .child(view().w_full().max_w(px(420.0)).mt(px(S6)).child(crate::ui::shared::modals::nearby_list()))
                     .child(saved_hosts())
                     .child(view().mt(px(S6)).child(btn(t("Settings"), Variant::Ghost, Sz::Md, Some(Icon::Settings), store::open_settings))),
             )
@@ -115,7 +117,7 @@ fn saved_hosts() -> impl IntoElement {
                         .when(i > 0, |v| v.border_t_1().border_color(BORDER))
                         .active(|s| s.bg(highlight()))
                         .child(icon(Icon::Server, 18.0).text_color(FG_MUTED))
-                        .child(text(h.name.clone()).text_size(px(TEXT_BASE)).number_of_lines(1).flex_1())
+                        .child(text(h.label()).text_size(px(TEXT_BASE)).number_of_lines(1).flex_1())
                         .child(icon(Icon::ChevronRight, 16.0).text_color(FG_FAINT)),
                 );
             }

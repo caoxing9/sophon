@@ -46,37 +46,30 @@ pub(crate) enum Sz {
 }
 
 impl Sz {
-    fn height(self) -> f32 {
+    /// nsh-ui's size: a phone keeps 32-point targets.
+    fn ui(self) -> nsh_ui::size::Size {
         match self {
-            Sz::Md => CONTROL_MD,
-            Sz::Sm => CONTROL_SM,
-        }
-    }
-    fn text(self) -> f32 {
-        match self {
-            Sz::Md => TEXT_BASE,
-            Sz::Sm => TEXT_SM,
+            Sz::Md => nsh_ui::size::Size::Medium,
+            Sz::Sm if MOBILE => nsh_ui::size::Size::Medium,
+            Sz::Sm => nsh_ui::size::Size::Small,
         }
     }
 }
 
-fn fill(variant: Variant) -> Option<AdaptiveColor> {
-    match variant {
-        Variant::Primary => Some(ACCENT),
-        Variant::Secondary => Some(SURFACE3),
-        Variant::Destructive => Some(DESTRUCTIVE),
-        Variant::Outline | Variant::Ghost => None,
+impl Variant {
+    fn ui(self) -> nsh_ui::button::ButtonVariant {
+        use nsh_ui::button::ButtonVariant as V;
+        match self {
+            Variant::Primary => V::Primary,
+            Variant::Secondary => V::Secondary,
+            Variant::Outline => V::Outline,
+            Variant::Ghost => V::Ghost,
+            Variant::Destructive => V::Danger,
+        }
     }
 }
 
-fn ink(variant: Variant) -> AdaptiveColor {
-    match variant {
-        Variant::Primary | Variant::Destructive => ACCENT_FG,
-        _ => FG,
-    }
-}
-
-/// A labelled pill button, optionally with a leading icon.
+/// A labelled button, optionally with a leading icon: nsh-ui's `Button`.
 pub(crate) fn btn(
     label: impl IntoReactive<SharedString>,
     variant: Variant,
@@ -84,51 +77,24 @@ pub(crate) fn btn(
     lead: Option<Icon>,
     on_press: impl Fn() + 'static,
 ) -> ButtonElement {
-    let mut b = button()
-        .on_press(on_press)
-        .flex_row()
-        .items_center()
-        .justify_center()
-        .gap(px(6.0))
-        .h(px(size.height()))
-        .px(px(if size == Sz::Md { 14.0 } else { 10.0 }))
-        .rounded(px(R_FULL))
-        .active(|s| s.opacity(0.7))
-        .disabled_style(|s| s.opacity(0.45));
-    b = match fill(variant) {
-        Some(color) => b.bg(color).hover(|s| s.opacity(0.88)),
-        None => b.hover(|s| s.bg(highlight())),
-    };
-    if variant == Variant::Outline {
-        b = b.border_1().border_color(BORDER_STRONG);
-    }
+    let (v, sz) = (variant.ui(), size.ui());
+    let mut b = nsh_ui::button::Button::new().label(label).variant(v).size(sz).on_press(on_press);
     if let Some(lead) = lead {
-        b = b.child(icon(lead, if size == Sz::Md { 16.0 } else { 14.0 }).text_color(ink(variant)));
+        b = b.icon(icon(lead, sz.icon()).text_color(v.ink()));
     }
-    b.child(
-        text(label)
-            .text_size(px(size.text()))
-            .font_weight(FontWeight(500))
-            .text_color(ink(variant))
-            .number_of_lines(1),
-    )
+    b.build()
 }
 
-/// An icon-only button: a circle with the translucent highlight on hover.
+/// An icon-only button: nsh-ui's ghost `Button`, its glyph muted.
 pub(crate) fn icon_btn(glyph: Icon, size: Sz, label: &'static str, on_press: impl Fn() + 'static) -> ButtonElement {
-    let box_size = size.height();
-    button()
-        .on_press(on_press)
+    let sz = size.ui();
+    nsh_ui::button::Button::new()
+        .ghost()
+        .size(sz)
+        .icon(icon(glyph, sz.icon()).text_color(FG_MUTED))
         .accessibility_label(label)
-        .w(px(box_size))
-        .h(px(box_size))
-        .items_center()
-        .justify_center()
-        .rounded(px(R_FULL))
-        .hover(|s| s.bg(highlight()))
-        .active(|s| s.bg(highlight()).opacity(0.7))
-        .disabled_style(|s| s.opacity(0.4))
-        .child(icon(glyph, if size == Sz::Md { 18.0 } else { 16.0 }).text_color(FG_MUTED))
+        .on_press(on_press)
+        .build()
 }
 
 /// A single-line text field on the muted fill.
@@ -447,39 +413,68 @@ pub(crate) fn ambient() -> View {
         .child(glow(tint(ACCENT, 0.07), Some(260.0), Some(420.0), 520.0))
 }
 
-/// The mark, loading: the eclipse alone (no sky, no tile), its corona
-/// alive around a still moon. Two copies of the corona turn opposite ways
-/// at different speeds (9 s and 13 s a turn), the first also breathing
-/// (1.7 s): as their streamers cross, the light shifts unevenly, as a
-/// corona's does, never in one steady beat. All natively, animated values
-/// bound to rotation and opacity: no layout or engine work per frame.
+/// Loading: an eclipse passing, drawn rather than the icon's layers (no
+/// tile, no box, on light pages and dark): the sun, a disc of the accent;
+/// the moon, a disc of the page, sliding in from the left until it covers
+/// the sun; at totality the corona flares round it and fades; the moon
+/// slides on and the sun comes back. 2.4 s a pass, eased at both ends. All
+/// natively, animated values bound to translation, scale and opacity: no
+/// layout or engine work per frame.
 pub(crate) fn eclipse(size: f32) -> View {
-    let forward = animated_value(0.0);
-    let backward = animated_value(0.0);
-    let breath = animated_value(1.0);
-    Animation::timing(&forward, 360.0, nsh_core::element::Timing::new(9000.0, Easing::Linear)).looped(None).start();
-    Animation::timing(&backward, -360.0, nsh_core::element::Timing::new(13000.0, Easing::Linear)).looped(None).start();
-    let half = nsh_core::element::Timing::new(850.0, Easing::EaseInOut);
-    Animation::sequence([Animation::timing(&breath, 0.72, half.clone()), Animation::timing(&breath, 1.0, half)])
-        .looped(None)
-        .start();
-    let layer = move |asset: ImageAsset| image(asset).absolute().top(px(0.0)).left(px(0.0)).w(px(size)).h(px(size));
-    // On dark pages the eclipse stands on the page; on light ones in the
-    // icon's night tile, as the Dock shows it: a black moon alone on a
-    // light page reads as a blot.
-    view().w(px(size)).h(px(size)).flex_shrink_0().child(dynamic(move || {
-        let night = dark();
-        Some(untracked(move || {
-            view()
-                .w(px(size))
-                .h(px(size))
-                .when(!night, |v| v.rounded(px(size * 0.24)).overflow_hidden().child(layer(crate::LOADER_SKY)))
-                .child(layer(crate::LOADER_CORONA).bind_rotate(&forward).bind_opacity(&breath))
-                .child(layer(crate::LOADER_CORONA).bind_rotate(&backward).opacity(0.45))
-                .child(layer(crate::LOADER_MOON))
-                .into_element()
-        }))
-    }))
+    let disc = size * 0.62;
+    let travel = disc * 1.05;
+    let moon_x = animated_value(-travel);
+    let corona = animated_value(0.0);
+    let flare = animated_value(0.9);
+    let glide = nsh_core::element::Timing::new(1000.0, Easing::EaseInOut);
+    Animation::sequence([
+        Animation::timing(&moon_x, 0.0, glide.clone()),
+        Animation::delay(250.0),
+        Animation::timing(&moon_x, travel, glide),
+        Animation::delay(150.0),
+        Animation::timing(&moon_x, -travel, nsh_core::element::Timing::new(0.0, Easing::Linear)),
+    ])
+    .looped(None)
+    .start();
+    // The corona: dark until the moon nearly covers the sun, a flare at
+    // totality (brightening and opening out), gone as the moon moves on.
+    let quiet = nsh_core::element::Timing::new(0.0, Easing::Linear);
+    Animation::sequence([
+        Animation::delay(820.0),
+        Animation::timing(&corona, 1.0, nsh_core::element::Timing::new(260.0, Easing::EaseOut)),
+        Animation::timing(&corona, 0.0, nsh_core::element::Timing::new(420.0, Easing::EaseIn)),
+        Animation::delay(900.0),
+    ])
+    .looped(None)
+    .start();
+    Animation::sequence([
+        Animation::delay(820.0),
+        Animation::timing(&flare, 1.12, nsh_core::element::Timing::new(680.0, Easing::EaseOut)),
+        Animation::timing(&flare, 0.9, quiet),
+        Animation::delay(900.0),
+    ])
+    .looped(None)
+    .start();
+    let centered = move |d: f32| view().absolute().top(px((size - d) / 2.0)).left(px((size - d) / 2.0)).w(px(d)).h(px(d)).rounded(px(R_FULL));
+    view()
+        .w(px(size))
+        .h(px(size))
+        .flex_shrink_0()
+        // The moon only passes in front of the sun: clipped to it.
+        .child(
+            centered(size * 0.86)
+                .when(size >= 32.0, |v| v.border_2())
+                .when(size < 32.0, |v| v.border_1())
+                .border_color(tint(ACCENT, 0.55))
+                .bind_opacity(&corona)
+                .bind_scale(&flare),
+        )
+        .child(
+            centered(disc)
+                .bg(ACCENT)
+                .overflow_hidden()
+                .child(view().w(px(disc)).h(px(disc)).rounded(px(R_FULL)).bg(SURFACE0).bind_translate_x(&moon_x)),
+        )
 }
 
 /// How far the mark's tile stands off the page.

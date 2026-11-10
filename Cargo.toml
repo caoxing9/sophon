@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [workspace]
+members = ["crates/nsh-ui"]
 
 [dependencies]
 nsh-core = { git = "https://github.com/caoxing9/nsh", rev = "3921ccc2cf9f6475a20ba7cd1d36e655457ab5e3" }
@@ -19,6 +20,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 snow = "0.9"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 crypto_box = { version = "0.9", features = ["std"] }
+# Sophon's shadcn-style components (`crates/nsh-ui`).
+nsh-ui = { path = "crates/nsh-ui" }
 
 # Natively the connection runs on a thread of its own with tokio; in a
 # browser on the page's WebSocket (`daemon::rt`).
@@ -28,6 +31,8 @@ env_logger = "0.11"
 tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net", "fs"] }
 tokio-tungstenite = { version = "0.28", features = ["native-tls"] }
 if-addrs = "0.13"
+# Local days for the usage page's sums (already in the tree through nsh-base).
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "=0.2.129"

@@ -108,7 +108,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         match target {
             Target::Agent => {
                 if let Some(id) = store::selected_id()
-                    && store::send_message(&out.text)
+                    && store::send_message(&out.message)
                 {
                     store::set_draft(&id, "");
                     // A queued message leaves its attachments for the one
@@ -117,7 +117,8 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                 }
             }
             Target::Form => {
-                set_text(&out.text);
+                // As it is sent: its chips named where they stand.
+                set_text(&out.message);
                 store::submit_form();
             }
         }
@@ -246,13 +247,10 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                     )
                     .child(menu_row(t("Choose images…"), Some(Icon::Image), None, false, with_key(pick_images_into)))
                     .child(menu_row(t("Choose files…"), Some(Icon::File), None, false, with_key(pick_files_into)))
-                    .child(menu_row(t("Paste image"), Some(Icon::Copy), None, false, with_key(paste_image_into))),
+
                 )
                 .child(mic_button(doc))
-                .child(model_picker(live))
-                .child(thinking_picker(live))
-                .child(mode_picker(live))
-                .child(feature_controls(live)),
+                .child(model_picker(live)),
                 )
                 .child(view().flex_shrink_0().child(disc(running, busy, empty, submit))),
         ))
@@ -324,7 +322,7 @@ fn settings_summary(live: bool) -> String {
     let model = c
         .model
         .as_deref()
-        .and_then(|m| provider.as_ref().and_then(|p| p.model(m)).map(|m| m.label.clone()))
+        .and_then(|m| provider.as_ref().and_then(|p| p.model(m)).map(|m| m.label.clone()).or(Some(model_name(m))))
         .or_else(|| provider.as_ref().map(|p| p.label.clone()))
         .unwrap_or_default();
     let thinking = thinking_options(live);
@@ -340,7 +338,7 @@ fn options_sheet(live: bool) {
     let model = c
         .model
         .as_deref()
-        .and_then(|m| provider.as_ref().and_then(|p| p.model(m)).map(|m| m.label.clone()))
+        .and_then(|m| provider.as_ref().and_then(|p| p.model(m)).map(|m| m.label.clone()).or(Some(model_name(m))))
         .or_else(|| provider.as_ref().map(|p| p.label.clone()))
         .unwrap_or_default();
     let mut items = vec![SheetItem::new(tf("Model · {}", &[&model]), move || model_sheet(live)).icon(Icon::Bot)];
@@ -385,7 +383,7 @@ fn model_sheet(live: bool) {
         if live && p.id != c.provider {
             continue;
         }
-        for m in &p.models {
+        for m in p.models.iter().filter(|m| !store::forbidden_model(&m.id, &m.label)) {
             let checked = c.provider == p.id && c.model.as_deref() == Some(m.id.as_str());
             let (pid, mid) = (p.id.clone(), m.id.clone());
             let label = if live { m.label.clone() } else { format!("{} · {}", p.label, m.label) };
@@ -567,184 +565,53 @@ fn disc(running: Memo<bool>, busy: Memo<bool>, empty: Memo<bool>, submit: impl F
     }))
 }
 
+/// A model the provider does not list (a default the daemon keeps, from
+/// another Claude Code version) by a short name: `claude-opus-5-5` as
+/// `Opus 5.5`; any other id as it is.
+fn model_name(id: &str) -> String {
+    let Some(rest) = id.strip_prefix("claude-") else { return id.to_owned() };
+    let mut parts = rest.split('-');
+    let Some(family) = parts.next().filter(|f| !f.is_empty() && f.chars().all(|c| c.is_ascii_alphabetic())) else {
+        return id.to_owned();
+    };
+    let version: Vec<&str> = parts.take_while(|p| p.len() <= 2 && p.chars().all(|c| c.is_ascii_digit())).collect();
+    if version.is_empty() {
+        return id.to_owned();
+    }
+    let mut name = family.to_owned();
+    name[..1].make_ascii_uppercase();
+    format!("{name} {}", version.join("."))
+}
+
+/// The model picker ([`super::model_picker`]), showing the model's name.
 fn model_picker(live: bool) -> impl IntoElement {
-    let label = computed(move || {
+    let name = computed(move || {
         let c = store::controls(live);
         let provider = store::provider(&c.provider);
-        let p_label = provider.as_ref().map(|p| p.label.clone()).unwrap_or_else(|| c.provider.clone());
-        let m_label = c
-            .model
+        c.model
             .as_deref()
-            .and_then(|m| provider.as_ref().and_then(|p| p.model(m)).map(|m| m.label.clone()).or(Some(m.to_owned())));
-        match m_label {
-            Some(m) => format!("{p_label} · {m}"),
-            None => p_label,
-        }
+            .map(|m| provider.as_ref().and_then(|p| p.model(m)).map(|m| m.label.clone()).unwrap_or_else(|| model_name(m)))
+            .or_else(|| provider.as_ref().map(|p| p.label.clone()))
+            .unwrap_or_default()
     });
-    dropup(picker_trigger(Some(Icon::Bot), move || label.get())).child(model_rows(live, true))
+    super::model_picker::model_picker(live, name)
 }
 
-/// The models to pick from, as menu rows (in a scroll of their own when
-/// `scrolled`).
-fn model_rows(live: bool, scrolled: bool) -> impl IntoElement {
-    view().child(dynamic(move || {
-        let c = store::controls(live);
-        let providers = store::providers();
-        Some(untracked(move || {
-            let mut list = view();
-            for p in providers.iter().filter(|p| p.enabled) {
-                // A live agent keeps its provider; it lists only its models.
-                if live && p.id != c.provider {
-                    continue;
-                }
-                list = list.child(menu_heading(if p.available() {
-                    p.label.clone()
-                } else {
-                    tf("{} · not available", &[&p.label])
-                }));
-                if p.models.is_empty() {
-                    let id = p.id.clone();
-                    list = list.child(
-                        menu_row(p.label.clone(), None, None, c.provider == p.id, move || {
-                            store::set_control(live, Control::Provider(id.clone()))
-                        })
-                        .disabled(!p.available() || live),
-                    );
-                    continue;
-                }
-                for m in &p.models {
-                    let (pid, mid) = (p.id.clone(), m.id.clone());
-                    let checked = c.provider == p.id && c.model.as_deref() == Some(m.id.as_str());
-                    list = list.child(
-                        menu_row(m.label.clone(), None, Some(m.description.clone().into()), checked, move || {
-                            if !live {
-                                store::set_control(false, Control::Provider(pid.clone()));
-                            }
-                            store::set_control(live, Control::Model(mid.clone()));
-                        })
-                        .disabled(!p.available()),
-                    );
-                }
-            }
-            // A live agent keeps its provider: another vendor's model
-            // continues the conversation in that vendor's own agent (a
-            // fork), where its sign-in belongs.
-            if live {
-                let others: Vec<_> = providers.iter().filter(|p| p.enabled && p.available() && p.id != c.provider).collect();
-                if !others.is_empty() {
-                    list = list.child(menu_divider()).child(menu_heading(t("Continue in another agent"))).child(
-                        text(t("A new agent, with this conversation"))
-                            .text_size(px(TEXT_XS))
-                            .text_color(FG_FAINT)
-                            .px(px(S3))
-                            .pb(px(S1)),
-                    );
-                }
-                for p in others {
-                    if p.models.is_empty() {
-                        let pid = p.id.clone();
-                        list = list.child(menu_row(p.label.clone(), None, None, false, move || store::continue_in(&pid, "")));
-                        continue;
-                    }
-                    for m in &p.models {
-                        let (pid, mid) = (p.id.clone(), m.id.clone());
-                        list = list.child(menu_row(format!("{} · {}", p.label, m.label), None, None, false, move || {
-                            store::continue_in(&pid, &mid)
-                        }));
-                    }
-                }
-            }
-            if scrolled { menu_scroll(420.0, list).into_element() } else { list.into_element() }
-        }))
-    }))
-}
-
-fn thinking_options(live: bool) -> Vec<crate::daemon::model::Opt> {
+pub(crate) fn thinking_options(live: bool) -> Vec<crate::daemon::model::Opt> {
     let c = store::controls(live);
+    // The agent's own list first: its levels for this model.
+    let local = c.model.as_deref().and_then(|m| store::local_models(&c.provider)?.into_iter().find(|x| x.id == m));
+    if let Some(local) = local.filter(|l| !l.thinking.is_empty()) {
+        return local
+            .thinking
+            .into_iter()
+            .map(|(id, label)| crate::daemon::model::Opt { id, label, description: String::new() })
+            .collect();
+    }
     store::provider(&c.provider)
         .and_then(|p| c.model.as_deref().and_then(|m| p.model(m).cloned()).or_else(|| p.default_model().cloned()))
         .map(|m| m.thinking)
         .unwrap_or_default()
-}
-
-fn thinking_picker(live: bool) -> impl IntoElement {
-    let has = computed(move || !thinking_options(live).is_empty());
-    let label = computed(move || {
-        let c = store::controls(live);
-        let opts = thinking_options(live);
-        c.thinking
-            .as_deref()
-            .and_then(|t| opts.iter().find(|o| o.id == t))
-            .or(opts.first())
-            .map(|o| o.label.clone())
-            .unwrap_or_default()
-    });
-    when(has, move || {
-        dropup(picker_trigger(Some(Icon::Brain), move || label.get())).child(thinking_rows(live))
-    })
-}
-
-fn thinking_rows(live: bool) -> impl IntoElement {
-    view().child(dynamic(move || {
-            let c = store::controls(live);
-            let opts = thinking_options(live);
-            if opts.is_empty() {
-                return None;
-            }
-            Some(untracked(move || {
-                let mut list = view().child(menu_heading(t("Thinking")));
-                for o in &opts {
-                    let id = o.id.clone();
-                    list = list.child(menu_row(
-                        o.label.clone(),
-                        None,
-                        Some(o.description.clone().into()),
-                        c.thinking.as_deref() == Some(o.id.as_str()),
-                        move || store::set_control(live, Control::Thinking(id.clone())),
-                    ));
-                }
-                list.into_element()
-            }))
-    }))
-}
-
-fn mode_picker(live: bool) -> impl IntoElement {
-    let has = computed(move || !store::controls(live).modes.is_empty());
-    let label = computed(move || {
-        let c = store::controls(live);
-        c.mode
-            .as_deref()
-            .and_then(|m| c.modes.iter().find(|o| o.id == m))
-            .or(c.modes.first())
-            .map(|o| o.label.clone())
-            .unwrap_or_default()
-    });
-    when(has, move || {
-        dropup(picker_trigger(Some(Icon::Layers), move || label.get())).child(mode_rows(live))
-    })
-}
-
-fn mode_rows(live: bool) -> impl IntoElement {
-    view().child(dynamic(move || {
-            let c = store::controls(live);
-            if c.modes.is_empty() {
-                return None;
-            }
-            Some(untracked(move || {
-                let mut list = view().child(menu_heading(t("Mode")));
-                for o in &c.modes {
-                    let id = o.id.clone();
-                    list = list.child(menu_row(
-                        o.label.clone(),
-                        None,
-                        Some(o.description.clone().into()),
-                        c.mode.as_deref() == Some(o.id.as_str()),
-                        move || store::set_control(live, Control::Mode(id.clone())),
-                    ));
-                }
-                list.into_element()
-            }))
-    }))
 }
 
 /// A hint line under a composer (errors, where it starts).
@@ -858,61 +725,6 @@ pub(crate) fn context_meter() -> impl IntoElement {
                     ),
                 )
                 .child(text(label).text_size(px(TEXT_XS)).font_family(|| MONO).text_color(tone))
-        }))
-    }))
-}
-
-/// The provider's features: toggles as chips, choices as menus.
-fn feature_controls(live: bool) -> impl IntoElement {
-    let list = computed(move || store::features(live));
-    view().flex_row().items_center().gap(px(2.0)).child(dynamic(move || {
-        let features = list.get();
-        if features.is_empty() {
-            return None;
-        }
-        Some(untracked(move || {
-            let mut row = view().flex_row().items_center().gap(px(2.0));
-            for f in features.clone() {
-                match f.value.clone() {
-                    Ok(on) => {
-                        let id = f.id.clone();
-                        row = row.child(
-                            nsh_base::button()
-                                .on_press(move || store::set_feature(live, &id, (!on).into()))
-                                .flex_row()
-                                .items_center()
-                                .gap(px(5.0))
-                                .h(px(CONTROL_SM))
-                                .px(px(S2))
-                                .rounded(px(R_FULL))
-                                .bg(if on { tint(ACCENT, 0.12) } else { tint(ACCENT, 0.0) })
-                                .hover(|s| s.bg(highlight()))
-                                .child(icon(Icon::Sparkles, 14.0).text_color(if on { ACCENT } else { FG_MUTED }))
-                                .child(text(f.label.clone()).text_size(px(TEXT_SM)).font_weight(FontWeight(500)).text_color(if on { ACCENT } else { FG_MUTED })),
-                        );
-                    }
-                    Err((value, options)) => {
-                        let current = value
-                            .as_deref()
-                            .and_then(|v| options.iter().find(|o| o.id == v))
-                            .map(|o| o.label.clone())
-                            .unwrap_or_else(|| f.label.clone());
-                        let mut menu = dropup(picker_trigger(Some(Icon::Settings2), current)).child(menu_heading(f.label.clone()));
-                        for o in options {
-                            let (id, oid) = (f.id.clone(), o.id.clone());
-                            menu = menu.child(menu_row(
-                                o.label.clone(),
-                                None,
-                                Some(o.description.clone().into()),
-                                value.as_deref() == Some(o.id.as_str()),
-                                move || store::set_feature(live, &id, oid.clone().into()),
-                            ));
-                        }
-                        row = row.child(menu);
-                    }
-                }
-            }
-            row
         }))
     }))
 }
@@ -1046,33 +858,22 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// The image on the clipboard, attached to the message as a chip.
-fn paste_image_into(key: String) {
-    store::spawn_detached(async move {
-        let Some(img) = clipboard_image().await else {
-            store::notify(t("No image on the clipboard").into());
-            return;
-        };
-        match fetch(img.url.as_str()).await {
-            Ok(resp) if resp.ok() => {
-                use base64::Engine;
-                let mime = resp.header("content-type").unwrap_or("image/png").to_owned();
-                insert_images(&key, vec![crate::daemon::connection::ImageInput {
-                    name: t("Pasted image").into(),
-                    mime,
-                    data: base64::engine::general_purpose::STANDARD.encode(&resp.body),
-                }]);
-            }
-            _ => store::notify(t("Could not read the pasted image").into()),
-        }
-    });
-}
-
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     #[test]
     fn decodes_file_url_paths() {
         assert_eq!(super::percent_decode("/Users/a/My%20Shot%E5%9B%BE.png"), "/Users/a/My Shot图.png");
         assert_eq!(super::percent_decode("/tmp/100%"), "/tmp/100%");
+    }
+}
+
+#[cfg(test)]
+mod model_name_tests {
+    #[test]
+    fn a_claude_id_reads_as_its_family_and_version() {
+        assert_eq!(super::model_name("claude-opus-5-5"), "Opus 5.5");
+        assert_eq!(super::model_name("claude-haiku-4-5-20251001"), "Haiku 4.5");
+        assert_eq!(super::model_name("claude-sonnet-5"), "Sonnet 5");
+        assert_eq!(super::model_name("gpt-6-sol"), "gpt-6-sol");
     }
 }

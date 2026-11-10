@@ -12,10 +12,25 @@ pub(crate) mod kit;
 
 mod desktop;
 mod mobile;
-mod shared;
+pub(crate) mod shared;
 
 use nsh_core::prelude::*;
 
 pub(crate) fn shell() -> AnyElement {
     if kit::MOBILE { mobile::shell().into_element() } else { desktop::shell().into_element() }
+}
+
+/// Opens a new draft (a prompt link's): in `workspace`'s draft tab, or,
+/// with none, where a new chat starts (the new-workspace screen; the
+/// phone's workspace list). The draft takes the link's text as it resets.
+pub(crate) fn open_new_draft(workspace: Option<&str>) {
+    match (kit::MOBILE, workspace) {
+        (true, Some(ws)) => mobile::open_chat(ws, Some(crate::store::Tab::Draft)),
+        (true, None) => mobile::push(mobile::Route::NewChat),
+        (false, Some(ws)) => {
+            crate::store::open_workspace(ws);
+            crate::store::open_tab(crate::store::Tab::Draft);
+        }
+        (false, None) => crate::store::open_new_workspace(None),
+    }
 }

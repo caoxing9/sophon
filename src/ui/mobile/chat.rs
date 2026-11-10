@@ -212,7 +212,7 @@ fn draft() -> impl IntoElement {
     let conn = computed(store::conn);
     let host = computed(move || match conn.get() {
         Conn::Connected { hostname, .. } if !hostname.is_empty() => hostname,
-        _ => store::current_host().map(|h| h.name).unwrap_or_default(),
+        _ => store::current_host().map(|h| h.label()).unwrap_or_default(),
     });
     let error = computed(|| store::form().error);
     view()
@@ -233,7 +233,7 @@ fn draft() -> impl IntoElement {
                         .map(|h| {
                             let on = current.as_deref() == Some(h.id.as_str());
                             let id = h.id.clone();
-                            SheetItem::new(h.name.clone(), move || store::switch_host(Some(id.clone()))).icon(Icon::Server).checked(on)
+                            SheetItem::new(h.label(), move || store::switch_host(Some(id.clone()))).icon(Icon::Server).checked(on)
                         })
                         .collect();
                     show_sheet(Some(t("Computer").into()), items);

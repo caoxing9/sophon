@@ -157,7 +157,7 @@ impl Handshake {
             let binary = v.pointer("/capabilities/binaryCiphertext").and_then(Value::as_bool) == Some(true);
             let b = Arc::new(self.legacy);
             return Ok(Some((
-                Sender { mode: Mode::Legacy(b.clone()), nonce: 0, binary },
+                Sender { mode: Mode::Legacy(b.clone()), nonce: 0, binary, hash: None },
                 Receiver { mode: Mode::Legacy(b), nonce: 0, binary },
             )));
         };
@@ -170,12 +170,13 @@ impl Handshake {
             return Err((self, "Relay handshake: unsupported parameters".into()));
         }
         let binary = payload[1] & 0x01 != 0;
+        let hash = self.state.get_handshake_hash().to_vec();
         let transport = match self.state.into_stateless_transport_mode() {
             Ok(t) => Arc::new(t),
             Err(e) => return Err((Self::dead(), format!("Relay handshake failed: {e}"))),
         };
         Ok(Some((
-            Sender { mode: Mode::Protected(transport.clone()), nonce: 0, binary },
+            Sender { mode: Mode::Protected(transport.clone()), nonce: 0, binary, hash: Some(hash) },
             Receiver { mode: Mode::Protected(transport), nonce: 0, binary },
         )))
     }
@@ -228,9 +229,20 @@ pub struct Sender {
     mode: Mode,
     nonce: u64,
     binary: bool,
+    /// The Noise handshake hash, the same on both ends of one session.
+    hash: Option<Vec<u8>>,
 }
 
 impl Sender {
+    /// Six digits both ends of this session show, `123 456`: equal only
+    /// when no one sits in between, so a person comparing them on the phone
+    /// and the Mac knows the phone talks to that Mac.
+    pub fn pairing_code(&self) -> Option<String> {
+        let h = self.hash.as_ref()?;
+        let n = u32::from_be_bytes([h[0], h[1], h[2], h[3]]) % 1_000_000;
+        Some(format!("{:03} {:03}", n / 1000, n % 1000))
+    }
+
     /// Whether the channel is the protected (Noise) one.
     pub fn protected(&self) -> bool {
         self.mode.protected()
@@ -471,6 +483,16 @@ mod tests {
     }
 
     #[test]
+    fn a_pairing_link_names_its_computer() {
+        let key = [5u8; 32];
+        let link = PairingLink::format_named(Some(("10.0.0.2:61034", &key, "tok")), None, Some("MacBook Pro · 林"));
+        let parsed = PairingLink::parse(&link).unwrap();
+        assert_eq!(parsed.name.as_deref(), Some("MacBook Pro · 林"));
+        assert_eq!(parsed.lan, Some(("10.0.0.2:61034".into(), key, "tok".into())));
+        assert_eq!(PairingLink::parse(&PairingLink::format(Some(("a:1", &key, "t")), None)).unwrap().name, None);
+    }
+
+    #[test]
     fn parses_pairing_links() {
         let key = B64.encode([3u8; 32]);
         let json = json!({ "v": 2, "serverId": "srv_1", "daemonPublicKeyB64": key, "relay": { "endpoint": "relay.paseo.sh:443", "useTls": true } });
@@ -510,10 +532,11 @@ pub fn respond(local_private: &[u8; 32], hello_text: &str) -> Result<(String, Se
     let mut buf = [0u8; 256];
     let m = state.write_message(&[0x01, if binary { 0x01 } else { 0x00 }], &mut buf).map_err(|e| e.to_string())?;
     let ready = json!({ "type": "e2ee_ready", "protected": { "v": 1, "message": B64.encode(&buf[..m]) } }).to_string();
+    let hash = state.get_handshake_hash().to_vec();
     let t = Arc::new(state.into_stateless_transport_mode().map_err(|e| e.to_string())?);
     Ok((
         ready,
-        Sender { mode: Mode::Protected(t.clone()), nonce: 0, binary },
+        Sender { mode: Mode::Protected(t.clone()), nonce: 0, binary, hash: Some(hash) },
         Receiver { mode: Mode::Protected(t), nonce: 0, binary },
     ))
 }
@@ -530,31 +553,57 @@ pub fn generate_key() -> ([u8; 32], [u8; 32]) {
 pub struct PairingLink {
     pub lan: Option<(String, [u8; 32], String)>,
     pub relay: Option<RelayOffer>,
+    /// What the paired computer is called here (a space's
+    /// `MacBook Pro · Lin`), when the link names it.
+    pub name: Option<String>,
 }
 
 impl PairingLink {
     pub fn parse(input: &str) -> Option<Self> {
         let s = input.trim();
         let relay = RelayOffer::parse(s);
-        let lan = s.strip_prefix("sophon://pair").or_else(|| s.strip_prefix("victor://pair")).and_then(|rest| {
-            let query = rest.trim_start_matches('/').strip_prefix('?')?;
-            let query = query.split('#').next().unwrap_or_default();
-            let param = |name: &str| {
-                query.split('&').find_map(|kv| {
-                    let (k, v) = kv.split_once('=')?;
-                    (k == name).then(|| percent_decode(v))
-                })
-            };
-            Some((param("lan")?, key(&param("lanKey")?)?, param("token")?))
-        });
-        (lan.is_some() || relay.is_some()).then_some(Self { lan, relay })
+        let query = s
+            .strip_prefix("sophon://pair")
+            .or_else(|| s.strip_prefix("victor://pair"))
+            .and_then(|rest| rest.trim_start_matches('/').strip_prefix('?'))
+            .map(|q| q.split('#').next().unwrap_or_default());
+        let param = |name: &str| {
+            query?.split('&').find_map(|kv| {
+                let (k, v) = kv.split_once('=')?;
+                (k == name).then(|| percent_decode(v))
+            })
+        };
+        let lan = (|| Some((param("lan")?, key(&param("lanKey")?)?, param("token")?)))();
+        let name = param("name").filter(|n| !n.trim().is_empty());
+        (lan.is_some() || relay.is_some()).then_some(Self { lan, relay, name })
     }
 
     pub fn format(lan: Option<(&str, &[u8; 32], &str)>, relay_link: Option<&str>) -> String {
+        Self::format_named(lan, relay_link, None)
+    }
+
+    /// [`Self::format`] naming the computer (`name=`), as the device that
+    /// pairs saves it.
+    pub fn format_named(lan: Option<(&str, &[u8; 32], &str)>, relay_link: Option<&str>, name: Option<&str>) -> String {
+        let enc = |v: &str| {
+            v.bytes()
+                .map(|b| match b {
+                    b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b':' | b',' => (b as char).to_string(),
+                    _ => format!("%{b:02X}"),
+                })
+                .collect::<String>()
+        };
         let mut s = "sophon://pair".to_owned();
+        let mut params: Vec<String> = Vec::new();
         if let Some((addr, key, token)) = lan {
-            let enc = |v: &str| v.replace('%', "%25").replace('+', "%2B").replace('/', "%2F").replace('=', "%3D");
-            s.push_str(&format!("?lan={addr}&lanKey={}&token={token}", enc(&B64.encode(key))));
+            params.push(format!("lan={addr}&lanKey={}&token={token}", enc(&B64.encode(key))));
+        }
+        if let Some(name) = name.filter(|n| !n.trim().is_empty()) {
+            params.push(format!("name={}", enc(name)));
+        }
+        if !params.is_empty() {
+            s.push('?');
+            s.push_str(&params.join("&"));
         }
         if let Some(fragment) = relay_link.and_then(|r| r.find("#offer=").map(|i| &r[i..])) {
             s.push_str(fragment);

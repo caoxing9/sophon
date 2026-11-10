@@ -36,7 +36,43 @@ pub(crate) fn modal_layer() -> impl IntoElement {
                     .child(dynamic(|| {
                         let m = store::modal()?;
                         Some(untracked(move || {
-                            if m == Modal::Palette {
+                            if let Modal::Picture { uri, .. } = &m {
+                                // A picture takes the whole window: itself,
+                                // and a small cross to put it away (a press
+                                // anywhere does too).
+                                view()
+                                    .flex_1()
+                                    .self_stretch()
+                                    .child(
+                                        nsh_base::button()
+                                            .on_press(store::close_modal)
+                                            .accessibility_label(t("Close"))
+                                            .flex_1()
+                                            .bg(AdaptiveColor::rgb(0x000000, 0x000000).opacity(0.55))
+                                            .child(
+                                                image(SharedString::from(uri.clone()))
+                                                    .flex_1()
+                                                    .m(px(S4))
+                                                    .object_fit(nsh_core::ResizeMode::Contain),
+                                            ),
+                                    )
+                                    .child(
+                                        nsh_base::button()
+                                            .on_press(store::close_modal)
+                                            .accessibility_label(t("Close"))
+                                            .absolute()
+                                            .top(px(S4))
+                                            .right(px(S4))
+                                            .w(px(30.0))
+                                            .h(px(30.0))
+                                            .rounded(px(R_FULL))
+                                            .items_center()
+                                            .justify_center()
+                                            .bg(AdaptiveColor::rgb(0x000000, 0x000000).opacity(0.45))
+                                            .hover(|s| s.bg(AdaptiveColor::rgb(0x000000, 0x000000).opacity(0.7)))
+                                            .child(icon(Icon::X, 16.0).text_color(AdaptiveColor::rgb(0xffffff, 0xffffff))),
+                                    )
+                            } else if m == Modal::Palette {
                                 view().self_stretch().items_center().pt(relative(0.12)).flex_1().child(crate::ui::desktop::shortcuts::palette())
                             } else if MOBILE && matches!(m, Modal::ToolDetail { .. }) {
                                 // The phone: a sheet at the foot, full width.
@@ -59,7 +95,7 @@ pub(crate) fn modal_layer() -> impl IntoElement {
     })
 }
 
-fn sheet(title: &str) -> View {
+pub(crate) fn sheet(title: &str) -> View {
     glass_strong(view())
         .w(px(420.0))
         .max_w(relative(0.92))
@@ -69,7 +105,7 @@ fn sheet(title: &str) -> View {
         .child(text(title.to_owned()).text_size(px(TEXT_LG)).font_weight(FontWeight(500)))
 }
 
-fn actions(primary: impl IntoElement) -> View {
+pub(crate) fn actions(primary: impl IntoElement) -> View {
     view()
         .flex_row()
         .justify_end()
@@ -86,15 +122,48 @@ fn body(m: Modal) -> View {
         Modal::RenameAgent { id, name } => rename(t("Rename agent"), name, move |v| {
             store::rename_agent(&id, v);
         }),
+        Modal::RenameHost { id, name } => rename(t("Rename host"), name, move |v| {
+            store::rename_host(&id, v);
+        }),
+        // Drawn by the layer itself, over the whole window.
+        Modal::Picture { .. } => view(),
+        Modal::RenameMySpace { name } => rename(t("Rename space"), name, store::rename_my_space),
+        Modal::RemoveSpace { id, name, folder } => sheet(t("Remove space"))
+            .child(
+                text(tf("“{}” leaves Sophon and its service stops. Its projects and conversations stay in {}, to delete by hand or to bring back", &[&name, &folder]))
+                    .text_size(px(TEXT_BASE))
+                    .line_height(px(20.0))
+                    .text_color(FG_MUTED),
+            )
+            .child(actions(btn(t("Remove"), Variant::Destructive, Sz::Md, Some(Icon::Trash2), move || {
+                store::remove_host(&id);
+                store::close_modal();
+            }))),
         Modal::Commit => commit(),
         Modal::Palette => view(),
         Modal::NewSchedule => new_schedule(),
         Modal::AddProject => add_project(),
         Modal::SwitchBranch => switch_branch(),
         Modal::ImportSession => import_session(),
-        Modal::Usage => usage(),
+        Modal::AddAgentAccount => crate::ui::shared::agents::add_account(),
+        Modal::AddAgentKey => crate::ui::shared::agents::add_api_key(),
+        Modal::RemoveAgent { id, label } => crate::ui::shared::agents::remove_agent(id, label),
         Modal::AddHost => add_host(),
+        Modal::CreateSpace => create_space(),
         Modal::PairDevice => pair_device(),
+        Modal::ApprovePairing { device, code, .. } => approve_pairing(device, code),
+        Modal::PairNearby => pair_nearby(),
+        Modal::RevokeDevices => sheet(t("Unpair every device"))
+            .child(
+                text(t("Every phone and computer paired with this Mac, by QR code or on the LAN, must pair again. Connected ones are cut off now"))
+                    .text_size(px(TEXT_BASE))
+                    .line_height(px(20.0))
+                    .text_color(FG_MUTED),
+            )
+            .child(actions(btn(t("Unpair all"), Variant::Destructive, Sz::Md, Some(Icon::Trash2), || {
+                crate::lan::revoke_all();
+                store::close_modal();
+            }))),
         Modal::Labels { workspace } => labels(workspace),
         Modal::ProjectSettings { name, .. } => project_settings(name),
         Modal::FileName { op, path, name } => rename(
@@ -429,60 +498,6 @@ fn import_session() -> View {
         .child(actions(view()))
 }
 
-fn usage() -> View {
-    let data = computed(store::usage);
-    sheet(t("Usage"))
-        .w(px(560.0))
-        .child(dynamic(move || {
-            let d = data.get();
-            Some(untracked(move || match d.clone() {
-                None => text(t("Loading…")).text_color(FG_MUTED).into_element(),
-                Some(list) if list.is_empty() => text(t("No usage reported by your providers")).text_size(px(TEXT_BASE)).text_color(FG_MUTED).into_element(),
-                Some(list) => {
-                    let mut col = view().gap(px(S4));
-                    for p in list {
-                        let mut c = card().p(px(S4)).gap(px(S3)).child(
-                            view()
-                                .flex_row()
-                                .items_center()
-                                .gap(px(S2))
-                                .child(text(p.name.clone()).text_size(px(TEXT_BASE)).font_weight(FontWeight(500)))
-                                .child(text(p.plan.clone().unwrap_or_default()).text_size(px(TEXT_SM)).text_color(FG_MUTED)),
-                        );
-                        if let Some(e) = p.error.clone() {
-                            c = c.child(text(e).text_size(px(TEXT_SM)).text_color(DANGER));
-                        }
-                        for (label, pct, resets) in p.windows {
-                            let used = pct.unwrap_or(0.0).clamp(0.0, 100.0);
-                            let tone = if used >= 90.0 { DANGER } else if used >= 70.0 { WARNING } else { ACCENT };
-                            c = c.child(
-                                view()
-                                    .gap(px(5.0))
-                                    .child(
-                                        view()
-                                            .flex_row()
-                                            .child(text(label).text_size(px(TEXT_SM)).flex_1())
-                                            .child(text(format!("{used:.0}%")).text_size(px(TEXT_SM)).font_family(|| MONO).text_color(FG_MUTED)),
-                                    )
-                                    .child(
-                                        view().h(px(6.0)).rounded(px(R_FULL)).bg(SURFACE3).child(
-                                            view().h_full().w(relative(used as f32 / 100.0)).rounded(px(R_FULL)).bg(tone),
-                                        ),
-                                    )
-                                    .when_some(resets, |v, r| {
-                                        v.child(text(tf("Resets {}", &[&r.get(..16).unwrap_or(&r).replace('T', " ")])).text_size(px(TEXT_XS)).text_color(FG_FAINT))
-                                    }),
-                            );
-                        }
-                        col = col.child(c);
-                    }
-                    scroll().max_h(px(480.0)).child(col).into_element()
-                }
-            }))
-        }))
-        .child(actions(view()))
-}
-
 fn project_settings(name: String) -> View {
     let cfg = computed(store::project_config);
     sheet(&format!("{name} · paseo.json"))
@@ -579,12 +594,36 @@ fn labels(workspace: String) -> View {
         ))
 }
 
+/// Names a new space: its own projects and conversations on this Mac.
+fn create_space() -> View {
+    let name = signal(String::new());
+    let create = move || {
+        let n = name.get_untracked();
+        if !n.trim().is_empty() {
+            store::create_space(&n);
+            store::close_modal();
+        }
+    };
+    sheet(t("New space"))
+        .child(
+            text(t("A space has its own projects, conversations and schedules on this Mac, for another person or another kind of work. Its agents can still open any folder here"))
+                .text_size(px(TEXT_SM))
+                .line_height(px(18.0))
+                .text_color(FG_MUTED),
+        )
+        .child(field().value(move || name.get()).on_change(move |v: &str| name.set(v.to_owned())).on_submit(move |_: &str| create()).placeholder(t("Name, e.g. Lin")).auto_focus(true))
+        .child(actions(
+            btn(t("Create"), Variant::Primary, Sz::Md, Some(Icon::FolderPlus), create).disabled(move || name.with(|n| n.trim().is_empty())),
+        ))
+}
+
 fn add_host() -> View {
     let name = signal(String::new());
     let url = signal(String::new());
     let password = signal(String::new());
     sheet(t("Add host"))
         .w(px(520.0))
+        .child(nearby_list())
         .child(
             text(t("Paste a pairing link (Settings → Pair a device on the other machine) to connect from anywhere through the encrypted relay, or a LAN / Tailscale address, or a tunnel URL"))
                 .text_size(px(TEXT_SM))
@@ -633,6 +672,138 @@ fn add_host() -> View {
             })
             .disabled(move || url.with(|u| u.trim().is_empty())),
         ))
+}
+
+/// The six digits of a pairing session, large, to compare.
+fn pairing_code(code: &str) -> View {
+    view()
+        .self_center()
+        .px(px(S6))
+        .py(px(S3))
+        .rounded(px(R_LG))
+        .bg(SURFACE2)
+        .child(text(code.to_owned()).text_size(px(32.0)).font_weight(FontWeight(500)).font_family(|| MONO))
+}
+
+/// This Mac: a phone nearby asks to pair, into one of its spaces.
+fn approve_pairing(device: String, code: String) -> View {
+    let space = signal(None::<String>);
+    sheet(t("Pairing request"))
+        .child(
+            text(tf("“{}” on this network asks to connect to this Mac. Allowed, it can use your agents here, from anywhere", &[&device]))
+                .text_size(px(TEXT_BASE))
+                .line_height(px(20.0))
+                .text_color(FG_MUTED),
+        )
+        .child(pairing_code(&code))
+        .child(text(t("Allow only if the device shows the same code")).text_size(px(TEXT_SM)).text_color(FG_MUTED).self_center())
+        .child(space_choice(space))
+        .child(
+            view()
+                .flex_row()
+                .justify_end()
+                .gap(px(S2))
+                .child(btn(t("Deny"), Variant::Secondary, Sz::Md, None, || crate::lan::answer_pairing(false, None)))
+                .child(btn(t("Allow"), Variant::Primary, Sz::Md, Some(Icon::Check), move || {
+                    crate::lan::answer_pairing(true, space.get_untracked())
+                })),
+        )
+}
+
+/// Which space on this Mac a device joins, when there is more than one.
+fn space_choice(space: Signal<Option<String>>) -> AnyElement {
+    let spaces = store::spaces();
+    if spaces.is_empty() {
+        return view().into_element();
+    }
+    let mut options: Vec<(Option<String>, SharedString)> = vec![(None, t("My space").into())];
+    options.extend(spaces.into_iter().map(|h| (Some(h.id.clone()), h.label().into())));
+    view()
+        .gap(px(S2))
+        .child(text(t("Joins the space")).text_size(px(TEXT_SM)).text_color(FG_MUTED))
+        .child(segmented(options, move || space.get(), move |v| space.set(v)))
+        .into_element()
+}
+
+/// A phone (or another Mac): pairing with a computer nearby.
+fn pair_nearby() -> View {
+    let p = computed(crate::lan::pairing);
+    sheet(t("Pair with a computer")).child(dynamic(move || {
+        let st = p.get();
+        Some(untracked(move || {
+            let mut v = view().gap(px(S4));
+            if let Some(e) = &st.error {
+                v = v.child(text(e.clone()).text_size(px(TEXT_BASE)).text_color(DANGER));
+            } else if let Some(code) = &st.code {
+                v = v
+                    .child(
+                        text(tf("Allow it on “{}”. The code there must be the same as this one", &[&st.name]))
+                            .text_size(px(TEXT_BASE))
+                            .line_height(px(20.0))
+                            .text_color(FG_MUTED),
+                    )
+                    .child(pairing_code(code));
+            } else {
+                v = v.child(text(tf("Connecting to “{}”…", &[&st.name])).text_size(px(TEXT_BASE)).text_color(FG_MUTED));
+            }
+            v.child(view().flex_row().justify_end().child(btn(
+                if st.error.is_some() { t("Close") } else { t("Cancel") },
+                Variant::Secondary,
+                Sz::Md,
+                None,
+                store::close_modal,
+            )))
+            .into_element()
+        }))
+    }))
+}
+
+/// The computers on this network: one paired already connects at once,
+/// another asks to pair. Searches when shown.
+pub(crate) fn nearby_list() -> View {
+    crate::lan::scan();
+    view().gap(px(S2)).child(dynamic(|| {
+        let list = crate::lan::nearby();
+        let scanning = crate::lan::scanning();
+        let scanned = crate::lan::scanned();
+        Some(untracked(move || {
+            let head = view()
+                .flex_row()
+                .items_center()
+                .gap(px(S2))
+                .child(text(t("On this network")).text_size(px(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG_MUTED).flex_1())
+                .child(if scanning {
+                    text(t("Searching…")).text_size(px(TEXT_SM)).text_color(FG_FAINT).into_element()
+                } else {
+                    icon_btn(Icon::RotateCw, Sz::Sm, t("Search again"), crate::lan::scan).into_element()
+                });
+            let mut c = card();
+            if list.is_empty() {
+                let note = if scanned && !scanning { t("No computer running Sophon found on this network") } else { t("Searching…") };
+                c = c.child(view().px(px(S4)).py(px(S3)).child(text(note).text_size(px(TEXT_SM)).text_color(FG_MUTED)));
+            }
+            for (i, n) in list.into_iter().enumerate() {
+                let paired = n.host.is_some();
+                let name = n.name.clone();
+                c = c.child(
+                    nsh_base::button()
+                        .on_press(move || crate::lan::connect(n.clone()))
+                        .flex_row()
+                        .items_center()
+                        .gap(px(S3))
+                        .h(px(52.0))
+                        .px(px(S4))
+                        .when(i > 0, |v| v.border_t_1().border_color(BORDER))
+                        .active(|s| s.bg(highlight()))
+                        .hover(|s| s.bg(highlight()))
+                        .child(icon(Icon::Monitor, 18.0).text_color(FG_MUTED))
+                        .child(text(name).text_size(px(TEXT_BASE)).number_of_lines(1).flex_1())
+                        .child(text(if paired { t("Paired") } else { t("Pair") }).text_size(px(TEXT_SM)).text_color(if paired { FG_MUTED } else { ACCENT })),
+                );
+            }
+            view().gap(px(S2)).child(head).child(c).into_element()
+        }))
+    }))
 }
 
 fn pair_device() -> View {

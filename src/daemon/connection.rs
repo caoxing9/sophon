@@ -8,6 +8,7 @@
 
 use std::{collections::HashMap, path::PathBuf, time::Duration};
 
+use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use serde_json::{Value, json};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use super::rt::{self, Message};
@@ -19,10 +20,16 @@ use super::model::{Agent, DiffFile, Item, Project, Provider, Workspace};
 pub enum Command {
     /// Show an agent: load its tail and stream it live.
     Open(String),
+    /// Try the service again now, not after the wait between attempts
+    /// (the app just started it).
+    Reconnect,
     /// `behavior`: `steer` or `interrupt` while a turn runs.
     /// `message_id`: the id the host echoes the message back with, so the
     /// copy shown at once is not shown twice.
     Send { agent_id: String, text: String, behavior: Option<&'static str>, images: Vec<ImageInput>, attachments: Vec<Value>, message_id: String },
+    /// Asks the host's Sophon (its bridge) for the pictures of a message
+    /// this device has none of: sent from another device, or forgotten.
+    AskPictures { message_id: String, text: String },
     /// Uploads a file to the host for the next message; answered by
     /// [`Event::Uploaded`] with the same `id`.
     Upload { id: String, name: String, mime: String, bytes: Vec<u8> },
@@ -103,6 +110,13 @@ pub enum Command {
     RecoverWorkspace(String),
     /// A partial config, merged by the daemon.
     SetConfig(Value),
+    /// A config patch of providers (`providers`, `removeProviders`): the
+    /// provider list is refreshed after it.
+    PatchProviders(Value),
+    /// Asks every provider again what it offers.
+    RefreshProviders,
+    /// What the provider's binary, version and login are.
+    ProviderDiagnostic(String),
     RestartDaemon,
     RecentSessions { query: String },
     ImportSession { provider: String, handle: String, cwd: String },
@@ -226,13 +240,23 @@ pub struct GitStatus {
     pub managed_worktree: bool,
 }
 
-/// A provider's plan usage: (window label, used %, resets at).
+/// A provider's plan usage and its limit windows.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ProviderUsage {
+    pub id: String,
     pub name: String,
     pub plan: Option<String>,
     pub error: Option<String>,
-    pub windows: Vec<(String, Option<f64>, Option<String>)>,
+    pub windows: Vec<UsageWindow>,
+}
+
+/// A limit window: what it is called, how much is used, when it resets.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct UsageWindow {
+    pub id: String,
+    pub label: String,
+    pub used: Option<f64>,
+    pub resets_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -339,6 +363,71 @@ impl TerminalInfo {
     }
 }
 
+/// A host switch the app asked for, taken by the connection however far its
+/// current attempt has gone: a connect, a handshake, or the retries of a LAN
+/// address that does not answer, which read no commands meanwhile (a host
+/// out of reach held the switch away from it until it answered).
+static SWITCH: std::sync::Mutex<Option<Option<RemoteHost>>> = std::sync::Mutex::new(None);
+
+fn switch_signal() -> &'static tokio::sync::Notify {
+    static SIGNAL: std::sync::OnceLock<tokio::sync::Notify> = std::sync::OnceLock::new();
+    SIGNAL.get_or_init(tokio::sync::Notify::new)
+}
+
+/// A line in `connection.log` (in the app's data folder): each attempt,
+/// connection and loss with its reason, for when the app sits on
+/// "Connecting…". Kept under 256 KB (the older half goes).
+fn trace(line: &str) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::io::Write;
+        let path = super::data_dir().join("connection.log");
+        if std::fs::metadata(&path).is_ok_and(|m| m.len() > 256 * 1024) {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                let half = text.len() / 2;
+                let cut = text[half..].find('\n').map_or(half, |i| half + i + 1);
+                let _ = std::fs::write(&path, &text[cut..]);
+            }
+        }
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            let _ = writeln!(f, "{now} {}", redact(line));
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = line;
+}
+
+/// `line` without a pairing link's or an address's secrets: the value of
+/// each `lanKey=`, `token=`, `offer=` and `password=` becomes `***`.
+fn redact(line: &str) -> String {
+    let mut out = line.to_owned();
+    for key in ["lanKey=", "token=", "offer=", "password="] {
+        let mut from = 0;
+        while let Some(i) = out[from..].find(key) {
+            let start = from + i + key.len();
+            let end = out[start..].find(|c: char| c == '&' || c == '/' || c.is_whitespace() || c == ';').map_or(out.len(), |j| start + j);
+            out.replace_range(start..end, "***");
+            from = start + 3;
+        }
+    }
+    out
+}
+
+/// Moves the connection to `next` (`None`: this computer's service) now,
+/// ending the session or attempt under way.
+pub fn switch_host(next: Option<RemoteHost>) {
+    trace(&format!("switch to {}", next.as_ref().map_or("this computer", |_| "a saved host")));
+    // At once: a conversation opened before the task turns reads this host's copy.
+    super::cache::set_host(super::cache::host_key(next.as_ref().map(|r| r.url.as_str())));
+    *SWITCH.lock().unwrap_or_else(|e| e.into_inner()) = Some(next);
+    switch_signal().notify_one();
+}
+
+fn take_switch() -> Option<Option<RemoteHost>> {
+    SWITCH.lock().unwrap_or_else(|e| e.into_inner()).take()
+}
+
 /// A daemon on another machine, reached directly (LAN, Tailscale, a tunnel).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RemoteHost {
@@ -429,6 +518,11 @@ pub enum Event {
     /// already holds are not applied again.
     TimelineReset { agent_id: String, items: Vec<Item>, older: Option<Value>, cursor: Option<(String, u64)> },
     TimelineOlder { agent_id: String, items: Vec<Item>, older: Option<Value> },
+    /// The conversation shown from this device's copy has everything the
+    /// host has now (what came since arrived as `TimelineLive`).
+    TimelineSynced { agent_id: String },
+    /// The pictures the host's Sophon kept for a message (`AskPictures`).
+    Pictures { message_id: String, text: String, pictures: Vec<String> },
     Commands { agent_id: String, list: Vec<SlashCommand> },
     Diff { cwd: String, files: Vec<DiffFile>, error: Option<String>, too_large: bool },
     Terminals { cwd: String, list: Vec<TerminalInfo> },
@@ -452,6 +546,8 @@ pub enum Event {
     Rewound { agent: String, error: Option<String> },
     RecentSessions(Vec<RecentSession>),
     DaemonConfig(Value),
+    /// A provider's diagnostic text.
+    Diagnostic { provider: String, text: String },
     Usage(Vec<ProviderUsage>),
     /// A link a phone pairs with: relay, daemon id and key.
     PairingOffer { url: Option<String>, relay_enabled: bool, error: Option<String> },
@@ -490,16 +586,52 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
     // LAN does not answer (away from home), the LAN again after that.
     let mut lan_index = 0usize;
     let mut backoff = Duration::from_secs(1);
+    // The host whose kept lists the UI has been given.
+    let mut shown: Option<String> = None;
     loop {
+        let key = super::cache::host_key(remote.as_ref().map(|r| r.url.as_str()));
+        if shown.as_deref() != Some(key.as_str()) {
+            super::cache::set_host(key.clone());
+            shown = Some(key);
+            // What this host said last time, before it answers again.
+            for ev in cached_lists() {
+                if events.send(ev).is_err() {
+                    return;
+                }
+            }
+        }
         let endpoint = match &remote {
-            Some(r) => endpoint_for(r, lan_index),
+            Some(r) => {
+                // Where its bridge is on this network now, if it is here:
+                // first, before the addresses pairing gave. Away from it
+                // (nothing answers) the relay at once, not after each
+                // address has timed out in turn.
+                let found = if lan_index == 0 { lan_now(r).await } else { None };
+                if lan_index == 0 && found.is_none() && has_relay(r) {
+                    lan_index = usize::MAX;
+                }
+                endpoint_for(r, lan_index, found)
+            }
             None => discover(),
         };
-        let lan_attempt = endpoint.bridge_token.is_some();
+        let lan_attempt = endpoint.is_lan();
+        // The address without a pairing link's key and token.
+        trace(&format!("connecting to {}", endpoint.url.split('?').next().unwrap_or("")));
         if events.send(Event::Connecting { url: endpoint.url.clone() }).is_err() {
             return;
         }
-        let result = session(&endpoint, &events, &mut commands, &mut open_agent, &mut diff_cwd).await;
+        let attempt = tokio::select! {
+            r = session(&endpoint, &events, &mut commands, &mut open_agent, &mut diff_cwd) => Some(r),
+            _ = switch_signal().notified() => None,
+        };
+        let result = match attempt {
+            Some(r) => r,
+            // Switched while connecting (or connected): the new host now.
+            None => match take_switch() {
+                Some(next) => Ok(Exit::Switch(next)),
+                None => continue,
+            },
+        };
         let reason = match result {
             Ok(Exit::UiGone) => return,
             Ok(Exit::Switch(next)) => {
@@ -521,6 +653,7 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
             Err(e) => {
                 if lan_attempt {
                     // Not on that network: the next address, then the relay.
+                    trace(&format!("LAN address did not answer: {e}"));
                     lan_index += 1;
                     continue;
                 }
@@ -528,6 +661,7 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
             }
         };
         lan_index = 0;
+        trace(&format!("lost: {reason}; next attempt in {} ms", backoff.as_millis()));
         if events.send(Event::Disconnected { reason }).is_err() {
             return;
         }
@@ -538,6 +672,16 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
         loop {
             tokio::select! {
                 _ = &mut deadline => break,
+                _ = switch_signal().notified() => {
+                    if let Some(next) = take_switch() {
+                        remote = next;
+                        open_agent = None;
+                        diff_cwd = None;
+                        lan_index = 0;
+                        backoff = Duration::from_secs(1);
+                        break;
+                    }
+                }
                 cmd = commands.recv() => match cmd {
                     None => return,
                     Some(Command::Open(id)) => open_agent = Some(id),
@@ -547,6 +691,11 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
                         open_agent = None;
                         diff_cwd = None;
                         backoff = Duration::from_secs(1);
+                        break;
+                    }
+                    // Just started: try now, then again soon.
+                    Some(Command::Reconnect) => {
+                        backoff = Duration::from_millis(250);
                         break;
                     }
                     Some(_) => { let _ = events.send(Event::Notice("Not connected to the service".into())); }
@@ -559,10 +708,15 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
 
 /// Where a saved host's session goes: its LAN bridge, its relay, or its
 /// direct address.
-fn endpoint_for(r: &RemoteHost, lan_index: usize) -> Endpoint {
+fn endpoint_for(r: &RemoteHost, lan_index: usize, found: Option<String>) -> Endpoint {
+    // Another space on this Mac: its own service, found as the first one is.
+    if let Some(home) = crate::spaces::home_of(&r.url) {
+        return discover_in(&home);
+    }
     if let Some(link) = super::relay::PairingLink::parse(&r.url) {
         let candidate = link.lan.clone().and_then(|(addrs, key, token)| {
-            let list: Vec<&str> = addrs.split(',').filter(|a| !a.is_empty()).collect();
+            let mut list: Vec<&str> = found.as_deref().into_iter().collect();
+            list.extend(addrs.split(',').filter(|a| !a.is_empty() && Some(*a) != found.as_deref()));
             // Without a relay, keep cycling through the addresses.
             let i = if link.relay.is_none() && !list.is_empty() { lan_index % list.len() } else { lan_index };
             list.get(i).map(|a| (a.to_string(), key, token))
@@ -581,25 +735,106 @@ fn endpoint_for(r: &RemoteHost, lan_index: usize) -> Endpoint {
                 }),
                 bridge_token: Some(token),
                 lan_probe: vec![],
+                lan_key: None,
             };
         }
         if let Some(offer) = link.relay {
+            // Sophon's own place at the relay (the LAN bridge's key): the
+            // device authenticates to it as on the LAN.
+            let bridge_token = link.lan.as_ref().filter(|(_, key, _)| *key == offer.daemon_key).map(|(_, _, token)| token.clone());
             let lan_probe = link
                 .lan
                 .as_ref()
                 .map(|(addrs, ..)| addrs.split(',').filter(|a| !a.is_empty()).map(str::to_owned).collect())
                 .unwrap_or_default();
+            let lan_key = link.lan.as_ref().map(|(_, key, _)| B64.encode(key));
             return Endpoint {
                 url: offer.ws_url(),
                 local_credential: None,
                 password: r.password.clone().or_else(|| offer.password.clone()),
                 relay: Some(offer),
-                bridge_token: None,
+                bridge_token,
                 lan_probe,
+                lan_key,
             };
         }
     }
-    Endpoint { url: r.ws_url(), local_credential: None, password: r.password.clone(), relay: None, bridge_token: None, lan_probe: vec![] }
+    Endpoint { url: r.ws_url(), local_credential: None, password: r.password.clone(), relay: None, bridge_token: None, lan_probe: vec![], lan_key: None }
+}
+
+/// A paired host's bridge on this network now, found by its key.
+fn has_relay(r: &RemoteHost) -> bool {
+    super::relay::PairingLink::parse(&r.url).is_some_and(|l| l.relay.is_some() && l.lan.is_some())
+}
+
+/// The address the host's bridge answers at on this network, if it is
+/// here: where Bonjour finds it, else the first of pairing's addresses
+/// that takes a connection. All asked at once, for under a second.
+async fn lan_now(r: &RemoteHost) -> Option<String> {
+    let (addrs, key, _) = super::relay::PairingLink::parse(&r.url)?.lan?;
+    let addrs: Vec<String> = addrs.split(',').filter(|a| !a.is_empty()).map(str::to_owned).collect();
+    let named = find_key(B64.encode(key), Duration::from_millis(900));
+    let answering = async {
+        let probes = addrs.iter().map(|a| async move { rt::reachable(a, Duration::from_millis(800)).await.then(|| a.clone()) });
+        futures_util::future::join_all(probes).await.into_iter().flatten().next()
+    };
+    let (named, answering) = tokio::join!(named, answering);
+    named.or(answering)
+}
+
+/// The lists this device kept of the current host, as the events its
+/// answers make.
+fn cached_lists() -> Vec<Event> {
+    let mut out = vec![];
+    for (kind, name) in LISTS {
+        if let Some(payload) = super::cache::load(name) {
+            out.extend(handle(kind, &payload, &mut HashMap::new(), None, &mut vec![]));
+        }
+    }
+    out
+}
+
+/// The answers kept whole, and the names they are kept under.
+const LISTS: [(&str, &str); 3] =
+    [("project.list.response", "projects"), ("fetch_workspaces_response", "workspaces"), ("fetch_agents_response", "agents")];
+
+/// A conversation's page as the host sent it: its items, the cursor of the
+/// page before it (while there is one), and where it ends.
+pub fn timeline_page(payload: &Value) -> (Vec<Item>, Option<Value>, Option<(String, u64)>) {
+    let items = payload
+        .get("entries")
+        .and_then(Value::as_array)
+        .map(|entries| entries.iter().filter_map(|e| e.get("item").and_then(Item::from_json)).collect())
+        .unwrap_or_default();
+    let older = (payload.get("hasOlder").and_then(Value::as_bool) == Some(true))
+        .then(|| payload.get("startCursor").cloned())
+        .flatten()
+        .filter(|c| !c.is_null());
+    (items, older, end_cursor(payload))
+}
+
+/// The page of `agent_id` this device kept, for showing before the host
+/// answers.
+pub fn cached_timeline(agent_id: &str) -> Option<(Vec<Item>, Option<Value>, Option<(String, u64)>)> {
+    let page = timeline_page(&super::cache::load(&super::cache::timeline_name(agent_id))?);
+    // Without its end there is no asking for what came after.
+    page.2.is_some().then_some(page)
+}
+
+/// The address Bonjour finds the bridge with `key` (base64) at, on a thread
+/// of its own (the lookup blocks).
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+async fn find_key(key: String, wait: Duration) -> Option<String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(super::bonjour::find(&key, wait));
+    });
+    rx.await.ok().flatten()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+async fn find_key(_key: String, _wait: Duration) -> Option<String> {
+    None
 }
 
 enum Exit {
@@ -619,6 +854,8 @@ enum Pending {
     Workspaces,
     Providers,
     Timeline(String),
+    /// What came after the page this device kept.
+    After(String, u64),
     Older(String),
     Commands,
     Suggest(String),
@@ -639,6 +876,8 @@ enum Pending {
     Pairing,
     /// A feature an older daemon may not have: failures stay quiet.
     Optional,
+    /// A providers config patch: the list is refreshed once it is saved.
+    ProviderConfig,
     /// Step 1 of `CreateAgent`: the workspace; step 2 starts the agent.
     CreateWorkspace,
     CreateAgent,
@@ -662,7 +901,7 @@ async fn session(
     // Downloads under way: their bytes so far, by request id.
     let mut downloads: HashMap<String, Vec<u8>> = HashMap::new();
     let (sink, mut rx) = rt::timeout(
-        Duration::from_secs(if endpoint.bridge_token.is_some() { 3 } else { 10 }),
+        Duration::from_secs(if endpoint.is_lan() { 3 } else { 10 }),
         rt::connect(endpoint.url.as_str()),
     )
     .await
@@ -677,7 +916,7 @@ async fn session(
         tx.seal = Some(sender);
         unseal = Some(receiver);
         if let Some(token) = &endpoint.bridge_token {
-            send(&mut tx, &json!({ "type": "sophon_bridge_auth", "token": token })).await?;
+            send(&mut tx, &json!({ "type": "sophon_bridge_auth", "token": token, "device": crate::lan::device_name() })).await?;
         }
     }
 
@@ -730,8 +969,12 @@ async fn session(
             _ = &mut hello_deadline, if !connected => {
                 return Err("The daemon did not answer the handshake".into());
             }
-            _ = lan_check.tick(), if connected && !endpoint.lan_probe.is_empty() => {
-                for addr in &endpoint.lan_probe {
+            _ = lan_check.tick(), if connected && (!endpoint.lan_probe.is_empty() || endpoint.lan_key.is_some()) => {
+                let found = match &endpoint.lan_key {
+                    Some(key) => find_key(key.clone(), Duration::from_millis(1000)).await,
+                    None => None,
+                };
+                for addr in found.iter().chain(&endpoint.lan_probe) {
                     if rt::reachable(addr, Duration::from_millis(800)).await {
                         log::info!("the LAN bridge at {addr} answers: leaving the relay");
                         return Ok(Exit::Lan);
@@ -747,10 +990,21 @@ async fn session(
             cmd = commands.recv() => {
                 let Some(cmd) = cmd else { return Ok(Exit::UiGone) };
                 if let Command::SwitchHost(next) = cmd {
+                    // Said, not dropped: the computer left behind (its
+                    // bridge, its device list) hears it go at once.
+                    let _ = tx.sink.send(Message::Close(None)).await;
                     return Ok(Exit::Switch(next));
                 }
                 if let Command::Open(id) = &cmd {
                     *open_agent = Some(id.clone());
+                }
+                if let Command::AskPictures { message_id, text } = &cmd {
+                    // Sophon's bridge answers this, not the service: only
+                    // a session that goes through one asks.
+                    if connected && endpoint.bridge_token.is_some() {
+                        send(&mut tx, &json!({ "type": "sophon_pictures_request", "messageId": message_id, "text": text })).await?;
+                    }
+                    continue;
                 }
                 if let Command::WatchDiff(cwd) = &cmd {
                     if *diff_cwd == *cwd {
@@ -853,6 +1107,18 @@ async fn session(
                         return Err(format!("The daemon refused this client: {reason}"));
                     }
                     Some("session") => {}
+                    Some("sophon_pictures") => {
+                        let field = |k| msg.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
+                        let pictures: Vec<String> = msg
+                            .get("pictures")
+                            .and_then(Value::as_array)
+                            .map(|l| l.iter().filter_map(Value::as_str).filter(|p| p.starts_with("data:image/")).map(str::to_owned).collect())
+                            .unwrap_or_default();
+                        if !pictures.is_empty() && events.send(Event::Pictures { message_id: field("messageId"), text: field("text"), pictures }).is_err() {
+                            return Ok(Exit::UiGone);
+                        }
+                        continue;
+                    }
                     _ => continue,
                 }
                 let Some(inner) = msg.get("message") else { continue };
@@ -863,6 +1129,7 @@ async fn session(
                     if kind == "status" && payload.get("status").and_then(Value::as_str) == Some("server_info") {
                         connected = true;
                         let field = |k| payload.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
+                        trace(&format!("connected to {} ({})", field("hostname"), field("version")));
                         if events.send(Event::Connected { hostname: field("hostname"), version: field("version") }).is_err() {
                             return Ok(Exit::UiGone);
                         }
@@ -887,6 +1154,9 @@ async fn session(
                 }
                 if kind == "subscribe_checkout_diff_response" {
                     diff_sub = payload.get("subscriptionId").and_then(Value::as_str).map(str::to_owned);
+                }
+                if let Some((_, name)) = LISTS.iter().find(|(k, _)| *k == kind) {
+                    super::cache::save(name, &payload);
                 }
                 let mut follow_ups = Vec::new();
                 for ev in handle(kind, &payload, &mut pending, open_agent.as_deref(), &mut follow_ups) {
@@ -928,22 +1198,51 @@ fn end_cursor(payload: &Value) -> Option<(String, u64)> {
 /// Items a conversation opens with, and each earlier page brings.
 const TIMELINE_PAGE: u32 = 40;
 
+/// The latest page of a conversation, whole.
+fn tail_request(agent_id: &str, pending: &mut HashMap<String, Pending>) -> Value {
+    request(
+        pending,
+        Pending::Timeline(agent_id.to_owned()),
+        json!({
+            "type": "fetch_agent_timeline_request",
+            "agentId": agent_id,
+            "direction": "tail",
+            // A screenful at a time: earlier ones load as
+            // the conversation scrolls up, so a long agent opens as
+            // fast as a short one, through a relay too.
+            "limit": TIMELINE_PAGE,
+            "projection": "projected",
+        }),
+    )
+}
+
 fn timeline_requests(agent_id: &str, pending: &mut HashMap<String, Pending>) -> Vec<Value> {
-    vec![
-        request(
+    // With a page kept on this device (shown already), only what came
+    // after it; the host answers with the latest page instead when the
+    // kept one no longer joins on (`reset`).
+    let kept = super::cache::load(&super::cache::timeline_name(agent_id)).and_then(|p| {
+        let cursor = p.get("endCursor")?;
+        let seq = cursor.get("seq")?.as_u64()?;
+        cursor.get("epoch")?.as_str()?;
+        Some((cursor.clone(), seq))
+    });
+    let first = match kept {
+        Some((cursor, seq)) => request(
             pending,
-            Pending::Timeline(agent_id.to_owned()),
+            Pending::After(agent_id.to_owned(), seq),
             json!({
                 "type": "fetch_agent_timeline_request",
                 "agentId": agent_id,
-                "direction": "tail",
-                // A screenful at a time: earlier ones load as
-                // the conversation scrolls up, so a long agent opens as
-                // fast as a short one, through a relay too.
+                "direction": "after",
+                "cursor": cursor,
                 "limit": TIMELINE_PAGE,
                 "projection": "projected",
             }),
         ),
+        None => tail_request(agent_id, pending),
+    };
+    vec![
+        first,
         request(
             pending,
             Pending::Other("timeline subscription"),
@@ -1026,11 +1325,17 @@ fn startup_messages(open_agent: Option<&str>, pending: &mut HashMap<String, Pend
     out
 }
 
+/// Asks the providers again (an added instance, a changed login), quietly
+/// on a daemon without it.
+fn refresh_providers(pending: &mut HashMap<String, Pending>) -> Value {
+    request(pending, Pending::Optional, json!({ "type": "refresh_providers_snapshot_request" }))
+}
+
 fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec<Value> {
     match cmd {
         Command::Open(id) => timeline_requests(&id, pending),
         // Sent by the session itself, with its binary frames.
-        Command::Upload { .. } | Command::Download { .. } => vec![],
+        Command::Upload { .. } | Command::Download { .. } | Command::Reconnect | Command::AskPictures { .. } => vec![],
         Command::Send { agent_id, text, behavior, images, attachments, message_id } => {
             let mut msg = json!({
                 "type": "send_agent_message_request",
@@ -1243,6 +1548,15 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
             pending,
             Pending::Other("save host settings"),
             json!({ "type": "set_daemon_config_request", "config": patch }),
+        )],
+        Command::PatchProviders(patch) => {
+            vec![request(pending, Pending::ProviderConfig, json!({ "type": "set_daemon_config_request", "config": patch }))]
+        }
+        Command::RefreshProviders => vec![refresh_providers(pending)],
+        Command::ProviderDiagnostic(provider) => vec![request(
+            pending,
+            Pending::Optional,
+            json!({ "type": "provider_diagnostic_request", "provider": provider }),
         )],
         Command::RestartDaemon => vec![request(
             pending,
@@ -1574,7 +1888,16 @@ fn handle(
                     return vec![];
                 }
                 Some(Pending::Optional) => return vec![],
+                // The page showed the change already: show the config as it is.
+                Some(Pending::ProviderConfig) => {
+                    follow_ups.push(request(pending, Pending::Optional, json!({ "type": "get_daemon_config_request" })));
+                }
                 _ => {}
+            }
+            // A host that cannot say what came after: the latest page whole.
+            if let Some(Pending::After(id, _)) = &what {
+                follow_ups.push(tail_request(id, pending));
+                return vec![];
             }
             let error = payload.get("error").and_then(Value::as_str).unwrap_or("request failed");
             let label = match what {
@@ -1582,7 +1905,7 @@ fn handle(
                     return vec![Event::CreateFailed(error.to_owned())];
                 }
                 Some(Pending::Other(label)) => label,
-                Some(Pending::Timeline(_) | Pending::Older(_)) => "load history",
+                Some(Pending::Timeline(_) | Pending::Older(_) | Pending::After(..)) => "load history",
                 Some(Pending::Commands) => "load commands",
                 Some(Pending::Diff) => "load changes",
                 Some(Pending::CreateTerminal) => "open a terminal",
@@ -1609,6 +1932,7 @@ fn handle(
                 Some(Pending::Agents | Pending::Agent) => "load agents",
                 Some(Pending::Projects | Pending::Workspaces) => "load projects",
                 Some(Pending::Providers) => "load providers",
+                Some(Pending::ProviderConfig) => "save agent settings",
                 None => "request",
             };
             vec![Event::Notice(format!("Could not {label}: {error}"))]
@@ -1703,11 +2027,43 @@ fn handle(
             _ => vec![],
         },
         "fetch_agent_timeline_response" => {
-            let (agent_id, older_page) = match request_id.and_then(|id| pending.remove(id)) {
-                Some(Pending::Timeline(id)) => (id, false),
-                Some(Pending::Older(id)) => (id, true),
+            let (agent_id, older_page, after) = match request_id.and_then(|id| pending.remove(id)) {
+                Some(Pending::Timeline(id)) => (id, false, None),
+                Some(Pending::Older(id)) => (id, true, None),
+                Some(Pending::After(id, from)) => (id, false, Some(from)),
                 _ => return vec![],
             };
+            let flag = |k: &str| payload.get(k).and_then(Value::as_bool) == Some(true);
+            if let Some(from) = after.filter(|_| !flag("reset")) {
+                // What came since the page this device kept, applied as
+                // live events are (each with its place, so one the
+                // subscription brought too is not shown twice). More than
+                // a page of it, a row that began before the kept page
+                // ended (it would repeat its start), or no answer: the
+                // latest page whole instead.
+                let rows = payload.get("entries").and_then(Value::as_array).cloned().unwrap_or_default();
+                let seq = |row: &Value, k: &str| row.get(k).and_then(Value::as_u64);
+                let joins = rows.iter().all(|r| seq(r, "seqStart").is_some_and(|s| s > from));
+                let epoch = payload.get("epoch").and_then(Value::as_str);
+                if payload.get("error").is_some_and(|e| !e.is_null()) || flag("hasNewer") || !joins || epoch.is_none() {
+                    follow_ups.push(tail_request(&agent_id, pending));
+                    return vec![];
+                }
+                let epoch = epoch.unwrap_or_default();
+                let mut out: Vec<Event> = rows
+                    .iter()
+                    .filter_map(|row| {
+                        let item = row.get("item").and_then(Item::from_json)?;
+                        let end = seq(row, "seqEnd").or_else(|| seq(row, "seq"))?;
+                        Some(Event::TimelineLive { agent_id: agent_id.clone(), item, cursor: Some((epoch.to_owned(), end)) })
+                    })
+                    .collect();
+                out.push(Event::TimelineSynced { agent_id: agent_id.clone() });
+                if let Some(agent) = payload.get("agent").and_then(Agent::from_json) {
+                    out.push(Event::AgentUpsert(agent));
+                }
+                return out;
+            }
             if let Some(error) = payload.get("error").and_then(Value::as_str) {
                 if older_page {
                     return vec![Event::Notice(format!("Could not load earlier messages: {error}"))];
@@ -1716,19 +2072,13 @@ fn handle(
                 let message = format!("Could not load history: {error}");
                 return vec![Event::TimelineReset { agent_id, items: vec![Item::Error { message }], older: None, cursor: None }];
             }
-            let items = payload
-                .get("entries")
-                .and_then(Value::as_array)
-                .map(|entries| entries.iter().filter_map(|e| e.get("item").and_then(Item::from_json)).collect())
-                .unwrap_or_default();
-            let older = (payload.get("hasOlder").and_then(Value::as_bool) == Some(true))
-                .then(|| payload.get("startCursor").cloned())
-                .flatten()
-                .filter(|c| !c.is_null());
+            let (items, older, cursor) = timeline_page(payload);
             let mut out: Vec<Event> = vec![if older_page {
                 Event::TimelineOlder { agent_id: agent_id.clone(), items, older }
             } else {
-                Event::TimelineReset { agent_id: agent_id.clone(), items, older, cursor: end_cursor(payload) }
+                // The latest page: what the next opening shows first.
+                super::cache::save(&super::cache::timeline_name(&agent_id), payload);
+                Event::TimelineReset { agent_id: agent_id.clone(), items, older, cursor }
             }];
             if let Some(agent) = payload.get("agent").and_then(Agent::from_json) {
                 out.push(Event::AgentUpsert(agent));
@@ -1891,17 +2241,21 @@ fn handle(
             request_id.and_then(|id| pending.remove(id));
             vec![Event::Usage(list_of(payload, "providers", |p| {
                 let s = |k: &str| p.get(k).and_then(Value::as_str).map(str::to_owned);
+                let name = s("displayName").or_else(|| s("providerId"))?;
                 Some(ProviderUsage {
-                    name: s("displayName").or_else(|| s("providerId"))?,
+                    id: s("providerId").unwrap_or_else(|| name.clone()),
+                    name,
                     plan: s("planLabel"),
                     error: s("error"),
                     windows: list_of(p, "windows", |w| {
-                        Some((
-                            w.get("label")?.as_str()?.to_owned(),
-                            w.get("usedPct").and_then(Value::as_f64)
+                        let label = w.get("label")?.as_str()?.to_owned();
+                        Some(UsageWindow {
+                            id: w.get("id").and_then(Value::as_str).map_or_else(|| label.clone(), str::to_owned),
+                            label,
+                            used: w.get("usedPct").and_then(Value::as_f64)
                                 .or_else(|| w.get("remainingPct").and_then(Value::as_f64).map(|r| 100.0 - r)),
-                            w.get("resetsAt").and_then(Value::as_str).map(str::to_owned),
-                        ))
+                            resets_at: w.get("resetsAt").and_then(Value::as_str).map(str::to_owned),
+                        })
                     }),
                 })
             }))]
@@ -1962,8 +2316,24 @@ fn handle(
             }
         }
         "get_daemon_config_response" | "set_daemon_config_response" => {
-            request_id.and_then(|id| pending.remove(id));
+            if let Some(Pending::ProviderConfig) = request_id.and_then(|id| pending.remove(id)) {
+                follow_ups.push(refresh_providers(pending));
+            }
             payload.get("config").cloned().map(Event::DaemonConfig).into_iter().collect()
+        }
+        // The refresh is done: the list as it is now.
+        "refresh_providers_snapshot_response" => {
+            request_id.and_then(|id| pending.remove(id));
+            follow_ups.push(request(pending, Pending::Providers, json!({ "type": "get_providers_snapshot_request" })));
+            vec![]
+        }
+        "provider_diagnostic_response" => {
+            request_id.and_then(|id| pending.remove(id));
+            let s = |k: &str| payload.get(k).and_then(Value::as_str).map(str::to_owned);
+            match (s("provider"), s("diagnostic")) {
+                (Some(provider), Some(text)) => vec![Event::Diagnostic { provider, text }],
+                _ => vec![],
+            }
         }
         "fetch_recent_provider_sessions_response" => {
             request_id.and_then(|id| pending.remove(id));
@@ -2371,6 +2741,15 @@ pub struct Endpoint {
     /// once iOS grants local network access, whose prompt fails the first
     /// attempt).
     pub lan_probe: Vec<String>,
+    /// The bridge's key (base64), to find it on the LAN by Bonjour.
+    pub lan_key: Option<String>,
+}
+
+impl Endpoint {
+    /// A LAN bridge's address (tried briefly; the relay comes next).
+    pub fn is_lan(&self) -> bool {
+        self.relay.as_ref().is_some_and(|r| r.server_id == "bridge")
+    }
 }
 
 /// The relay this Mac's service registers with (`daemon.relay.endpoint` in
@@ -2380,6 +2759,13 @@ pub fn relay_endpoint() -> Option<String> {
     let text = std::fs::read_to_string(daemon_home().join("config.json")).ok()?;
     let v: Value = serde_json::from_str(&text).ok()?;
     v.pointer("/daemon/relay/endpoint").and_then(Value::as_str).map(str::to_owned).filter(|s| !s.is_empty())
+}
+
+/// Whether the relay the first space sets is reached over TLS, when it says.
+pub fn relay_use_tls() -> Option<bool> {
+    let text = std::fs::read_to_string(daemon_home().join("config.json")).ok()?;
+    let v: Value = serde_json::from_str(&text).ok()?;
+    v.pointer("/daemon/relay/useTls").and_then(Value::as_bool)
 }
 
 /// Sets the relay (`host:port`, TLS when the port is 443; empty: the default),
@@ -2426,7 +2812,11 @@ fn home_dir() -> PathBuf {
 /// on every start. The credential is only offered to the address `paseo.pid`
 /// names, as the daemon's CLI does.
 pub fn discover() -> Endpoint {
-    let home = daemon_home();
+    discover_in(&daemon_home())
+}
+
+/// The service of the Paseo home `home` on this machine (a space's).
+pub fn discover_in(home: &std::path::Path) -> Endpoint {
     let read_json = |name: &str| {
         std::fs::read_to_string(home.join(name)).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok())
     };
@@ -2445,7 +2835,7 @@ pub fn discover() -> Endpoint {
         .flatten()
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty());
-    Endpoint { url: format!("ws://{listen}/ws"), local_credential, password: None, relay: None, bridge_token: None, lan_probe: vec![] }
+    Endpoint { url: format!("ws://{listen}/ws"), local_credential, password: None, relay: None, bridge_token: None, lan_probe: vec![], lan_key: None }
 }
 
 /// A stable id, so a reconnect within the daemon's grace period resumes the
@@ -2497,6 +2887,55 @@ mod tests {
         assert!(rest.iter().all(|f| download_frame(f, &mut downloads).is_none()));
         assert_eq!(download_frame(last, &mut downloads), Some(("d1".to_owned(), Ok(bytes))));
         assert!(downloads.is_empty());
+    }
+
+    /// A providers patch is saved, then the providers are asked again and
+    /// listed; nothing is sent to a daemon here.
+    #[test]
+    fn a_providers_patch_refreshes_the_list() {
+        let mut pending = HashMap::new();
+        let patch = json!({ "providers": { "copilot": { "enabled": false } } });
+        let sent = command_messages(Command::PatchProviders(patch.clone()), &mut pending);
+        let msg = &sent[0]["message"];
+        assert_eq!(msg["type"], "set_daemon_config_request");
+        assert_eq!(msg["config"], patch);
+
+        let mut follow_ups = vec![];
+        let id = msg["requestId"].as_str().unwrap();
+        let events = handle("set_daemon_config_response", &json!({ "requestId": id, "config": {} }), &mut pending, None, &mut follow_ups);
+        assert!(matches!(&events[..], [Event::DaemonConfig(_)]));
+        let refresh = &follow_ups.pop().unwrap()["message"];
+        assert_eq!(refresh["type"], "refresh_providers_snapshot_request");
+
+        let id = refresh["requestId"].as_str().unwrap();
+        handle("refresh_providers_snapshot_response", &json!({ "requestId": id, "acknowledged": true }), &mut pending, None, &mut follow_ups);
+        assert_eq!(follow_ups.pop().unwrap()["message"]["type"], "get_providers_snapshot_request");
+
+        // A plain settings patch does not refresh providers.
+        let sent = command_messages(Command::SetConfig(json!({ "autoArchiveAfterMerge": true })), &mut pending);
+        let id = sent[0]["message"]["requestId"].as_str().unwrap().to_owned();
+        handle("set_daemon_config_response", &json!({ "requestId": id, "config": {} }), &mut pending, None, &mut follow_ups);
+        assert!(follow_ups.is_empty());
+
+        // A refused patch reloads the config the page shows.
+        let sent = command_messages(Command::PatchProviders(json!({ "removeProviders": ["x"] })), &mut pending);
+        let id = sent[0]["message"]["requestId"].as_str().unwrap().to_owned();
+        let events = handle("rpc_error", &json!({ "requestId": id, "error": "nope" }), &mut pending, None, &mut follow_ups);
+        assert!(matches!(&events[..], [Event::Notice(_)]));
+        assert_eq!(follow_ups.pop().unwrap()["message"]["type"], "get_daemon_config_request");
+    }
+
+    #[test]
+    fn a_diagnostic_comes_back_as_its_text() {
+        let mut pending = HashMap::new();
+        let sent = command_messages(Command::ProviderDiagnostic("claude".into()), &mut pending);
+        let msg = &sent[0]["message"];
+        assert_eq!(msg["type"], "provider_diagnostic_request");
+        assert_eq!(msg["provider"], "claude");
+        let payload = json!({ "requestId": msg["requestId"], "provider": "claude", "diagnostic": "Claude Code\n  Version: 1.0" });
+        let events = handle("provider_diagnostic_response", &payload, &mut pending, None, &mut vec![]);
+        assert!(matches!(&events[..], [Event::Diagnostic { provider, text }] if provider == "claude" && text.contains("1.0")));
+        assert!(pending.is_empty());
     }
 
     #[test]
@@ -2595,6 +3034,267 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A file of a workspace by its path inside it, as the explorer asks:
+    /// `SOPHON_TEST_DOWNLOAD=<cwd>|<path>|<size>`. Read only.
+    #[test]
+    #[ignore]
+    fn download_workspace_file_live() {
+        let Ok(spec) = std::env::var("SOPHON_TEST_DOWNLOAD") else { return };
+        let mut parts = spec.splitn(3, '|');
+        let (cwd, path, size) = (parts.next().unwrap().to_owned(), parts.next().unwrap().to_owned(), parts.next().unwrap().parse::<usize>().unwrap());
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let (ev_tx, mut ev_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+            tokio::spawn(run(ev_tx, cmd_rx));
+            let deadline = tokio::time::sleep(Duration::from_secs(20));
+            tokio::pin!(deadline);
+            loop {
+                tokio::select! {
+                    _ = &mut deadline => panic!("no download answer"),
+                    ev = ev_rx.recv() => match ev.unwrap() {
+                        Event::Connected { .. } => cmd_tx.send(Command::Download { id: "f".into(), cwd: cwd.clone(), path: path.clone() }).unwrap(),
+                        Event::Downloaded { result, .. } => {
+                            println!("downloaded: {:?}", result.as_ref().map(Vec::len));
+                            assert_eq!(result.map(|b| b.len()), Ok(size));
+                            return;
+                        }
+                        _ => {}
+                    },
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn what_came_after_the_kept_page_is_applied_as_live_rows() {
+        let mut pending = HashMap::new();
+        pending.insert("r1".to_owned(), Pending::After("a1".into(), 7));
+        let mut follow_ups = vec![];
+        let payload = json!({
+            "requestId": "r1", "agentId": "a1", "epoch": "e", "reset": false, "hasNewer": false,
+            "entries": [{ "seqStart": 8, "seqEnd": 9, "item": { "type": "assistant_message", "text": "hi" } }],
+        });
+        let events = handle("fetch_agent_timeline_response", &payload, &mut pending, Some("a1"), &mut follow_ups);
+        assert!(follow_ups.is_empty());
+        assert!(matches!(
+            &events[..],
+            [Event::TimelineLive { cursor: Some((e, 9)), item: Item::Assistant { text }, .. }, Event::TimelineSynced { agent_id }]
+                if e == "e" && text == "hi" && agent_id == "a1"
+        ));
+    }
+
+    #[test]
+    fn a_kept_page_that_does_not_join_on_asks_for_the_latest_page_whole() {
+        // More since than a page holds, and a row that began before the
+        // kept page ended.
+        for payload in [
+            json!({ "requestId": "r1", "epoch": "e", "hasNewer": true, "entries": [] }),
+            json!({ "requestId": "r1", "epoch": "e", "entries": [{ "seqStart": 6, "seqEnd": 9, "item": { "type": "assistant_message", "text": "hi" } }] }),
+        ] {
+            let mut pending = HashMap::new();
+            pending.insert("r1".to_owned(), Pending::After("a1".into(), 7));
+            let mut follow_ups = vec![];
+            let events = handle("fetch_agent_timeline_response", &payload, &mut pending, Some("a1"), &mut follow_ups);
+            assert!(events.is_empty());
+            assert_eq!(follow_ups.len(), 1);
+            assert_eq!(follow_ups[0]["message"]["direction"], "tail");
+            assert!(pending.values().any(|p| matches!(p, Pending::Timeline(id) if id == "a1")));
+        }
+        // The host started the conversation's record anew: its answer is the latest page.
+        let mut pending = HashMap::new();
+        pending.insert("r1".to_owned(), Pending::After("a1".into(), 7));
+        let payload = json!({ "requestId": "r1", "epoch": "e2", "reset": true, "entries": [{ "item": { "type": "assistant_message", "text": "new" } }] });
+        let events = handle("fetch_agent_timeline_response", &payload, &mut pending, Some("a1"), &mut vec![]);
+        assert!(matches!(&events[0], Event::TimelineReset { items, .. } if items.len() == 1));
+    }
+
+    #[test]
+    fn a_trace_line_keeps_no_secrets() {
+        assert_eq!(
+            redact("lost: ws://sophon://pair?lan=10.0.0.1:1&lanKey=abc&token=xyz/ws: refused; https://app.x/#offer=eyJ password=p"),
+            "lost: ws://sophon://pair?lan=10.0.0.1:1&lanKey=***&token=***/ws: refused; https://app.x/#offer=*** password=***"
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn switching_away_from_an_unreachable_host_live() {
+        // A LAN-only pairing link to nowhere, then this Mac's service: the
+        // switch must not wait for the unreachable host to answer.
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let (ev_tx, mut ev_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (_cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+            tokio::spawn(run(ev_tx, cmd_rx));
+            // A well-formed LAN-only link to an address that does not answer.
+            let key = { use base64::Engine as _; base64::engine::general_purpose::STANDARD.encode([7u8; 32]) };
+            let key = key.replace('+', "%2B").replace('/', "%2F").replace('=', "%3D");
+            let link = format!("sophon://pair?lan=10.255.255.1:62584&lanKey={key}&token=t");
+            assert!(super::super::relay::PairingLink::parse(&link).is_some_and(|l| l.lan.is_some()), "the link parses");
+            // The first connection (this Mac's), then away to the unreachable host.
+            loop {
+                if let Some(Event::Connected { .. }) = ev_rx.recv().await { break; }
+            }
+            switch_host(Some(RemoteHost { url: link, password: None }));
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let asked = std::time::Instant::now();
+            switch_host(None);
+            let back = tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    if let Some(Event::Connected { .. }) = ev_rx.recv().await { break; }
+                }
+            })
+            .await;
+            println!("back on this Mac after {} ms", asked.elapsed().as_millis());
+            assert!(back.is_ok(), "the switch waited on the unreachable host");
+        });
+    }
+
+    #[test]
+    #[ignore]
+    fn agent_instance_add_and_remove_live() {
+        // The local daemon: an API-key instance (a fake key, never used)
+        // goes into its config, shows as a provider, then goes again.
+        use super::super::agents::{Base, KeyInstance, key_instance_patch, remove_patch};
+        const ID: &str = "sophon-live-test";
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let (ev_tx, mut ev_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+            tokio::spawn(run(ev_tx, cmd_rx));
+            loop {
+                if let Some(Event::Connected { .. }) = ev_rx.recv().await { break; }
+            }
+            let k = KeyInstance {
+                label: "Sophon live test".into(),
+                base: Base::Claude,
+                base_url: "https://example.invalid/anthropic".into(),
+                key: "not-a-key".into(),
+                models: vec![("test-model".into(), "Test Model".into())],
+                extra_env: vec![],
+                claude_dir: None,
+            };
+            let t0 = std::time::Instant::now();
+            cmd_tx.send(Command::SetConfig(key_instance_patch(ID, &k))).unwrap();
+            cmd_tx.send(Command::RefreshProviders).unwrap();
+            let shown = tokio::time::timeout(Duration::from_secs(30), async {
+                loop {
+                    if let Some(Event::Providers(list)) = ev_rx.recv().await {
+                        if let Some(p) = list.iter().find(|p| p.id == ID) {
+                            return (p.label.clone(), p.models.len(), p.status.clone());
+                        }
+                    }
+                }
+            })
+            .await;
+            println!("added: {shown:?} after {} ms", t0.elapsed().as_millis());
+            let t1 = std::time::Instant::now();
+            cmd_tx.send(Command::SetConfig(remove_patch(ID))).unwrap();
+            cmd_tx.send(Command::RefreshProviders).unwrap();
+            let gone = tokio::time::timeout(Duration::from_secs(30), async {
+                loop {
+                    if let Some(Event::Providers(list)) = ev_rx.recv().await {
+                        if !list.iter().any(|p| p.id == ID) { return; }
+                    }
+                }
+            })
+            .await;
+            println!("removed: {} after {} ms", gone.is_ok(), t1.elapsed().as_millis());
+            assert!(shown.is_ok(), "the instance never showed");
+            assert!(gone.is_ok(), "the instance never went");
+        });
+    }
+
+    #[test]
+    #[ignore]
+    fn agent_enable_toggle_live() {
+        // The local daemon: `pi` (off here) on, then off again.
+        use super::super::agents::enable_patch;
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let (ev_tx, mut ev_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+            tokio::spawn(run(ev_tx, cmd_rx));
+            loop {
+                if let Some(Event::Connected { .. }) = ev_rx.recv().await { break; }
+            }
+            for on in [true, false] {
+                cmd_tx.send(Command::SetConfig(enable_patch("pi", on))).unwrap();
+                cmd_tx.send(Command::RefreshProviders).unwrap();
+                let seen = tokio::time::timeout(Duration::from_secs(30), async {
+                    loop {
+                        if let Some(Event::Providers(list)) = ev_rx.recv().await {
+                            if list.iter().any(|p| p.id == "pi" && p.enabled == on) { return; }
+                        }
+                    }
+                })
+                .await;
+                println!("pi enabled={on}: {}", seen.is_ok());
+                assert!(seen.is_ok());
+            }
+        });
+    }
+
+    #[test]
+    #[ignore]
+    fn daemon_config_shape_live() {
+        // The local daemon's config as it answers it: which keys it has.
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let (ev_tx, mut ev_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+            tokio::spawn(run(ev_tx, cmd_rx));
+            loop {
+                if let Some(Event::Connected { .. }) = ev_rx.recv().await { break; }
+            }
+            cmd_tx.send(Command::GetConfig).unwrap();
+            let got = tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    if let Some(Event::DaemonConfig(c)) = ev_rx.recv().await { return c; }
+                }
+            })
+            .await;
+            match got {
+                Ok(c) => {
+                    for p in ["/mcp/injectIntoAgents", "/autoArchiveAfterMerge", "/idleRuntimeCleanup", "/resumeOnStartup", "/usage/enabled", "/relay/enabled", "/appendSystemPrompt"] {
+                        println!("{p}: {}", c.pointer(p).map_or("MISSING".to_owned(), |v| v.to_string().chars().take(40).collect()));
+                    }
+                    println!("top keys: {:?}", c.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()));
+                }
+                Err(_) => println!("no config answer"),
+            }
+        });
+    }
+
+    #[test]
+    #[ignore]
+    fn host_flag_toggle_live() {
+        // The local daemon: Archive after merge on, then off; each answer
+        // carries the new value.
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let (ev_tx, mut ev_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+            tokio::spawn(run(ev_tx, cmd_rx));
+            loop {
+                if let Some(Event::Connected { .. }) = ev_rx.recv().await { break; }
+            }
+            for on in [true, false] {
+                cmd_tx.send(Command::SetConfig(json!({ "autoArchiveAfterMerge": on }))).unwrap();
+                let got = tokio::time::timeout(Duration::from_secs(10), async {
+                    loop {
+                        if let Some(Event::DaemonConfig(c)) = ev_rx.recv().await { return c; }
+                    }
+                })
+                .await
+                .expect("an answer");
+                println!("set {on}: answered {:?}", got.get("autoArchiveAfterMerge"));
+                assert_eq!(got.get("autoArchiveAfterMerge"), Some(&json!(on)));
+            }
+        });
+    }
+
     #[test]
     #[ignore]
     fn upload_live() {
@@ -2631,7 +3331,7 @@ mod tests {
     #[test]
     #[ignore]
     fn bridge_live() {
-        let info = super::super::bridge::start().expect("bridge");
+        let (info, _events) = super::super::bridge::start().expect("bridge");
         let link = super::super::relay::PairingLink::format(Some((&info.addr, &info.key, &info.token)), None);
         println!("pairing link: {link}");
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();

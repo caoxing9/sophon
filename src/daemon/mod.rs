@@ -29,8 +29,12 @@ pub fn data_dir() -> std::path::PathBuf {
     dir
 }
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub mod bonjour;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod bridge;
+pub mod agents;
+pub mod cache;
 pub mod connection;
 pub mod model;
 pub mod relay;

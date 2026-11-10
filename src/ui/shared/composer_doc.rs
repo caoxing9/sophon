@@ -115,6 +115,10 @@ pub(crate) fn attachment_id(node: &Node) -> Option<&str> {
 pub(crate) struct Outgoing {
     pub(crate) text: String,
     pub(crate) attachments: Vec<String>,
+    /// The text as it is sent: each attachment chip a `[name]` where it
+    /// stood, so the agent reads where a file belongs in the sentence and
+    /// the sent message shows its chips in place ([`segments`]).
+    pub(crate) message: String,
 }
 
 impl Outgoing {
@@ -132,22 +136,86 @@ pub(crate) fn outgoing(doc: &Node) -> Outgoing {
     for (i, block) in doc.content().children().iter().enumerate() {
         if i > 0 {
             out.text.push('\n');
+            out.message.push('\n');
         }
         for inline in block.content().children() {
             if let Some(t) = inline.text() {
                 out.text.push_str(t);
+                out.message.push_str(t);
                 continue;
             }
             match inline.ty().name() {
-                ATTACHMENT => out.attachments.push(attr_str(inline, "id").to_owned()),
+                ATTACHMENT => {
+                    out.attachments.push(attr_str(inline, "id").to_owned());
+                    let name = attr_str(inline, "name").replace(['[', ']', '\n'], " ");
+                    out.message.push_str(&format!("[{}]", name.trim()));
+                }
                 MENTION => {
-                    out.text.push('@');
-                    out.text.push_str(attr_str(inline, "path"));
+                    let mention = format!("@{}", attr_str(inline, "path"));
+                    out.text.push_str(&mention);
+                    out.message.push_str(&mention);
                 }
                 // A line break, or anything with a text of its own.
-                _ => out.text.push_str(&inline.text_content()),
+                _ => {
+                    let t = inline.text_content();
+                    out.text.push_str(&t);
+                    out.message.push_str(&t);
+                }
             }
         }
+    }
+    out
+}
+
+/// A piece of a sent message: text, or an attachment's `[name]`.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Segment {
+    Text(String),
+    Chip(String),
+}
+
+/// Whether `name` is a picture's, by its extension.
+pub(crate) fn is_image_name(name: &str) -> bool {
+    name.rsplit_once('.').is_some_and(|(_, ext)| {
+        matches!(ext.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "heic" | "heif" | "bmp" | "tiff" | "avif")
+    })
+}
+
+/// A sent message's text and the attachments named in it (`[image.png]`: a
+/// file's name in brackets, on one line), in order.
+pub(crate) fn segments(text: &str) -> Vec<Segment> {
+    let mut out: Vec<Segment> = Vec::new();
+    let mut rest = text;
+    let mut plain = String::new();
+    while let Some(open) = rest.find('[') {
+        let after = &rest[open + 1..];
+        let name = after.find(']').map(|close| &after[..close]).filter(|n| {
+            let ext = n.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
+            !n.is_empty()
+                && n.len() <= 160
+                && !n.contains(['[', '\n'])
+                && n.trim() == *n
+                && (1..=8).contains(&ext.len())
+                && ext.chars().all(|c| c.is_ascii_alphanumeric())
+        });
+        match name {
+            Some(name) => {
+                plain.push_str(&rest[..open]);
+                if !plain.is_empty() {
+                    out.push(Segment::Text(std::mem::take(&mut plain)));
+                }
+                out.push(Segment::Chip(name.to_owned()));
+                rest = &after[name.len() + 1..];
+            }
+            None => {
+                plain.push_str(&rest[..=open]);
+                rest = after;
+            }
+        }
+    }
+    plain.push_str(rest);
+    if !plain.is_empty() {
+        out.push(Segment::Text(plain));
     }
     out
 }
@@ -474,8 +542,26 @@ mod tests {
         let doc = sample_schema_doc(&schema);
         assert_eq!(
             outgoing(&doc),
-            Outgoing { text: "Look at @src/main.rs and \nthen\nthis".into(), attachments: vec!["img-1".into(), "file-2".into()] }
+            Outgoing {
+                text: "Look at @src/main.rs and \nthen\nthis".into(),
+                attachments: vec!["img-1".into(), "file-2".into()],
+                message: "Look at @src/main.rs and [shot.png]\nthen\n[a.pdf]this".into(),
+            }
         );
+    }
+
+    #[test]
+    fn a_sent_message_reads_back_as_text_and_chips() {
+        use Segment::{Chip, Text};
+        assert_eq!(
+            segments("Look at [shot.png] and [林晗 简历.pdf]this"),
+            [Text("Look at ".into()), Chip("shot.png".into()), Text(" and ".into()), Chip("林晗 简历.pdf".into()), Text("this".into())]
+        );
+        // Brackets that name no file stay text: code, a list, a link.
+        assert_eq!(segments("a[0] = [1, 2] and [x](y.md)"), [Text("a[0] = [1, 2] and [x](y.md)".into())]);
+        assert_eq!(segments("[image.png]"), [Chip("image.png".into())]);
+        assert_eq!(segments("plain"), [Text("plain".into())]);
+        assert!(is_image_name("Shot.PNG") && !is_image_name("a.pdf"));
     }
 
     #[test]

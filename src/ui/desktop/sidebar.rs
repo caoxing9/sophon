@@ -27,7 +27,18 @@ pub(crate) fn sidebar() -> View {
                 .child(nav_item(Icon::Search, t("Search"), || false, || store::open_modal(store::Modal::Palette)))
                 .child(nav_item(Icon::CalendarClock, t("Schedules"), || store::screen() == Screen::Schedules, store::open_schedules)),
         )
-        .child(projects::project_list(true, || empty_list().into_element()))
+        // A Mac that runs no agents of its own, connected nowhere yet: how to
+        // reach one, in place of a list it has none of.
+        .child(dynamic(|| {
+            let elsewhere = !store::local_service() && store::current_host().is_none();
+            Some(untracked(move || {
+                if elsewhere {
+                    connect_elsewhere().into_element()
+                } else {
+                    projects::project_list(true, || empty_list().into_element()).into_element()
+                }
+            }))
+        }))
         .child(update_pill())
         .child(footer())
 }
@@ -45,14 +56,39 @@ fn host_line() -> impl IntoElement {
             let hosts = store::hosts();
             let current = store::current_host().map(|h| h.id);
             Some(untracked(move || {
-                let mut m = view()
-                    .child(menu_heading(t("Hosts")))
-                    .child(menu_row(t("This Mac"), Some(Icon::Cpu), None, current.is_none(), || {
-                        store::switch_host(None)
-                    }));
-                for h in hosts.clone() {
+                let is_space = |h: &store::HostProfile| crate::spaces::home_of(&h.url).is_some();
+                let spaces: Vec<_> = hosts.iter().filter(|h| is_space(h)).cloned().collect();
+                let local = store::local_service();
+                let mut m = view();
+                // This Mac's own spaces, while it runs agents of its own.
+                if local {
+                    m = m
+                        .child(menu_heading(if spaces.is_empty() { t("Hosts") } else { t("Spaces on this Mac") }))
+                        .child(menu_row(
+                            store::my_space_label().unwrap_or_else(|| t("This Mac").to_owned()),
+                            Some(Icon::Cpu),
+                            None,
+                            current.is_none(),
+                            || store::switch_host(None),
+                        ));
+                    for h in spaces {
+                        let id = h.id.clone();
+                        m = m.child(menu_row(h.label(), Some(Icon::Folder), None, current.as_deref() == Some(h.id.as_str()), move || {
+                            store::switch_host(Some(id.clone()))
+                        }));
+                    }
+                    m = m.child(menu_row(t("New space…"), Some(Icon::FolderPlus), None, false, || store::open_modal(store::Modal::CreateSpace)));
+                }
+                let others: Vec<_> = hosts.iter().filter(|h| !is_space(h)).cloned().collect();
+                if !others.is_empty() {
+                    if local {
+                        m = m.child(menu_divider());
+                    }
+                    m = m.child(menu_heading(if local { t("Other computers") } else { t("Computers") }));
+                }
+                for h in others {
                     let id = h.id.clone();
-                    m = m.child(menu_row(h.name.clone(), Some(Icon::Server), None, current.as_deref() == Some(h.id.as_str()), move || {
+                    m = m.child(menu_row(h.label(), Some(Icon::Server), None, current.as_deref() == Some(h.id.as_str()), move || {
                         store::switch_host(Some(id.clone()))
                     }));
                 }
@@ -63,7 +99,12 @@ fn host_line() -> impl IntoElement {
                     }))
                     .child(menu_row(t("Pair a device…"), Some(Icon::Link2), None, false, store::open_pairing));
                 if let Some(cur) = store::current_host() {
-                    m = m.child(menu_row_danger(t("Remove this host"), Icon::Trash2, move || store::remove_host(&cur.id)));
+                    let (id, name) = (cur.id.clone(), cur.label());
+                    m = m
+                        .child(menu_row(t("Rename this host…"), Some(Icon::Pencil), None, false, move || {
+                            store::open_modal(store::Modal::RenameHost { id: id.clone(), name: name.clone() })
+                        }))
+                        .child(menu_row_danger(t("Remove this host"), Icon::Trash2, move || store::remove_host(&cur.id)));
                 }
                 m.into_element()
             }))
@@ -72,7 +113,9 @@ fn host_line() -> impl IntoElement {
 
 fn host_body() -> View {
     let conn = computed(store::conn);
-    let remote = computed(|| store::current_host().map(|h| h.name));
+    // Another computer's or space's name; this Mac's first space's once it
+    // has one (renamed, or beside other spaces), else the host's own name.
+    let remote = computed(|| store::current_host().map(|h| h.label()).or_else(store::my_space_label));
     view()
         .flex_row()
         .items_center()
@@ -87,30 +130,33 @@ fn host_body() -> View {
         .hover(|s| s.bg(highlight()))
         .child(
             // The host alone: the mark beside it says whose app this is.
+            // A long name ends in an ellipsis inside the row.
             view()
                 .flex_1()
+                .min_w(px(0.0))
                 .child(
                     view()
                         .flex_row()
                         .items_center()
+                        .min_w(px(0.0))
                         .gap(px(5.0))
-                        .child(status_dot(move || match conn.get() {
-                            Conn::Connected { .. } => Status::Done,
-                            Conn::Down(_) => Status::Failed,
-                            _ => Status::Idle,
-                        }))
+                        .child(crate::ui::shared::conn_mark())
                         .child(
                             text(move || {
                                 let name = remote.get();
                                 match conn.get() {
                                     Conn::Starting | Conn::Connecting(_) => match name { Some(n) => tf("Connecting to {}…", &[&n]), None => t("Connecting…").to_owned() },
                                     Conn::Connected { hostname, .. } => name.unwrap_or(if hostname.is_empty() { t("This Mac").into() } else { hostname }),
-                                    Conn::Down(_) => tf("{} offline", &[&name.unwrap_or_else(|| t("Host").into())]),
+                                    // This Mac's service is being started, not offline.
+                                    Conn::Down(_) if store::current_host().is_none() && store::service_start_error().is_none() => t("Starting the service…").to_owned(),
+                                    Conn::Down(_) => tf("{} offline", &[&name.unwrap_or_else(|| t("This Mac").into())]),
                                 }
                             })
                             .text_size(px(TEXT_BASE))
                             .font_weight(FontWeight(500))
-                            .number_of_lines(1),
+                            .number_of_lines(1)
+                            .flex_shrink(1.0)
+                            .min_w(px(0.0)),
                         ),
                 ),
         )
@@ -129,6 +175,8 @@ fn nav_item(
         .items_center()
         .gap(px(S2))
         .h(px(CONTROL_MD))
+        // Rows that fill under the pointer keep a hairline apart.
+        .my(px(1.0))
         .px(px(S2))
         .rounded(px(R_LG))
         .bg(move || if active.get() { highlight() } else { tint(SIDEBAR, 0.0) })
@@ -139,11 +187,34 @@ fn nav_item(
 }
 
 fn empty_list() -> impl IntoElement {
+    service_status()
+}
+
+/// A Mac that runs no agents of its own, connected to no computer yet: the
+/// computers nearby, and adding one by its link or address.
+fn connect_elsewhere() -> impl IntoElement {
+    view()
+        .flex_1()
+        .px(px(S3))
+        .pt(px(S3))
+        .gap(px(S3))
+        .child(text(t("Connect to the computer your agents run on")).text_size(px(TEXT_SM)).line_height(px(18.0)).text_color(FG_MUTED))
+        .child(crate::ui::shared::modals::nearby_list())
+        .child(btn(t("Add host…"), Variant::Secondary, Sz::Sm, Some(Icon::Plus), || store::open_modal(store::Modal::AddHost)))
+}
+
+fn service_status() -> impl IntoElement {
     let conn = computed(store::conn);
-    let down = computed(move || matches!(conn.get(), Conn::Down(_)));
+    let failed = computed(store::service_start_error);
+    // This Mac's service starts on its own: a button only when that failed.
+    let retry = computed(move || matches!(conn.get(), Conn::Down(_)) && store::on_this_mac() && failed.get().is_some());
     view().flex_1().px(px(S4)).pt(px(S4)).gap(px(S3)).items_start().child(
         text(move || match conn.get() {
-            Conn::Down(_) => t("The Sophon service isn't running on this Mac").to_owned(),
+            Conn::Down(_) if !store::on_this_mac() => String::new(),
+            Conn::Down(_) => match failed.get() {
+                Some(e) => tf("The service on this Mac did not start: {}", &[&e]),
+                None => t("Starting the service…").to_owned(),
+            },
             Conn::Connected { .. } => t("No projects yet").to_owned(),
             _ => String::new(),
         })
@@ -151,12 +222,12 @@ fn empty_list() -> impl IntoElement {
         .line_height(px(18.0))
         .text_color(FG_MUTED),
     )
-    .child(when(down, || {
+    .child(when(retry, || {
         btn(
-            move || -> SharedString { if store::service_starting() { t("Starting the service…").into() } else { t("Start service").into() } },
-            Variant::Primary,
+            move || -> SharedString { if store::service_starting() { t("Starting the service…").into() } else { t("Try again").into() } },
+            Variant::Secondary,
             Sz::Sm,
-            Some(Icon::Play),
+            Some(Icon::RotateCw),
             store::start_service,
         )
     }))

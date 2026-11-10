@@ -2,6 +2,12 @@
 
 #[cfg(target_os = "ios")]
 pub(crate) mod ios_scanner;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub(crate) mod pdf;
+
+/// The PDF view's name (`nsh_core::element::native`).
+#[cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(dead_code))]
+pub(crate) const PDF_VIEW: &str = "sophon/pdf";
 
 /// The QR scanner component's name (`nsh_core::element::native`).
 #[cfg_attr(not(target_os = "ios"), allow(dead_code))]

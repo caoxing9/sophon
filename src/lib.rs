@@ -6,12 +6,22 @@
 use nsh_base::theme;
 use nsh_core::{element::{AssetFile, AssetKind}, prelude::*};
 
+mod agent_update;
+#[cfg(target_os = "macos")]
+mod awake;
 pub mod daemon;
+mod fold;
 mod i18n;
+mod lan;
 mod platform;
+mod prompt_link;
+mod sent_pictures;
+mod spaces;
 mod store;
+mod models;
 mod ui;
 mod update;
+mod usage;
 
 /// Randomness on the web: NSH builds with getrandom's `custom` backend,
 /// filled here from the page's `crypto.getRandomValues` (getrandom 0.2's
@@ -44,6 +54,14 @@ fn native(registry: &mut Registry) {
 #[native_components(ios)]
 fn components(components: &nsh_platform_ios::Components) {
     platform::ios_scanner::register(components);
+    platform::pdf::register(components);
+}
+
+/// The app's native components on macOS: the PDF view.
+#[cfg(target_os = "macos")]
+#[native_components(macos)]
+fn components(components: &nsh_platform_macos::Components) {
+    platform::pdf::register(components);
 }
 
 /// The icon in layers, for the loading mark: its sky, its corona (which
@@ -63,11 +81,15 @@ pub fn App() -> impl IntoElement {
     store::load_prefs();
     start_connection();
     store::load_hosts();
+    store::load_local_models();
     store::watch_notification_presses();
     store::watch_pairing_links();
     // The web's desktop idiom is still a page: no bridge, no updates.
     if is_desktop() && !cfg!(target_arch = "wasm32") {
+        // A Mac that only connects to others runs none of this side.
         store::start_bridge();
+        store::start_spaces();
+        store::watch_keep_awake();
         update::start();
         update::preview();
     }

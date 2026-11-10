@@ -35,3 +35,52 @@ test("Backspace deletes a chip as one unit", async () => {
   await app.keyboard.press("backspace");
   expect(app.count("label:moon@2x.png")).toBe(0);
 });
+
+test("settings lists the agents with their add buttons", async () => {
+  const app = await open(".", { width: 1100, height: 900 });
+  await app.press("label:Settings >> nth=0");
+  expect(app.texts()).toContain("Coding agents");
+  expect(app.texts()).toContain("Add account…");
+  expect(app.texts()).toContain("Add API key…");
+});
+
+test("opens the usage page from the sidebar", async () => {
+  const app = await open(".", { width: 1100, height: 760 });
+  await app.press("label:Usage");
+  expect(app.texts()).toContain("This computer's sessions");
+  expect(app.texts()).toContain("Plan limits");
+  expect(app.texts()).toContain("7 days");
+});
+
+test("the model picker shows the agents, the models and their reasoning", async () => {
+  const app = await open(".", { width: 1100, height: 760 });
+  await app.press("New workspace >> nth=0");
+  await app.press("label:Model");
+  expect(app.texts()).toContain("Reasoning");
+  expect(app.count("label:Favorites")).toBe(1);
+  await app.keyboard.press("escape");
+  expect(app.texts()).not.toContain("Reasoning");
+});
+
+test("a Mac that runs no agents of its own connects to others", async () => {
+  const app = await open(".", { width: 1100, height: 900 });
+  const elsewhere = "text:Connect to the computer your agents run on";
+  await app.press("label:Settings >> nth=0");
+  // From its default, whatever an earlier run left.
+  if (app.shows(elsewhere)) {
+    await app.press("label:Run agents on this Mac");
+    await app.waitFor(elsewhere, { state: "gone" });
+  }
+  await app.press("label:Run agents on this Mac");
+  await app.waitFor(elsewhere);
+  await app.press("label:Run agents on this Mac");
+  await app.waitFor(elsewhere, { state: "gone" });
+});
+
+test("settings manage the spaces on this Mac", async () => {
+  const app = await open(".", { width: 1100, height: 900 });
+  await app.press("label:Settings >> nth=0");
+  expect(app.texts()).toContain("Spaces");
+  expect(app.texts()).toContain("My space");
+  expect(app.texts()).toContain("New space…");
+});

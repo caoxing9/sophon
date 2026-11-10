@@ -23,14 +23,27 @@ pub(crate) fn agent_pane(bar: bool) -> impl IntoElement {
     view()
         .flex_1()
         .when(bar, |v| v.child(agent_bar(agent)))
-        .child(timeline::find_bar())
+        .when(MOBILE, |v| v.child(timeline::find_bar()))
         // On the phone a tap on the conversation (not on something in it
         // that takes taps) puts the keyboard away, as Messages does.
         .child(
             view()
                 .flex_1()
                 .when(MOBILE, |v| v.on_press(|_: &PressEvent| dismiss_keyboard()))
-                .child(timeline::timeline()),
+                .child(timeline::timeline())
+                // This device's copy shows while the host says what came since.
+                .child(when(store::timeline_syncing, || {
+                    view()
+                        .absolute()
+                        .top(px(S2))
+                        .left(px(0.0))
+                        .right(px(0.0))
+                        .items_center()
+                        .pointer_events(nsh_core::PointerEvents::BoxNone)
+                        .child(glass_strong(view()).rounded(px(R_FULL)).pl(px(S1)).pr(px(S3)).py(px(2.0)).child(working(t("Syncing…"))))
+                }))
+                // The desktop's find panel floats over the conversation.
+                .when(!MOBILE, |v| v.child(timeline::find_bar())),
         )
         .child(
             view()
@@ -75,9 +88,9 @@ fn agent_tools_of(agent: Memo<Option<crate::daemon::Agent>>) -> impl IntoElement
         .child(text(move || label.get()).text_size(px(TEXT_SM)).text_color(FG_FAINT).number_of_lines(1).flex_shrink(1.0))
         .child(composer::context_meter())
         .child(view().w(px(S1)))
-        .child(
-            dropup_or_down_outline(),
-        )
+        // The phone's outline; the desktop has the rail beside the
+        // conversation (`timeline::turn_rail`).
+        .when(MOBILE, |v| v.child(dropup_or_down_outline()))
         .child(icon_btn(Icon::Search, Sz::Sm, t("Find in conversation"), store::toggle_find))
         .child(
             dropdown(
@@ -222,7 +235,7 @@ pub(crate) fn dropup_or_down_outline() -> impl IntoElement {
 fn context_bar() -> impl IntoElement {
     let ws = computed(store::current_workspace);
     let host = computed(|| {
-        let named = store::current_host().map(|h| h.name);
+        let named = store::current_host().map(|h| h.label());
         match store::conn() {
             store::Conn::Connected { hostname, .. } => named.unwrap_or(if hostname.is_empty() { t("This Mac").into() } else { hostname }),
             _ => named.unwrap_or_else(|| t("This Mac").into()),
@@ -241,7 +254,14 @@ fn context_bar() -> impl IntoElement {
             .min_w(px(0.0))
             .flex_shrink(1.0)
             .child(icon(glyph, 14.0).text_color(FG_MUTED))
-            .child(text(move || label.get()).text_size(px(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1))
+            .child(
+                text(move || label.get())
+                    .text_size(px(TEXT_SM))
+                    .text_color(FG_MUTED)
+                    .number_of_lines(1)
+                    .flex_shrink(1.0)
+                    .min_w(px(0.0)),
+            )
     };
     let divider = || view().w(px(1.0)).h(px(14.0)).bg(BORDER);
     view()
@@ -260,6 +280,8 @@ fn context_bar() -> impl IntoElement {
         .bg(tint(SURFACE1, 0.7))
         .border_1()
         .border_color(tint(BORDER, 0.7))
+        // Nothing past its edge: a long name ends in an ellipsis.
+        .overflow_hidden()
         .child(item(Icon::Monitor, host))
         .child(divider())
         .child(item(Icon::Folder, folder))

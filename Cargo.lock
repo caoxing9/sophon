@@ -2078,6 +2078,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nsh-ui"
+version = "0.1.0"
+dependencies = [
+ "nsh-base",
+ "nsh-core",
+]
+
+[[package]]
 name = "nsh-updater"
 version = "0.4.0"
 source = "git+https://github.com/caoxing9/nsh?rev=3921ccc2cf9f6475a20ba7cd1d36e655457ab5e3#3921ccc2cf9f6475a20ba7cd1d36e655457ab5e3"
@@ -3085,6 +3093,7 @@ name = "sophon"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
  "crypto_box",
  "env_logger",
  "futures-util",
@@ -3100,6 +3109,7 @@ dependencies = [
  "nsh-platform-linux",
  "nsh-platform-macos",
  "nsh-platform-windows",
+ "nsh-ui",
  "nsh-updater",
  "objc2",
  "objc2-foundation",

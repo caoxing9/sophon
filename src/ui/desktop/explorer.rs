@@ -15,12 +15,64 @@ use crate::{
     store::{self, ExplorerTab, Tab},
 };
 
-pub(crate) const EXPLORER_WIDTH: f32 = 300.0;
+/// The explorer's edge: dragging it sets the width; dragged far enough
+/// out (narrower than it may be), the explorer folds away, as the sidebar
+/// does (⌘E or its toggle opens it again).
+pub(crate) fn resize_handle() -> impl IntoElement {
+    let start = signal(0.0f32);
+    let hover = signal(false);
+    let dragging = signal(false);
+    let fold = store::EXPLORER_MIN - 60.0;
+    view()
+        .w(px(8.0))
+        .ml(px(-4.0))
+        .mr(px(-4.0))
+        .flex_shrink_0()
+        .self_stretch()
+        .items_center()
+        .justify_center()
+        .cursor(Cursor::ColResize)
+        .window_drag(false)
+        .on_mouse_enter(move |_: &MouseEvent| hover.set(true))
+        .on_mouse_leave(move |_: &MouseEvent| hover.set(false))
+        .claim_touches(TouchClaim::on_start().ask(|request: &ClaimRequest| request.claim()))
+        .keep_touches(true)
+        .on_responder_grant(move |_: &ResponderEvent| {
+            start.set(store::explorer_width());
+            dragging.set(true);
+        })
+        // Its left edge: dragging left widens it.
+        .on_responder_move(move |e: &ResponderEvent| {
+            let w = start.get_untracked() - e.gesture.delta.x.0;
+            if w >= fold {
+                store::set_explorer_width(w, false);
+            }
+        })
+        .on_responder_release(move |e: &ResponderEvent| {
+            dragging.set(false);
+            if start.get_untracked() - e.gesture.delta.x.0 < fold {
+                store::set_explorer_width(start.get_untracked(), false);
+                store::toggle_explorer();
+            } else {
+                store::set_explorer_width(store::explorer_width(), true);
+            }
+        })
+        .on_responder_terminate(move |_: &ResponderEvent| dragging.set(false))
+        .child(
+            view()
+                .w(px(2.0))
+                .h(px(36.0))
+                .rounded(px(1.0))
+                .bg(move || tint(ACCENT, if dragging.get() { 0.9 } else if hover.get() { 0.5 } else { 0.0 })),
+        )
+}
 
 pub(crate) fn explorer() -> View {
     let tab = computed(store::explorer_tab);
+    let width = computed(store::explorer_width);
+    let page = move || Length::from(px(width.get()));
     glass(view())
-        .w(px(EXPLORER_WIDTH))
+        .w(page)
         .flex_shrink_0()
         .m(px(10.0))
         .ml(px(0.0))
@@ -57,7 +109,7 @@ pub(crate) fn explorer() -> View {
                 view()
                     .flex_1()
                     .flex_row()
-                    .w(px(EXPLORER_WIDTH * 3.0))
+                    .w(move || Length::from(px(width.get() * 3.0)))
                     // Moved by its frame, not a transform, so the pages
                     // coming in are laid out where they show; the switch's
                     // layout spring (the thumb's) carries it.
@@ -67,11 +119,11 @@ pub(crate) fn explorer() -> View {
                             ExplorerTab::Files => 1.0,
                             ExplorerTab::Commits => 2.0,
                         };
-                        Length::from(px(-i * EXPLORER_WIDTH))
+                        Length::from(px(-i * width.get()))
                     })
-                    .child(view().w(px(EXPLORER_WIDTH)).child(changes_view().flex_1()))
-                    .child(view().w(px(EXPLORER_WIDTH)).child(files_view().flex_1()))
-                    .child(view().w(px(EXPLORER_WIDTH)).child(commits_view().flex_1())),
+                    .child(view().w(page).child(changes_view().flex_1()))
+                    .child(view().w(page).child(files_view().flex_1()))
+                    .child(view().w(page).child(commits_view().flex_1())),
             ),
         )
 }

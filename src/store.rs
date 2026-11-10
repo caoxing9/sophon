@@ -35,6 +35,7 @@ pub(crate) enum Screen {
     Settings,
     History,
     Schedules,
+    Usage,
     Workspace(String),
 }
 
@@ -177,9 +178,94 @@ pub(crate) fn save_project_config() {
 }
 
 pub(crate) fn open_usage() {
-    send(Command::Usage);
-    open_modal(Modal::Usage);
+    global::<Nav>().update(|n| n.screen = Screen::Usage);
+    send(Command::WatchDiff(None));
+    refresh_usage();
 }
+
+/// Asks the daemon for the plan limits and re-reads this computer's
+/// session logs.
+pub(crate) fn refresh_usage() {
+    send(Command::Usage);
+    refresh_local_usage();
+}
+
+/// The limit readings so far (`usage-history.json`), read on first use.
+#[derive(Clone, Default)]
+struct LimitHistory(Option<crate::usage::limits::History>);
+
+pub(crate) fn limit_history() -> crate::usage::limits::History {
+    let loaded = global::<LimitHistory>().with_untracked(|h| h.0.is_some());
+    if !loaded {
+        let h = crate::usage::limits::History::load();
+        untracked(|| global::<LimitHistory>().set(LimitHistory(Some(h))));
+    }
+    global::<LimitHistory>().with(|h| h.0.clone().unwrap_or_default())
+}
+
+/// The key a window's readings are kept under.
+pub(crate) fn limit_key(provider: &crate::daemon::connection::ProviderUsage, window: &crate::daemon::connection::UsageWindow) -> String {
+    format!("{}/{}", provider.id, window.id)
+}
+
+/// Keeps a reading of each window the daemon reported, for the trend and
+/// the forecast.
+fn record_limits(list: &[crate::daemon::connection::ProviderUsage]) {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+    let mut history = untracked(limit_history);
+    let mut changed = false;
+    for p in list {
+        for w in &p.windows {
+            if let Some(pct) = w.used {
+                let resets = w.resets_at.as_deref().and_then(crate::usage::parse::rfc3339);
+                changed |= history.record(&limit_key(p, w), now, pct, resets);
+            }
+        }
+    }
+    if changed {
+        history.save();
+        global::<LimitHistory>().set(LimitHistory(Some(history)));
+    }
+}
+
+/// This computer's session-log statistics: the last report, and whether a
+/// read is under way.
+#[derive(Clone, Default, PartialEq)]
+pub(crate) struct LocalUsage {
+    pub(crate) report: Option<crate::usage::Report>,
+    pub(crate) loading: bool,
+}
+
+pub(crate) fn local_usage() -> LocalUsage {
+    global::<LocalUsage>().with(Clone::clone)
+}
+
+/// Re-reads the session logs on a thread of its own (only new and changed
+/// files are read), then shows the sums.
+#[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+fn refresh_local_usage() {
+    if global::<LocalUsage>().with_untracked(|u| u.loading) {
+        return;
+    }
+    global::<LocalUsage>().update(|u| u.loading = true);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(crate::usage::scan::scan());
+    });
+    spawn_detached(async move {
+        let report = rx.recv().await;
+        global::<LocalUsage>().update(|u| {
+            u.loading = false;
+            if report.is_some() {
+                u.report = report;
+            }
+        });
+    });
+}
+
+/// No session logs to read on a phone or in a browser.
+#[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+fn refresh_local_usage() {}
 
 /// Sends review notes on a diff to the workspace's newest agent.
 pub(crate) fn send_review(path: Option<&str>, note: &str) -> bool {
@@ -555,6 +641,30 @@ pub(crate) fn set_sidebar_width(width: f32, save: bool) {
     }
 }
 
+#[derive(Clone)]
+struct ExplorerWidth(f32);
+
+impl Default for ExplorerWidth {
+    fn default() -> Self {
+        Self(300.0)
+    }
+}
+
+pub(crate) const EXPLORER_MIN: f32 = 240.0;
+pub(crate) const EXPLORER_MAX: f32 = 640.0;
+
+/// The explorer's width, which its edge drags.
+pub(crate) fn explorer_width() -> f32 {
+    global::<ExplorerWidth>().with(|w| w.0)
+}
+
+pub(crate) fn set_explorer_width(width: f32, save: bool) {
+    global::<ExplorerWidth>().set(ExplorerWidth(width.clamp(EXPLORER_MIN, EXPLORER_MAX)));
+    if save {
+        save_prefs();
+    }
+}
+
 /// Panels sliding in and out: the frames that change ease over 280 ms.
 pub(crate) fn animate_panels() {
     animate_layout(nsh_core::LayoutAnimation {
@@ -650,6 +760,12 @@ struct Timeline {
     /// The epoch and last seq `items` hold: live events at or before it
     /// are repeats.
     cursor: Option<(String, u64)>,
+    /// `items` are this device's copy (`daemon::cache`), shown before the
+    /// host has said what came since.
+    syncing: bool,
+    /// Tool-call groups the user opened (true) or closed (false), by the
+    /// group's id; kept while the conversation is open.
+    folds: HashMap<String, bool>,
 }
 /// Messages waiting for the running turn to end, per agent.
 #[derive(Clone, Default)]
@@ -679,6 +795,13 @@ pub(crate) enum SendBehavior {
 pub(crate) enum Modal {
     RenameWorkspace { id: String, name: String },
     RenameAgent { id: String, name: String },
+    RenameHost { id: String, name: String },
+    /// A picture of a sent message, large.
+    Picture { name: String, uri: String },
+    /// Renames the first space on this Mac.
+    RenameMySpace { name: String },
+    /// Removes a space on this Mac (its service stops; its folder stays).
+    RemoveSpace { id: String, name: String, folder: String },
     ArchiveWorkspace { id: String, name: String },
     Commit,
     Palette,
@@ -691,13 +814,26 @@ pub(crate) enum Modal {
     Update,
     ImportSession,
     RestartDaemon,
-    Usage,
     AddHost,
+    /// Names a new space on this Mac.
+    CreateSpace,
     PairDevice,
+    /// A phone nearby asks to pair with this Mac, showing `code` too.
+    ApprovePairing { id: u64, device: String, code: String },
+    /// Pairing with a computer nearby ([`crate::lan::pairing`]).
+    PairNearby,
+    /// Every paired device must pair again.
+    RevokeDevices,
     Labels { workspace: String },
     ProjectSettings { root: String, name: String },
     /// Names a new file or folder in `dir`, or renames `path`.
     FileName { op: &'static str, path: String, name: String },
+    /// Another account of an agent CLI, as its own instance.
+    AddAgentAccount,
+    /// An agent instance on an API key.
+    AddAgentKey,
+    /// Removes an instance Sophon added.
+    RemoveAgent { id: String, label: String },
 }
 
 #[derive(Clone, Default)]
@@ -712,12 +848,88 @@ pub(crate) fn open_modal(m: Modal) {
 }
 
 pub(crate) fn close_modal() {
+    let was = global::<ModalState>().with_untracked(|s| s.0.clone());
     global::<ModalState>().update(|s| s.0 = None);
+    // Dismissed without an answer: the waiting side hears no at once.
+    match was {
+        Some(Modal::ApprovePairing { .. }) => crate::lan::answer_pairing(false, None),
+        Some(Modal::PairNearby) => crate::lan::cancel_pairing(),
+        _ => {}
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
 pub(crate) struct Settings {
     pub(crate) send_behavior: SendBehavior,
+    pub(crate) keep_awake: KeepAwake,
+    /// This Mac runs agents of its own (its Paseo service). Off: it only
+    /// connects to other computers (a partner's Mac with no service).
+    pub(crate) local_service: LocalService,
+    /// What the first space on this Mac is called, when renamed.
+    pub(crate) my_space_name: Option<String>,
+}
+
+/// Whether this Mac runs a service of its own (on unless set off; a Mac
+/// without Paseo starts off).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct LocalService(pub(crate) bool);
+
+impl Default for LocalService {
+    fn default() -> Self {
+        LocalService(true)
+    }
+}
+
+/// Whether this Mac runs agents of its own.
+pub(crate) fn local_service() -> bool {
+    !crate::ui::kit::MOBILE && settings().local_service.0
+}
+
+/// Turns this Mac's own service on or off: off, it goes to the first other
+/// computer saved; on, back to its own.
+pub(crate) fn set_local_service(on: bool) {
+    edit_settings(|s| s.local_service = LocalService(on));
+    if on {
+        if current_host().is_some_and(|h| crate::spaces::home_of(&h.url).is_none()) {
+            return;
+        }
+        start_bridge();
+        switch_host(None);
+    } else if current_host().is_none_or(|h| crate::spaces::home_of(&h.url).is_some()) {
+        let other = hosts().into_iter().find(|h| crate::spaces::home_of(&h.url).is_none()).map(|h| h.id);
+        if other.is_some() {
+            switch_host(other);
+        }
+    }
+}
+
+/// Whether this Mac stays awake while its agents run.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub(crate) enum KeepAwake {
+    Off,
+    /// Idle sleep held off; the display still sleeps.
+    #[default]
+    On,
+    /// The display stays on too.
+    Display,
+}
+
+/// Holds this Mac awake while an agent of its own runs, as the setting
+/// says. A remote host's agents keep their own computer busy, not this one.
+pub(crate) fn watch_keep_awake() {
+    effect(|| {
+        let mode = settings().keep_awake;
+        let busy = on_this_mac() && global::<Agents>().with(|a| a.0.iter().any(|x| x.is_running()));
+        #[cfg(target_os = "macos")]
+        crate::awake::hold(match mode {
+            KeepAwake::Off => None,
+            _ if !busy => None,
+            KeepAwake::On => Some(false),
+            KeepAwake::Display => Some(true),
+        });
+        #[cfg(not(target_os = "macos"))]
+        let _ = (mode, busy);
+    });
 }
 /// What a notice's button does.
 #[derive(Clone, Debug, PartialEq)]
@@ -855,6 +1067,25 @@ struct ProjectOrder(Vec<String>);
 /// Projects whose workspaces the sidebar folds away.
 #[derive(Clone, Default)]
 struct Collapsed(Vec<String>);
+
+/// Models starred in the model picker, as `provider:model`.
+#[derive(Clone, Default)]
+struct FavoriteModels(Vec<String>);
+
+pub(crate) fn favorite_models() -> Vec<String> {
+    global::<FavoriteModels>().with(|f| f.0.clone())
+}
+
+pub(crate) fn toggle_favorite_model(key: &str) {
+    global::<FavoriteModels>().update(|f| {
+        if let Some(i) = f.0.iter().position(|k| k == key) {
+            f.0.remove(i);
+        } else {
+            f.0.push(key.to_owned());
+        }
+    });
+    save_prefs();
+}
 
 pub(crate) fn is_collapsed(project_id: &str) -> bool {
     global::<Collapsed>().with(|c| c.0.iter().any(|id| id == project_id))
@@ -1011,15 +1242,75 @@ pub(crate) fn item_at(index: usize) -> Option<Item> {
     global::<Timeline>().with(|t| t.items.get(index).cloned())
 }
 
-pub(crate) fn item_keys() -> Vec<String> {
+/// The conversation's rows as the list shows them: runs of tool calls
+/// folded into one summary row each.
+/// The list reads it through one memo, so it is worked out once per change
+/// rather than once per row.
+pub(crate) fn display_rows() -> Vec<crate::fold::Row> {
     global::<Timeline>().with(|t| {
-        let agent = t.agent_id.as_deref().unwrap_or_default();
-        (0..t.items.len()).map(|i| format!("{agent}:{i}")).collect()
+        // The conversation's own agent, read without cloning it: this runs
+        // on every streamed word.
+        let running = t.agent_id.as_deref().is_some_and(|id| {
+            global::<Agents>().with(|a| a.0.iter().any(|x| x.id == id && x.is_running()))
+        });
+        crate::fold::fold(&t.items, running, &t.folds)
     })
+}
+
+/// The list's keys for `rows`: the agent's id with each row's own.
+pub(crate) fn row_keys(rows: &[crate::fold::Row]) -> Vec<String> {
+    let agent = global::<Timeline>().with(|t| t.agent_id.clone().unwrap_or_default());
+    rows.iter().map(|r| format!("{agent}:{}", r.key())).collect()
+}
+
+/// What a group's calls did, for its summary row.
+pub(crate) fn group_summary(start: usize, end: usize) -> crate::fold::Summary {
+    global::<Timeline>().with(|t| crate::fold::summarize(t.items.get(start..end).unwrap_or_default()))
+}
+
+/// Opens or folds a group of tool calls.
+pub(crate) fn set_group_open(id: &str, open: bool) {
+    global::<Timeline>().update(|t| {
+        t.folds.insert(id.to_owned(), open);
+    });
+    if open {
+        // At the end of the conversation the list keeps its end in place,
+        // so the calls push the summary up out of view: bring it back near
+        // the top once they are laid out, where it folds them again.
+        let id = id.to_owned();
+        set_timeout(std::time::Duration::from_millis(60), move || {
+            let row = untracked(display_rows).iter().position(|r| matches!(r, crate::fold::Row::Group(g) if g.id == id));
+            if let Some(row) = row {
+                TIMELINE_LIST.with_borrow(|l| {
+                    if let Some(list) = l {
+                        list.scroll_to_index(row as u32, nsh_core::geometry::Percentage(0.1), px(0.0), true);
+                    }
+                });
+            }
+        });
+    }
+}
+
+/// Asks the host's Sophon for the pictures of the user messages among
+/// `items` that name one and have none here (sent from another device).
+/// Each once per conversation opening; a host without them says nothing.
+fn ask_pictures(items: &[Item]) {
+    for item in items {
+        let Item::User { text, message_id, images } = item else { continue };
+        if images.is_empty() && crate::sent_pictures::names_a_picture(text) {
+            send(Command::AskPictures { message_id: message_id.clone().unwrap_or_default(), text: text.clone() });
+        }
+    }
 }
 
 pub(crate) fn timeline_loaded() -> bool {
     global::<Timeline>().with(|t| t.loaded)
+}
+
+/// Whether the open conversation shows this device's copy still, the host
+/// not having said yet what came since.
+pub(crate) fn timeline_syncing() -> bool {
+    global::<Timeline>().with(|t| t.syncing)
 }
 
 pub(crate) fn loading_older() -> bool {
@@ -1206,7 +1497,7 @@ fn arrangement(now: &[(String, bool)], ids: &[String]) -> Option<Vec<(usize, boo
 
 /// Files on their way here, by request id: their path in the workspace.
 #[derive(Clone, Default)]
-struct Downloads(HashMap<String, String>);
+struct Downloads(HashMap<String, (String, bool)>);
 
 /// Saves the workspace's file `path` on this device, whatever its size or
 /// kind: on the Mac where the save panel says, on the phone in Sophon's
@@ -1218,7 +1509,7 @@ pub(crate) fn download_file(path: &str) {
     }
     let id = uuid::Uuid::new_v4().to_string();
     global::<Downloads>().update(|d| {
-        d.0.insert(id.clone(), path.to_owned());
+        d.0.insert(id.clone(), (path.to_owned(), false));
     });
     notify(tf("Downloading “{}”…", &[file_name(path)]));
     send(Command::Download { id, cwd, path: path.to_owned() });
@@ -1226,7 +1517,55 @@ pub(crate) fn download_file(path: &str) {
 
 /// Whether `path` is on its way here.
 pub(crate) fn downloading(path: &str) -> bool {
-    global::<Downloads>().with(|d| d.0.values().any(|p| p == path))
+    global::<Downloads>().with(|d| d.0.values().any(|(p, preview)| p == path && !preview))
+}
+
+/// A file's bytes for its preview (a PDF, an image, a video): on their
+/// way, here, or why not.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Preview {
+    Loading,
+    Ready(std::rc::Rc<Vec<u8>>),
+    Failed(String),
+    TooLarge,
+}
+
+#[derive(Clone, Default)]
+struct Previews(HashMap<String, Preview>);
+
+/// The largest file previewed; a larger one downloads.
+pub(crate) const PREVIEW_MAX_BYTES: u64 = 100 * 1024 * 1024;
+
+/// The open workspace's file `path` for its preview, fetched whole (the
+/// read a text file takes stops at 2 MB) the first time it is asked for.
+pub(crate) fn preview(path: &str) -> Preview {
+    if let Some(p) = global::<Previews>().with(|p| p.0.get(path).cloned()) {
+        return p;
+    }
+    let state = match (tree_cwd(), entry_size(path)) {
+        (None, _) => Preview::Failed(t("No workspace is open").into()),
+        (_, Some(size)) if size > PREVIEW_MAX_BYTES => Preview::TooLarge,
+        (Some(cwd), _) => {
+            let id = uuid::Uuid::new_v4().to_string();
+            untracked(|| global::<Downloads>().update(|d| {
+                d.0.insert(id.clone(), (path.to_owned(), true));
+            }));
+            send(Command::Download { id, cwd, path: path.to_owned() });
+            Preview::Loading
+        }
+    };
+    untracked(|| global::<Previews>().update(|p| {
+        p.0.insert(path.to_owned(), state.clone());
+    }));
+    state
+}
+
+/// The size of the workspace's file `path` as its folder's listing gave it.
+fn entry_size(path: &str) -> Option<u64> {
+    let dir = path.rsplit_once('/').map(|(d, _)| d).unwrap_or(ROOT);
+    global::<FileTree>().with_untracked(|t| {
+        t.dirs.get(dir).and_then(|entries| entries.iter().find(|e| e.path == path)).map(|e| e.size)
+    })
 }
 
 fn file_name(path: &str) -> &str {
@@ -1234,9 +1573,20 @@ fn file_name(path: &str) -> &str {
 }
 
 fn downloaded(id: String, result: Result<Vec<u8>, String>) {
-    let mut path = None;
-    global::<Downloads>().update(|d| path = d.0.remove(&id));
-    let Some(path) = path else { return };
+    let mut entry = None;
+    global::<Downloads>().update(|d| entry = d.0.remove(&id));
+    let Some((path, for_preview)) = entry else { return };
+    if for_preview {
+        let state = match result {
+            Ok(bytes) if bytes.len() as u64 > PREVIEW_MAX_BYTES => Preview::TooLarge,
+            Ok(bytes) => Preview::Ready(std::rc::Rc::new(bytes)),
+            Err(e) => Preview::Failed(e),
+        };
+        global::<Previews>().update(|p| {
+            p.0.insert(path, state);
+        });
+        return;
+    }
     let name = file_name(&path).to_owned();
     match result {
         Ok(bytes) => save_download(name, bytes),
@@ -1339,6 +1689,66 @@ pub(crate) struct HostProfile {
     pub(crate) password: Option<String>,
 }
 
+impl HostProfile {
+    /// What the host is called: its name, or, while it has none of its own
+    /// (an address pasted with no name; earlier versions stored the address
+    /// as the name, a pairing link's keys and token included), the address's
+    /// host, never the link.
+    pub(crate) fn label(&self) -> String {
+        if !self.name.trim().is_empty() && !is_address(&self.name) {
+            return self.name.trim().to_owned();
+        }
+        address_label(&self.url)
+    }
+
+    /// Whether the host has a name of its own.
+    pub(crate) fn named(&self) -> bool {
+        !self.name.trim().is_empty() && !is_address(&self.name)
+    }
+}
+
+/// A pasted address rather than a name.
+fn is_address(text: &str) -> bool {
+    let t = text.trim();
+    t.contains("://") || t.contains("#offer=") || t.contains("token=")
+}
+
+/// A short label for a daemon's address: a pairing link's LAN address (no
+/// port), an URL's host, else "Remote host" (a link through the relay only).
+fn address_label(url: &str) -> String {
+    let url = url.trim();
+    if let Some(query) = url.strip_prefix("sophon://pair?") {
+        if let Some(lan) = query.split('&').find_map(|kv| kv.strip_prefix("lan=")) {
+            let host = lan.rsplit_once(':').map(|(h, _)| h).unwrap_or(lan);
+            if !host.is_empty() {
+                return host.to_owned();
+            }
+        }
+        return t("Remote host").to_owned();
+    }
+    if url.contains("#offer=") {
+        return t("Remote host").to_owned();
+    }
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let host = host.rsplit_once(':').filter(|(_, p)| p.chars().all(|c| c.is_ascii_digit())).map(|(h, _)| h).unwrap_or(host);
+    if host.is_empty() { t("Remote host").to_owned() } else { host.to_owned() }
+}
+
+/// Renames saved host `id`.
+pub(crate) fn rename_host(id: &str, name: &str) {
+    let name = name.trim();
+    if name.is_empty() {
+        return;
+    }
+    global::<Hosts>().update(|h| {
+        if let Some(p) = h.list.iter_mut().find(|p| p.id == id) {
+            p.name = name.to_owned();
+        }
+    });
+    save_hosts();
+}
+
 #[derive(Clone, Default)]
 struct Hosts {
     list: Vec<HostProfile>,
@@ -1358,48 +1768,54 @@ pub(crate) struct Pairing {
     pub(crate) error: Option<String>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-type BridgeInfo = crate::daemon::bridge::BridgeInfo;
-/// A page runs no bridge.
-#[cfg(target_arch = "wasm32")]
-#[derive(Clone)]
-struct BridgeInfo {
-    addr: String,
-    key: [u8; 32],
-    token: String,
-}
-
-thread_local! {
-    static BRIDGE: RefCell<Option<BridgeInfo>> = const { RefCell::new(None) };
-}
-
 /// Starts the LAN bridge (desktops), so paired phones on this network skip
-/// the relay.
+/// the relay, and phones nearby can ask to pair.
 pub(crate) fn start_bridge() {
-    #[cfg(target_arch = "wasm32")]
-    let info: Option<BridgeInfo> = None;
-    #[cfg(not(target_arch = "wasm32"))]
-    let info = crate::daemon::bridge::start();
-    if info.is_none() {
-        log::warn!("the LAN bridge could not start; phones pair through the relay only");
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !local_service() || STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
     }
-    BRIDGE.with_borrow_mut(|b| *b = info);
+    #[cfg(not(target_arch = "wasm32"))]
+    match crate::daemon::bridge::start() {
+        Some((_, events)) => crate::lan::watch_bridge(events),
+        None => log::warn!("the LAN bridge could not start; phones pair through the relay only"),
+    }
 }
 
-/// The link a phone pairs with: the LAN bridge and the daemon's relay.
-pub(crate) fn pairing_link(relay_link: Option<&str>) -> Option<String> {
-    let lan = BRIDGE.with_borrow(|b| b.clone());
+/// The link a phone pairs with: the LAN bridge (at its addresses now) and
+/// its place at the relay, Sophon's own (a device away from home reaches
+/// the bridge, which sees and can cut it off), else the daemon's.
+pub(crate) fn pairing_link(daemon_relay: Option<&str>) -> Option<String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    let own = crate::daemon::bridge::relay_offer();
+    #[cfg(target_arch = "wasm32")]
+    let own: Option<String> = None;
+    let relay_link = own.as_deref().or(daemon_relay);
+    // The space in use: its own token, and its name for the device to show.
+    let space = current_host().filter(|h| crate::spaces::home_of(&h.url).is_some());
+    #[cfg(not(target_arch = "wasm32"))]
+    let lan = {
+        let home = space.as_ref().and_then(|h| crate::spaces::home_of(&h.url)).map(|h| h.to_string_lossy().into_owned());
+        crate::daemon::bridge::info_for(home.as_deref()).map(|b| (b.addr, b.key, b.token))
+    };
+    #[cfg(target_arch = "wasm32")]
+    let lan: Option<(String, [u8; 32], String)> = None;
     if lan.is_none() && relay_link.is_none() {
         return None;
     }
-    Some(crate::daemon::relay::PairingLink::format(
-        lan.as_ref().map(|b| (b.addr.as_str(), &b.key, b.token.as_str())),
+    let name = space.map(|h| format!("{} · {}", crate::lan::device_name(), h.label()));
+    Some(crate::daemon::relay::PairingLink::format_named(
+        lan.as_ref().map(|(a, k, t)| (a.as_str(), k, t.as_str())),
         relay_link,
+        name.as_deref(),
     ))
 }
 
 pub(crate) fn bridge_addr() -> Option<String> {
-    BRIDGE.with_borrow(|b| b.as_ref().map(|b| b.addr.clone()))
+    #[cfg(not(target_arch = "wasm32"))]
+    return crate::daemon::bridge::info().map(|b| b.addr);
+    #[cfg(target_arch = "wasm32")]
+    None
 }
 
 /// Runs `future` owned by nothing, so it outlives what started it: a
@@ -1411,12 +1827,17 @@ pub(crate) fn spawn_detached(future: impl std::future::Future<Output = ()> + 'st
     });
 }
 
-/// Pairs from a scanned `sophon://pair…` link (the system camera opens it).
+/// Answers `sophon://` links: pairs from a scanned `sophon://pair…` link
+/// (the system camera opens it), and opens a draft from a
+/// `sophon://prompt…` one. One loop takes every link, so no other listener
+/// can swallow one.
 pub(crate) fn watch_pairing_links() {
     spawn(async move {
         loop {
             let url = next_url_scheme_open().await;
-            if crate::daemon::relay::PairingLink::parse(&url).is_some() {
+            if let Some(link) = crate::prompt_link::PromptLink::parse(&url) {
+                open_prompt_link(link);
+            } else if crate::daemon::relay::PairingLink::parse(&url).is_some() {
                 if hosts().iter().any(|h| h.url == url) {
                     if let Some(h) = hosts().into_iter().find(|h| h.url == url) {
                         switch_host(Some(h.id));
@@ -1428,6 +1849,102 @@ pub(crate) fn watch_pairing_links() {
             }
         }
     });
+}
+
+/// A prompt link's text waiting for the next new draft, and a link waiting
+/// for the host's workspaces and providers (a link can launch the app).
+#[derive(Clone, Default)]
+struct PromptLinks {
+    /// Taken by the next fresh form ([`reset_form`]).
+    text: Option<String>,
+    waiting: Option<crate::prompt_link::PromptLink>,
+    workspaces_known: bool,
+    providers_known: bool,
+}
+
+/// Opens `link` as a new draft: in its workspace when this host has it,
+/// else the open one, else Home's new chat. It only fills the composer;
+/// the user reads it and sends it.
+fn open_prompt_link(link: crate::prompt_link::PromptLink) {
+    let ready = global::<PromptLinks>().with_untracked(|p| p.workspaces_known && p.providers_known);
+    if !ready {
+        // Navigating now would be undone by restoring the last workspace
+        // and by the first providers resetting the form.
+        global::<PromptLinks>().update(|p| p.waiting = Some(link));
+        // A host with no agents never lists providers: open it anyway
+        // after a while rather than hold it for good.
+        set_timeout(std::time::Duration::from_secs(5), || {
+            prompt_links_known(|p| {
+                p.workspaces_known = true;
+                p.providers_known = true;
+            })
+        });
+        return;
+    }
+    let current = untracked(|| current_workspace().map(|w| w.id));
+    let target = link.workspace.as_deref().filter(|id| untracked(|| workspace(id)).is_some()).map(str::to_owned).or(current.clone());
+    // A new-agent draft already on screen there (the workspace's draft tab,
+    // or the new-workspace screen) stays as it is, its folder, branch and
+    // model too: the link's text goes under what it holds.
+    let in_place = untracked(|| match (screen(), tab()) {
+        (Screen::Workspace(id), Tab::Draft) => target.as_deref() == Some(id.as_str()),
+        (Screen::NewWorkspace, _) => target.is_none(),
+        _ => false,
+    });
+    if in_place {
+        edit_form(|f| {
+            f.prompt = if f.prompt.trim().is_empty() { link.text } else { format!("{}\n\n{}", f.prompt.trim_end(), link.text) };
+        });
+    } else {
+        global::<PromptLinks>().update(|p| p.text = Some(link.text));
+        crate::ui::open_new_draft(target.as_deref());
+    }
+    notify(t("Opened a prompt link as a draft. Review it, then send").into());
+}
+
+/// Notes that the host's workspaces (or providers) arrived, and opens a
+/// link that waited for them.
+fn prompt_links_known(change: impl FnOnce(&mut PromptLinks)) {
+    global::<PromptLinks>().update(change);
+    let waiting = global::<PromptLinks>().with_untracked(|p| if p.workspaces_known && p.providers_known { p.waiting.clone() } else { None });
+    if let Some(link) = waiting {
+        global::<PromptLinks>().update(|p| p.waiting = None);
+        open_prompt_link(link);
+    }
+}
+
+/// A prompt link's text, once: the fresh draft that takes it.
+fn take_prompt_link_text() -> Option<String> {
+    let text = global::<PromptLinks>().with_untracked(|p| p.text.clone())?;
+    global::<PromptLinks>().update(|p| p.text = None);
+    Some(text)
+}
+
+/// The text of the draft on screen: the new agent's form, or the open
+/// agent's unsent message.
+pub(crate) fn current_draft_text() -> String {
+    match (screen(), tab()) {
+        (Screen::NewWorkspace, _) | (Screen::Workspace(_), Tab::Draft) => form().prompt,
+        (Screen::Workspace(_), Tab::Agent(id)) => draft(&id),
+        _ => String::new(),
+    }
+}
+
+/// Copies a prompt link for the draft on screen.
+pub(crate) fn copy_prompt_link() {
+    let text = current_draft_text();
+    if text.trim().is_empty() {
+        notify(t("Write a draft first, then copy its link").into());
+        return;
+    }
+    let ws = current_workspace().map(|w| w.id);
+    match crate::prompt_link::PromptLink::format(&text, ws.as_deref()) {
+        Some(link) => {
+            set_clipboard(link);
+            notify(t("Prompt link copied").into());
+        }
+        None => notify(t("This draft is too long for a link").into()),
+    }
 }
 
 pub(crate) fn pairing() -> Pairing {
@@ -1460,6 +1977,80 @@ pub(crate) fn current_host() -> Option<HostProfile> {
     global::<Hosts>().with(|h| h.current.as_ref().and_then(|id| h.list.iter().find(|x| &x.id == id).cloned()))
 }
 
+/// The folder of the space on this Mac in use: `None` for the first space
+/// (Paseo's own `~/.paseo`) or another computer.
+pub(crate) fn current_space_home() -> Option<std::path::PathBuf> {
+    current_host().and_then(|h| crate::spaces::home_of(&h.url))
+}
+
+/// Whether the service in use runs on this Mac: its first space or another.
+/// What reads this Mac's files (the agents' own model lists, their CLIs,
+/// the session logs) holds for every space alike.
+pub(crate) fn on_this_mac() -> bool {
+    local_service() && current_host().is_none_or(|h| crate::spaces::home_of(&h.url).is_some())
+}
+
+/// What the first space on this Mac is called: its name when renamed, "My
+/// space" once there are others, else nothing (the host shows its name).
+pub(crate) fn my_space_label() -> Option<String> {
+    settings().my_space_name.clone().or_else(|| (!spaces().is_empty()).then(|| t("My space").to_owned()))
+}
+
+/// Renames the first space on this Mac (empty: its default name back).
+pub(crate) fn rename_my_space(name: &str) {
+    let name = name.trim().to_owned();
+    edit_settings(|s| s.my_space_name = Some(name).filter(|n| !n.is_empty()));
+}
+
+/// The spaces on this Mac besides the first: saved hosts at `space:` addresses.
+pub(crate) fn spaces() -> Vec<HostProfile> {
+    hosts().into_iter().filter(|h| crate::spaces::home_of(&h.url).is_some()).collect()
+}
+
+/// Starts every space's service (Sophon starting on this Mac): Paseo's app
+/// keeps only the first one running.
+pub(crate) fn start_spaces() {
+    if !local_service() {
+        return;
+    }
+    #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+    {
+        let homes: Vec<_> = spaces().iter().filter_map(|h| crate::spaces::home_of(&h.url)).collect();
+        if !homes.is_empty() {
+            std::thread::spawn(move || {
+                for home in homes {
+                    if let Err(e) = crate::spaces::start(&home) {
+                        log::warn!("space {}: {e}", home.display());
+                    }
+                }
+            });
+        }
+    }
+}
+
+/// Makes a space called `name` and switches to it once its service runs.
+pub(crate) fn create_space(name: &str) {
+    #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+    {
+        let name = name.trim().to_owned();
+        notify(tf("Creating “{}”…", &[&name]));
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let n = name.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::spaces::create(&n));
+        });
+        spawn_detached(async move {
+            match rx.recv().await {
+                Some(Ok(home)) => add_host(&name, &crate::spaces::url_of(&home), ""),
+                Some(Err(e)) => notify(tf("Cannot create the space: {}", &[&e])),
+                None => {}
+            }
+        });
+    }
+    #[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+    let _ = name;
+}
+
 fn save_hosts() {
     let h = global::<Hosts>().with_untracked(Clone::clone);
     let json = serde_json::json!({
@@ -1489,8 +2080,12 @@ pub(crate) fn load_hosts() {
         .unwrap_or_default();
     let current = v.get("current").and_then(|c| c.as_str()).map(str::to_owned).filter(|c| list.iter().any(|x| &x.id == c));
     global::<Hosts>().update(|h| *h = Hosts { list, current });
+    if !crate::ui::kit::MOBILE && !local_service() && current_host().is_none_or(|h| crate::spaces::home_of(&h.url).is_some()) {
+        let other = hosts().into_iter().find(|h| crate::spaces::home_of(&h.url).is_none()).map(|h| h.id);
+        global::<Hosts>().update(|h| h.current = other);
+    }
     if let Some(host) = current_host() {
-        send(Command::SwitchHost(Some(crate::daemon::connection::RemoteHost { url: host.url, password: host.password })));
+        crate::daemon::connection::switch_host(Some(crate::daemon::connection::RemoteHost { url: host.url, password: host.password }));
     }
 }
 
@@ -1503,17 +2098,23 @@ pub(crate) fn switch_host(id: Option<String>) {
         global::<Workspaces>().update(|w| w.0.clear());
         global::<Agents>().update(|a| a.0.clear());
         global::<Providers>().update(|p| p.0.clear());
+        global::<Diagnostics>().update(|d| *d = Diagnostics::default());
+        global::<DaemonConfig>().update(|c| c.0 = None);
         global::<Nav>().update(|n| *n = Nav::default());
     });
     let remote = current_host().map(|h| crate::daemon::connection::RemoteHost { url: h.url, password: h.password });
-    send(Command::SwitchHost(remote));
+    crate::daemon::connection::switch_host(remote);
 }
 
 pub(crate) fn add_host(name: &str, url: &str, password: &str) {
+    // A pairing link that names the computer (a space's) names it here.
+    let named = crate::daemon::relay::PairingLink::parse(url).and_then(|l| l.name);
+    let name = named.as_deref().unwrap_or(name);
     let id = format!("host_{}", uuid::Uuid::new_v4().simple());
     let profile = HostProfile {
         id: id.clone(),
-        name: if name.trim().is_empty() { url.trim().to_owned() } else { name.trim().to_owned() },
+        // No name: the host's own once connected (see `Event::Connected`).
+        name: name.trim().to_owned(),
         url: url.trim().to_owned(),
         password: Some(password.to_owned()).filter(|p| !p.is_empty()),
     };
@@ -1522,6 +2123,16 @@ pub(crate) fn add_host(name: &str, url: &str, password: &str) {
 }
 
 pub(crate) fn remove_host(id: &str) {
+    // A space's service stops with it; its folder, with its conversations,
+    // stays.
+    #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+    if let Some(home) = hosts().into_iter().find(|h| h.id == id).and_then(|h| crate::spaces::home_of(&h.url)) {
+        std::thread::spawn(move || {
+            if let Err(e) = crate::spaces::stop(&home) {
+                log::warn!("space {}: {e}", home.display());
+            }
+        });
+    }
     let was_current = global::<Hosts>().with_untracked(|h| h.current.as_deref() == Some(id));
     global::<Hosts>().update(|h| h.list.retain(|x| x.id != id));
     if was_current {
@@ -1550,14 +2161,23 @@ fn save_prefs() {
             SendBehavior::Interrupt => "interrupt",
             SendBehavior::Queue => "queue",
         },
+        "localService": s.local_service.0,
+        "mySpaceName": s.my_space_name,
+        "keepAwake": match s.keep_awake {
+            KeepAwake::Off => "off",
+            KeepAwake::On => "on",
+            KeepAwake::Display => "display",
+        },
         "sidebarHidden": global::<SidebarHidden>().with_untracked(|h| h.0),
         "explorerOpen": global::<Explorer>().with_untracked(|e| e.open),
         "sidebarWidth": global::<SidebarWidth>().with_untracked(|w| w.0),
+        "explorerWidth": global::<ExplorerWidth>().with_untracked(|w| w.0),
         "terminalHeight": global::<TerminalPanel>().with_untracked(|p| p.height),
         "projectOrder": global::<ProjectOrder>().with_untracked(|o| o.0.clone()),
         "lastWorkspace": global::<LastOpen>().with_untracked(|l| l.workspace.clone()),
         "lastAgent": global::<LastOpen>().with_untracked(|l| l.agent.clone()),
         "collapsedProjects": global::<Collapsed>().with_untracked(|c| c.0.clone()),
+        "favoriteModels": global::<FavoriteModels>().with_untracked(|f| f.0.clone()),
         "language": crate::i18n::lang_untracked().as_str(),
         "appearance": match global::<Theme>().with_untracked(|t| t.0) {
             nsh_core::platform::Appearance::Light => "light",
@@ -1572,14 +2192,33 @@ fn save_prefs() {
 
 /// Restores what `save_prefs` wrote.
 pub(crate) fn load_prefs() {
-    let Some(text) = crate::daemon::read_file("settings.json") else { return };
+    let Some(text) = crate::daemon::read_file("settings.json") else {
+        #[cfg(not(target_arch = "wasm32"))]
+        if !crate::ui::kit::MOBILE && service_cli().is_none() {
+            global::<Settings>().update(|s| s.local_service = LocalService(false));
+        }
+        return;
+    };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return };
     let behavior = match v.get("sendBehavior").and_then(serde_json::Value::as_str) {
         Some("interrupt") => SendBehavior::Interrupt,
         Some("queue") => SendBehavior::Queue,
         _ => SendBehavior::Steer,
     };
-    global::<Settings>().update(|s| s.send_behavior = behavior);
+    let keep_awake = match v.get("keepAwake").and_then(serde_json::Value::as_str) {
+        Some("off") => KeepAwake::Off,
+        Some("display") => KeepAwake::Display,
+        _ => KeepAwake::On,
+    };
+    // A Mac without Paseo starts as one that only connects to others.
+    let local = v.get("localService").and_then(serde_json::Value::as_bool).unwrap_or_else(|| cfg!(target_arch = "wasm32") || service_cli().is_some());
+    let my_space = v.get("mySpaceName").and_then(serde_json::Value::as_str).map(str::to_owned).filter(|n| !n.trim().is_empty());
+    global::<Settings>().update(|s| {
+        s.send_behavior = behavior;
+        s.keep_awake = keep_awake;
+        s.local_service = LocalService(local);
+        s.my_space_name = my_space;
+    });
     if let Some(h) = v.get("sidebarHidden").and_then(serde_json::Value::as_bool) {
         global::<SidebarHidden>().update(|s| s.0 = h);
     }
@@ -1593,8 +2232,12 @@ pub(crate) fn load_prefs() {
     let string = |k: &str| v.get(k).and_then(serde_json::Value::as_str).map(str::to_owned);
     global::<LastOpen>().set(LastOpen { workspace: string("lastWorkspace"), agent: string("lastAgent"), done: false });
     global::<Collapsed>().set(Collapsed(strings("collapsedProjects")));
+    global::<FavoriteModels>().set(FavoriteModels(strings("favoriteModels")));
     if let Some(h) = v.get("terminalHeight").and_then(serde_json::Value::as_f64) {
         global::<TerminalPanel>().update(|p| p.height = (h as f32).clamp(120.0, 900.0));
+    }
+    if let Some(w) = v.get("explorerWidth").and_then(serde_json::Value::as_f64) {
+        global::<ExplorerWidth>().set(ExplorerWidth((w as f32).clamp(EXPLORER_MIN, EXPLORER_MAX)));
     }
     if let Some(w) = v.get("sidebarWidth").and_then(serde_json::Value::as_f64) {
         global::<SidebarWidth>().set(SidebarWidth((w as f32).clamp(SIDEBAR_MIN, SIDEBAR_MAX)));
@@ -1630,7 +2273,7 @@ pub(crate) fn set_appearance(appearance: nsh_core::platform::Appearance) {
 
 /// The service's command line: on the PATH, or inside the desktop app that
 /// ships it.
-fn service_cli() -> Option<std::path::PathBuf> {
+pub(crate) fn service_cli() -> Option<std::path::PathBuf> {
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
     let mut candidates: Vec<std::path::PathBuf> = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).map(|d| d.join("paseo")).collect())
@@ -1661,6 +2304,33 @@ pub(crate) fn service_starting() -> bool {
     global::<Starting>().with(|s| s.0)
 }
 
+/// The service's start this run: tried on its own once the connection to
+/// this Mac's service fails (the app starts it, as a Mac app starts what it
+/// needs), and why it failed, if it did.
+#[derive(Clone, Default, PartialEq)]
+struct AutoStart {
+    tried: bool,
+    error: Option<String>,
+}
+
+/// Why this Mac's service could not be started, if starting it failed.
+pub(crate) fn service_start_error() -> Option<String> {
+    global::<AutoStart>().with(|a| a.error.clone())
+}
+
+/// This Mac's service is down: start it, once a run (a service stopped on
+/// purpose afterwards stays stopped; Start service starts it again).
+fn auto_start_service() {
+    if crate::ui::kit::MOBILE || cfg!(target_arch = "wasm32") || !on_this_mac() {
+        return;
+    }
+    if global::<AutoStart>().with_untracked(|a| a.tried) {
+        return;
+    }
+    global::<AutoStart>().update(|a| a.tried = true);
+    start_service();
+}
+
 /// Starts the agent service on this Mac; the connection, which retries on
 /// its own, picks it up.
 pub(crate) fn start_service() {
@@ -1668,13 +2338,19 @@ pub(crate) fn start_service() {
         return;
     }
     let Some(cli) = service_cli() else {
-        notify(crate::i18n::tf("Couldn't start the service: {}", &["paseo CLI not found"]));
+        global::<AutoStart>().update(|a| a.error = Some(t("The service is not installed on this Mac").into()));
         return;
     };
+    global::<AutoStart>().update(|a| a.error = None);
     global::<Starting>().set(Starting(true));
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Result<(), String>>();
+    let home = current_space_home();
     std::thread::spawn(move || {
-        let out = std::process::Command::new(&cli).args(["daemon", "start"]).output();
+        let mut args = vec!["daemon".to_owned(), "start".to_owned()];
+        if let Some(home) = home {
+            args.extend(["--home".to_owned(), home.to_string_lossy().into_owned()]);
+        }
+        let out = std::process::Command::new(&cli).args(&args).output();
         let _ = tx.send(match out {
             Ok(o) if o.status.success() => Ok(()),
             Ok(o) => Err(String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("").to_owned()),
@@ -1684,8 +2360,11 @@ pub(crate) fn start_service() {
     spawn(async move {
         let result = rx.recv().await;
         global::<Starting>().set(Starting(false));
-        if let Some(Err(e)) = result {
-            notify(crate::i18n::tf("Couldn't start the service: {}", &[&e]));
+        match result {
+            Some(Err(e)) => global::<AutoStart>().update(|a| a.error = Some(e)),
+            // Up: connect now rather than after the wait between attempts
+            // (up to 30 s once a few have failed).
+            _ => send(Command::Reconnect),
         }
     });
 }
@@ -1913,18 +2592,8 @@ pub(crate) fn daemon_config() -> Option<serde_json::Value> {
 /// Sets `pointer` (`/autoArchiveAfterMerge`) to `value`, shown at once and
 /// sent as a patch.
 pub(crate) fn set_daemon_config(pointer: &str, value: serde_json::Value) {
-    let mut patch = serde_json::json!({});
+    let patch = config_patch(pointer, value.clone());
     let keys: Vec<&str> = pointer.trim_start_matches('/').split('/').collect();
-    {
-        let mut node = &mut patch;
-        for (i, k) in keys.iter().enumerate() {
-            if i + 1 == keys.len() {
-                node[*k] = value.clone();
-            } else {
-                node = &mut node[*k];
-            }
-        }
-    }
     global::<DaemonConfig>().update(|c| {
         if let Some(cfg) = c.0.as_mut() {
             let mut node = cfg;
@@ -1938,6 +2607,240 @@ pub(crate) fn set_daemon_config(pointer: &str, value: serde_json::Value) {
         }
     });
     send(Command::SetConfig(patch));
+}
+
+/// The patch that sets only `pointer` to `value`: `/a/b` and 1 make
+/// `{"a":{"b":1}}`. The daemon merges it, so every other key stays.
+fn config_patch(pointer: &str, value: serde_json::Value) -> serde_json::Value {
+    let mut patch = serde_json::json!({});
+    let mut node = &mut patch;
+    for k in pointer.trim_start_matches('/').split('/') {
+        node = &mut node[k];
+    }
+    *node = value;
+    patch
+}
+
+/// Where the daemon keeps the model that names chats and branches
+/// (`agents.metadataGeneration`): an ordered list it tries, empty for its
+/// own choice.
+const TEXT_GENERATION: &str = "/metadataGeneration/providers";
+
+/// The value [`TEXT_GENERATION`] takes for `choice` (provider, model):
+/// that one model, or none (the daemon's default).
+fn text_generation_value(choice: Option<(&str, &str)>) -> serde_json::Value {
+    match choice {
+        Some((provider, model)) => serde_json::json!([{ "provider": provider, "model": model }]),
+        None => serde_json::json!([]),
+    }
+}
+
+/// The model the daemon writes titles with: (provider, model), or `None`
+/// for its default.
+pub(crate) fn text_generation_model() -> Option<(String, String)> {
+    let config = daemon_config()?;
+    let first = config.pointer(&format!("{TEXT_GENERATION}/0"))?;
+    let provider = first.get("provider")?.as_str()?.to_owned();
+    let model = first.get("model").and_then(|m| m.as_str()).unwrap_or_default().to_owned();
+    Some((provider, model))
+}
+
+/// Sets the model the daemon writes titles with; `None` gives the choice
+/// back to the daemon. A refused model is never sent.
+pub(crate) fn set_text_generation_model(choice: Option<(&str, &str)>) {
+    if let Some((provider, model)) = choice
+        && refuse_model(provider, model)
+    {
+        return;
+    }
+    set_daemon_config(TEXT_GENERATION, text_generation_value(choice));
+}
+
+// ------------------------------------------------------------------ agents
+
+/// Providers' diagnostics (binary, version, login), by provider id.
+/// `wanted`: the Agents page is open, so new providers get theirs too.
+#[derive(Clone, Default)]
+struct Diagnostics {
+    map: HashMap<String, crate::daemon::agents::Diagnostic>,
+    wanted: bool,
+}
+
+pub(crate) fn diagnostic(id: &str) -> Option<crate::daemon::agents::Diagnostic> {
+    global::<Diagnostics>().with(|d| d.map.get(id).cloned())
+}
+
+/// Asks every provider for its diagnostic: the Agents page shows them.
+pub(crate) fn load_diagnostics() {
+    global::<Diagnostics>().update(|d| d.wanted = true);
+    for p in global::<Providers>().with_untracked(|p| p.0.clone()) {
+        send(Command::ProviderDiagnostic(p.id));
+    }
+}
+
+/// The host's home folder for agent config folders: from Claude Code's
+/// config folder there, this machine's own when the host is this machine,
+/// else as the workspaces' paths show it.
+pub(crate) fn agent_home() -> Option<String> {
+    let from_claude = global::<Diagnostics>().with(|d| {
+        d.map
+            .values()
+            .filter_map(|x| x.login.as_ref()?.config_dir.as_deref())
+            .find_map(crate::daemon::agents::home_from_config_dir)
+    });
+    from_claude.or_else(|| {
+        if !on_this_mac() {
+            return None;
+        }
+        std::env::var("HOME").ok().filter(|h| h.starts_with('/'))
+    })
+    .or_else(|| Some(host_home()).filter(|h| h != "/"))
+}
+
+/// Every provider id the host knows, in the list or only in the config.
+pub(crate) fn provider_ids() -> Vec<String> {
+    let mut ids: Vec<String> = providers().into_iter().map(|p| p.id).collect();
+    if let Some(cfg) = daemon_config()
+        && let Some(map) = cfg.get("providers").and_then(serde_json::Value::as_object)
+    {
+        ids.extend(map.keys().cloned());
+    }
+    ids
+}
+
+/// Sends a providers patch, merged into the shown config at once; the
+/// daemon answers with the whole config and the list refreshes after.
+pub(crate) fn patch_providers(patch: serde_json::Value) {
+    global::<DaemonConfig>().update(|c| {
+        if let Some(cfg) = c.0.as_mut() {
+            if let Some(remove) = patch.get("removeProviders").and_then(serde_json::Value::as_array)
+                && let Some(map) = cfg.get_mut("providers").and_then(serde_json::Value::as_object_mut)
+            {
+                for id in remove.iter().filter_map(serde_json::Value::as_str) {
+                    map.remove(id);
+                }
+            }
+            if let Some(add) = patch.get("providers").and_then(serde_json::Value::as_object) {
+                for (id, fields) in add {
+                    let entry = &mut cfg["providers"][id.as_str()];
+                    if !entry.is_object() {
+                        *entry = serde_json::json!({});
+                    }
+                    if let (Some(e), Some(f)) = (entry.as_object_mut(), fields.as_object()) {
+                        e.extend(f.clone());
+                    }
+                }
+            }
+        }
+    });
+    send(Command::PatchProviders(patch));
+}
+
+/// What the Agents section reads: the host's config and the diagnostics.
+pub(crate) fn load_agents() {
+    send(Command::GetConfig);
+    load_diagnostics();
+}
+
+/// A local agent CLI's update: how it was installed, the newest version that
+/// way, and an update under way or failed. By the binary the service runs,
+/// which instances of one CLI share.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct AgentUpdate {
+    pub(crate) install: Option<crate::agent_update::Install>,
+    pub(crate) latest: Option<String>,
+    pub(crate) updating: bool,
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Clone, Default)]
+struct AgentUpdates(HashMap<String, AgentUpdate>);
+
+/// The update of the CLI at `path`, while the host is this computer.
+pub(crate) fn agent_update(path: &str) -> Option<AgentUpdate> {
+    if !on_this_mac() {
+        return None;
+    }
+    global::<AgentUpdates>().with(|u| u.0.get(path).cloned())
+}
+
+/// Looks up the newest version of the CLI at `path`, once a run: a network
+/// or Homebrew call, on a thread of its own.
+#[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+fn check_agent_update(path: String) {
+    if !on_this_mac() || global::<AgentUpdates>().with_untracked(|u| u.0.contains_key(&path)) {
+        return;
+    }
+    let real = std::fs::canonicalize(&path).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| path.clone());
+    let install = crate::agent_update::install_of(&real);
+    global::<AgentUpdates>().update(|u| {
+        u.0.insert(path.clone(), AgentUpdate { install: install.clone(), ..Default::default() });
+    });
+    let Some(install) = install else { return };
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(crate::agent_update::latest(&install));
+    });
+    spawn_detached(async move {
+        // Not found is not shown: the row only offers what it knows.
+        if let Some(Ok(latest)) = rx.recv().await {
+            global::<AgentUpdates>().update(|u| {
+                if let Some(e) = u.0.get_mut(&path) {
+                    e.latest = Some(latest);
+                }
+            });
+        }
+    });
+}
+
+#[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+fn check_agent_update(_path: String) {}
+
+/// Updates the CLI at `path` the way it was installed, then asks the
+/// providers again for their versions. This computer's only.
+#[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+pub(crate) fn update_agent(path: &str) {
+    if !on_this_mac() {
+        return;
+    }
+    let mut install = None;
+    global::<AgentUpdates>().update(|u| {
+        if let Some(e) = u.0.get_mut(path).filter(|e| !e.updating) {
+            install = e.install.clone();
+            if install.is_some() {
+                e.updating = true;
+                e.error = None;
+            }
+        }
+    });
+    let Some(install) = install else { return };
+    let (path, binary) = (path.to_owned(), path.to_owned());
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(crate::agent_update::run_update(&install, &binary));
+    });
+    spawn_detached(async move {
+        let result = rx.recv().await.unwrap_or_else(|| Err("stopped".into()));
+        global::<AgentUpdates>().update(|u| {
+            if let Some(e) = u.0.get_mut(&path) {
+                e.updating = false;
+                e.error = result.as_ref().err().cloned();
+            }
+        });
+        if result.is_ok() {
+            refresh_agents();
+        }
+    });
+}
+
+#[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+pub(crate) fn update_agent(_path: &str) {}
+
+/// Asks the providers again, and their diagnostics.
+pub(crate) fn refresh_agents() {
+    global::<Diagnostics>().update(|d| d.map.clear());
+    send(Command::RefreshProviders);
+    load_diagnostics();
 }
 
 #[derive(Clone, Default)]
@@ -1984,6 +2887,7 @@ pub(crate) fn restart_daemon() {
 
 pub(crate) fn open_settings() {
     send(Command::GetConfig);
+    load_diagnostics();
     global::<Nav>().update(|n| n.screen = Screen::Settings);
     send(Command::WatchDiff(None));
 }
@@ -2066,11 +2970,22 @@ pub(crate) fn open_tab(tab: Tab) {
     }
     batch(|| {
         global::<Nav>().update(|n| n.tab = tab.clone());
-        global::<Timeline>().update(|t| *t = Timeline { agent_id: agent_id.clone(), ..Default::default() });
+        global::<Timeline>().update(|t| {
+            *t = Timeline { agent_id: agent_id.clone(), ..Default::default() };
+            // This device's copy of its last page at once; the host then
+            // says what came since.
+            if let Some((mut items, older, cursor)) = agent_id.as_deref().and_then(crate::daemon::connection::cached_timeline) {
+                crate::sent_pictures::restore(&mut items);
+                *t = Timeline { agent_id: agent_id.clone(), items, older, cursor, loaded: true, syncing: true, ..Default::default() };
+            }
+        });
         if tab == Tab::Draft {
             reset_form(current_workspace().map(|w| w.directory));
         }
     });
+    if global::<Timeline>().with_untracked(|t| t.syncing) {
+        scroll_timeline_end_after(&[30, 120, 250], false);
+    }
     if let Some(id) = agent_id {
         send(Command::Open(id.clone()));
         send(Command::Subagents(id.clone()));
@@ -2132,9 +3047,46 @@ fn default_provider(list: &[Provider], current: &str) -> String {
 }
 
 /// Fills the provider's defaults (model, its thinking level, mode).
+/// The `provider/` prefixes of models a gateway serves from a subscription
+/// signed in to another client (Magpie's signed-in agents as providers).
+pub(crate) const SUBSCRIPTION_PREFIXES: &[&str] =
+    &["claude", "codex", "copilot", "devin", "grok", "cursor", "gemini", "antigravity", "qoder"];
+
+/// Not allowed: a Claude model through a subscription. Claude's own outside
+/// Claude Code (`claude/…` through a gateway: Anthropic counts it as another
+/// client's use of the subscription), or another client's (`copilot/claude-…`,
+/// `cursor/claude-…`: that account answers for it). A Claude model on an API
+/// key, through any gateway, stays allowed.
+pub(crate) fn forbidden_model(model_id: &str, label: &str) -> bool {
+    let Some((prefix, rest)) = model_id.split_once('/') else { return false };
+    if !SUBSCRIPTION_PREFIXES.contains(&prefix) {
+        return false;
+    }
+    let claude = |s: &str| {
+        let s = s.to_lowercase();
+        s.contains("claude") || s.split(|c: char| !c.is_alphanumeric()).any(|w| matches!(w, "opus" | "sonnet" | "haiku" | "fable"))
+    };
+    prefix == "claude" || claude(rest) || claude(label)
+}
+
+/// Whether `provider`'s `model` is refused ([`forbidden_model`]); says so.
+fn refuse_model(provider_id: &str, model: &str) -> bool {
+    let label = provider(provider_id).and_then(|p| p.model(model).map(|m| m.label.clone())).unwrap_or_default();
+    if forbidden_model(model, &label) {
+        notify(t("Claude models run only in Claude Code, on your own Claude account: not through another client's subscription").into());
+        return true;
+    }
+    false
+}
+
 fn apply_provider_defaults(f: &mut Form) {
     let Some(p) = provider(&f.provider) else { return };
-    let model = p.default_model().cloned();
+    // A refused default gives way to the first allowed model.
+    let model = p
+        .default_model()
+        .filter(|m| !forbidden_model(&m.id, &m.label))
+        .or_else(|| p.models.iter().find(|m| !forbidden_model(&m.id, &m.label)))
+        .cloned();
     f.model = model.as_ref().map(|m| m.id.clone());
     f.thinking = model.and_then(|m| m.default_thinking.or_else(|| m.thinking.first().map(|t| t.id.clone())));
     f.mode = p.default_mode.clone().or_else(|| p.modes.first().map(|m| m.id.clone()));
@@ -2142,11 +3094,13 @@ fn apply_provider_defaults(f: &mut Form) {
 
 fn reset_form(path: Option<String>) {
     let list = providers();
+    // A prompt link's text starts this new draft.
+    let prompt = take_prompt_link_text().unwrap_or_default();
     global::<Form>().update(|f| {
         let provider = default_provider(&list, &f.provider);
         let keep = f.provider == provider && f.model.is_some();
         let (model, mode, thinking) = (f.model.clone(), f.mode.clone(), f.thinking.clone());
-        *f = Form { path: path.clone().unwrap_or_default(), provider, ..Default::default() };
+        *f = Form { path: path.clone().unwrap_or_default(), provider, prompt, ..Default::default() };
         if keep {
             (f.model, f.mode, f.thinking) = (model, mode, thinking);
         } else {
@@ -2249,6 +3203,12 @@ pub(crate) fn controls(live: bool) -> Controls {
 }
 
 pub(crate) fn set_control(live: bool, change: Control) {
+    if let Control::Model(m) = &change {
+        let provider_id = if live { selected_agent().map(|a| a.provider).unwrap_or_default() } else { form().provider };
+        if refuse_model(&provider_id, m) {
+            return;
+        }
+    }
     let refresh = !live && matches!(change, Control::Provider(_) | Control::Model(_));
     if live {
         let Some(agent_id) = selected_id() else { return };
@@ -2277,9 +3237,16 @@ pub(crate) fn set_control(live: bool, change: Control) {
             apply_provider_defaults(f);
         }
         Control::Model(m) => {
+            // The agent's own list knows its levels (a model the service's
+            // list lacks too); the service's otherwise.
+            let local = local_models(&f.provider).and_then(|l| l.into_iter().find(|x| x.id == m));
             let model = provider(&f.provider).and_then(|p| p.model(&m).cloned());
             f.model = Some(m);
-            if let Some(model) = model {
+            if let Some(local) = local.filter(|l| !l.thinking.is_empty()) {
+                if !local.thinking.iter().any(|(id, _)| Some(id) == f.thinking.as_ref()) {
+                    f.thinking = local.default_thinking.or_else(|| local.thinking.first().map(|(id, _)| id.clone()));
+                }
+            } else if let Some(model) = model {
                 if !model.thinking.iter().any(|t| Some(&t.id) == f.thinking.as_ref()) {
                     f.thinking = model.default_thinking.or_else(|| model.thinking.first().map(|t| t.id.clone()));
                 }
@@ -2300,6 +3267,9 @@ pub(crate) fn submit_form() {
     if f.busy || f.path.trim().is_empty() || f.provider.is_empty() {
         return;
     }
+    if f.model.as_deref().is_some_and(|m| refuse_model(&f.provider, m)) {
+        return;
+    }
     if uploading() {
         notify(t("Wait for the files to finish uploading").into());
         return;
@@ -2312,6 +3282,10 @@ pub(crate) fn submit_form() {
         f.busy = true;
         f.error = None;
     });
+    // The first message's pictures, kept by its words: the host makes its id.
+    let images = take_images();
+    let thumbs: Vec<String> = images.iter().map(|i| format!("data:{};base64,{}", i.mime, i.data)).collect();
+    crate::sent_pictures::keep_for_text(&f.prompt, &thumbs);
     send(Command::CreateAgent(CreateAgent {
         workspace_id,
         path: f.path.trim().to_owned(),
@@ -2323,7 +3297,7 @@ pub(crate) fn submit_form() {
         mode: f.mode,
         thinking: f.thinking,
         prompt: f.prompt,
-        images: take_images(),
+        images,
         attachments: take_files(),
         context: f.context.map(|(c, _)| c),
         features: f
@@ -2369,15 +3343,21 @@ fn deliver(agent_id: &str, text: &str, behavior: Option<&'static str>) {
     let images = if mine { take_images() } else { vec![] };
     let attachments = if mine { take_files() } else { vec![] };
     let mut shown = text.to_owned();
+    // A file the text does not name where its chip stood (a message
+    // queued before, a draft kept as text) is named after it.
     for a in &attachments {
-        if let Some(name) = a.get("fileName").and_then(serde_json::Value::as_str) {
+        if let Some(name) = a.get("fileName").and_then(serde_json::Value::as_str)
+            && !text.contains(&format!("[{name}]"))
+        {
             shown.push_str(&format!("\n📎 {name}"));
         }
     }
     // Shown at once under the id the host echoes it back with, which then
     // replaces nothing and adds nothing (the echo has the text alone).
     let message_id = uuid::Uuid::new_v4().to_string();
-    let thumbs = images.iter().map(|i| format!("data:{};base64,{}", i.mime, i.data)).collect();
+    let thumbs: Vec<String> = images.iter().map(|i| format!("data:{};base64,{}", i.mime, i.data)).collect();
+    // On disk too: the host's history has the text alone.
+    crate::sent_pictures::keep(&message_id, &thumbs);
     let mut shown_here = false;
     global::<Timeline>().update(|t| {
         if t.agent_id.as_deref() == Some(agent_id) {
@@ -2513,7 +3493,9 @@ pub(crate) fn set_timeline_list(list: ElementRef) {
     TIMELINE_LIST.with_borrow_mut(|l| *l = Some(list));
 }
 
+/// Brings item `index` into view: its row, or its folded group's.
 pub(crate) fn scroll_timeline_to(index: usize) {
+    let Some(index) = crate::fold::row_of(&display_rows(), index) else { return };
     TIMELINE_LIST.with_borrow(|l| {
         if let Some(list) = l {
             list.scroll_to_index(index as u32, nsh_core::geometry::Percentage(0.3), px(0.0), true);
@@ -2605,6 +3587,28 @@ pub(crate) fn prompts() -> Vec<(usize, String)> {
     })
 }
 
+/// The conversation's turns, for the rail beside it: each user message's
+/// row and first line, and how the reply to it begins.
+pub(crate) fn turns() -> Vec<(usize, String, String)> {
+    global::<Timeline>().with(|t| {
+        let mut out: Vec<(usize, String, String)> = Vec::new();
+        for (n, item) in t.items.iter().enumerate() {
+            match item {
+                Item::User { text, .. } => out.push((n, text.lines().next().unwrap_or_default().to_owned(), String::new())),
+                Item::Assistant { text } => {
+                    if let Some(last) = out.last_mut().filter(|l| l.2.is_empty()) {
+                        // Its start, as plain words: no Markdown marks.
+                        let plain: String = text.chars().filter(|c| !matches!(c, '#' | '*' | '`' | '>')).take(220).collect();
+                        last.2 = plain.split_whitespace().collect::<Vec<_>>().join(" ");
+                    }
+                }
+                _ => {}
+            }
+        }
+        out
+    })
+}
+
 pub(crate) fn rewind(message_id: &str, mode: &'static str) {
     if let Some(agent) = selected_id() {
         send(Command::Rewind { agent, message_id: message_id.to_owned(), mode });
@@ -2630,6 +3634,9 @@ struct Handoff(Option<(String, String, String)>);
 /// one.
 pub(crate) fn continue_in(provider: &str, model: &str) {
     let Some(agent) = selected_id() else { return };
+    if refuse_model(provider, model) {
+        return;
+    }
     global::<Handoff>().update(|h| h.0 = Some((agent.clone(), provider.to_owned(), model.to_owned())));
     send(Command::Fork(agent));
 }
@@ -2692,6 +3699,12 @@ pub(crate) fn apply(event: Event) {
             }
         }),
         Event::Connected { hostname, version } => {
+            // A saved host with no name of its own takes the computer's.
+            if !hostname.trim().is_empty() {
+                if let Some(h) = current_host().filter(|h| !h.named()) {
+                    rename_host(&h.id, &hostname);
+                }
+            }
             global::<ConnState>().update(|c| {
                 c.0 = Conn::Connected { hostname, version, url: c.1.clone() };
             });
@@ -2700,7 +3713,10 @@ pub(crate) fn apply(event: Event) {
                 notify(t("The service restarted").into());
             }
         }
-        Event::Disconnected { reason } => global::<ConnState>().update(|c| c.0 = Conn::Down(reason)),
+        Event::Disconnected { reason } => {
+            global::<ConnState>().update(|c| c.0 = Conn::Down(reason));
+            auto_start_service();
+        }
         Event::ProjectsReset(list) => global::<Projects>().update(|p| p.0 = list),
         Event::ProjectUpsert(project) => global::<Projects>().update(|p| {
             p.0.retain(|x| x.id != project.id);
@@ -2710,6 +3726,7 @@ pub(crate) fn apply(event: Event) {
         Event::WorkspacesReset(list) => {
             global::<Workspaces>().update(|w| w.0 = list);
             restore_last_open();
+            prompt_links_known(|p| p.workspaces_known = true);
         }
         Event::WorkspaceUpsert(ws) => global::<Workspaces>().update(|w| {
             w.0.retain(|x| x.id != ws.id);
@@ -2722,12 +3739,27 @@ pub(crate) fn apply(event: Event) {
             }
         }
         Event::Providers(list) => {
+            // The agents may have learned new models since: read their lists again.
+            load_local_models();
             let first = global::<Providers>().with_untracked(|p| p.0.is_empty());
+            // An instance just added gets its diagnostic too.
+            let (wanted, known) = global::<Diagnostics>().with_untracked(|d| (d.wanted, d.map.keys().cloned().collect::<Vec<_>>()));
+            if wanted {
+                for p in list.iter().filter(|p| !known.contains(&p.id)) {
+                    send(Command::ProviderDiagnostic(p.id.clone()));
+                }
+            }
             global::<Providers>().update(|p| p.0 = list);
             if first {
-                let path = form().path;
+                // The first providers fill the form's defaults; what is
+                // written in it (a prompt link's text) stays.
+                let Form { path, prompt, .. } = form();
                 reset_form(Some(path));
+                if !prompt.is_empty() && form().prompt.is_empty() {
+                    edit_form(|f| f.prompt = prompt);
+                }
             }
+            prompt_links_known(|p| p.providers_known = true);
         }
         Event::Created(agent) => {
             edit_form(|f| {
@@ -2780,9 +3812,12 @@ pub(crate) fn apply(event: Event) {
                 if t.agent_id.as_deref() == Some(agent_id.as_str()) {
                     opened = !t.loaded;
                     carry_images(&t.items, &mut items);
+                    crate::sent_pictures::restore(&mut items);
+                    ask_pictures(&items);
                     t.items = items;
                     t.cursor = cursor;
                     t.loaded = true;
+                    t.syncing = false;
                     t.older = older;
                 }
             });
@@ -2790,9 +3825,36 @@ pub(crate) fn apply(event: Event) {
                 scroll_timeline_end_after(&[30, 120, 250], false);
             }
         }
+        Event::TimelineSynced { agent_id } => global::<Timeline>().update(|t| {
+            if t.agent_id.as_deref() == Some(agent_id.as_str()) {
+                t.syncing = false;
+                t.loaded = true;
+                // The copy's messages too: their pictures may be elsewhere.
+                ask_pictures(&t.items);
+            }
+        }),
+        Event::Pictures { message_id, text, pictures } => {
+            // Kept here from now on, and shown where the message is open.
+            if message_id.is_empty() {
+                crate::sent_pictures::keep_for_text(&text, &pictures);
+            } else {
+                crate::sent_pictures::keep(&message_id, &pictures);
+            }
+            global::<Timeline>().update(|t| {
+                for item in t.items.iter_mut() {
+                    let Item::User { text: body, message_id: id, images } = item else { continue };
+                    let same = if message_id.is_empty() { body.trim() == text.trim() } else { id.as_deref() == Some(message_id.as_str()) };
+                    if same && images.is_empty() {
+                        *images = pictures.clone();
+                    }
+                }
+            });
+        }
         Event::TimelineOlder { agent_id, items, older } => global::<Timeline>().update(|t| {
             if t.agent_id.as_deref() == Some(agent_id.as_str()) {
                 let mut merged = items;
+                crate::sent_pictures::restore(&mut merged);
+                ask_pictures(&merged);
                 merged.append(&mut t.items);
                 t.items = merged;
                 t.older = older;
@@ -2985,8 +4047,20 @@ pub(crate) fn apply(event: Event) {
             *p = Pairing { loaded: true, qr_svg: link.as_deref().and_then(qr_svg), sophon_url: link, url, relay_enabled, error };
         }),
         Event::Labels(list) => global::<LabelCatalog>().update(|l| l.0 = list),
-        Event::Usage(list) => global::<UsageState>().update(|u| u.0 = Some(list)),
+        Event::Usage(list) => {
+            record_limits(&list);
+            global::<UsageState>().update(|u| u.0 = Some(list));
+        }
         Event::DaemonConfig(cfg) => global::<DaemonConfig>().update(|c| c.0 = Some(cfg)),
+        Event::Diagnostic { provider, text } => {
+            let d = crate::daemon::agents::parse_diagnostic(&text);
+            if let Some(path) = d.path.clone().filter(|_| d.version.is_some()) {
+                check_agent_update(path);
+            }
+            global::<Diagnostics>().update(|x| {
+                x.map.insert(provider, d);
+            });
+        }
         Event::RecentSessions(list) => global::<Recent>().update(|r| r.0 = Some(list)),
         Event::Rewound { agent, error } => match error {
             Some(e) => notify(tf("Rewind failed: {}", &[&e])),
@@ -3101,4 +4175,81 @@ pub(crate) fn close_current() {
         }
         Tab::Agent(_) => {}
     }
+}
+
+#[cfg(test)]
+mod model_rule_tests {
+    use super::forbidden_model;
+
+    #[test]
+    fn a_claude_model_through_a_subscription_is_refused() {
+        // Claude's subscription outside Claude Code.
+        assert!(forbidden_model("claude/claude-sonnet-5", "Claude Sonnet 5 · Claude"));
+        // Claude through Copilot's, Cursor's subscription.
+        assert!(forbidden_model("copilot/claude-sonnet-5", "Claude Sonnet 5 · Copilot"));
+        assert!(forbidden_model("copilot/claude-haiku-5.5", "Claude Haiku 5.5 · Copilot"));
+        assert!(forbidden_model("cursor/opus-5", "Opus 5 · Cursor"));
+    }
+
+    #[test]
+    fn other_models_and_claude_on_an_api_key_stay() {
+        assert!(!forbidden_model("claude-opus-5-5", "Opus 5.5"));
+        assert!(!forbidden_model("gpt-6-sol", "GPT-6-Sol"));
+        assert!(!forbidden_model("copilot/gpt-5.6-luna", "GPT-5.6 Luna · Copilot"));
+        assert!(!forbidden_model("copilot/gemini-3.7-flash", "Gemini 3.7 Flash · Copilot"));
+        assert!(!forbidden_model("codex/gpt-6-astra", "GPT-6-Astra · Codex"));
+        assert!(!forbidden_model("anthropic/claude-sonnet-5", "Claude Sonnet 5 · Anthropic"));
+        assert!(!forbidden_model("teable/claude-opus-5-5", "Claude Opus 5.5 · teable"));
+    }
+}
+
+#[cfg(test)]
+mod config_patch_tests {
+    use super::{TEXT_GENERATION, config_patch, text_generation_value};
+    use serde_json::json;
+
+    #[test]
+    fn a_text_generation_model_patches_only_its_key() {
+        let patch = config_patch(TEXT_GENERATION, text_generation_value(Some(("codex", "gpt-5.4-mini"))));
+        assert_eq!(patch, json!({ "metadataGeneration": { "providers": [{ "provider": "codex", "model": "gpt-5.4-mini" }] } }));
+    }
+
+    #[test]
+    fn default_clears_the_list() {
+        let patch = config_patch(TEXT_GENERATION, text_generation_value(None));
+        assert_eq!(patch, json!({ "metadataGeneration": { "providers": [] } }));
+    }
+
+    #[test]
+    fn other_settings_still_patch_as_before() {
+        assert_eq!(config_patch("/autoArchiveAfterMerge", json!(true)), json!({ "autoArchiveAfterMerge": true }));
+        assert_eq!(config_patch("/providers/codex/enabled", json!(false)), json!({ "providers": { "codex": { "enabled": false } } }));
+    }
+}
+
+/// Each agent's models as it keeps them on this computer ([`crate::models`]),
+/// by provider id.
+#[derive(Clone, Default)]
+struct LocalModels(HashMap<String, Vec<crate::models::LocalModel>>);
+
+/// `provider`'s models as the agent itself lists them, while the host is
+/// this computer: they include models the service's built-in list does not
+/// have yet, in the agent's own order. `None` elsewhere, or for an agent
+/// that keeps no list.
+pub(crate) fn local_models(provider: &str) -> Option<Vec<crate::models::LocalModel>> {
+    if !on_this_mac() {
+        return None;
+    }
+    global::<LocalModels>().with(|m| m.0.get(provider).cloned())
+}
+
+/// Reads the agents' own model lists again.
+pub(crate) fn load_local_models() {
+    let mut map = HashMap::new();
+    for provider in ["claude", "codex"] {
+        if let Some(list) = crate::models::read_local(provider) {
+            map.insert(provider.to_owned(), list);
+        }
+    }
+    global::<LocalModels>().set(LocalModels(map));
 }

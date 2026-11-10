@@ -35,44 +35,47 @@ pub(crate) fn workspace(compact: bool) -> impl IntoElement {
     let fits = computed(move || !compact && window().width >= px(900.0));
     let show_explorer = computed(move || fits.get() && store::explorer_open());
     let bar = computed(nsh_core::element::desktop::title_bar);
-    // The explorer takes the window's whole height beside the workspace's
-    // column (header, tabs, pane, terminals), up into the title bar.
-    view()
+    // The workspace's column (header, tabs, pane) beside the explorer, which
+    // reaches up into the title bar; the terminals under both, the window's
+    // whole width, as wide output wants.
+    let top = view()
         .flex_1()
+        .min_h(px(0.0))
         .flex_row()
         .child(
             view()
                 .flex_1()
                 .min_w(px(0.0))
                 .child(header(compact, show_explorer))
-                .child(
-                    view().flex_1().child(tabs()).child(dynamic(move || {
-                        let pane = pane.get();
-                        Some(untracked(move || match pane.clone() {
-                            Pane::Draft => agent::draft_pane().into_element(),
-                            Pane::Agent => agent::agent_pane(false).into_element(),
-                            Pane::Diff(p) => explorer::diff_pane(p).into_element(),
-                            Pane::File(p) => file_pane::file_pane(p).into_element(),
-                            Pane::Subagent(parent, id) => timeline::subagent_pane(parent, id).into_element(),
-                            Pane::CommitDiff(sha, path) => explorer::commit_diff_pane(sha, path).into_element(),
-                        }))
+                .child(view().flex_1().child(tabs()).child(dynamic(move || {
+                    let pane = pane.get();
+                    Some(untracked(move || match pane.clone() {
+                        Pane::Draft => agent::draft_pane().into_element(),
+                        Pane::Agent => agent::agent_pane(false).into_element(),
+                        Pane::Diff(p) => explorer::diff_pane(p).into_element(),
+                        Pane::File(p) => file_pane::file_pane(p).into_element(),
+                        Pane::Subagent(parent, id) => timeline::subagent_pane(parent, id).into_element(),
+                        Pane::CommitDiff(sha, path) => explorer::commit_diff_pane(sha, path).into_element(),
                     }))
-                    .child(when(store::terminal_panel_open, terminal::terminal_panel)),
-                ),
+                }))),
         )
         .child(when(fits, move || {
             // Mounted while it fits; the toggle slides it in and out
             // (its width eases, the panel keeps its own).
             view()
                 .flex_shrink_0()
-                .items_start()
+                .flex_row()
+                .items_stretch()
                 .overflow_hidden()
                 .mt(move || Length::from(px(-bar.get().top.0)))
-                .w(move || Length::from(px(if show_explorer.get() { explorer::EXPLORER_WIDTH + 10.0 } else { 0.0 })))
+                .w(move || Length::from(px(if show_explorer.get() { store::explorer_width() + 10.0 } else { 0.0 })))
                 .opacity(move || if show_explorer.get() { 1.0_f32 } else { 0.0 })
                 .transition_opacity()
+                // Its left edge drags its width.
+                .child(explorer::resize_handle())
                 .child(explorer::explorer().flex_1())
-        }))
+        }));
+    view().flex_1().child(top).child(when(store::terminal_panel_open, terminal::terminal_panel))
 }
 
 fn header(compact: bool, explorer_shown: Memo<bool>) -> impl IntoElement {
@@ -224,6 +227,8 @@ fn tab_shell(selected: bool, on_press: impl Fn() + 'static) -> nsh_base::ButtonE
         .pl(px(10.0))
         .pr(px(12.0))
         .max_w(px(220.0))
+        .min_w(px(0.0))
+        .flex_shrink(1.0)
         .rounded(px(R_FULL))
         .bg(if selected { tint(ACCENT, 0.10) } else { tint(SURFACE0, 0.0) })
         .hover(|s| s.bg(highlight()))
@@ -259,7 +264,8 @@ fn file_tab(path: String) -> impl IntoElement {
         Some(untracked(move || {
             tab_shell(on, move || store::open_tab(Tab::File(open.clone())))
                 .child(icon(Icon::FileText, 14.0).text_color(FG_MUTED))
-                .child(text(label).text_size(px(TEXT_SM)).text_color(if on { FG } else { FG_MUTED }).number_of_lines(1))
+                // A long name ends in an ellipsis inside the tab.
+                .child(text(label).text_size(px(TEXT_SM)).text_color(if on { FG } else { FG_MUTED }).number_of_lines(1).flex_shrink(1.0).min_w(px(0.0)))
                 .child(when(dirty, || view().w(px(6.0)).h(px(6.0)).rounded(px(R_FULL)).bg(FG_MUTED)))
                 .child(close_button(t("Close file"), move || store::close_file(&close)))
         }))
@@ -293,7 +299,8 @@ fn agent_tab(id: String) -> impl IntoElement {
                         .text_size(px(TEXT_SM))
                         .text_color(if on { FG } else { FG_MUTED })
                         .number_of_lines(1)
-                        .flex_shrink(1.0),
+                        .flex_shrink(1.0)
+                        .min_w(px(0.0)),
                 )
         }))
     }))

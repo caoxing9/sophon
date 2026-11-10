@@ -81,6 +81,8 @@ pub(crate) fn menu_row(
         .items_center()
         .gap(px(S2))
         .min_h(px(CONTROL_MD))
+        // A hairline between rows that fill under the pointer.
+        .my(px(1.0))
         .px(px(S2))
         .py(px(5.0))
         .rounded(px(R_LG))
@@ -108,6 +110,8 @@ pub(crate) fn menu_row_danger(label: &'static str, lead: Icon, on_select: impl F
         .items_center()
         .gap(px(S2))
         .min_h(px(CONTROL_MD))
+        // A hairline between rows that fill under the pointer.
+        .my(px(1.0))
         .px(px(S2))
         .rounded(px(R_LG))
         .hover(|s| s.bg(tint(DESTRUCTIVE, 0.1)))

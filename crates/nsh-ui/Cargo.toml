@@ -1,0 +1,11 @@
+[package]
+name = "nsh-ui"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+description = "A shadcn/ui-style component set for Native Shell (NSH), in Rust, after GPUI Component's"
+
+[dependencies]
+nsh-core = { git = "https://github.com/caoxing9/nsh", rev = "3921ccc2cf9f6475a20ba7cd1d36e655457ab5e3" }
+nsh-base = { git = "https://github.com/caoxing9/nsh", rev = "3921ccc2cf9f6475a20ba7cd1d36e655457ab5e3" }

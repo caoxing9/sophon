@@ -14,7 +14,8 @@ use crate::daemon::connection::DirEntry;
 use crate::store;
 use crate::ui::kit::text;
 use crate::ui::kit::*;
-use crate::ui::shared::chips::format_size;
+use crate::ui::shared::{chips::format_size, preview};
+use nsh_base::text_view;
 
 /// Text shown at most: a longer file shows its start (it downloads whole).
 const SHOWN_BYTES: usize = 200_000;
@@ -95,7 +96,10 @@ fn entry_row(entry: Memo<Option<DirEntry>>) -> impl IntoElement {
 }
 
 pub(crate) fn file_page(path: String) -> Screen {
-    store::load_file(&path);
+    // A PDF, an image, a video: fetched whole for its preview instead.
+    if preview::kind_of(&path).is_none() {
+        store::load_file(&path);
+    }
     let name = title_of(&path);
     let dir = path.rsplit_once('/').map(|(d, _)| d.to_owned()).unwrap_or_default();
     let down = path.clone();
@@ -119,7 +123,11 @@ pub(crate) fn file_page(path: String) -> Screen {
     )
 }
 
-fn content(path: String) -> impl IntoElement {
+fn content(path: String) -> AnyElement {
+    if preview::kind_of(&path).is_some() {
+        return preview::file_preview(path).into_element();
+    }
+    let markdown = path.to_ascii_lowercase().ends_with(".md") || path.to_ascii_lowercase().ends_with(".markdown");
     let file = {
         let p = path.clone();
         computed(move || store::file(&p))
@@ -144,6 +152,24 @@ fn content(path: String) -> impl IntoElement {
             let body = file.with_untracked(|f| f.as_ref().map(|f| f.disk.clone()).unwrap_or_default());
             let cut = body.len() > SHOWN_BYTES;
             let shown = if cut { body[..body.floor_char_boundary(SHOWN_BYTES)].to_owned() } else { body };
+            // A Markdown file reads as the document it writes.
+            if markdown {
+                let doc = shown.clone();
+                return scroll()
+                    .flex_1()
+                    .child(
+                        view().p(px(S4)).child(
+                            text_view()
+                                .markdown(move || Some(SharedString::from(doc.clone())))
+                                .selectable(true)
+                                .gap_3()
+                                .text_size(px(TEXT_CONTENT))
+                                .line_height(px(24.0))
+                                .text_color(FG),
+                        ),
+                    )
+                    .into_element();
+            }
             scroll()
                 .flex_1()
                 .child(
@@ -165,6 +191,7 @@ fn content(path: String) -> impl IntoElement {
                 .into_element()
         }))
     }))
+    .into_element()
 }
 
 /// A file shown by its name only: why, and its download.

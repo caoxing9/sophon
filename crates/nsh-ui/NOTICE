@@ -1,0 +1,3 @@
+nsh-ui ports the designs (variants, sizes, colors and states) of GPUI Component
+(https://github.com/longbridge/gpui-kit, crates/component), Copyright Longbridge,
+licensed under the Apache License, Version 2.0, onto NSH's nsh-base.
