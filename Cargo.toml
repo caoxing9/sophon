@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [workspace]
+members = ["crates/nsh-ui"]
 
 [dependencies]
 nsh-core = { git = "https://github.com/caoxing9/nsh", rev = "3921ccc2cf9f6475a20ba7cd1d36e655457ab5e3" }
@@ -19,6 +20,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 snow = "0.9"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 crypto_box = { version = "0.9", features = ["std"] }
+# Sophon's shadcn-style components (`crates/nsh-ui`).
+nsh-ui = { path = "crates/nsh-ui" }
 
 # Natively the connection runs on a thread of its own with tokio; in a
 # browser on the page's WebSocket (`daemon::rt`).

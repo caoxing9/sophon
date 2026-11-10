@@ -46,37 +46,30 @@ pub(crate) enum Sz {
 }
 
 impl Sz {
-    fn height(self) -> f32 {
+    /// nsh-ui's size: a phone keeps 32-point targets.
+    fn ui(self) -> nsh_ui::size::Size {
         match self {
-            Sz::Md => CONTROL_MD,
-            Sz::Sm => CONTROL_SM,
-        }
-    }
-    fn text(self) -> f32 {
-        match self {
-            Sz::Md => TEXT_BASE,
-            Sz::Sm => TEXT_SM,
+            Sz::Md => nsh_ui::size::Size::Medium,
+            Sz::Sm if MOBILE => nsh_ui::size::Size::Medium,
+            Sz::Sm => nsh_ui::size::Size::Small,
         }
     }
 }
 
-fn fill(variant: Variant) -> Option<AdaptiveColor> {
-    match variant {
-        Variant::Primary => Some(ACCENT),
-        Variant::Secondary => Some(SURFACE3),
-        Variant::Destructive => Some(DESTRUCTIVE),
-        Variant::Outline | Variant::Ghost => None,
+impl Variant {
+    fn ui(self) -> nsh_ui::button::ButtonVariant {
+        use nsh_ui::button::ButtonVariant as V;
+        match self {
+            Variant::Primary => V::Primary,
+            Variant::Secondary => V::Secondary,
+            Variant::Outline => V::Outline,
+            Variant::Ghost => V::Ghost,
+            Variant::Destructive => V::Danger,
+        }
     }
 }
 
-fn ink(variant: Variant) -> AdaptiveColor {
-    match variant {
-        Variant::Primary | Variant::Destructive => ACCENT_FG,
-        _ => FG,
-    }
-}
-
-/// A labelled pill button, optionally with a leading icon.
+/// A labelled button, optionally with a leading icon: nsh-ui's `Button`.
 pub(crate) fn btn(
     label: impl IntoReactive<SharedString>,
     variant: Variant,
@@ -84,51 +77,24 @@ pub(crate) fn btn(
     lead: Option<Icon>,
     on_press: impl Fn() + 'static,
 ) -> ButtonElement {
-    let mut b = button()
-        .on_press(on_press)
-        .flex_row()
-        .items_center()
-        .justify_center()
-        .gap(px(6.0))
-        .h(px(size.height()))
-        .px(px(if size == Sz::Md { 14.0 } else { 10.0 }))
-        .rounded(px(R_FULL))
-        .active(|s| s.opacity(0.7))
-        .disabled_style(|s| s.opacity(0.45));
-    b = match fill(variant) {
-        Some(color) => b.bg(color).hover(|s| s.opacity(0.88)),
-        None => b.hover(|s| s.bg(highlight())),
-    };
-    if variant == Variant::Outline {
-        b = b.border_1().border_color(BORDER_STRONG);
-    }
+    let (v, sz) = (variant.ui(), size.ui());
+    let mut b = nsh_ui::button::Button::new().label(label).variant(v).size(sz).on_press(on_press);
     if let Some(lead) = lead {
-        b = b.child(icon(lead, if size == Sz::Md { 16.0 } else { 14.0 }).text_color(ink(variant)));
+        b = b.icon(icon(lead, sz.icon()).text_color(v.ink()));
     }
-    b.child(
-        text(label)
-            .text_size(px(size.text()))
-            .font_weight(FontWeight(500))
-            .text_color(ink(variant))
-            .number_of_lines(1),
-    )
+    b.build()
 }
 
-/// An icon-only button: a circle with the translucent highlight on hover.
+/// An icon-only button: nsh-ui's ghost `Button`, its glyph muted.
 pub(crate) fn icon_btn(glyph: Icon, size: Sz, label: &'static str, on_press: impl Fn() + 'static) -> ButtonElement {
-    let box_size = size.height();
-    button()
-        .on_press(on_press)
+    let sz = size.ui();
+    nsh_ui::button::Button::new()
+        .ghost()
+        .size(sz)
+        .icon(icon(glyph, sz.icon()).text_color(FG_MUTED))
         .accessibility_label(label)
-        .w(px(box_size))
-        .h(px(box_size))
-        .items_center()
-        .justify_center()
-        .rounded(px(R_FULL))
-        .hover(|s| s.bg(highlight()))
-        .active(|s| s.bg(highlight()).opacity(0.7))
-        .disabled_style(|s| s.opacity(0.4))
-        .child(icon(glyph, if size == Sz::Md { 18.0 } else { 16.0 }).text_color(FG_MUTED))
+        .on_press(on_press)
+        .build()
 }
 
 /// A single-line text field on the muted fill.
