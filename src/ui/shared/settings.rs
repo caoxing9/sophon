@@ -2,7 +2,7 @@
 //! controls in the rows' trailing slot. The desktop and the phone each
 //! assemble their page from them.
 
-use crate::i18n::{Lang, t, tf};
+use crate::i18n::{Lang, t};
 use nsh_core::{
     element::{FontWeight, View},
     prelude::*,
@@ -137,54 +137,6 @@ pub(crate) fn host_card() -> View {
             .text_color(FG_MUTED),
             false,
         ))
-}
-
-pub(crate) fn providers_card() -> impl IntoElement {
-    let providers = computed(store::providers);
-    card().child(dynamic(move || {
-        let list = providers.get();
-        Some(untracked(move || {
-            let mut v = view();
-            for (i, p) in list.iter().enumerate() {
-                let state = if !p.enabled {
-                    (Status::Idle, t("Disabled").to_owned())
-                } else if p.available() {
-                    (Status::Done, tf("{} models", &[&p.models.len().to_string()]))
-                } else {
-                    (Status::Failed, p.error.clone().unwrap_or_else(|| t("Not available").into()))
-                };
-                let (status, hint) = state;
-                let (id, id2) = (p.id.clone(), p.id.clone());
-                v = v.child(row(
-                    p.label.clone(),
-                    hint,
-                    view()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(S3))
-                        .child(badge(match status {
-                            Status::Done => t("Ready"),
-                            Status::Failed => t("Unavailable"),
-                            _ => t("Disabled"),
-                        }, match status {
-                            Status::Done => SUCCESS,
-                            Status::Failed => DANGER,
-                            _ => FG_MUTED,
-                        }))
-                        .child(switch(
-                            move || {
-                                store::daemon_config()
-                                    .and_then(|c| c.pointer(&format!("/providers/{id}/enabled")).and_then(serde_json::Value::as_bool))
-                                    .unwrap_or(true)
-                            },
-                            move |on| store::set_daemon_config(&format!("/providers/{id2}/enabled"), on.into()),
-                        )),
-                    i == 0,
-                ));
-            }
-            v
-        }))
-    }))
 }
 
 fn flag(pointer: &'static str, default: bool) -> impl IntoElement {

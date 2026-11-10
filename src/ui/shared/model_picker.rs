@@ -70,7 +70,7 @@ fn rows_of(p: &Provider) -> Vec<Row> {
 }
 
 /// The agent's mark: Claude's and Codex's (OpenAI's) own, else a glyph.
-fn mark(provider: &str, size: f32) -> impl IntoElement {
+pub(crate) fn mark(provider: &str, size: f32) -> impl IntoElement {
     match provider {
         "claude" => icon(Icon::Claude, size),
         "codex" => icon(Icon::Codex, size).text_color(FG),

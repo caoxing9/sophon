@@ -35,3 +35,11 @@ test("Backspace deletes a chip as one unit", async () => {
   await app.keyboard.press("backspace");
   expect(app.count("label:moon@2x.png")).toBe(0);
 });
+
+test("settings lists the agents with their add buttons", async () => {
+  const app = await open(".", { width: 1100, height: 900 });
+  await app.press("label:Settings >> nth=0");
+  expect(app.texts()).toContain("Coding agents");
+  expect(app.texts()).toContain("Add account…");
+  expect(app.texts()).toContain("Add API key…");
+});

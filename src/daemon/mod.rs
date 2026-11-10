@@ -31,6 +31,7 @@ pub fn data_dir() -> std::path::PathBuf {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod bridge;
+pub mod agents;
 pub mod connection;
 pub mod model;
 pub mod relay;

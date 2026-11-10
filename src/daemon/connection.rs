@@ -106,6 +106,13 @@ pub enum Command {
     RecoverWorkspace(String),
     /// A partial config, merged by the daemon.
     SetConfig(Value),
+    /// A config patch of providers (`providers`, `removeProviders`): the
+    /// provider list is refreshed after it.
+    PatchProviders(Value),
+    /// Asks every provider again what it offers.
+    RefreshProviders,
+    /// What the provider's binary, version and login are.
+    ProviderDiagnostic(String),
     RestartDaemon,
     RecentSessions { query: String },
     ImportSession { provider: String, handle: String, cwd: String },
@@ -518,6 +525,8 @@ pub enum Event {
     Rewound { agent: String, error: Option<String> },
     RecentSessions(Vec<RecentSession>),
     DaemonConfig(Value),
+    /// A provider's diagnostic text.
+    Diagnostic { provider: String, text: String },
     Usage(Vec<ProviderUsage>),
     /// A link a phone pairs with: relay, daemon id and key.
     PairingOffer { url: Option<String>, relay_enabled: bool, error: Option<String> },
@@ -735,6 +744,8 @@ enum Pending {
     Pairing,
     /// A feature an older daemon may not have: failures stay quiet.
     Optional,
+    /// A providers config patch: the list is refreshed once it is saved.
+    ProviderConfig,
     /// Step 1 of `CreateAgent`: the workspace; step 2 starts the agent.
     CreateWorkspace,
     CreateAgent,
@@ -1123,6 +1134,12 @@ fn startup_messages(open_agent: Option<&str>, pending: &mut HashMap<String, Pend
     out
 }
 
+/// Asks the providers again (an added instance, a changed login), quietly
+/// on a daemon without it.
+fn refresh_providers(pending: &mut HashMap<String, Pending>) -> Value {
+    request(pending, Pending::Optional, json!({ "type": "refresh_providers_snapshot_request" }))
+}
+
 fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec<Value> {
     match cmd {
         Command::Open(id) => timeline_requests(&id, pending),
@@ -1340,6 +1357,15 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
             pending,
             Pending::Other("save host settings"),
             json!({ "type": "set_daemon_config_request", "config": patch }),
+        )],
+        Command::PatchProviders(patch) => {
+            vec![request(pending, Pending::ProviderConfig, json!({ "type": "set_daemon_config_request", "config": patch }))]
+        }
+        Command::RefreshProviders => vec![refresh_providers(pending)],
+        Command::ProviderDiagnostic(provider) => vec![request(
+            pending,
+            Pending::Optional,
+            json!({ "type": "provider_diagnostic_request", "provider": provider }),
         )],
         Command::RestartDaemon => vec![request(
             pending,
@@ -1671,6 +1697,10 @@ fn handle(
                     return vec![];
                 }
                 Some(Pending::Optional) => return vec![],
+                // The page showed the change already: show the config as it is.
+                Some(Pending::ProviderConfig) => {
+                    follow_ups.push(request(pending, Pending::Optional, json!({ "type": "get_daemon_config_request" })));
+                }
                 _ => {}
             }
             let error = payload.get("error").and_then(Value::as_str).unwrap_or("request failed");
@@ -1706,6 +1736,7 @@ fn handle(
                 Some(Pending::Agents | Pending::Agent) => "load agents",
                 Some(Pending::Projects | Pending::Workspaces) => "load projects",
                 Some(Pending::Providers) => "load providers",
+                Some(Pending::ProviderConfig) => "save agent settings",
                 None => "request",
             };
             vec![Event::Notice(format!("Could not {label}: {error}"))]
@@ -2059,8 +2090,24 @@ fn handle(
             }
         }
         "get_daemon_config_response" | "set_daemon_config_response" => {
-            request_id.and_then(|id| pending.remove(id));
+            if let Some(Pending::ProviderConfig) = request_id.and_then(|id| pending.remove(id)) {
+                follow_ups.push(refresh_providers(pending));
+            }
             payload.get("config").cloned().map(Event::DaemonConfig).into_iter().collect()
+        }
+        // The refresh is done: the list as it is now.
+        "refresh_providers_snapshot_response" => {
+            request_id.and_then(|id| pending.remove(id));
+            follow_ups.push(request(pending, Pending::Providers, json!({ "type": "get_providers_snapshot_request" })));
+            vec![]
+        }
+        "provider_diagnostic_response" => {
+            request_id.and_then(|id| pending.remove(id));
+            let s = |k: &str| payload.get(k).and_then(Value::as_str).map(str::to_owned);
+            match (s("provider"), s("diagnostic")) {
+                (Some(provider), Some(text)) => vec![Event::Diagnostic { provider, text }],
+                _ => vec![],
+            }
         }
         "fetch_recent_provider_sessions_response" => {
             request_id.and_then(|id| pending.remove(id));
@@ -2594,6 +2641,55 @@ mod tests {
         assert!(rest.iter().all(|f| download_frame(f, &mut downloads).is_none()));
         assert_eq!(download_frame(last, &mut downloads), Some(("d1".to_owned(), Ok(bytes))));
         assert!(downloads.is_empty());
+    }
+
+    /// A providers patch is saved, then the providers are asked again and
+    /// listed; nothing is sent to a daemon here.
+    #[test]
+    fn a_providers_patch_refreshes_the_list() {
+        let mut pending = HashMap::new();
+        let patch = json!({ "providers": { "copilot": { "enabled": false } } });
+        let sent = command_messages(Command::PatchProviders(patch.clone()), &mut pending);
+        let msg = &sent[0]["message"];
+        assert_eq!(msg["type"], "set_daemon_config_request");
+        assert_eq!(msg["config"], patch);
+
+        let mut follow_ups = vec![];
+        let id = msg["requestId"].as_str().unwrap();
+        let events = handle("set_daemon_config_response", &json!({ "requestId": id, "config": {} }), &mut pending, None, &mut follow_ups);
+        assert!(matches!(&events[..], [Event::DaemonConfig(_)]));
+        let refresh = &follow_ups.pop().unwrap()["message"];
+        assert_eq!(refresh["type"], "refresh_providers_snapshot_request");
+
+        let id = refresh["requestId"].as_str().unwrap();
+        handle("refresh_providers_snapshot_response", &json!({ "requestId": id, "acknowledged": true }), &mut pending, None, &mut follow_ups);
+        assert_eq!(follow_ups.pop().unwrap()["message"]["type"], "get_providers_snapshot_request");
+
+        // A plain settings patch does not refresh providers.
+        let sent = command_messages(Command::SetConfig(json!({ "autoArchiveAfterMerge": true })), &mut pending);
+        let id = sent[0]["message"]["requestId"].as_str().unwrap().to_owned();
+        handle("set_daemon_config_response", &json!({ "requestId": id, "config": {} }), &mut pending, None, &mut follow_ups);
+        assert!(follow_ups.is_empty());
+
+        // A refused patch reloads the config the page shows.
+        let sent = command_messages(Command::PatchProviders(json!({ "removeProviders": ["x"] })), &mut pending);
+        let id = sent[0]["message"]["requestId"].as_str().unwrap().to_owned();
+        let events = handle("rpc_error", &json!({ "requestId": id, "error": "nope" }), &mut pending, None, &mut follow_ups);
+        assert!(matches!(&events[..], [Event::Notice(_)]));
+        assert_eq!(follow_ups.pop().unwrap()["message"]["type"], "get_daemon_config_request");
+    }
+
+    #[test]
+    fn a_diagnostic_comes_back_as_its_text() {
+        let mut pending = HashMap::new();
+        let sent = command_messages(Command::ProviderDiagnostic("claude".into()), &mut pending);
+        let msg = &sent[0]["message"];
+        assert_eq!(msg["type"], "provider_diagnostic_request");
+        assert_eq!(msg["provider"], "claude");
+        let payload = json!({ "requestId": msg["requestId"], "provider": "claude", "diagnostic": "Claude Code\n  Version: 1.0" });
+        let events = handle("provider_diagnostic_response", &payload, &mut pending, None, &mut vec![]);
+        assert!(matches!(&events[..], [Event::Diagnostic { provider, text }] if provider == "claude" && text.contains("1.0")));
+        assert!(pending.is_empty());
     }
 
     #[test]

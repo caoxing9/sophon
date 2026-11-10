@@ -59,7 +59,7 @@ pub(crate) fn modal_layer() -> impl IntoElement {
     })
 }
 
-fn sheet(title: &str) -> View {
+pub(crate) fn sheet(title: &str) -> View {
     glass_strong(view())
         .w(px(420.0))
         .max_w(relative(0.92))
@@ -69,7 +69,7 @@ fn sheet(title: &str) -> View {
         .child(text(title.to_owned()).text_size(px(TEXT_LG)).font_weight(FontWeight(500)))
 }
 
-fn actions(primary: impl IntoElement) -> View {
+pub(crate) fn actions(primary: impl IntoElement) -> View {
     view()
         .flex_row()
         .justify_end()
@@ -96,6 +96,9 @@ fn body(m: Modal) -> View {
         Modal::SwitchBranch => switch_branch(),
         Modal::ImportSession => import_session(),
         Modal::Usage => usage(),
+        Modal::AddAgentAccount => crate::ui::shared::agents::add_account(),
+        Modal::AddAgentKey => crate::ui::shared::agents::add_api_key(),
+        Modal::RemoveAgent { id, label } => crate::ui::shared::agents::remove_agent(id, label),
         Modal::AddHost => add_host(),
         Modal::PairDevice => pair_device(),
         Modal::Labels { workspace } => labels(workspace),

@@ -9,6 +9,7 @@ use crate::ui::kit::*;
 use crate::ui::shared::settings::*;
 
 pub(crate) fn settings() -> impl IntoElement {
+    store::load_agents();
     view()
         .flex_1()
         .child(page(
@@ -28,6 +29,7 @@ pub(crate) fn settings() -> impl IntoElement {
                         }),
                         false,
                     )),
-                )),
+                ))
+                .child(section(t("Coding agents"), crate::ui::shared::agents::agents_card(false))),
         ))
 }

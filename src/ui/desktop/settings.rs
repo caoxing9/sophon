@@ -48,7 +48,7 @@ pub(crate) fn settings(compact: bool) -> impl IntoElement {
                         }),
                 ))
                 .child(section(t("Host behavior"), behavior_card()))
-                .child(section(t("Providers"), providers_card())),
+                .child(section(t("Coding agents"), crate::ui::shared::agents::agents_card(true))),
         ))
 }
 

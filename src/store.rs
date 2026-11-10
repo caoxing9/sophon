@@ -699,6 +699,12 @@ pub(crate) enum Modal {
     ProjectSettings { root: String, name: String },
     /// Names a new file or folder in `dir`, or renames `path`.
     FileName { op: &'static str, path: String, name: String },
+    /// Another account of an agent CLI, as its own instance.
+    AddAgentAccount,
+    /// An agent instance on an API key.
+    AddAgentKey,
+    /// Removes an instance Sophon added.
+    RemoveAgent { id: String, label: String },
 }
 
 #[derive(Clone, Default)]
@@ -1642,6 +1648,8 @@ pub(crate) fn switch_host(id: Option<String>) {
         global::<Workspaces>().update(|w| w.0.clear());
         global::<Agents>().update(|a| a.0.clear());
         global::<Providers>().update(|p| p.0.clear());
+        global::<Diagnostics>().update(|d| *d = Diagnostics::default());
+        global::<DaemonConfig>().update(|c| c.0 = None);
         global::<Nav>().update(|n| *n = Nav::default());
     });
     let remote = current_host().map(|h| crate::daemon::connection::RemoteHost { url: h.url, password: h.password });
@@ -2113,6 +2121,99 @@ pub(crate) fn set_daemon_config(pointer: &str, value: serde_json::Value) {
     send(Command::SetConfig(patch));
 }
 
+// ------------------------------------------------------------------ agents
+
+/// Providers' diagnostics (binary, version, login), by provider id.
+/// `wanted`: the Agents page is open, so new providers get theirs too.
+#[derive(Clone, Default)]
+struct Diagnostics {
+    map: HashMap<String, crate::daemon::agents::Diagnostic>,
+    wanted: bool,
+}
+
+pub(crate) fn diagnostic(id: &str) -> Option<crate::daemon::agents::Diagnostic> {
+    global::<Diagnostics>().with(|d| d.map.get(id).cloned())
+}
+
+/// Asks every provider for its diagnostic: the Agents page shows them.
+pub(crate) fn load_diagnostics() {
+    global::<Diagnostics>().update(|d| d.wanted = true);
+    for p in global::<Providers>().with_untracked(|p| p.0.clone()) {
+        send(Command::ProviderDiagnostic(p.id));
+    }
+}
+
+/// The host's home folder for agent config folders: from Claude Code's
+/// config folder there, this machine's own when the host is this machine,
+/// else as the workspaces' paths show it.
+pub(crate) fn agent_home() -> Option<String> {
+    let from_claude = global::<Diagnostics>().with(|d| {
+        d.map
+            .values()
+            .filter_map(|x| x.login.as_ref()?.config_dir.as_deref())
+            .find_map(crate::daemon::agents::home_from_config_dir)
+    });
+    from_claude.or_else(|| {
+        if crate::ui::kit::MOBILE || current_host().is_some() {
+            return None;
+        }
+        std::env::var("HOME").ok().filter(|h| h.starts_with('/'))
+    })
+    .or_else(|| Some(host_home()).filter(|h| h != "/"))
+}
+
+/// Every provider id the host knows, in the list or only in the config.
+pub(crate) fn provider_ids() -> Vec<String> {
+    let mut ids: Vec<String> = providers().into_iter().map(|p| p.id).collect();
+    if let Some(cfg) = daemon_config()
+        && let Some(map) = cfg.get("providers").and_then(serde_json::Value::as_object)
+    {
+        ids.extend(map.keys().cloned());
+    }
+    ids
+}
+
+/// Sends a providers patch, merged into the shown config at once; the
+/// daemon answers with the whole config and the list refreshes after.
+pub(crate) fn patch_providers(patch: serde_json::Value) {
+    global::<DaemonConfig>().update(|c| {
+        if let Some(cfg) = c.0.as_mut() {
+            if let Some(remove) = patch.get("removeProviders").and_then(serde_json::Value::as_array)
+                && let Some(map) = cfg.get_mut("providers").and_then(serde_json::Value::as_object_mut)
+            {
+                for id in remove.iter().filter_map(serde_json::Value::as_str) {
+                    map.remove(id);
+                }
+            }
+            if let Some(add) = patch.get("providers").and_then(serde_json::Value::as_object) {
+                for (id, fields) in add {
+                    let entry = &mut cfg["providers"][id.as_str()];
+                    if !entry.is_object() {
+                        *entry = serde_json::json!({});
+                    }
+                    if let (Some(e), Some(f)) = (entry.as_object_mut(), fields.as_object()) {
+                        e.extend(f.clone());
+                    }
+                }
+            }
+        }
+    });
+    send(Command::PatchProviders(patch));
+}
+
+/// What the Agents section reads: the host's config and the diagnostics.
+pub(crate) fn load_agents() {
+    send(Command::GetConfig);
+    load_diagnostics();
+}
+
+/// Asks the providers again, and their diagnostics.
+pub(crate) fn refresh_agents() {
+    global::<Diagnostics>().update(|d| d.map.clear());
+    send(Command::RefreshProviders);
+    load_diagnostics();
+}
+
 #[derive(Clone, Default)]
 struct LabelCatalog(Vec<(String, String)>);
 
@@ -2157,6 +2258,7 @@ pub(crate) fn restart_daemon() {
 
 pub(crate) fn open_settings() {
     send(Command::GetConfig);
+    load_diagnostics();
     global::<Nav>().update(|n| n.screen = Screen::Settings);
     send(Command::WatchDiff(None));
 }
@@ -2954,6 +3056,13 @@ pub(crate) fn apply(event: Event) {
         }
         Event::Providers(list) => {
             let first = global::<Providers>().with_untracked(|p| p.0.is_empty());
+            // An instance just added gets its diagnostic too.
+            let (wanted, known) = global::<Diagnostics>().with_untracked(|d| (d.wanted, d.map.keys().cloned().collect::<Vec<_>>()));
+            if wanted {
+                for p in list.iter().filter(|p| !known.contains(&p.id)) {
+                    send(Command::ProviderDiagnostic(p.id.clone()));
+                }
+            }
             global::<Providers>().update(|p| p.0 = list);
             if first {
                 let path = form().path;
@@ -3218,6 +3327,12 @@ pub(crate) fn apply(event: Event) {
         Event::Labels(list) => global::<LabelCatalog>().update(|l| l.0 = list),
         Event::Usage(list) => global::<UsageState>().update(|u| u.0 = Some(list)),
         Event::DaemonConfig(cfg) => global::<DaemonConfig>().update(|c| c.0 = Some(cfg)),
+        Event::Diagnostic { provider, text } => {
+            let d = crate::daemon::agents::parse_diagnostic(&text);
+            global::<Diagnostics>().update(|x| {
+                x.map.insert(provider, d);
+            });
+        }
         Event::RecentSessions(list) => global::<Recent>().update(|r| r.0 = Some(list)),
         Event::Rewound { agent, error } => match error {
             Some(e) => notify(tf("Rewind failed: {}", &[&e])),
