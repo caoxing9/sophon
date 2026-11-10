@@ -80,6 +80,8 @@ test("a Mac that runs no agents of its own connects to others", async () => {
 test("settings manage the spaces on this Mac", async () => {
   const app = await open(".", { width: 1100, height: 900 });
   await app.press("label:Settings >> nth=0");
+  // The page may come a frame after the press.
+  await app.waitFor("text:Spaces");
   expect(app.texts()).toContain("Spaces");
   expect(app.texts()).toContain("My space");
   expect(app.texts()).toContain("New space…");

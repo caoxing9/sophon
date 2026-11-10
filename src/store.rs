@@ -895,10 +895,13 @@ pub(crate) fn set_local_service(on: bool) {
         }
         start_bridge();
         switch_host(None);
+        // The switch that did it stays on screen (a host switch goes home).
+        global::<Nav>().update(|n| n.screen = Screen::Settings);
     } else if current_host().is_none_or(|h| crate::spaces::home_of(&h.url).is_some()) {
         let other = hosts().into_iter().find(|h| crate::spaces::home_of(&h.url).is_none()).map(|h| h.id);
         if other.is_some() {
             switch_host(other);
+            global::<Nav>().update(|n| n.screen = Screen::Settings);
         }
     }
 }
