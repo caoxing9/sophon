@@ -19,7 +19,9 @@ pub(crate) fn sidebar() -> View {
         .child(
             view()
                 .px(px(S2))
-                .pb(px(S2))
+                // The space between the two groups, which the first
+                // project's own top margin no longer gives.
+                .pb(px(S4))
                 .child(nav_item(Icon::SquarePen, t("New workspace"), || store::screen() == Screen::NewWorkspace, || {
                     store::open_new_workspace(None)
                 }))
