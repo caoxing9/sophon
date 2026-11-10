@@ -50,7 +50,7 @@ pub(crate) fn new_workspace(compact: bool) -> impl IntoElement {
                     .self_center()
                     .gap(px(S3))
                     .child(
-                        text(t("New workspace"))
+                        text(t("What should we work on?"))
                             .text_size(px(TEXT_XL))
                             .font_weight(FontWeight(450))
                             .px(px(S2))
