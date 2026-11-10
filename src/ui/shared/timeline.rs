@@ -114,39 +114,56 @@ fn turn_rail() -> impl IntoElement {
                 return None;
             }
             Some(untracked(move || {
+                // The tick under the pointer, whose card shows beside it.
+                let over = signal(None::<usize>);
                 let mut rail = view().items_start();
-                for (row, message, reply) in list {
+                // The latest turns: a rail longer than the window helps no one.
+                let skip = list.len().saturating_sub(60);
+                for (row, message, reply) in list.into_iter().skip(skip) {
                     let width = 8.0 + (message.chars().count().min(40) as f32) * 0.35;
                     let card = glass_strong(view())
+                        .absolute()
+                        .left(px(30.0))
+                        .top(px(-14.0))
                         .w(px(320.0))
                         .p(px(S3))
                         .gap(px(S1))
                         .rounded(px(R_XL))
+                        .shadow_lg()
+                        .pointer_events(PointerEvents::None)
                         .child(text(message).text_size(px(TEXT_BASE)).font_weight(FontWeight(600)).text_color(FG).number_of_lines(1))
                         .when(!reply.is_empty(), |v| {
                             v.child(text(reply).text_size(px(TEXT_SM)).line_height(px(18.0)).text_color(FG_MUTED).number_of_lines(3))
-                        });
+                        })
+                        .opacity(move || if over.get() == Some(row) { 1.0_f32 } else { 0.0 })
+                        .transition_opacity();
                     rail = rail.child(
-                        view().tooltip(card).child(
-                            nsh_base::button()
-                                .on_press(move || store::scroll_timeline_to(row))
-                                .h(px(9.0))
-                                .w(px(26.0))
-                                .justify_center()
-                                .group()
-                                .child(
-                                    view()
-                                        .h(px(2.0))
-                                        .w(px(width))
-                                        .rounded(px(1.0))
-                                        .bg(tint(FG, 0.22))
-                                        .group_hover(|s| s.bg(FG))
-                                        .transition_colors(),
-                                ),
-                        ),
+                        view()
+                            .on_mouse_enter(move |_: &MouseEvent| over.set(Some(row)))
+                            .on_mouse_leave(move |_: &MouseEvent| {
+                                if over.get_untracked() == Some(row) {
+                                    over.set(None);
+                                }
+                            })
+                            .child(
+                                nsh_base::button()
+                                    .on_press(move || store::scroll_timeline_to(row))
+                                    .h(px(9.0))
+                                    .w(px(26.0))
+                                    .justify_center()
+                                    .child(
+                                        view()
+                                            .h(px(2.0))
+                                            .w(px(width))
+                                            .rounded(px(1.0))
+                                            .bg(move || if over.get() == Some(row) { FG } else { tint(FG, 0.22) })
+                                            .transition_colors(),
+                                    ),
+                            )
+                            .child(card),
                     );
                 }
-                scroll().max_h(relative(0.7)).child(rail).into_element()
+                rail.into_element()
             }))
         }))
 }
