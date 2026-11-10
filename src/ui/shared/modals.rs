@@ -36,7 +36,43 @@ pub(crate) fn modal_layer() -> impl IntoElement {
                     .child(dynamic(|| {
                         let m = store::modal()?;
                         Some(untracked(move || {
-                            if m == Modal::Palette {
+                            if let Modal::Picture { uri, .. } = &m {
+                                // A picture takes the whole window: itself,
+                                // and a small cross to put it away (a press
+                                // anywhere does too).
+                                view()
+                                    .flex_1()
+                                    .self_stretch()
+                                    .child(
+                                        nsh_base::button()
+                                            .on_press(store::close_modal)
+                                            .accessibility_label(t("Close"))
+                                            .flex_1()
+                                            .bg(AdaptiveColor::rgb(0x000000, 0x000000).opacity(0.55))
+                                            .child(
+                                                image(SharedString::from(uri.clone()))
+                                                    .flex_1()
+                                                    .m(px(S4))
+                                                    .object_fit(nsh_core::ResizeMode::Contain),
+                                            ),
+                                    )
+                                    .child(
+                                        nsh_base::button()
+                                            .on_press(store::close_modal)
+                                            .accessibility_label(t("Close"))
+                                            .absolute()
+                                            .top(px(S4))
+                                            .right(px(S4))
+                                            .w(px(30.0))
+                                            .h(px(30.0))
+                                            .rounded(px(R_FULL))
+                                            .items_center()
+                                            .justify_center()
+                                            .bg(AdaptiveColor::rgb(0x000000, 0x000000).opacity(0.45))
+                                            .hover(|s| s.bg(AdaptiveColor::rgb(0x000000, 0x000000).opacity(0.7)))
+                                            .child(icon(Icon::X, 16.0).text_color(AdaptiveColor::rgb(0xffffff, 0xffffff))),
+                                    )
+                            } else if m == Modal::Palette {
                                 view().self_stretch().items_center().pt(relative(0.12)).flex_1().child(crate::ui::desktop::shortcuts::palette())
                             } else if MOBILE && matches!(m, Modal::ToolDetail { .. }) {
                                 // The phone: a sheet at the foot, full width.
@@ -89,28 +125,8 @@ fn body(m: Modal) -> View {
         Modal::RenameHost { id, name } => rename(t("Rename host"), name, move |v| {
             store::rename_host(&id, v);
         }),
-        Modal::Picture { name, uri } => glass_strong(view())
-            .p(px(S3))
-            .gap(px(S3))
-            .rounded(px(22.0))
-            .max_w(relative(0.92))
-            .child(
-                image(SharedString::from(uri))
-                    .w(px(880.0))
-                    .max_w(relative(1.0))
-                    .h(px(620.0))
-                    .object_fit(nsh_core::ResizeMode::Contain)
-                    .rounded(px(R_XL)),
-            )
-            .child(
-                view()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(S2))
-                    .pl(px(S2))
-                    .child(text(name).text_size(px(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1).flex_1())
-                    .child(btn(t("Close"), Variant::Secondary, Sz::Md, None, store::close_modal)),
-            ),
+        // Drawn by the layer itself, over the whole window.
+        Modal::Picture { .. } => view(),
         Modal::RenameMySpace { name } => rename(t("Rename space"), name, store::rename_my_space),
         Modal::RemoveSpace { id, name, folder } => sheet(t("Remove space"))
             .child(
