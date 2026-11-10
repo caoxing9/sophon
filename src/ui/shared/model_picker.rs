@@ -199,14 +199,47 @@ fn rail(providers: Memo<Vec<Provider>>, tab: Signal<Tab>) -> impl IntoElement {
     }))
 }
 
+/// A Claude model's family and version, from its label: `Opus 4.8 1M` is
+/// (`opus`, [4, 8]).
+fn family_version(label: &str) -> Option<(String, Vec<u32>)> {
+    let mut words = label.split_whitespace();
+    let family = words.next()?.to_lowercase();
+    if !matches!(family.as_str(), "opus" | "sonnet" | "haiku" | "fable") {
+        return None;
+    }
+    let version = words.next()?.split('.').map(|n| n.parse().ok()).collect::<Option<Vec<u32>>>()?;
+    Some((family, version))
+}
+
+/// Claude Code's own list (`/model`) has each family's newest model: the
+/// rows older than their family's newest, the selected one kept.
+fn older_rows(rows: &[Row], selected: &str) -> std::collections::HashSet<String> {
+    let mut newest: std::collections::HashMap<String, Vec<u32>> = std::collections::HashMap::new();
+    for r in rows {
+        if let Some((family, version)) = family_version(&r.name) {
+            let best = newest.entry(family).or_default();
+            if version > *best {
+                *best = version;
+            }
+        }
+    }
+    rows.iter()
+        .filter(|r| r.model != selected)
+        .filter(|r| family_version(&r.name).is_some_and(|(family, version)| newest.get(&family).is_some_and(|best| version < *best)))
+        .map(|r| r.key())
+        .collect()
+}
+
 fn list(live: bool, open: Signal<bool>, providers: Memo<Vec<Provider>>, tab: Signal<Tab>, query: Signal<String>) -> impl IntoElement {
     let favorites = computed(store::favorite_models);
+    let older_open = signal(false);
     view().flex_1().min_h(px(0.0)).child(dynamic(move || {
         let tab = tab.get();
         let needle = query.get().trim().to_lowercase();
         let all: Vec<Provider> = providers.get();
         let favs = favorites.get();
         let c = store::controls(live);
+        let show_older = older_open.get();
         Some(untracked(move || {
             let mut body = view().p(px(S1));
             // Another agent, in an open conversation: picking continues there.
@@ -253,6 +286,25 @@ fn list(live: bool, open: Signal<bool>, providers: Memo<Vec<Provider>>, tab: Sig
             // The agent's own models first, then those a gateway serves.
             let mut rows = rows;
             rows.sort_by_key(|r| r.gateway);
+            // Claude: each family's newest, as Claude Code lists them; the
+            // earlier ones folded under a row of their own.
+            let older = if tab == Tab::Agent("claude".into()) && needle.is_empty() {
+                older_rows(&rows, c.model.as_deref().unwrap_or(""))
+            } else {
+                Default::default()
+            };
+            let (rows, earlier): (Vec<Row>, Vec<Row>) = rows.into_iter().partition(|r| !older.contains(&r.key()));
+            // A bare alias Claude Code resolves to a family's newest (`opus`
+            // from settings.json) repeats that row: shown only while in use.
+            let rows: Vec<Row> = rows
+                .into_iter()
+                .filter(|r| {
+                    r.provider != "claude"
+                        || !matches!(r.model.as_str(), "opus" | "sonnet" | "haiku" | "fable" | "default")
+                        || c.model.as_deref() == Some(r.model.as_str())
+                        || !needle.is_empty()
+                })
+                .collect();
             let mut gateway_heading = false;
             for r in rows {
                 if r.gateway && !gateway_heading && matches!(tab, Tab::Agent(_)) && needle.is_empty() {
@@ -273,6 +325,28 @@ fn list(live: bool, open: Signal<bool>, providers: Memo<Vec<Provider>>, tab: Sig
                 }
                 let selected = r.provider == c.provider && c.model.as_deref() == Some(r.model.as_str());
                 body = body.child(row(live, open, r, selected, show_agent, &favs));
+            }
+            if !earlier.is_empty() {
+                let count = earlier.len().to_string();
+                body = body.child(
+                    nsh_base::button()
+                        .on_press(move || older_open.update(|o| *o = !*o))
+                        .flex_row()
+                        .items_center()
+                        .gap(px(S1))
+                        .h(px(30.0))
+                        .px(px(S2))
+                        .mt(px(S1))
+                        .rounded(px(R_LG))
+                        .hover(|s| s.bg(highlight()))
+                        .child(text(tf("Earlier versions ({})", &[&count])).text_size(px(TEXT_SM)).text_color(FG_MUTED).flex_1())
+                        .child(icon(if show_older { Icon::ChevronUp } else { Icon::ChevronDown }, 14.0).text_color(FG_FAINT)),
+                );
+                if show_older {
+                    for r in earlier {
+                        body = body.child(row(live, open, r, false, false, &favs));
+                    }
+                }
             }
             scroll().flex_1().child(body).into_element()
         }))

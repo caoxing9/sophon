@@ -283,6 +283,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Close sub-agent", "关闭子 Agent"),
     ("Sub-agent", "子 Agent"),
     ("Changes", "更改"),
+    ("Earlier versions ({})", "更早的版本（{}）"),
     ("Claude models run only in Claude Code, on your own Claude account: not through another client's subscription", "Claude 模型只能在 Claude Code 里、用你自己的 Claude 账号运行，不能经其他客户端的订阅使用"),
     ("The service is not installed on this Mac", "这台 Mac 上没有安装服务"),
     ("The service on this Mac did not start: {}", "本机服务没能启动：{}"),
