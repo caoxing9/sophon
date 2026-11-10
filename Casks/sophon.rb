@@ -1,17 +1,15 @@
 cask "sophon" do
-  arch arm: "aarch64", intel: "x86_64"
+  version "0.2.0"
+  sha256 "b9f420dc0f6e9791c537c8718c8ec0a5c11b5c9efbbe0822c41313350ec4c89e"
 
-  version "0.1.0"
-  sha256 arm:   "48a349e91673f04a19b75b3dc237429daa3d72dd5a44b42c51bbbee08557f720",
-         intel: "cc25bcbf6cfb021f97e3f8982425753175dcd28040cba180a1f213a65040c6aa"
-
-  url "https://github.com/caoxing9/sophon/releases/download/v#{version}/Sophon-#{version}-macos-#{arch}.tar.gz"
+  url "https://github.com/caoxing9/sophon/releases/download/v#{version}/Sophon-#{version}-macos-aarch64.tar.gz"
   name "Sophon"
   desc "Native desktop client for coding agents"
   homepage "https://github.com/caoxing9/sophon"
 
   # The app updates itself (sidebar → Update); brew upgrade works too.
   auto_updates true
+  depends_on arch: :arm64
   depends_on macos: ">= :sonoma"
 
   app "Sophon.app"
