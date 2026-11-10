@@ -48,7 +48,8 @@ pub(crate) fn settings(compact: bool) -> impl IntoElement {
                         }),
                 ))
                 .child(section(t("Host behavior"), behavior_card()))
-                .child(section(t("Providers"), providers_card())),
+                .child(section(t("Providers"), providers_card()))
+                .child(section(t("Text generation"), text_generation_card())),
         ))
 }
 

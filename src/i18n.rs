@@ -638,6 +638,18 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Rewind both to here", "对话和文件都回退到这里"),
     ("Agent settings", "Agent 设置"),
     ("Workspace", "工作区"),
+    // Text generation model
+    ("Text generation", "文本生成"),
+    ("Text generation model", "文本生成模型"),
+    ("Names chats and branches. A small, fast model is plenty and costs less", "用于给对话和分支起名。小而快的模型就够用，也更省钱"),
+    ("Default", "默认"),
+    ("The service picks", "由服务自动选择"),
+    // Prompt links
+    ("Copy prompt link", "复制提示词链接"),
+    ("Prompt link copied", "已复制提示词链接"),
+    ("Write a draft first, then copy its link", "先写好草稿，再复制它的链接"),
+    ("This draft is too long for a link", "这份草稿太长，放不进链接"),
+    ("Opened a prompt link as a draft. Review it, then send", "已把提示词链接打开为草稿，请检查后再发送"),
 ];
 
 #[cfg(test)]

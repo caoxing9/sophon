@@ -9,6 +9,7 @@ use nsh_core::{element::{AssetFile, AssetKind}, prelude::*};
 pub mod daemon;
 mod i18n;
 mod platform;
+mod prompt_link;
 mod store;
 mod ui;
 mod update;

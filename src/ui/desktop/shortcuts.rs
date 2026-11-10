@@ -126,6 +126,10 @@ fn items() -> Vec<CommandItem> {
         CommandItem::new("import", t("Import a session")).group(t("Actions")).keywords(["claude", "codex", "resume"]),
         CommandItem::new("toggle-sidebar", t("Toggle sidebar")).group(t("Actions")).shortcut("mod+b"),
     ];
+    // Only a draft with text has a link to share.
+    if !store::current_draft_text().trim().is_empty() {
+        items.push(CommandItem::new("copy-prompt-link", t("Copy prompt link")).group(t("Actions")).keywords(["share", "draft", "url"]));
+    }
     if store::current_workspace().is_some() {
         items.push(CommandItem::new("new-agent", t("New agent")).group(t("Actions")).shortcut("mod+t"));
         items.push(CommandItem::new("new-terminal", t("New terminal")).group(t("Actions")).shortcut("shift+ctrl+`"));
@@ -161,6 +165,7 @@ fn run(id: &str) {
             store::open_modal(Modal::ImportSession);
         }
         "toggle-sidebar" => store::toggle_sidebar(),
+        "copy-prompt-link" => store::copy_prompt_link(),
         "new-agent" => new_chat(),
         "new-terminal" => store::new_terminal(),
         "toggle-terminal" => store::toggle_terminal_panel(),

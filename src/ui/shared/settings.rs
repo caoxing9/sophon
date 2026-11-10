@@ -187,6 +187,69 @@ pub(crate) fn providers_card() -> impl IntoElement {
     }))
 }
 
+/// The model the service names chats and branches with. Default leaves the
+/// choice to the service (a small model it finds, else the chat's own).
+pub(crate) fn text_generation_card() -> View {
+    let loaded = computed(|| store::daemon_config().is_some());
+    let label = computed(|| match store::text_generation_model() {
+        None => t("Default").to_owned(),
+        Some((provider, model)) => store::provider(&provider)
+            .and_then(|p| p.model(&model).map(|m| format!("{} · {}", m.label, p.label)))
+            .unwrap_or_else(|| if model.is_empty() { provider } else { model }),
+    });
+    card().child(row(
+        t("Text generation model"),
+        t("Names chats and branches. A small, fast model is plenty and costs less"),
+        dynamic(move || {
+            if !loaded.get() {
+                return Some(untracked(|| text(t("Loading…")).text_size(px(TEXT_SM)).text_color(FG_MUTED).into_element()));
+            }
+            Some(untracked(move || {
+                dropdown(picker_trigger(Some(Icon::Cpu), move || label.get()))
+                    .align(nsh_core::overlay::Align::End)
+                    .child(dynamic(move || {
+                        let current = store::text_generation_model();
+                        let providers: Vec<_> = store::providers().into_iter().filter(|p| p.available()).collect();
+                        Some(untracked(move || {
+                            let mut list = view().child(menu_row(
+                                t("Default"),
+                                None,
+                                Some(t("The service picks").into()),
+                                current.is_none(),
+                                || store::set_text_generation_model(None),
+                            ));
+                            for p in &providers {
+                                // As the model picker offers them: Claude Code's own
+                                // models only, and never a Claude model through a
+                                // subscription.
+                                let models: Vec<_> = p
+                                    .models
+                                    .iter()
+                                    .filter(|m| p.id != "claude" || !m.id.contains('/'))
+                                    .filter(|m| !store::forbidden_model(&m.id, &m.label))
+                                    .collect();
+                                if models.is_empty() {
+                                    continue;
+                                }
+                                list = list.child(menu_divider()).child(menu_heading(p.label.clone()));
+                                for m in models {
+                                    let (pid, mid) = (p.id.clone(), m.id.clone());
+                                    let checked = current.as_ref().is_some_and(|(cp, cm)| *cp == pid && *cm == mid);
+                                    list = list.child(menu_row(m.label.clone(), None, None, checked, move || {
+                                        store::set_text_generation_model(Some((&pid, &mid)))
+                                    }));
+                                }
+                            }
+                            menu_scroll(420.0, list).into_element()
+                        }))
+                    }))
+                    .into_element()
+            }))
+        }),
+        true,
+    ))
+}
+
 fn flag(pointer: &'static str, default: bool) -> impl IntoElement {
     switch(
         move || store::daemon_config().and_then(|c| c.pointer(pointer).and_then(serde_json::Value::as_bool)).unwrap_or(default),

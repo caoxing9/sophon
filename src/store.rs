@@ -1550,12 +1550,17 @@ pub(crate) fn spawn_detached(future: impl std::future::Future<Output = ()> + 'st
     });
 }
 
-/// Pairs from a scanned `sophon://pair…` link (the system camera opens it).
+/// Answers `sophon://` links: pairs from a scanned `sophon://pair…` link
+/// (the system camera opens it), and opens a draft from a
+/// `sophon://prompt…` one. One loop takes every link, so no other listener
+/// can swallow one.
 pub(crate) fn watch_pairing_links() {
     spawn(async move {
         loop {
             let url = next_url_scheme_open().await;
-            if crate::daemon::relay::PairingLink::parse(&url).is_some() {
+            if let Some(link) = crate::prompt_link::PromptLink::parse(&url) {
+                open_prompt_link(link);
+            } else if crate::daemon::relay::PairingLink::parse(&url).is_some() {
                 if hosts().iter().any(|h| h.url == url) {
                     if let Some(h) = hosts().into_iter().find(|h| h.url == url) {
                         switch_host(Some(h.id));
@@ -1567,6 +1572,94 @@ pub(crate) fn watch_pairing_links() {
             }
         }
     });
+}
+
+/// A prompt link's text waiting for the next new draft, and a link waiting
+/// for the host's workspaces and providers (a link can launch the app).
+#[derive(Clone, Default)]
+struct PromptLinks {
+    /// Taken by the next fresh form ([`reset_form`]).
+    text: Option<String>,
+    waiting: Option<crate::prompt_link::PromptLink>,
+    workspaces_known: bool,
+    providers_known: bool,
+}
+
+/// Opens `link` as a new draft: in its workspace when this host has it,
+/// else the open one, else Home's new chat. It only fills the composer;
+/// the user reads it and sends it.
+fn open_prompt_link(link: crate::prompt_link::PromptLink) {
+    let ready = global::<PromptLinks>().with_untracked(|p| p.workspaces_known && p.providers_known);
+    if !ready {
+        // Navigating now would be undone by restoring the last workspace
+        // and by the first providers resetting the form.
+        global::<PromptLinks>().update(|p| p.waiting = Some(link));
+        return;
+    }
+    let current = untracked(|| current_workspace().map(|w| w.id));
+    let target = link.workspace.as_deref().filter(|id| untracked(|| workspace(id)).is_some()).map(str::to_owned).or(current.clone());
+    // A new-agent draft already on screen there (the workspace's draft tab,
+    // or the new-workspace screen) stays as it is, its folder, branch and
+    // model too: the link's text goes under what it holds.
+    let in_place = untracked(|| match (screen(), tab()) {
+        (Screen::Workspace(id), Tab::Draft) => target.as_deref() == Some(id.as_str()),
+        (Screen::NewWorkspace, _) => target.is_none(),
+        _ => false,
+    });
+    if in_place {
+        edit_form(|f| {
+            f.prompt = if f.prompt.trim().is_empty() { link.text } else { format!("{}\n\n{}", f.prompt.trim_end(), link.text) };
+        });
+    } else {
+        global::<PromptLinks>().update(|p| p.text = Some(link.text));
+        crate::ui::open_new_draft(target.as_deref());
+    }
+    notify(t("Opened a prompt link as a draft. Review it, then send").into());
+}
+
+/// Notes that the host's workspaces (or providers) arrived, and opens a
+/// link that waited for them.
+fn prompt_links_known(change: impl FnOnce(&mut PromptLinks)) {
+    global::<PromptLinks>().update(change);
+    let waiting = global::<PromptLinks>().with_untracked(|p| if p.workspaces_known && p.providers_known { p.waiting.clone() } else { None });
+    if let Some(link) = waiting {
+        global::<PromptLinks>().update(|p| p.waiting = None);
+        open_prompt_link(link);
+    }
+}
+
+/// A prompt link's text, once: the fresh draft that takes it.
+fn take_prompt_link_text() -> Option<String> {
+    let text = global::<PromptLinks>().with_untracked(|p| p.text.clone())?;
+    global::<PromptLinks>().update(|p| p.text = None);
+    Some(text)
+}
+
+/// The text of the draft on screen: the new agent's form, or the open
+/// agent's unsent message.
+pub(crate) fn current_draft_text() -> String {
+    match (screen(), tab()) {
+        (Screen::NewWorkspace, _) | (Screen::Workspace(_), Tab::Draft) => form().prompt,
+        (Screen::Workspace(_), Tab::Agent(id)) => draft(&id),
+        _ => String::new(),
+    }
+}
+
+/// Copies a prompt link for the draft on screen.
+pub(crate) fn copy_prompt_link() {
+    let text = current_draft_text();
+    if text.trim().is_empty() {
+        notify(t("Write a draft first, then copy its link").into());
+        return;
+    }
+    let ws = current_workspace().map(|w| w.id);
+    match crate::prompt_link::PromptLink::format(&text, ws.as_deref()) {
+        Some(link) => {
+            set_clipboard(link);
+            notify(t("Prompt link copied").into());
+        }
+        None => notify(t("This draft is too long for a link").into()),
+    }
 }
 
 pub(crate) fn pairing() -> Pairing {
@@ -2086,18 +2179,8 @@ pub(crate) fn daemon_config() -> Option<serde_json::Value> {
 /// Sets `pointer` (`/autoArchiveAfterMerge`) to `value`, shown at once and
 /// sent as a patch.
 pub(crate) fn set_daemon_config(pointer: &str, value: serde_json::Value) {
-    let mut patch = serde_json::json!({});
+    let patch = config_patch(pointer, value.clone());
     let keys: Vec<&str> = pointer.trim_start_matches('/').split('/').collect();
-    {
-        let mut node = &mut patch;
-        for (i, k) in keys.iter().enumerate() {
-            if i + 1 == keys.len() {
-                node[*k] = value.clone();
-            } else {
-                node = &mut node[*k];
-            }
-        }
-    }
     global::<DaemonConfig>().update(|c| {
         if let Some(cfg) = c.0.as_mut() {
             let mut node = cfg;
@@ -2111,6 +2194,53 @@ pub(crate) fn set_daemon_config(pointer: &str, value: serde_json::Value) {
         }
     });
     send(Command::SetConfig(patch));
+}
+
+/// The patch that sets only `pointer` to `value`: `/a/b` and 1 make
+/// `{"a":{"b":1}}`. The daemon merges it, so every other key stays.
+fn config_patch(pointer: &str, value: serde_json::Value) -> serde_json::Value {
+    let mut patch = serde_json::json!({});
+    let mut node = &mut patch;
+    for k in pointer.trim_start_matches('/').split('/') {
+        node = &mut node[k];
+    }
+    *node = value;
+    patch
+}
+
+/// Where the daemon keeps the model that names chats and branches
+/// (`agents.metadataGeneration`): an ordered list it tries, empty for its
+/// own choice.
+const TEXT_GENERATION: &str = "/metadataGeneration/providers";
+
+/// The value [`TEXT_GENERATION`] takes for `choice` (provider, model):
+/// that one model, or none (the daemon's default).
+fn text_generation_value(choice: Option<(&str, &str)>) -> serde_json::Value {
+    match choice {
+        Some((provider, model)) => serde_json::json!([{ "provider": provider, "model": model }]),
+        None => serde_json::json!([]),
+    }
+}
+
+/// The model the daemon writes titles with: (provider, model), or `None`
+/// for its default.
+pub(crate) fn text_generation_model() -> Option<(String, String)> {
+    let config = daemon_config()?;
+    let first = config.pointer(&format!("{TEXT_GENERATION}/0"))?;
+    let provider = first.get("provider")?.as_str()?.to_owned();
+    let model = first.get("model").and_then(|m| m.as_str()).unwrap_or_default().to_owned();
+    Some((provider, model))
+}
+
+/// Sets the model the daemon writes titles with; `None` gives the choice
+/// back to the daemon. A refused model is never sent.
+pub(crate) fn set_text_generation_model(choice: Option<(&str, &str)>) {
+    if let Some((provider, model)) = choice
+        && refuse_model(provider, model)
+    {
+        return;
+    }
+    set_daemon_config(TEXT_GENERATION, text_generation_value(choice));
 }
 
 #[derive(Clone, Default)]
@@ -2352,11 +2482,13 @@ fn apply_provider_defaults(f: &mut Form) {
 
 fn reset_form(path: Option<String>) {
     let list = providers();
+    // A prompt link's text starts this new draft.
+    let prompt = take_prompt_link_text().unwrap_or_default();
     global::<Form>().update(|f| {
         let provider = default_provider(&list, &f.provider);
         let keep = f.provider == provider && f.model.is_some();
         let (model, mode, thinking) = (f.model.clone(), f.mode.clone(), f.thinking.clone());
-        *f = Form { path: path.clone().unwrap_or_default(), provider, ..Default::default() };
+        *f = Form { path: path.clone().unwrap_or_default(), provider, prompt, ..Default::default() };
         if keep {
             (f.model, f.mode, f.thinking) = (model, mode, thinking);
         } else {
@@ -2941,6 +3073,7 @@ pub(crate) fn apply(event: Event) {
         Event::WorkspacesReset(list) => {
             global::<Workspaces>().update(|w| w.0 = list);
             restore_last_open();
+            prompt_links_known(|p| p.workspaces_known = true);
         }
         Event::WorkspaceUpsert(ws) => global::<Workspaces>().update(|w| {
             w.0.retain(|x| x.id != ws.id);
@@ -2956,9 +3089,15 @@ pub(crate) fn apply(event: Event) {
             let first = global::<Providers>().with_untracked(|p| p.0.is_empty());
             global::<Providers>().update(|p| p.0 = list);
             if first {
-                let path = form().path;
+                // The first providers fill the form's defaults; what is
+                // written in it (a prompt link's text) stays.
+                let Form { path, prompt, .. } = form();
                 reset_form(Some(path));
+                if !prompt.is_empty() && form().prompt.is_empty() {
+                    edit_form(|f| f.prompt = prompt);
+                }
             }
+            prompt_links_known(|p| p.providers_known = true);
         }
         Event::Created(agent) => {
             edit_form(|f| {
@@ -3357,5 +3496,29 @@ mod model_rule_tests {
         assert!(!forbidden_model("codex/gpt-6-astra", "GPT-6-Astra · Codex"));
         assert!(!forbidden_model("anthropic/claude-sonnet-5", "Claude Sonnet 5 · Anthropic"));
         assert!(!forbidden_model("teable/claude-opus-5-5", "Claude Opus 5.5 · teable"));
+    }
+}
+
+#[cfg(test)]
+mod config_patch_tests {
+    use super::{TEXT_GENERATION, config_patch, text_generation_value};
+    use serde_json::json;
+
+    #[test]
+    fn a_text_generation_model_patches_only_its_key() {
+        let patch = config_patch(TEXT_GENERATION, text_generation_value(Some(("codex", "gpt-5.4-mini"))));
+        assert_eq!(patch, json!({ "metadataGeneration": { "providers": [{ "provider": "codex", "model": "gpt-5.4-mini" }] } }));
+    }
+
+    #[test]
+    fn default_clears_the_list() {
+        let patch = config_patch(TEXT_GENERATION, text_generation_value(None));
+        assert_eq!(patch, json!({ "metadataGeneration": { "providers": [] } }));
+    }
+
+    #[test]
+    fn other_settings_still_patch_as_before() {
+        assert_eq!(config_patch("/autoArchiveAfterMerge", json!(true)), json!({ "autoArchiveAfterMerge": true }));
+        assert_eq!(config_patch("/providers/codex/enabled", json!(false)), json!({ "providers": { "codex": { "enabled": false } } }));
     }
 }
