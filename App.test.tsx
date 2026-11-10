@@ -64,11 +64,17 @@ test("the model picker shows the agents, the models and their reasoning", async 
 
 test("a Mac that runs no agents of its own connects to others", async () => {
   const app = await open(".", { width: 1100, height: 900 });
+  const elsewhere = "text:Connect to the computer your agents run on";
   await app.press("label:Settings >> nth=0");
+  // From its default, whatever an earlier run left.
+  if (app.shows(elsewhere)) {
+    await app.press("label:Run agents on this Mac");
+    await app.waitFor(elsewhere, { state: "gone" });
+  }
   await app.press("label:Run agents on this Mac");
-  expect(app.texts()).toContain("Connect to the computer your agents run on");
+  await app.waitFor(elsewhere);
   await app.press("label:Run agents on this Mac");
-  expect(app.texts()).not.toContain("Connect to the computer your agents run on");
+  await app.waitFor(elsewhere, { state: "gone" });
 });
 
 test("settings manage the spaces on this Mac", async () => {
