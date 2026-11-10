@@ -1,12 +1,13 @@
-//! Git in the workspace header: ahead / behind, the pull request and its
-//! checks, and the actions menu (a git split button).
+//! Git in the workspace header: ahead / behind, and the pull request with
+//! its checks. The actions (commit, push, pull, …) are the command
+//! palette's: the agents do most of them, and a button for them was noise.
 
 use crate::i18n::{t, tf};
 use nsh_core::{element::FontWeight, prelude::*};
 use crate::ui::kit::text;
 
 use crate::ui::kit::*;
-use crate::{daemon::connection::GitAction, store};
+use crate::store;
 
 pub(crate) fn git_controls() -> impl IntoElement {
     let git = computed(store::git);
@@ -27,7 +28,6 @@ pub(crate) fn git_controls() -> impl IntoElement {
             let pr = git.with(|g| g.pr.clone())?;
             Some(untracked(move || pr_badge(pr.clone())))
         }))
-        .child(when(move || git.with(|g| g.status.as_ref().is_some_and(|s| s.is_git)), move || actions_menu(git)))
 }
 
 fn pr_badge(pr: crate::daemon::connection::PullRequest) -> impl IntoElement {
@@ -80,97 +80,3 @@ fn pr_badge(pr: crate::daemon::connection::PullRequest) -> impl IntoElement {
         })
 }
 
-fn actions_menu(git: Memo<store::Git>) -> impl IntoElement {
-    dropdown(
-        view()
-            .flex_row()
-            .items_center()
-            .gap(px(6.0))
-            .h(px(CONTROL_SM))
-            .px(px(S3))
-            .rounded(px(R_FULL))
-            .border_1()
-            .border_color(BORDER_STRONG)
-            .hover(|s| s.bg(highlight()))
-            .child(icon(Icon::GitBranch, 14.0).text_color(FG_MUTED))
-            .child(
-                text(move || git.with(|g| g.busy.map(|b| format!("{b}…")).unwrap_or_else(|| t("Git").into())))
-                    .text_size(px(TEXT_SM))
-                    .font_weight(FontWeight(500)),
-            )
-            .child(icon(Icon::ChevronDown, 13.0).text_color(FG_FAINT)),
-    )
-    .align(nsh_core::overlay::Align::End)
-    .child(dynamic(move || {
-        let g = git.get();
-        Some(untracked(move || {
-            let st = g.status.clone().unwrap_or_default();
-            let has_pr = g.pr.as_ref().is_some_and(|p| !p.merged && !p.state.eq_ignore_ascii_case("closed"));
-            let mut m = view()
-                .child(menu_heading(st.branch.clone().unwrap_or_else(|| t("Detached").into())))
-                .child(
-                    menu_row(t("Commit all changes…"), Some(Icon::GitCommitHorizontal), None, false, || {
-                        store::open_modal(store::Modal::Commit)
-                    })
-                    .disabled(!st.dirty),
-                )
-                .child(
-                    menu_row(
-                        t("Push"),
-                        Some(Icon::ArrowUp),
-                        (st.ahead > 0).then(|| tf("{} commits to push", &[&st.ahead.to_string()]).into()),
-                        false,
-                        || store::git_action(GitAction::Push),
-                    )
-                    .disabled(!st.has_remote),
-                )
-                .child(
-                    menu_row(
-                        t("Pull"),
-                        Some(Icon::ArrowDown),
-                        (st.behind > 0).then(|| tf("{} commits behind", &[&st.behind.to_string()]).into()),
-                        false,
-                        || store::git_action(GitAction::Pull),
-                    )
-                    .disabled(!st.has_remote),
-                )
-                .child(menu_row(t("Switch branch…"), Some(Icon::GitBranch), None, false, || {
-                    store::search_branches("");
-                    store::open_modal(store::Modal::SwitchBranch)
-                }))
-                .child(menu_row(t("Stash changes"), Some(Icon::Archive), None, false, || store::git_action(GitAction::Stash)).disabled(!st.dirty))
-                .child(menu_row(t("Pop latest stash"), Some(Icon::Undo2), None, false, || store::git_action(GitAction::PopStash)))
-                .child(menu_divider());
-            if has_pr {
-                let url = g.pr.as_ref().map(|p| p.url.clone()).unwrap_or_default();
-                m = m
-                    .child(menu_row(t("Open pull request"), Some(Icon::ExternalLink), None, false, move || {
-                        let _ = open_url(url.clone());
-                    }))
-                    .child(menu_row(t("Squash and merge"), Some(Icon::GitMerge), None, false, || {
-                        store::git_action(GitAction::MergePr("squash"))
-                    }))
-                    .child(menu_row(t("Merge pull request"), Some(Icon::GitMerge), None, false, || {
-                        store::git_action(GitAction::MergePr("merge"))
-                    }));
-            } else {
-                m = m.child(
-                    menu_row(t("Create pull request"), Some(Icon::GitPullRequest), None, false, || {
-                        store::git_action(GitAction::CreatePr)
-                    })
-                    .disabled(!st.has_remote),
-                );
-            }
-            if let Some(base) = st.base_ref.clone().filter(|_| st.managed_worktree) {
-                m = m.child(menu_row(
-                    t("Merge into base"),
-                    Some(Icon::GitMerge),
-                    Some(tf("Into {}", &[&base]).into()),
-                    false,
-                    || store::git_action(GitAction::MergeIntoBase),
-                ));
-            }
-            m.into_element()
-        }))
-    }))
-}
