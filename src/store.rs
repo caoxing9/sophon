@@ -2613,8 +2613,25 @@ pub(crate) fn rewind(message_id: &str, mode: &'static str) {
 
 pub(crate) fn fork_selected() {
     if let Some(agent) = selected_id() {
+        global::<Handoff>().update(|h| h.0 = None);
         send(Command::Fork(agent));
     }
+}
+
+/// A fork that continues in another agent: the agent forked, and the
+/// provider and model the new agent's draft starts on.
+#[derive(Clone, Default)]
+struct Handoff(Option<(String, String, String)>);
+
+/// Continues the open conversation in another agent: forks it, then opens
+/// the new agent's draft on `provider` (and its `model`, unless empty) with
+/// the conversation attached. A model of another vendor so runs in that
+/// vendor's own agent, signed in as that agent is, rather than inside this
+/// one.
+pub(crate) fn continue_in(provider: &str, model: &str) {
+    let Some(agent) = selected_id() else { return };
+    global::<Handoff>().update(|h| h.0 = Some((agent.clone(), provider.to_owned(), model.to_owned())));
+    send(Command::Fork(agent));
 }
 
 pub(crate) fn rename_agent(id: &str, title: &str) {
@@ -2980,15 +2997,26 @@ pub(crate) fn apply(event: Event) {
                 }
             }
         },
-        Event::Forked { agent, context, error } => match (error, context) {
-            (Some(e), _) => notify(tf("Fork failed: {}", &[&e])),
-            (None, Some(c)) => {
-                let title = self::agent(&agent).map(|a| a.title).unwrap_or_else(|| "agent".into());
-                open_tab(Tab::Draft);
-                edit_form(|f| f.context = Some((c, title)));
+        Event::Forked { agent, context, error } => {
+            let mut handoff = None;
+            global::<Handoff>().update(|h| handoff = h.0.take().filter(|(a, _, _)| *a == agent));
+            match (error, context) {
+                (Some(e), _) => notify(tf("Fork failed: {}", &[&e])),
+                (None, Some(c)) => {
+                    let title = self::agent(&agent).map(|a| a.title).unwrap_or_else(|| "agent".into());
+                    open_tab(Tab::Draft);
+                    edit_form(|f| f.context = Some((c, title)));
+                    // The provider first: it resets the model to its default.
+                    if let Some((_, provider, model)) = handoff {
+                        set_control(false, Control::Provider(provider));
+                        if !model.is_empty() {
+                            set_control(false, Control::Model(model));
+                        }
+                    }
+                }
+                (None, None) => notify(t("Nothing to fork yet").into()),
             }
-            (None, None) => notify(t("Nothing to fork yet").into()),
-        },
+        }
         Event::Subagents { parent, list } => global::<SubagentState>().update(|s| {
             s.by_parent.insert(parent, list);
         }),

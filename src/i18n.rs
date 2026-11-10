@@ -283,6 +283,8 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Close sub-agent", "关闭子 Agent"),
     ("Sub-agent", "子 Agent"),
     ("Changes", "更改"),
+    ("Continue in another agent", "在其他智能体中继续"),
+    ("A new agent, with this conversation", "新建智能体，带上这段对话"),
     ("Download…", "下载…"),
     ("Downloading “{}”…", "正在下载「{}」…"),
     ("Saved “{}”", "已保存「{}」"),

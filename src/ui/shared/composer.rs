@@ -626,6 +626,34 @@ fn model_rows(live: bool, scrolled: bool) -> impl IntoElement {
                     );
                 }
             }
+            // A live agent keeps its provider: another vendor's model
+            // continues the conversation in that vendor's own agent (a
+            // fork), where its sign-in belongs.
+            if live {
+                let others: Vec<_> = providers.iter().filter(|p| p.enabled && p.available() && p.id != c.provider).collect();
+                if !others.is_empty() {
+                    list = list.child(menu_divider()).child(menu_heading(t("Continue in another agent"))).child(
+                        text(t("A new agent, with this conversation"))
+                            .text_size(px(TEXT_XS))
+                            .text_color(FG_FAINT)
+                            .px(px(S3))
+                            .pb(px(S1)),
+                    );
+                }
+                for p in others {
+                    if p.models.is_empty() {
+                        let pid = p.id.clone();
+                        list = list.child(menu_row(p.label.clone(), None, None, false, move || store::continue_in(&pid, "")));
+                        continue;
+                    }
+                    for m in &p.models {
+                        let (pid, mid) = (p.id.clone(), m.id.clone());
+                        list = list.child(menu_row(format!("{} · {}", p.label, m.label), None, None, false, move || {
+                            store::continue_in(&pid, &mid)
+                        }));
+                    }
+                }
+            }
             if scrolled { menu_scroll(420.0, list).into_element() } else { list.into_element() }
         }))
     }))
