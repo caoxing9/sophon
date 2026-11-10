@@ -108,7 +108,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         match target {
             Target::Agent => {
                 if let Some(id) = store::selected_id()
-                    && store::send_message(&out.text)
+                    && store::send_message(&out.message)
                 {
                     store::set_draft(&id, "");
                     // A queued message leaves its attachments for the one
@@ -117,7 +117,8 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                 }
             }
             Target::Form => {
-                set_text(&out.text);
+                // As it is sent: its chips named where they stand.
+                set_text(&out.message);
                 store::submit_form();
             }
         }

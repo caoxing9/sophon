@@ -641,6 +641,30 @@ pub(crate) fn set_sidebar_width(width: f32, save: bool) {
     }
 }
 
+#[derive(Clone)]
+struct ExplorerWidth(f32);
+
+impl Default for ExplorerWidth {
+    fn default() -> Self {
+        Self(300.0)
+    }
+}
+
+pub(crate) const EXPLORER_MIN: f32 = 240.0;
+pub(crate) const EXPLORER_MAX: f32 = 640.0;
+
+/// The explorer's width, which its edge drags.
+pub(crate) fn explorer_width() -> f32 {
+    global::<ExplorerWidth>().with(|w| w.0)
+}
+
+pub(crate) fn set_explorer_width(width: f32, save: bool) {
+    global::<ExplorerWidth>().set(ExplorerWidth(width.clamp(EXPLORER_MIN, EXPLORER_MAX)));
+    if save {
+        save_prefs();
+    }
+}
+
 /// Panels sliding in and out: the frames that change ease over 280 ms.
 pub(crate) fn animate_panels() {
     animate_layout(nsh_core::LayoutAnimation {
@@ -2124,6 +2148,7 @@ fn save_prefs() {
         "sidebarHidden": global::<SidebarHidden>().with_untracked(|h| h.0),
         "explorerOpen": global::<Explorer>().with_untracked(|e| e.open),
         "sidebarWidth": global::<SidebarWidth>().with_untracked(|w| w.0),
+        "explorerWidth": global::<ExplorerWidth>().with_untracked(|w| w.0),
         "terminalHeight": global::<TerminalPanel>().with_untracked(|p| p.height),
         "projectOrder": global::<ProjectOrder>().with_untracked(|o| o.0.clone()),
         "lastWorkspace": global::<LastOpen>().with_untracked(|l| l.workspace.clone()),
@@ -2187,6 +2212,9 @@ pub(crate) fn load_prefs() {
     global::<FavoriteModels>().set(FavoriteModels(strings("favoriteModels")));
     if let Some(h) = v.get("terminalHeight").and_then(serde_json::Value::as_f64) {
         global::<TerminalPanel>().update(|p| p.height = (h as f32).clamp(120.0, 900.0));
+    }
+    if let Some(w) = v.get("explorerWidth").and_then(serde_json::Value::as_f64) {
+        global::<ExplorerWidth>().set(ExplorerWidth((w as f32).clamp(EXPLORER_MIN, EXPLORER_MAX)));
     }
     if let Some(w) = v.get("sidebarWidth").and_then(serde_json::Value::as_f64) {
         global::<SidebarWidth>().set(SidebarWidth((w as f32).clamp(SIDEBAR_MIN, SIDEBAR_MAX)));
@@ -3277,8 +3305,12 @@ fn deliver(agent_id: &str, text: &str, behavior: Option<&'static str>) {
     let images = if mine { take_images() } else { vec![] };
     let attachments = if mine { take_files() } else { vec![] };
     let mut shown = text.to_owned();
+    // A file the text does not name where its chip stood (a message
+    // queued before, a draft kept as text) is named after it.
     for a in &attachments {
-        if let Some(name) = a.get("fileName").and_then(serde_json::Value::as_str) {
+        if let Some(name) = a.get("fileName").and_then(serde_json::Value::as_str)
+            && !text.contains(&format!("[{name}]"))
+        {
             shown.push_str(&format!("\n📎 {name}"));
         }
     }

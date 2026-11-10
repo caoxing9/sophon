@@ -64,12 +64,15 @@ pub(crate) fn workspace(compact: bool) -> impl IntoElement {
             // (its width eases, the panel keeps its own).
             view()
                 .flex_shrink_0()
-                .items_start()
+                .flex_row()
+                .items_stretch()
                 .overflow_hidden()
                 .mt(move || Length::from(px(-bar.get().top.0)))
-                .w(move || Length::from(px(if show_explorer.get() { explorer::EXPLORER_WIDTH + 10.0 } else { 0.0 })))
+                .w(move || Length::from(px(if show_explorer.get() { store::explorer_width() + 10.0 } else { 0.0 })))
                 .opacity(move || if show_explorer.get() { 1.0_f32 } else { 0.0 })
                 .transition_opacity()
+                // Its left edge drags its width.
+                .child(explorer::resize_handle())
                 .child(explorer::explorer().flex_1())
         }));
     view().flex_1().child(top).child(when(store::terminal_panel_open, terminal::terminal_panel))

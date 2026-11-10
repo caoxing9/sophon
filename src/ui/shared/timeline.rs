@@ -160,7 +160,7 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                     .active(|s| s.opacity(0.7))
                     .on_press(move || message_sheet(item))
                     .accessibility_label(t("Message actions"))
-                    .child(text(text_of).text_size(px(TEXT_CONTENT)).line_height(px(22.0)).text_color(FG)))
+                    .child(user_text(item, false)))
                     .into_element(),
                 // The desktop: its actions show while the pointer is on it.
                 RowKind::User => {
@@ -173,13 +173,7 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                     .py(px(9.0))
                     .rounded(px(18.0))
                     .bg(tint(ACCENT, 0.10))
-                    .child(
-                        text(text_of)
-                            .text_size(px(TEXT_CONTENT))
-                            .line_height(px(22.0))
-                            .text_color(FG)
-                            .selectable(true),
-                    ))
+                    .child(user_text(item, true)))
                     .into_element()
                 }
                 RowKind::Assistant => text_view()
@@ -238,9 +232,78 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
 
 /// A user message on the right: the images it carried as thumbnails over
 /// its bubble (no bubble when it was images alone).
+/// A sent message's text with its attachments' chips where they stood in
+/// the composer (`[name]` in the text, `composer_doc::segments`): a
+/// picture's chip carries its thumbnail and shows it large under the
+/// pointer; a message from the host's history has the names alone.
+fn user_text(item: Memo<Option<Item>>, selectable: bool) -> impl IntoElement {
+    use crate::ui::shared::composer_doc::{Segment, is_image_name, segments};
+    view().child(dynamic(move || {
+        let (body, images) = item.with(|i| match i {
+            Some(Item::User { text, images, .. }) => (text.clone(), images.clone()),
+            _ => Default::default(),
+        });
+        Some(untracked(move || {
+            let mut line = text("").text_size(px(TEXT_CONTENT)).line_height(px(22.0)).text_color(FG).selectable(selectable);
+            let mut pictures = images.into_iter();
+            for segment in segments(&body) {
+                line = match segment {
+                    Segment::Text(t) => line.child(text(t)),
+                    Segment::Chip(name) => {
+                        let thumb = if is_image_name(&name) { pictures.next() } else { None };
+                        line.child(sent_chip(name, thumb))
+                    }
+                };
+            }
+            line.into_element()
+        }))
+    }))
+}
+
+/// An attachment's chip in a sent message, as the composer's: its
+/// thumbnail (a file's glyph) and its name.
+fn sent_chip(name: String, thumb: Option<String>) -> View {
+    let chip = view()
+        .flex_row()
+        .items_center()
+        .gap(px(5.0))
+        .h(px(22.0))
+        .pl(px(4.0))
+        .pr(px(7.0))
+        .mx(px(2.0))
+        .rounded(px(R_MD))
+        .bg(SURFACE0)
+        .border_1()
+        .border_color(tint(ACCENT, 0.35))
+        .align_middle();
+    let chip = match &thumb {
+        Some(uri) => chip.child(
+            image(SharedString::from(uri.clone())).w(px(16.0)).h(px(16.0)).object_fit(nsh_core::ResizeMode::Cover).rounded(px(3.0)),
+        ),
+        None => chip.child(icon(if crate::ui::shared::composer_doc::is_image_name(&name) { Icon::Image } else { Icon::File }, 13.0).text_color(FG_MUTED)),
+    };
+    let chip = chip.child(text(name).text_size(px(TEXT_SM)).text_color(FG).number_of_lines(1));
+    match thumb {
+        Some(uri) => chip.tooltip(
+            glass_strong(view()).p(px(S1)).rounded(px(R_LG)).child(
+                image(SharedString::from(uri)).w(px(280.0)).h(px(280.0)).object_fit(nsh_core::ResizeMode::Contain).rounded(px(R_MD)),
+            ),
+        ),
+        None => chip,
+    }
+}
+
 fn user_row(item: Memo<Option<Item>>, bubble: impl IntoElement + 'static) -> impl IntoElement {
     let (images, has_text) = item.with_untracked(|i| match i {
-        Some(Item::User { images, text, .. }) => (images.clone(), !text.trim().is_empty()),
+        Some(Item::User { images, text, .. }) => {
+            // The pictures the text names show as chips in it; the rest (a
+            // message sent before chips were named) stay above it.
+            let named = crate::ui::shared::composer_doc::segments(text)
+                .iter()
+                .filter(|s| matches!(s, crate::ui::shared::composer_doc::Segment::Chip(n) if crate::ui::shared::composer_doc::is_image_name(n)))
+                .count();
+            (images.iter().skip(named).cloned().collect::<Vec<_>>(), !text.trim().is_empty())
+        }
         _ => (vec![], true),
     });
     let mut thumbs = view().flex_row().flex_wrap().justify_end().gap(px(6.0));
@@ -874,15 +937,18 @@ pub(crate) fn subagent_pane(parent: String, id: String) -> impl IntoElement {
 
 fn static_row(item: Item) -> AnyElement {
     match item {
-        Item::User { text: t, .. } => view()
-            .self_end()
-            .max_w(relative(0.82))
-            .px(px(14.0))
-            .py(px(9.0))
-            .rounded(px(18.0))
-            .bg(SURFACE2)
-            .child(text(t).text_size(px(TEXT_CONTENT)).line_height(px(22.0)).selectable(true))
-            .into_element(),
+        Item::User { text: t, .. } => {
+            let item = computed(move || Some(Item::User { text: t.clone(), message_id: None, images: vec![] }));
+            view()
+                .self_end()
+                .max_w(relative(0.82))
+                .px(px(14.0))
+                .py(px(9.0))
+                .rounded(px(18.0))
+                .bg(SURFACE2)
+                .child(user_text(item, true))
+                .into_element()
+        }
         Item::Assistant { text: t } => text_view()
             .markdown(move || Some(SharedString::from(t.clone())))
             .selectable(true)

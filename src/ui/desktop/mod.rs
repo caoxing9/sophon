@@ -105,6 +105,32 @@ pub(crate) fn shell() -> impl IntoElement {
     }))
     .child(sidebar_toggle())
     .child(quit_hint())
+    .child(edge_cursors())
+}
+
+/// The window's edges and corners show the resize pointers: the app's
+/// content reaches every edge, and its own pointers would cover the
+/// system's there. Thin strips over the frame's resize zone, which the
+/// system takes the presses of.
+fn edge_cursors() -> impl IntoElement {
+    const EDGE: f32 = 4.0;
+    const CORNER: f32 = 12.0;
+    let strip = |cursor: Cursor| view().absolute().cursor(cursor).window_drag(false);
+    view()
+        .absolute()
+        .top(px(0.0))
+        .bottom(px(0.0))
+        .left(px(0.0))
+        .right(px(0.0))
+        .pointer_events(PointerEvents::BoxNone)
+        .child(strip(Cursor::ColResize).left(px(0.0)).top(px(CORNER)).bottom(px(CORNER)).w(px(EDGE)))
+        .child(strip(Cursor::ColResize).right(px(0.0)).top(px(CORNER)).bottom(px(CORNER)).w(px(EDGE)))
+        .child(strip(Cursor::RowResize).top(px(0.0)).left(px(CORNER)).right(px(CORNER)).h(px(EDGE)))
+        .child(strip(Cursor::RowResize).bottom(px(0.0)).left(px(CORNER)).right(px(CORNER)).h(px(EDGE)))
+        .child(strip(Cursor::NwseResize).top(px(0.0)).left(px(0.0)).w(px(CORNER)).h(px(CORNER)))
+        .child(strip(Cursor::NwseResize).bottom(px(0.0)).right(px(0.0)).w(px(CORNER)).h(px(CORNER)))
+        .child(strip(Cursor::NeswResize).top(px(0.0)).right(px(0.0)).w(px(CORNER)).h(px(CORNER)))
+        .child(strip(Cursor::NeswResize).bottom(px(0.0)).left(px(0.0)).w(px(CORNER)).h(px(CORNER)))
 }
 
 /// "Press ⌘Q again to quit", over the middle of the window while a second
