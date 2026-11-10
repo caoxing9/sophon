@@ -907,6 +907,9 @@ async fn session(
             cmd = commands.recv() => {
                 let Some(cmd) = cmd else { return Ok(Exit::UiGone) };
                 if let Command::SwitchHost(next) = cmd {
+                    // Said, not dropped: the computer left behind (its
+                    // bridge, its device list) hears it go at once.
+                    let _ = tx.sink.send(Message::Close(None)).await;
                     return Ok(Exit::Switch(next));
                 }
                 if let Command::Open(id) = &cmd {

@@ -546,6 +546,9 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(phone: WebSocketStream<S>, rel
     result
 }
 
+/// How long a connected device may stay silent (it pings every 10 s).
+const SILENCE: Duration = if cfg!(test) { Duration::from_secs(2) } else { Duration::from_secs(35) };
+
 type PhoneTx<S> = futures_util::stream::SplitSink<WebSocketStream<S>, tokio_tungstenite::tungstenite::Message>;
 type PhoneRx<S> = futures_util::stream::SplitStream<WebSocketStream<S>>;
 
@@ -613,11 +616,23 @@ async fn forward<S: AsyncRead + AsyncWrite + Unpin>(
     let (daemon, _) = tokio_tungstenite::connect_async(endpoint.url.as_str()).await.map_err(|e| e.to_string())?;
     let (mut dtx, mut drx) = daemon.split();
     let credential = endpoint.local_credential.clone();
+    // A device pings every 10 s while it is connected: one silent far
+    // longer left without closing (another network, asleep), which the
+    // relay and the sockets may not notice for minutes.
+    let mut heard = tokio::time::Instant::now();
+    let mut check = tokio::time::interval(Duration::from_secs(5));
     loop {
         tokio::select! {
             _ = cut.notified() => break,
+            _ = check.tick() => {
+                if heard.elapsed() > SILENCE {
+                    log::info!("a device went silent; it is gone");
+                    break;
+                }
+            }
             frame = prx.next() => {
                 let Some(Ok(frame)) = frame else { break };
+                heard = tokio::time::Instant::now();
                 let Some(mut plain) = unseal.open(from_ws(frame))? else { continue };
                 // The phone's hello gets this machine's credential, which a
                 // daemon with a password requires.
@@ -807,7 +822,31 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("sophon-relay-test-{}", std::process::id()));
         let paseo = dir.join("paseo");
         std::fs::create_dir_all(&paseo).unwrap();
-        std::fs::write(paseo.join("config.json"), json!({ "daemon": { "relay": { "endpoint": relay_addr, "useTls": false } } }).to_string()).unwrap();
+        // A stand-in service behind the bridge: it takes the socket and
+        // keeps it, as the daemon does.
+        let service = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let service_addr = service.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            rt.block_on(async move {
+                service.set_nonblocking(true).unwrap();
+                let listener = TcpListener::from_std(service).unwrap();
+                loop {
+                    let Ok((stream, _)) = listener.accept().await else { continue };
+                    tokio::spawn(async move {
+                        if let Ok(ws) = tokio_tungstenite::accept_async(stream).await {
+                            let (_tx, mut rx) = ws.split();
+                            while let Some(Ok(_)) = rx.next().await {}
+                        }
+                    });
+                }
+            });
+        });
+        std::fs::write(
+            paseo.join("config.json"),
+            json!({ "daemon": { "listen": service_addr.to_string(), "relay": { "endpoint": relay_addr, "useTls": false } } }).to_string(),
+        )
+        .unwrap();
         // SAFETY: set before any thread of this test reads them.
         unsafe {
             std::env::set_var("SOPHON_DATA_DIR", dir.join("sophon"));
@@ -853,6 +892,51 @@ mod tests {
             .await
             .expect("the bridge heard the device");
             assert_eq!(came, "Away Phone");
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            assert!(connections().iter().any(|c| c.device == "Away Phone" && c.relayed), "listed, relayed, while it stays");
+            // The phone goes (another host, out of range): it leaves the list.
+            drop((tx, rx));
+            let gone = tokio::time::timeout(Duration::from_secs(3), async {
+                while let Some(e) = events.recv().await {
+                    if let BridgeEvent::Disconnected { .. } = e {
+                        return;
+                    }
+                }
+            })
+            .await;
+            assert!(gone.is_ok(), "the bridge heard it go");
+            assert!(connections().is_empty(), "no longer listed");
+
+            // A phone that goes quiet without closing (asleep, another
+            // network): gone once it stays silent too long.
+            let (ws, _) = tokio_tungstenite::connect_async(offer.ws_url()).await.expect("the relay");
+            let (mut tx, mut rx) = ws.split();
+            let mut hs = relay::Handshake::start(&offer).unwrap();
+            let (mut seal, _unseal) = loop {
+                tx.send(to_ws(Message::Text(hs.hello().to_owned()))).await.unwrap();
+                if let Ok(Some(Ok(frame))) = tokio::time::timeout(Duration::from_secs(2), rx.next()).await
+                    && let Message::Text(t) = from_ws(frame)
+                {
+                    match hs.finish(t.as_str()) {
+                        Ok(Some(pair)) => break pair,
+                        Err((back, e)) if e.is_empty() => hs = back,
+                        other => panic!("handshake: {:?}", other.err().map(|(_, e)| e)),
+                    }
+                }
+            };
+            let auth = json!({ "type": "sophon_bridge_auth", "token": info.token, "device": "Quiet Phone" }).to_string();
+            tx.send(to_ws(seal.seal(Message::Text(auth)).unwrap())).await.unwrap();
+            let quiet = tokio::time::timeout(Duration::from_secs(10), async {
+                while let Some(e) = events.recv().await {
+                    if let BridgeEvent::Disconnected { .. } = e {
+                        return;
+                    }
+                }
+            })
+            .await;
+            assert!(quiet.is_ok(), "a silent device is let go");
+            assert!(connections().is_empty());
+            drop((tx, rx));
         });
         let _ = std::fs::remove_dir_all(dir);
     }
