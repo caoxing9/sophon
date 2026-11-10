@@ -840,6 +840,19 @@ pub(crate) enum KeepAwake {
     Display,
 }
 
+/// Settings' general section as the TSX entry renders it; `None` when the
+/// app runs without it (its Rust root alone), and the Rust cards show.
+#[derive(Clone, Default)]
+struct TsxGeneral(Option<Renderer<SharedString>>);
+
+pub(crate) fn set_tsx_general(r: Option<Renderer<SharedString>>) {
+    global::<TsxGeneral>().set(TsxGeneral(r));
+}
+
+pub(crate) fn tsx_general() -> Option<Renderer<SharedString>> {
+    global::<TsxGeneral>().with(|g| g.0.clone())
+}
+
 /// Holds this Mac awake while an agent of its own runs, as the setting
 /// says. A remote host's agents keep their own computer busy, not this one.
 pub(crate) fn watch_keep_awake() {

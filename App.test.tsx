@@ -61,3 +61,18 @@ test("the model picker shows the agents, the models and their reasoning", async 
   await app.keyboard.press("escape");
   expect(app.texts()).not.toContain("Reasoning");
 });
+
+test("settings' TSX section reads the preferences from Rust and changes them there", async () => {
+  const app = await open(".", { width: 1100, height: 900 });
+  await app.press("label:Settings >> nth=0");
+  // The section is TSX (`tsx/settings/General.tsx`), placed by the Rust page.
+  expect(app.texts()).toContain("While an agent is running");
+  const before = app.spanStyle("text:Queue").color;
+  await app.press("text:Queue");
+  // The TSX screen sets nothing itself: Queue lights up only once Rust has
+  // the new value and tells it.
+  expect(app.spanStyle("text:Queue").color).not.toBe(before);
+  expect(app.spanStyle("text:Queue").color).toBe(app.spanStyle("text:While an agent is running").color);
+  await app.press("text:Steer");
+  expect(app.spanStyle("text:Queue").color).toBe(before);
+});
