@@ -1629,7 +1629,7 @@ pub(crate) fn load_hosts() {
     let current = v.get("current").and_then(|c| c.as_str()).map(str::to_owned).filter(|c| list.iter().any(|x| &x.id == c));
     global::<Hosts>().update(|h| *h = Hosts { list, current });
     if let Some(host) = current_host() {
-        send(Command::SwitchHost(Some(crate::daemon::connection::RemoteHost { url: host.url, password: host.password })));
+        crate::daemon::connection::switch_host(Some(crate::daemon::connection::RemoteHost { url: host.url, password: host.password }));
     }
 }
 
@@ -1645,7 +1645,7 @@ pub(crate) fn switch_host(id: Option<String>) {
         global::<Nav>().update(|n| *n = Nav::default());
     });
     let remote = current_host().map(|h| crate::daemon::connection::RemoteHost { url: h.url, password: h.password });
-    send(Command::SwitchHost(remote));
+    crate::daemon::connection::switch_host(remote);
 }
 
 pub(crate) fn add_host(name: &str, url: &str, password: &str) {

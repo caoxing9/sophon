@@ -342,6 +342,69 @@ impl TerminalInfo {
     }
 }
 
+/// A host switch the app asked for, taken by the connection however far its
+/// current attempt has gone: a connect, a handshake, or the retries of a LAN
+/// address that does not answer, which read no commands meanwhile (a host
+/// out of reach held the switch away from it until it answered).
+static SWITCH: std::sync::Mutex<Option<Option<RemoteHost>>> = std::sync::Mutex::new(None);
+
+fn switch_signal() -> &'static tokio::sync::Notify {
+    static SIGNAL: std::sync::OnceLock<tokio::sync::Notify> = std::sync::OnceLock::new();
+    SIGNAL.get_or_init(tokio::sync::Notify::new)
+}
+
+/// A line in `connection.log` (in the app's data folder): each attempt,
+/// connection and loss with its reason, for when the app sits on
+/// "Connecting…". Kept under 256 KB (the older half goes).
+fn trace(line: &str) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::io::Write;
+        let path = super::data_dir().join("connection.log");
+        if std::fs::metadata(&path).is_ok_and(|m| m.len() > 256 * 1024) {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                let half = text.len() / 2;
+                let cut = text[half..].find('\n').map_or(half, |i| half + i + 1);
+                let _ = std::fs::write(&path, &text[cut..]);
+            }
+        }
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            let _ = writeln!(f, "{now} {}", redact(line));
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = line;
+}
+
+/// `line` without a pairing link's or an address's secrets: the value of
+/// each `lanKey=`, `token=`, `offer=` and `password=` becomes `***`.
+fn redact(line: &str) -> String {
+    let mut out = line.to_owned();
+    for key in ["lanKey=", "token=", "offer=", "password="] {
+        let mut from = 0;
+        while let Some(i) = out[from..].find(key) {
+            let start = from + i + key.len();
+            let end = out[start..].find(|c: char| c == '&' || c == '/' || c.is_whitespace() || c == ';').map_or(out.len(), |j| start + j);
+            out.replace_range(start..end, "***");
+            from = start + 3;
+        }
+    }
+    out
+}
+
+/// Moves the connection to `next` (`None`: this computer's service) now,
+/// ending the session or attempt under way.
+pub fn switch_host(next: Option<RemoteHost>) {
+    trace(&format!("switch to {}", next.as_ref().map_or("this computer", |_| "a saved host")));
+    *SWITCH.lock().unwrap_or_else(|e| e.into_inner()) = Some(next);
+    switch_signal().notify_one();
+}
+
+fn take_switch() -> Option<Option<RemoteHost>> {
+    SWITCH.lock().unwrap_or_else(|e| e.into_inner()).take()
+}
+
 /// A daemon on another machine, reached directly (LAN, Tailscale, a tunnel).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RemoteHost {
@@ -499,10 +562,23 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
             None => discover(),
         };
         let lan_attempt = endpoint.bridge_token.is_some();
+        // The address without a pairing link's key and token.
+        trace(&format!("connecting to {}", endpoint.url.split('?').next().unwrap_or("")));
         if events.send(Event::Connecting { url: endpoint.url.clone() }).is_err() {
             return;
         }
-        let result = session(&endpoint, &events, &mut commands, &mut open_agent, &mut diff_cwd).await;
+        let attempt = tokio::select! {
+            r = session(&endpoint, &events, &mut commands, &mut open_agent, &mut diff_cwd) => Some(r),
+            _ = switch_signal().notified() => None,
+        };
+        let result = match attempt {
+            Some(r) => r,
+            // Switched while connecting (or connected): the new host now.
+            None => match take_switch() {
+                Some(next) => Ok(Exit::Switch(next)),
+                None => continue,
+            },
+        };
         let reason = match result {
             Ok(Exit::UiGone) => return,
             Ok(Exit::Switch(next)) => {
@@ -524,6 +600,7 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
             Err(e) => {
                 if lan_attempt {
                     // Not on that network: the next address, then the relay.
+                    trace(&format!("LAN address did not answer: {e}"));
                     lan_index += 1;
                     continue;
                 }
@@ -531,6 +608,7 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
             }
         };
         lan_index = 0;
+        trace(&format!("lost: {reason}; next attempt in {} ms", backoff.as_millis()));
         if events.send(Event::Disconnected { reason }).is_err() {
             return;
         }
@@ -541,6 +619,16 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
         loop {
             tokio::select! {
                 _ = &mut deadline => break,
+                _ = switch_signal().notified() => {
+                    if let Some(next) = take_switch() {
+                        remote = next;
+                        open_agent = None;
+                        diff_cwd = None;
+                        lan_index = 0;
+                        backoff = Duration::from_secs(1);
+                        break;
+                    }
+                }
                 cmd = commands.recv() => match cmd {
                     None => return,
                     Some(Command::Open(id)) => open_agent = Some(id),
@@ -871,6 +959,7 @@ async fn session(
                     if kind == "status" && payload.get("status").and_then(Value::as_str) == Some("server_info") {
                         connected = true;
                         let field = |k| payload.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
+                        trace(&format!("connected to {} ({})", field("hostname"), field("version")));
                         if events.send(Event::Connected { hostname: field("hostname"), version: field("version") }).is_err() {
                             return Ok(Exit::UiGone);
                         }
@@ -2601,6 +2690,48 @@ mod tests {
             }
         });
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_trace_line_keeps_no_secrets() {
+        assert_eq!(
+            redact("lost: ws://sophon://pair?lan=10.0.0.1:1&lanKey=abc&token=xyz/ws: refused; https://app.x/#offer=eyJ password=p"),
+            "lost: ws://sophon://pair?lan=10.0.0.1:1&lanKey=***&token=***/ws: refused; https://app.x/#offer=*** password=***"
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn switching_away_from_an_unreachable_host_live() {
+        // A LAN-only pairing link to nowhere, then this Mac's service: the
+        // switch must not wait for the unreachable host to answer.
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let (ev_tx, mut ev_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (_cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+            tokio::spawn(run(ev_tx, cmd_rx));
+            // A well-formed LAN-only link to an address that does not answer.
+            let key = { use base64::Engine as _; base64::engine::general_purpose::STANDARD.encode([7u8; 32]) };
+            let key = key.replace('+', "%2B").replace('/', "%2F").replace('=', "%3D");
+            let link = format!("sophon://pair?lan=10.255.255.1:62584&lanKey={key}&token=t");
+            assert!(super::super::relay::PairingLink::parse(&link).is_some_and(|l| l.lan.is_some()), "the link parses");
+            // The first connection (this Mac's), then away to the unreachable host.
+            loop {
+                if let Some(Event::Connected { .. }) = ev_rx.recv().await { break; }
+            }
+            switch_host(Some(RemoteHost { url: link, password: None }));
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let asked = std::time::Instant::now();
+            switch_host(None);
+            let back = tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    if let Some(Event::Connected { .. }) = ev_rx.recv().await { break; }
+                }
+            })
+            .await;
+            println!("back on this Mac after {} ms", asked.elapsed().as_millis());
+            assert!(back.is_ok(), "the switch waited on the unreachable host");
+        });
     }
 
     #[test]
