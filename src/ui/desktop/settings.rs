@@ -18,7 +18,9 @@ pub(crate) fn settings(compact: bool) -> impl IntoElement {
         .child(page(
             compact,
             view()
-                .child(general())
+                .child(section(t("Appearance"), appearance_card()))
+                .child(section(t("Sending"), sending_card()))
+                .child(section(t("Power"), keep_awake_card()))
                 .child(section(
                     t("Host"),
                     host_card()
@@ -51,24 +53,6 @@ pub(crate) fn settings(compact: bool) -> impl IntoElement {
                 .child(section(t("Coding agents"), crate::ui::shared::agents::agents_card(true)))
                 .child(section(t("Text generation"), text_generation_card())),
         ))
-}
-
-/// Appearance, sending and power: the TSX entry's screen when it gives one
-/// (rendered again in each language), else the Rust cards.
-fn general() -> impl IntoElement {
-    view().child(dynamic(|| {
-        let tsx = store::tsx_general();
-        let lang = crate::i18n::lang().as_str();
-        Some(untracked(move || match tsx {
-            Some(r) => r.render("general", SharedString::from(lang)).into_element(),
-            None => view()
-                .gap(px(S8))
-                .child(section(t("Appearance"), appearance_card()))
-                .child(section(t("Sending"), sending_card()))
-                .child(section(t("Power"), keep_awake_card()))
-                .into_element(),
-        }))
-    }))
 }
 
 /// The devices that reach this Mac through its LAN bridge: those connected

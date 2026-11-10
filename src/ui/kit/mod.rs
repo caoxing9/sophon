@@ -2,7 +2,6 @@
 //! from these, never from hand-styled `nsh/base` elements.
 
 pub(crate) mod controls;
-pub(crate) mod exports;
 pub(crate) mod icon;
 pub(crate) mod menu;
 pub(crate) mod sheet;

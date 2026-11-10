@@ -5,6 +5,7 @@
   "build": 1,
   "icon": "assets/app-icon/icon-macos-1024.png",
   "rust": ".",
+  "root": "App",
   "theme": "theme.json",
   "schemes": [
     "sophon"

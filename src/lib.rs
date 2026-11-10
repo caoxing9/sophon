@@ -7,7 +7,6 @@ use nsh_base::theme;
 use nsh_core::{element::{AssetFile, AssetKind}, prelude::*};
 
 mod agent_update;
-mod bridge;
 #[cfg(target_os = "macos")]
 mod awake;
 pub mod daemon;
@@ -36,13 +35,7 @@ unsafe extern "Rust" fn __getrandom_v03_custom(dest: *mut u8, len: usize) -> Res
 /// The app's UI set (`nsh.json` `"rust"`).
 #[native_module("sophon/native")]
 fn native(registry: &mut Registry) {
-    registry
-        .register::<App>()
-        .register::<ui::kit::exports::Card>()
-        .register::<ui::kit::exports::Section>()
-        .register::<ui::kit::exports::SettingsRow>()
-        .register::<ui::kit::exports::Segmented>()
-        .module::<bridge::Prefs>();
+    registry.register::<App>();
     // Only the mark's layers ship: `assets!()` would ship the whole
     // directory, the app icon's sources included.
     registry.assets(&[
@@ -72,19 +65,9 @@ pub(crate) const LOADER_MOON: ImageAsset = asset!("loader/moon@2x.png");
 pub(crate) const LOADER_SKY_LIGHT: ImageAsset = asset!("loader/sky-light@2x.png");
 pub(crate) const LOADER_CORONA_LIGHT: ImageAsset = asset!("loader/corona-light@2x.png");
 
-/// What the TSX entry (`App.tsx`) gives the app: screens written in TSX,
-/// placed where the Rust shell has their place.
-#[derive(Clone, PartialEq, Props)]
-pub struct AppProps {
-    /// Settings' general section (appearance, language, sending, power),
-    /// rendered for the interface's language.
-    pub render_general: Prop<Option<Renderer<SharedString>>>,
-}
-
 /// The application's root component.
 #[component]
-pub fn App(props: AppProps) -> impl IntoElement {
-    effect(move || store::set_tsx_general(props.render_general.get()));
+pub fn App() -> impl IntoElement {
     store::load_prefs();
     start_connection();
     store::load_hosts();
