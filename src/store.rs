@@ -3831,6 +3831,7 @@ pub(crate) fn load_claude_catalog() {
 }
 
 /// The models of a Claude Code catalog cache, in its order.
+#[cfg_attr(any(target_os = "ios", target_arch = "wasm32"), allow(dead_code))]
 fn parse_claude_catalog(text: &str) -> Option<Vec<CatalogModel>> {
     let v: serde_json::Value = serde_json::from_str(text).ok()?;
     let models = v.pointer("/catalog/config/models")?.as_array()?;
