@@ -1,5 +1,5 @@
 //! The Agents settings section: one row per provider (Paseo's word for an
-//! agent CLI or an instance of one) with its status, binary, version,
+//! agent CLI or an instance of one) with its status, version,
 //! models and login; on the desktop also the switch that turns it on,
 //! and the forms that add another account or an API-key instance.
 //! Instances are separate providers: nothing switches accounts on its own.
@@ -90,7 +90,7 @@ fn agent_row(p: Provider, d: Option<Diagnostic>, u: Option<store::AgentUpdate>, 
         title = title.child(badge(t("Through a gateway"), if native_claude { WARNING } else { FG_MUTED }));
     }
 
-    // Version · models · binary: what is known, nothing in place of the rest.
+    // Version · models: what is known, nothing in place of the rest.
     let mut facts: Vec<String> = Vec::new();
     if let Some(v) = &d.version {
         facts.push(v.clone());
@@ -109,9 +109,6 @@ fn agent_row(p: Provider, d: Option<Diagnostic>, u: Option<store::AgentUpdate>, 
     let mut body = view().flex_1().min_w(px(0.0)).gap(px(3.0)).child(title);
     if !facts.is_empty() {
         body = body.child(muted(facts.join(" · ")));
-    }
-    if let Some(path) = &d.path {
-        body = body.child(muted(path.clone()).font_family(|| MONO).number_of_lines(1));
     }
     if let (Some(u), Some(path)) = (&u, &d.path) {
         if let Some(line) = update_line(u, newer.as_deref(), path, editable) {
