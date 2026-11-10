@@ -36,7 +36,13 @@ unsafe extern "Rust" fn __getrandom_v03_custom(dest: *mut u8, len: usize) -> Res
 /// The app's UI set (`nsh.json` `"rust"`).
 #[native_module("sophon/native")]
 fn native(registry: &mut Registry) {
-    registry.register::<App>().module::<bridge::Prefs>();
+    registry
+        .register::<App>()
+        .register::<ui::kit::exports::Card>()
+        .register::<ui::kit::exports::Section>()
+        .register::<ui::kit::exports::SettingsRow>()
+        .register::<ui::kit::exports::Segmented>()
+        .module::<bridge::Prefs>();
     // Only the mark's layers ship: `assets!()` would ship the whole
     // directory, the app icon's sources included.
     registry.assets(&[
