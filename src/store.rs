@@ -829,6 +829,43 @@ pub(crate) fn close_modal() {
 pub(crate) struct Settings {
     pub(crate) send_behavior: SendBehavior,
     pub(crate) keep_awake: KeepAwake,
+    /// This Mac runs agents of its own (its Paseo service). Off: it only
+    /// connects to other computers (a partner's Mac with no service).
+    pub(crate) local_service: LocalService,
+}
+
+/// Whether this Mac runs a service of its own (on unless set off; a Mac
+/// without Paseo starts off).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct LocalService(pub(crate) bool);
+
+impl Default for LocalService {
+    fn default() -> Self {
+        LocalService(true)
+    }
+}
+
+/// Whether this Mac runs agents of its own.
+pub(crate) fn local_service() -> bool {
+    !crate::ui::kit::MOBILE && settings().local_service.0
+}
+
+/// Turns this Mac's own service on or off: off, it goes to the first other
+/// computer saved; on, back to its own.
+pub(crate) fn set_local_service(on: bool) {
+    edit_settings(|s| s.local_service = LocalService(on));
+    if on {
+        if current_host().is_some_and(|h| crate::spaces::home_of(&h.url).is_none()) {
+            return;
+        }
+        start_bridge();
+        switch_host(None);
+    } else if current_host().is_none_or(|h| crate::spaces::home_of(&h.url).is_some()) {
+        let other = hosts().into_iter().find(|h| crate::spaces::home_of(&h.url).is_none()).map(|h| h.id);
+        if other.is_some() {
+            switch_host(other);
+        }
+    }
 }
 
 /// Whether this Mac stays awake while its agents run.
@@ -1681,6 +1718,10 @@ pub(crate) struct Pairing {
 /// Starts the LAN bridge (desktops), so paired phones on this network skip
 /// the relay, and phones nearby can ask to pair.
 pub(crate) fn start_bridge() {
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !local_service() || STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
     #[cfg(not(target_arch = "wasm32"))]
     match crate::daemon::bridge::start() {
         Some((_, events)) => crate::lan::watch_bridge(events),
@@ -1887,7 +1928,7 @@ pub(crate) fn current_space_home() -> Option<std::path::PathBuf> {
 /// What reads this Mac's files (the agents' own model lists, their CLIs,
 /// the session logs) holds for every space alike.
 pub(crate) fn on_this_mac() -> bool {
-    !crate::ui::kit::MOBILE && current_host().is_none_or(|h| crate::spaces::home_of(&h.url).is_some())
+    local_service() && current_host().is_none_or(|h| crate::spaces::home_of(&h.url).is_some())
 }
 
 /// The spaces on this Mac besides the first: saved hosts at `space:` addresses.
@@ -1898,6 +1939,9 @@ pub(crate) fn spaces() -> Vec<HostProfile> {
 /// Starts every space's service (Sophon starting on this Mac): Paseo's app
 /// keeps only the first one running.
 pub(crate) fn start_spaces() {
+    if !local_service() {
+        return;
+    }
     #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
     {
         let homes: Vec<_> = spaces().iter().filter_map(|h| crate::spaces::home_of(&h.url)).collect();
@@ -1965,6 +2009,10 @@ pub(crate) fn load_hosts() {
         .unwrap_or_default();
     let current = v.get("current").and_then(|c| c.as_str()).map(str::to_owned).filter(|c| list.iter().any(|x| &x.id == c));
     global::<Hosts>().update(|h| *h = Hosts { list, current });
+    if !crate::ui::kit::MOBILE && !local_service() && current_host().is_none_or(|h| crate::spaces::home_of(&h.url).is_some()) {
+        let other = hosts().into_iter().find(|h| crate::spaces::home_of(&h.url).is_none()).map(|h| h.id);
+        global::<Hosts>().update(|h| h.current = other);
+    }
     if let Some(host) = current_host() {
         crate::daemon::connection::switch_host(Some(crate::daemon::connection::RemoteHost { url: host.url, password: host.password }));
     }
@@ -2042,6 +2090,7 @@ fn save_prefs() {
             SendBehavior::Interrupt => "interrupt",
             SendBehavior::Queue => "queue",
         },
+        "localService": s.local_service.0,
         "keepAwake": match s.keep_awake {
             KeepAwake::Off => "off",
             KeepAwake::On => "on",
@@ -2070,7 +2119,13 @@ fn save_prefs() {
 
 /// Restores what `save_prefs` wrote.
 pub(crate) fn load_prefs() {
-    let Some(text) = crate::daemon::read_file("settings.json") else { return };
+    let Some(text) = crate::daemon::read_file("settings.json") else {
+        #[cfg(not(target_arch = "wasm32"))]
+        if !crate::ui::kit::MOBILE && service_cli().is_none() {
+            global::<Settings>().update(|s| s.local_service = LocalService(false));
+        }
+        return;
+    };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return };
     let behavior = match v.get("sendBehavior").and_then(serde_json::Value::as_str) {
         Some("interrupt") => SendBehavior::Interrupt,
@@ -2082,9 +2137,12 @@ pub(crate) fn load_prefs() {
         Some("display") => KeepAwake::Display,
         _ => KeepAwake::On,
     };
+    // A Mac without Paseo starts as one that only connects to others.
+    let local = v.get("localService").and_then(serde_json::Value::as_bool).unwrap_or_else(|| cfg!(target_arch = "wasm32") || service_cli().is_some());
     global::<Settings>().update(|s| {
         s.send_behavior = behavior;
         s.keep_awake = keep_awake;
+        s.local_service = LocalService(local);
     });
     if let Some(h) = v.get("sidebarHidden").and_then(serde_json::Value::as_bool) {
         global::<SidebarHidden>().update(|s| s.0 = h);

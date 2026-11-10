@@ -61,3 +61,12 @@ test("the model picker shows the agents, the models and their reasoning", async 
   await app.keyboard.press("escape");
   expect(app.texts()).not.toContain("Reasoning");
 });
+
+test("a Mac that runs no agents of its own connects to others", async () => {
+  const app = await open(".", { width: 1100, height: 900 });
+  await app.press("label:Settings >> nth=0");
+  await app.press("label:Run agents on this Mac");
+  expect(app.texts()).toContain("Connect to the computer your agents run on");
+  await app.press("label:Run agents on this Mac");
+  expect(app.texts()).not.toContain("Connect to the computer your agents run on");
+});

@@ -48,6 +48,12 @@ pub(crate) fn settings(compact: bool) -> impl IntoElement {
                             )
                         }),
                 ))
+                .child(section(t("This Mac"), card().child(row(
+                    t("Run agents on this Mac"),
+                    t("Off: this Mac only connects to other computers, and starts no service of its own"),
+                    switch(store::local_service, store::set_local_service).accessibility_label(t("Run agents on this Mac")),
+                    true,
+                ))))
                 .child(section(t("Devices"), devices_card()))
                 .child(section(t("Host behavior"), behavior_card()))
                 .child(section(t("Coding agents"), crate::ui::shared::agents::agents_card(true)))

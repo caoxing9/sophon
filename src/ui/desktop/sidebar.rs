@@ -27,7 +27,18 @@ pub(crate) fn sidebar() -> View {
                 .child(nav_item(Icon::Search, t("Search"), || false, || store::open_modal(store::Modal::Palette)))
                 .child(nav_item(Icon::CalendarClock, t("Schedules"), || store::screen() == Screen::Schedules, store::open_schedules)),
         )
-        .child(projects::project_list(true, || empty_list().into_element()))
+        // A Mac that runs no agents of its own, connected nowhere yet: how to
+        // reach one, in place of a list it has none of.
+        .child(dynamic(|| {
+            let elsewhere = !store::local_service() && store::current_host().is_none();
+            Some(untracked(move || {
+                if elsewhere {
+                    connect_elsewhere().into_element()
+                } else {
+                    projects::project_list(true, || empty_list().into_element()).into_element()
+                }
+            }))
+        }))
         .child(update_pill())
         .child(footer())
 }
@@ -47,25 +58,33 @@ fn host_line() -> impl IntoElement {
             Some(untracked(move || {
                 let is_space = |h: &store::HostProfile| crate::spaces::home_of(&h.url).is_some();
                 let spaces: Vec<_> = hosts.iter().filter(|h| is_space(h)).cloned().collect();
-                let mut m = view()
-                    .child(menu_heading(if spaces.is_empty() { t("Hosts") } else { t("Spaces on this Mac") }))
-                    .child(menu_row(
-                        if spaces.is_empty() { t("This Mac") } else { t("My space") },
-                        Some(Icon::Cpu),
-                        None,
-                        current.is_none(),
-                        || store::switch_host(None),
-                    ));
-                for h in spaces {
-                    let id = h.id.clone();
-                    m = m.child(menu_row(h.label(), Some(Icon::Folder), None, current.as_deref() == Some(h.id.as_str()), move || {
-                        store::switch_host(Some(id.clone()))
-                    }));
+                let local = store::local_service();
+                let mut m = view();
+                // This Mac's own spaces, while it runs agents of its own.
+                if local {
+                    m = m
+                        .child(menu_heading(if spaces.is_empty() { t("Hosts") } else { t("Spaces on this Mac") }))
+                        .child(menu_row(
+                            if spaces.is_empty() { t("This Mac") } else { t("My space") },
+                            Some(Icon::Cpu),
+                            None,
+                            current.is_none(),
+                            || store::switch_host(None),
+                        ));
+                    for h in spaces {
+                        let id = h.id.clone();
+                        m = m.child(menu_row(h.label(), Some(Icon::Folder), None, current.as_deref() == Some(h.id.as_str()), move || {
+                            store::switch_host(Some(id.clone()))
+                        }));
+                    }
+                    m = m.child(menu_row(t("New space…"), Some(Icon::FolderPlus), None, false, || store::open_modal(store::Modal::CreateSpace)));
                 }
-                m = m.child(menu_row(t("New space…"), Some(Icon::FolderPlus), None, false, || store::open_modal(store::Modal::CreateSpace)));
                 let others: Vec<_> = hosts.iter().filter(|h| !is_space(h)).cloned().collect();
                 if !others.is_empty() {
-                    m = m.child(menu_divider()).child(menu_heading(t("Other computers")));
+                    if local {
+                        m = m.child(menu_divider());
+                    }
+                    m = m.child(menu_heading(if local { t("Other computers") } else { t("Computers") }));
                 }
                 for h in others {
                     let id = h.id.clone();
@@ -168,6 +187,23 @@ fn nav_item(
 }
 
 fn empty_list() -> impl IntoElement {
+    service_status()
+}
+
+/// A Mac that runs no agents of its own, connected to no computer yet: the
+/// computers nearby, and adding one by its link or address.
+fn connect_elsewhere() -> impl IntoElement {
+    view()
+        .flex_1()
+        .px(px(S3))
+        .pt(px(S3))
+        .gap(px(S3))
+        .child(text(t("Connect to the computer your agents run on")).text_size(px(TEXT_SM)).line_height(px(18.0)).text_color(FG_MUTED))
+        .child(crate::ui::shared::modals::nearby_list())
+        .child(btn(t("Add host…"), Variant::Secondary, Sz::Sm, Some(Icon::Plus), || store::open_modal(store::Modal::AddHost)))
+}
+
+fn service_status() -> impl IntoElement {
     let conn = computed(store::conn);
     let failed = computed(store::service_start_error);
     // This Mac's service starts on its own: a button only when that failed.

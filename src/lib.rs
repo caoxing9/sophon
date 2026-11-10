@@ -77,6 +77,7 @@ pub fn App() -> impl IntoElement {
     store::watch_pairing_links();
     // The web's desktop idiom is still a page: no bridge, no updates.
     if is_desktop() && !cfg!(target_arch = "wasm32") {
+        // A Mac that only connects to others runs none of this side.
         store::start_bridge();
         store::start_spaces();
         store::watch_keep_awake();
