@@ -234,7 +234,13 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                     .into_element()
                 }
                 RowKind::Assistant => text_view()
-                    .markdown(move || Some(SharedString::from(text_of())))
+                    // While searching, the words found are marked in the
+                    // text itself, not only the message they are in.
+                    .markdown(move || {
+                        let body = text_of();
+                        let f = store::find();
+                        Some(SharedString::from(if f.open && hit.get() > 0 { mark_matches(&body, &f.query) } else { body }))
+                    })
                     .options(move || MarkdownOptions { streaming: streaming.get(), ..MarkdownOptions::default() })
                     .selectable(true)
                     .gap_3()
@@ -289,6 +295,65 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
 
 /// A user message on the right: the images it carried as thumbnails over
 /// its bubble (no bubble when it was images alone).
+/// `markdown` with each run of `query` (any case) inside `<mark>`, which
+/// the text view shows highlighted. Code (fenced or inline), a link's
+/// address and HTML tags are left alone: marks there would show as text or
+/// break the link.
+pub(crate) fn mark_matches(markdown: &str, query: &str) -> String {
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return markdown.to_owned();
+    }
+    let mut out = String::with_capacity(markdown.len() + 32);
+    let mut fenced = false;
+    for line in markdown.split_inclusive('\n') {
+        let fence = line.trim_start().starts_with("```") || line.trim_start().starts_with("~~~");
+        if fence {
+            fenced = !fenced;
+        }
+        let lower = line.to_lowercase();
+        // Lowercasing that moves bytes (rare) would misplace the marks.
+        if fenced || fence || lower.len() != line.len() {
+            out.push_str(line);
+            continue;
+        }
+        // Where marks may not go: `code`, `](address)`, `<tag>`.
+        let mut closed = vec![false; line.len()];
+        let bytes = line.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            let end = match bytes[i] {
+                b'`' => line[i + 1..].find('`').map(|e| i + 1 + e + 1),
+                b']' if bytes.get(i + 1) == Some(&b'(') => line[i..].find(')').map(|e| i + e + 1),
+                b'<' => line[i..].find('>').map(|e| i + e + 1),
+                _ => None,
+            };
+            match end {
+                Some(end) => {
+                    closed[i..end].iter_mut().for_each(|c| *c = true);
+                    i = end;
+                }
+                None => i += 1,
+            }
+        }
+        let mut at = 0;
+        while let Some(found) = lower[at..].find(&needle) {
+            let (start, end) = (at + found, at + found + needle.len());
+            if closed[start..end].iter().any(|c| *c) || !line.is_char_boundary(start) || !line.is_char_boundary(end) {
+                out.push_str(&line[at..end.min(line.len())]);
+            } else {
+                out.push_str(&line[at..start]);
+                out.push_str("<mark>");
+                out.push_str(&line[start..end]);
+                out.push_str("</mark>");
+            }
+            at = end;
+        }
+        out.push_str(&line[at..]);
+    }
+    out
+}
+
 /// A sent message's text with its attachments' chips where they stood in
 /// the composer (`[name]` in the text, `composer_doc::segments`): a
 /// picture's chip carries its thumbnail and shows it large under the
@@ -300,11 +365,27 @@ fn user_text(item: Memo<Option<Item>>, selectable: bool) -> impl IntoElement {
             Some(Item::User { text, images, .. }) => (text.clone(), images.clone()),
             _ => Default::default(),
         });
+        let f = store::find();
         Some(untracked(move || {
             let mut line = text("").text_size(px(TEXT_CONTENT)).line_height(px(22.0)).text_color(FG).selectable(selectable);
             let mut pictures = images.into_iter();
+            let needle = if f.open { f.query.trim().to_lowercase() } else { String::new() };
             for segment in segments(&body) {
                 line = match segment {
+                    // The words a search found, marked as the replies' are.
+                    Segment::Text(t) if !needle.is_empty() && t.to_lowercase().len() == t.len() => {
+                        let lower = t.to_lowercase();
+                        let mut at = 0;
+                        while let Some(found) = lower[at..].find(&needle) {
+                            let (start, end) = (at + found, at + found + needle.len());
+                            if !t.is_char_boundary(start) || !t.is_char_boundary(end) {
+                                break;
+                            }
+                            line = line.child(text(t[at..start].to_owned())).child(text(t[start..end].to_owned()).bg(tint(DOT_WARNING, 0.35)));
+                            at = end;
+                        }
+                        line.child(text(t[at..].to_owned()))
+                    }
                     Segment::Text(t) => line.child(text(t)),
                     Segment::Chip(name) => {
                         let thumb = if is_image_name(&name) { pictures.next() } else { None };
@@ -339,13 +420,20 @@ fn sent_chip(name: String, thumb: Option<String>) -> View {
         ),
         None => chip.child(icon(if crate::ui::shared::composer_doc::is_image_name(&name) { Icon::Image } else { Icon::File }, 13.0).text_color(FG_MUTED)),
     };
+    let chip_name = name.clone();
     let chip = chip.child(text(name).text_size(px(TEXT_SM)).text_color(FG).number_of_lines(1));
+    // A picture's chip opens it large (and shows it under the pointer).
     match thumb {
-        Some(uri) => chip.tooltip(
-            glass_strong(view()).p(px(S1)).rounded(px(R_LG)).child(
-                image(SharedString::from(uri)).w(px(280.0)).h(px(280.0)).object_fit(nsh_core::ResizeMode::Contain).rounded(px(R_MD)),
-            ),
-        ),
+        Some(uri) => {
+            let (open_name, open_uri) = (chip_name, uri.clone());
+            chip.hover(|s| s.border_color(ACCENT))
+                .on_press(move |_: &PressEvent| store::open_modal(store::Modal::Picture { name: open_name.clone(), uri: open_uri.clone() }))
+                .tooltip(
+                    glass_strong(view()).p(px(S1)).rounded(px(R_LG)).child(
+                        image(SharedString::from(uri)).w(px(280.0)).h(px(280.0)).object_fit(nsh_core::ResizeMode::Contain).rounded(px(R_MD)),
+                    ),
+                )
+        }
         None => chip,
     }
 }
@@ -1039,20 +1127,22 @@ pub(crate) fn find_bar() -> impl IntoElement {
     when(open, || {
         let count = computed(|| store::find_matches().len());
         let cur = computed(|| store::find().current);
-        view()
+        let asked = computed(|| !store::find().query.trim().is_empty());
+        // A compact panel over the conversation's top right corner, as a
+        // browser's or an editor's (the phone: across its top): it covers
+        // nothing that the search moves to, and pushes nothing down.
+        let panel = glass_strong(view())
             .flex_row()
             .items_center()
-            .gap(px(S2))
-            .mx(px(S6))
-            .mb(px(S2))
-            .px(px(S2))
-            .py(px(S1))
-            .rounded(px(R_FULL))
-            .border_1()
-            .border_color(BORDER_STRONG)
-            .bg(SURFACE0)
-            .shadow_sm()
-            .child(icon(Icon::Search, 15.0).text_color(FG_MUTED).ml(px(S1)))
+            .gap(px(S1))
+            .h(px(40.0))
+            .pl(px(S3))
+            .pr(px(S1))
+            .rounded(px(R_XL))
+            .shadow_lg();
+        let panel = if MOBILE { panel.mx(px(S2)).mb(px(S2)) } else { panel.absolute().top(px(S2)).right(px(S6)).w(px(360.0)) };
+        panel
+            .child(icon(Icon::Search, 15.0).text_color(FG_MUTED))
             .child(
                 nsh_core::element::input()
                     .value(|| store::find().query)
@@ -1062,17 +1152,25 @@ pub(crate) fn find_bar() -> impl IntoElement {
                     .auto_focus(true)
                     .text_size(px(TEXT_BASE))
                     .text_color(FG)
+                    .caret_color(|| color(ACCENT))
                     .h(px(28.0))
-                    .flex_1(),
+                    .ml(px(S1))
+                    .flex_1()
+                    .min_w(px(0.0)),
             )
             .child(
-                text(move || match count.get() {
-                    0 => String::new(),
-                    n => format!("{}/{n}", cur.get().min(n - 1) + 1),
+                text(move || match (count.get(), asked.get()) {
+                    (0, true) => t("No results").to_owned(),
+                    (0, false) => String::new(),
+                    (n, _) => format!("{} / {n}", cur.get().min(n - 1) + 1),
                 })
                 .text_size(px(TEXT_SM))
-                .text_color(FG_MUTED),
+                .text_color(FG_MUTED)
+                .tabular_nums()
+                .number_of_lines(1)
+                .flex_shrink_0(),
             )
+            .child(view().w(px(1.0)).h(px(18.0)).mx(px(S1)).bg(BORDER))
             .child(icon_btn(Icon::ChevronUp, Sz::Sm, t("Previous match"), || store::find_step(false)))
             .child(icon_btn(Icon::ChevronDown, Sz::Sm, t("Next match"), || store::find_step(true)))
             .child(icon_btn(Icon::X, Sz::Sm, t("Close find"), store::toggle_find))
@@ -1115,4 +1213,21 @@ fn thinking(running: Memo<bool>) -> impl IntoElement {
                 .into_element()
         }))
     }))
+}
+
+#[cfg(test)]
+mod find_tests {
+    use super::mark_matches;
+
+    #[test]
+    fn a_search_marks_its_words_in_the_text_but_not_in_code_or_addresses() {
+        assert_eq!(mark_matches("Run the Tests now", "tests"), "Run the <mark>Tests</mark> now");
+        assert_eq!(mark_matches("简历要改两处，简历源文件", "简历"), "<mark>简历</mark>要改两处，<mark>简历</mark>源文件");
+        // Inline code, a link's address and fenced code keep their text.
+        assert_eq!(mark_matches("use `cargo test` to test", "test"), "use `cargo test` to <mark>test</mark>");
+        assert_eq!(mark_matches("[test docs](https://x.dev/test)", "test"), "[<mark>test</mark> docs](https://x.dev/test)");
+        assert_eq!(mark_matches("a test\n```\ntest()\n```\ntest", "test"), "a <mark>test</mark>\n```\ntest()\n```\n<mark>test</mark>");
+        assert_eq!(mark_matches("nothing here", "zzz"), "nothing here");
+        assert_eq!(mark_matches("same", " "), "same");
+    }
 }

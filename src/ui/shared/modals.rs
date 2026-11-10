@@ -89,6 +89,28 @@ fn body(m: Modal) -> View {
         Modal::RenameHost { id, name } => rename(t("Rename host"), name, move |v| {
             store::rename_host(&id, v);
         }),
+        Modal::Picture { name, uri } => glass_strong(view())
+            .p(px(S3))
+            .gap(px(S3))
+            .rounded(px(22.0))
+            .max_w(relative(0.92))
+            .child(
+                image(SharedString::from(uri))
+                    .w(px(880.0))
+                    .max_w(relative(1.0))
+                    .h(px(620.0))
+                    .object_fit(nsh_core::ResizeMode::Contain)
+                    .rounded(px(R_XL)),
+            )
+            .child(
+                view()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(S2))
+                    .pl(px(S2))
+                    .child(text(name).text_size(px(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1).flex_1())
+                    .child(btn(t("Close"), Variant::Secondary, Sz::Md, None, store::close_modal)),
+            ),
         Modal::RenameMySpace { name } => rename(t("Rename space"), name, store::rename_my_space),
         Modal::RemoveSpace { id, name, folder } => sheet(t("Remove space"))
             .child(

@@ -247,7 +247,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                     )
                     .child(menu_row(t("Choose images…"), Some(Icon::Image), None, false, with_key(pick_images_into)))
                     .child(menu_row(t("Choose files…"), Some(Icon::File), None, false, with_key(pick_files_into)))
-                    .child(menu_row(t("Paste image"), Some(Icon::Copy), None, false, with_key(paste_image_into))),
+
                 )
                 .child(mic_button(doc))
                 .child(model_picker(live)),
@@ -856,28 +856,6 @@ fn percent_decode(s: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
-}
-
-/// The image on the clipboard, attached to the message as a chip.
-fn paste_image_into(key: String) {
-    store::spawn_detached(async move {
-        let Some(img) = clipboard_image().await else {
-            store::notify(t("No image on the clipboard").into());
-            return;
-        };
-        match fetch(img.url.as_str()).await {
-            Ok(resp) if resp.ok() => {
-                use base64::Engine;
-                let mime = resp.header("content-type").unwrap_or("image/png").to_owned();
-                insert_images(&key, vec![crate::daemon::connection::ImageInput {
-                    name: t("Pasted image").into(),
-                    mime,
-                    data: base64::engine::general_purpose::STANDARD.encode(&resp.body),
-                }]);
-            }
-            _ => store::notify(t("Could not read the pasted image").into()),
-        }
-    });
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

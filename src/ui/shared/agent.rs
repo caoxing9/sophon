@@ -23,14 +23,16 @@ pub(crate) fn agent_pane(bar: bool) -> impl IntoElement {
     view()
         .flex_1()
         .when(bar, |v| v.child(agent_bar(agent)))
-        .child(timeline::find_bar())
+        .when(MOBILE, |v| v.child(timeline::find_bar()))
         // On the phone a tap on the conversation (not on something in it
         // that takes taps) puts the keyboard away, as Messages does.
         .child(
             view()
                 .flex_1()
                 .when(MOBILE, |v| v.on_press(|_: &PressEvent| dismiss_keyboard()))
-                .child(timeline::timeline()),
+                .child(timeline::timeline())
+                // The desktop's find panel floats over the conversation.
+                .when(!MOBILE, |v| v.child(timeline::find_bar())),
         )
         .child(
             view()

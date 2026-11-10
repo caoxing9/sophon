@@ -793,6 +793,8 @@ pub(crate) enum Modal {
     RenameWorkspace { id: String, name: String },
     RenameAgent { id: String, name: String },
     RenameHost { id: String, name: String },
+    /// A picture of a sent message, large.
+    Picture { name: String, uri: String },
     /// Renames the first space on this Mac.
     RenameMySpace { name: String },
     /// Removes a space on this Mac (its service stops; its folder stays).
