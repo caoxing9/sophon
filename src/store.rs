@@ -650,6 +650,9 @@ struct Timeline {
     /// The epoch and last seq `items` hold: live events at or before it
     /// are repeats.
     cursor: Option<(String, u64)>,
+    /// Tool-call groups the user opened (true) or closed (false), by the
+    /// group's id; kept while the conversation is open.
+    folds: HashMap<String, bool>,
 }
 /// Messages waiting for the running turn to end, per agent.
 #[derive(Clone, Default)]
@@ -1031,11 +1034,37 @@ pub(crate) fn item_at(index: usize) -> Option<Item> {
     global::<Timeline>().with(|t| t.items.get(index).cloned())
 }
 
-pub(crate) fn item_keys() -> Vec<String> {
+/// The conversation's rows as the list shows them: runs of tool calls
+/// folded into one summary row each.
+/// The list reads it through one memo, so it is worked out once per change
+/// rather than once per row.
+pub(crate) fn display_rows() -> Vec<crate::fold::Row> {
     global::<Timeline>().with(|t| {
-        let agent = t.agent_id.as_deref().unwrap_or_default();
-        (0..t.items.len()).map(|i| format!("{agent}:{i}")).collect()
+        // The conversation's own agent, read without cloning it: this runs
+        // on every streamed word.
+        let running = t.agent_id.as_deref().is_some_and(|id| {
+            global::<Agents>().with(|a| a.0.iter().any(|x| x.id == id && x.is_running()))
+        });
+        crate::fold::fold(&t.items, running, &t.folds)
     })
+}
+
+/// The list's keys for `rows`: the agent's id with each row's own.
+pub(crate) fn row_keys(rows: &[crate::fold::Row]) -> Vec<String> {
+    let agent = global::<Timeline>().with(|t| t.agent_id.clone().unwrap_or_default());
+    rows.iter().map(|r| format!("{agent}:{}", r.key())).collect()
+}
+
+/// What a group's calls did, for its summary row.
+pub(crate) fn group_summary(start: usize, end: usize) -> crate::fold::Summary {
+    global::<Timeline>().with(|t| crate::fold::summarize(t.items.get(start..end).unwrap_or_default()))
+}
+
+/// Opens or folds a group of tool calls.
+pub(crate) fn set_group_open(id: &str, open: bool) {
+    global::<Timeline>().update(|t| {
+        t.folds.insert(id.to_owned(), open);
+    });
 }
 
 pub(crate) fn timeline_loaded() -> bool {
@@ -2864,7 +2893,9 @@ pub(crate) fn set_timeline_list(list: ElementRef) {
     TIMELINE_LIST.with_borrow_mut(|l| *l = Some(list));
 }
 
+/// Brings item `index` into view: its row, or its folded group's.
 pub(crate) fn scroll_timeline_to(index: usize) {
+    let Some(index) = crate::fold::row_of(&display_rows(), index) else { return };
     TIMELINE_LIST.with_borrow(|l| {
         if let Some(list) = l {
             list.scroll_to_index(index as u32, nsh_core::geometry::Percentage(0.3), px(0.0), true);

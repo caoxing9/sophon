@@ -650,6 +650,21 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Write a draft first, then copy its link", "先写好草稿，再复制它的链接"),
     ("This draft is too long for a link", "这份草稿太长，放不进链接"),
     ("Opened a prompt link as a draft. Review it, then send", "已把提示词链接打开为草稿，请检查后再发送"),
+    // A folded run of tool calls: "Ran 3 commands, edited 2 files".
+    ("ran 1 command", "运行了 1 条命令"),
+    ("ran {} commands", "运行了 {} 条命令"),
+    ("edited 1 file", "编辑了 1 个文件"),
+    ("edited {} files", "编辑了 {} 个文件"),
+    ("read 1 file", "读取了 1 个文件"),
+    ("read {} files", "读取了 {} 个文件"),
+    ("ran 1 search", "搜索了 1 次"),
+    ("ran {} searches", "搜索了 {} 次"),
+    ("fetched 1 page", "获取了 1 个网页"),
+    ("fetched {} pages", "获取了 {} 个网页"),
+    ("1 other action", "执行了 1 项其他操作"),
+    ("{} other actions", "执行了 {} 项其他操作"),
+    (", ", "，"),
+    ("{} failed", "{} 项失败"),
 ];
 
 #[cfg(test)]
