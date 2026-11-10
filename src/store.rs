@@ -3547,6 +3547,28 @@ pub(crate) fn prompts() -> Vec<(usize, String)> {
     })
 }
 
+/// The conversation's turns, for the rail beside it: each user message's
+/// row and first line, and how the reply to it begins.
+pub(crate) fn turns() -> Vec<(usize, String, String)> {
+    global::<Timeline>().with(|t| {
+        let mut out: Vec<(usize, String, String)> = Vec::new();
+        for (n, item) in t.items.iter().enumerate() {
+            match item {
+                Item::User { text, .. } => out.push((n, text.lines().next().unwrap_or_default().to_owned(), String::new())),
+                Item::Assistant { text } => {
+                    if let Some(last) = out.last_mut().filter(|l| l.2.is_empty()) {
+                        // Its start, as plain words: no Markdown marks.
+                        let plain: String = text.chars().filter(|c| !matches!(c, '#' | '*' | '`' | '>')).take(220).collect();
+                        last.2 = plain.split_whitespace().collect::<Vec<_>>().join(" ");
+                    }
+                }
+                _ => {}
+            }
+        }
+        out
+    })
+}
+
 pub(crate) fn rewind(message_id: &str, mode: &'static str) {
     if let Some(agent) = selected_id() {
         send(Command::Rewind { agent, message_id: message_id.to_owned(), mode });

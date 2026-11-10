@@ -75,9 +75,9 @@ fn agent_tools_of(agent: Memo<Option<crate::daemon::Agent>>) -> impl IntoElement
         .child(text(move || label.get()).text_size(px(TEXT_SM)).text_color(FG_FAINT).number_of_lines(1).flex_shrink(1.0))
         .child(composer::context_meter())
         .child(view().w(px(S1)))
-        .child(
-            dropup_or_down_outline(),
-        )
+        // The phone's outline; the desktop has the rail beside the
+        // conversation (`timeline::turn_rail`).
+        .when(MOBILE, |v| v.child(dropup_or_down_outline()))
         .child(icon_btn(Icon::Search, Sz::Sm, t("Find in conversation"), store::toggle_find))
         .child(
             dropdown(

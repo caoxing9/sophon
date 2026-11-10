@@ -89,9 +89,66 @@ pub(crate) fn timeline() -> impl IntoElement {
                 .child(when(store::loading_older, || {
                     view().absolute().top(px(S2)).left(px(0.0)).right(px(0.0)).items_center().child(eclipse(24.0))
                 }))
+                .when(!MOBILE, |v| v.child(turn_rail()))
                 .into_element()
         }))
     }))
+}
+
+/// The conversation's turns down its left edge, as T3 Code's: a tick per
+/// message of the user's (longer for a longer one); under the pointer, a
+/// card with the message and how the reply begins; a press goes to it.
+fn turn_rail() -> impl IntoElement {
+    let turns = computed(store::turns);
+    view()
+        .absolute()
+        .top(px(0.0))
+        .bottom(px(0.0))
+        .left(px(S1))
+        .justify_center()
+        .pointer_events(PointerEvents::BoxNone)
+        .child(dynamic(move || {
+            let list = turns.get();
+            // One message needs no map.
+            if list.len() < 2 {
+                return None;
+            }
+            Some(untracked(move || {
+                let mut rail = view().items_start();
+                for (row, message, reply) in list {
+                    let width = 8.0 + (message.chars().count().min(40) as f32) * 0.35;
+                    let card = glass_strong(view())
+                        .w(px(320.0))
+                        .p(px(S3))
+                        .gap(px(S1))
+                        .rounded(px(R_XL))
+                        .child(text(message).text_size(px(TEXT_BASE)).font_weight(FontWeight(600)).text_color(FG).number_of_lines(1))
+                        .when(!reply.is_empty(), |v| {
+                            v.child(text(reply).text_size(px(TEXT_SM)).line_height(px(18.0)).text_color(FG_MUTED).number_of_lines(3))
+                        });
+                    rail = rail.child(
+                        view().tooltip(card).child(
+                            nsh_base::button()
+                                .on_press(move || store::scroll_timeline_to(row))
+                                .h(px(9.0))
+                                .w(px(26.0))
+                                .justify_center()
+                                .group()
+                                .child(
+                                    view()
+                                        .h(px(2.0))
+                                        .w(px(width))
+                                        .rounded(px(1.0))
+                                        .bg(tint(FG, 0.22))
+                                        .group_hover(|s| s.bg(FG))
+                                        .transition_colors(),
+                                ),
+                        ),
+                    );
+                }
+                scroll().max_h(relative(0.7)).child(rail).into_element()
+            }))
+        }))
 }
 
 fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElement {
