@@ -580,7 +580,6 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("My computer", "我的电脑"),
     ("Close", "关闭"),
     ("Connected", "已连接"),
-    ("Computers", "电脑"),
     ("Pair another computer", "配对另一台电脑"),
     ("Forget this computer", "忘记这台电脑"),
     ("Can't reach the computer. Make sure it's awake and Sophon is running there. ({})", "连不上电脑。请确认电脑没有休眠，并且 Sophon 正在运行。（{}）"),
