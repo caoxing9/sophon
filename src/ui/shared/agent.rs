@@ -31,6 +31,17 @@ pub(crate) fn agent_pane(bar: bool) -> impl IntoElement {
                 .flex_1()
                 .when(MOBILE, |v| v.on_press(|_: &PressEvent| dismiss_keyboard()))
                 .child(timeline::timeline())
+                // This device's copy shows while the host says what came since.
+                .child(when(store::timeline_syncing, || {
+                    view()
+                        .absolute()
+                        .top(px(S2))
+                        .left(px(0.0))
+                        .right(px(0.0))
+                        .items_center()
+                        .pointer_events(nsh_core::PointerEvents::BoxNone)
+                        .child(glass_strong(view()).rounded(px(R_FULL)).pl(px(S1)).pr(px(S3)).py(px(2.0)).child(working(t("Syncing…"))))
+                }))
                 // The desktop's find panel floats over the conversation.
                 .when(!MOBILE, |v| v.child(timeline::find_bar())),
         )

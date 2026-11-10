@@ -644,6 +644,24 @@ async fn forward<S: AsyncRead + AsyncWrite + Unpin>(
                     plain = Message::Text(v.to_string());
                 }
                 if let Message::Close(_) = plain { break; }
+                // The pictures of the messages that pass are kept here (the
+                // service's history has their text alone), and given back
+                // to a device that asks: one that did not send them, or
+                // has forgotten them.
+                if let Message::Text(t) = &plain
+                    && (t.as_str().contains("\"images\"") || t.as_str().contains("sophon_pictures_request"))
+                    && let Ok(v) = serde_json::from_str::<Value>(t.as_str())
+                {
+                    if v.get("type").and_then(Value::as_str) == Some("sophon_pictures_request") {
+                        let field = |k| v.get(k).and_then(Value::as_str).unwrap_or_default();
+                        let pictures = crate::sent_pictures::of(field("messageId"), field("text"));
+                        let answer = json!({ "type": "sophon_pictures", "messageId": field("messageId"), "text": field("text"), "pictures": pictures });
+                        let sealed = seal.seal(Message::Text(answer.to_string()))?;
+                        ptx.send(to_ws(sealed)).await.map_err(|e| e.to_string())?;
+                        continue;
+                    }
+                    keep_pictures(&v);
+                }
                 dtx.send(to_ws(plain)).await.map_err(|e| e.to_string())?;
             }
             frame = drx.next() => {
@@ -656,6 +674,34 @@ async fn forward<S: AsyncRead + AsyncWrite + Unpin>(
         }
     }
     Ok(())
+}
+
+/// Keeps the pictures a device's message carries (one sent to an agent, or
+/// the one that starts an agent): under the message's id, or its words
+/// when the service is to make the id.
+fn keep_pictures(frame: &Value) {
+    let Some(m) = frame.get("message") else { return };
+    let pictures: Vec<String> = m
+        .get("images")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|i| Some(format!("data:{};base64,{}", i.get("mimeType")?.as_str()?, i.get("data")?.as_str()?)))
+                .collect()
+        })
+        .unwrap_or_default();
+    if pictures.is_empty() {
+        return;
+    }
+    let field = |k| m.get(k).and_then(Value::as_str);
+    match field("messageId") {
+        Some(id) => crate::sent_pictures::keep(id, &pictures),
+        None => {
+            if let Some(text) = field("initialPrompt").or(field("text")) {
+                crate::sent_pictures::keep_for_text(text, &pictures);
+            }
+        }
+    }
 }
 
 /// Why a pairing request came to nothing.

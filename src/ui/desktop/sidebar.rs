@@ -140,11 +140,7 @@ fn host_body() -> View {
                         .items_center()
                         .min_w(px(0.0))
                         .gap(px(5.0))
-                        .child(status_dot(move || match conn.get() {
-                            Conn::Connected { .. } => Status::Done,
-                            Conn::Down(_) => Status::Failed,
-                            _ => Status::Idle,
-                        }))
+                        .child(crate::ui::shared::conn_mark())
                         .child(
                             text(move || {
                                 let name = remote.get();

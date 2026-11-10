@@ -15,6 +15,7 @@ mod i18n;
 mod lan;
 mod platform;
 mod prompt_link;
+mod sent_pictures;
 mod spaces;
 mod store;
 mod models;

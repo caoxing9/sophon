@@ -12,7 +12,7 @@ pub(crate) mod kit;
 
 mod desktop;
 mod mobile;
-mod shared;
+pub(crate) mod shared;
 
 use nsh_core::prelude::*;
 

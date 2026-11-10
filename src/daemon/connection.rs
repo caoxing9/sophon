@@ -27,6 +27,9 @@ pub enum Command {
     /// `message_id`: the id the host echoes the message back with, so the
     /// copy shown at once is not shown twice.
     Send { agent_id: String, text: String, behavior: Option<&'static str>, images: Vec<ImageInput>, attachments: Vec<Value>, message_id: String },
+    /// Asks the host's Sophon (its bridge) for the pictures of a message
+    /// this device has none of: sent from another device, or forgotten.
+    AskPictures { message_id: String, text: String },
     /// Uploads a file to the host for the next message; answered by
     /// [`Event::Uploaded`] with the same `id`.
     Upload { id: String, name: String, mime: String, bytes: Vec<u8> },
@@ -415,6 +418,8 @@ fn redact(line: &str) -> String {
 /// ending the session or attempt under way.
 pub fn switch_host(next: Option<RemoteHost>) {
     trace(&format!("switch to {}", next.as_ref().map_or("this computer", |_| "a saved host")));
+    // At once: a conversation opened before the task turns reads this host's copy.
+    super::cache::set_host(super::cache::host_key(next.as_ref().map(|r| r.url.as_str())));
     *SWITCH.lock().unwrap_or_else(|e| e.into_inner()) = Some(next);
     switch_signal().notify_one();
 }
@@ -513,6 +518,11 @@ pub enum Event {
     /// already holds are not applied again.
     TimelineReset { agent_id: String, items: Vec<Item>, older: Option<Value>, cursor: Option<(String, u64)> },
     TimelineOlder { agent_id: String, items: Vec<Item>, older: Option<Value> },
+    /// The conversation shown from this device's copy has everything the
+    /// host has now (what came since arrived as `TimelineLive`).
+    TimelineSynced { agent_id: String },
+    /// The pictures the host's Sophon kept for a message (`AskPictures`).
+    Pictures { message_id: String, text: String, pictures: Vec<String> },
     Commands { agent_id: String, list: Vec<SlashCommand> },
     Diff { cwd: String, files: Vec<DiffFile>, error: Option<String>, too_large: bool },
     Terminals { cwd: String, list: Vec<TerminalInfo> },
@@ -576,12 +586,30 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
     // LAN does not answer (away from home), the LAN again after that.
     let mut lan_index = 0usize;
     let mut backoff = Duration::from_secs(1);
+    // The host whose kept lists the UI has been given.
+    let mut shown: Option<String> = None;
     loop {
+        let key = super::cache::host_key(remote.as_ref().map(|r| r.url.as_str()));
+        if shown.as_deref() != Some(key.as_str()) {
+            super::cache::set_host(key.clone());
+            shown = Some(key);
+            // What this host said last time, before it answers again.
+            for ev in cached_lists() {
+                if events.send(ev).is_err() {
+                    return;
+                }
+            }
+        }
         let endpoint = match &remote {
             Some(r) => {
                 // Where its bridge is on this network now, if it is here:
-                // first, before the addresses pairing gave.
-                let found = if lan_index == 0 { find_bridge(r, Duration::from_millis(1500)).await } else { None };
+                // first, before the addresses pairing gave. Away from it
+                // (nothing answers) the relay at once, not after each
+                // address has timed out in turn.
+                let found = if lan_index == 0 { lan_now(r).await } else { None };
+                if lan_index == 0 && found.is_none() && has_relay(r) {
+                    lan_index = usize::MAX;
+                }
                 endpoint_for(r, lan_index, found)
             }
             None => discover(),
@@ -735,9 +763,62 @@ fn endpoint_for(r: &RemoteHost, lan_index: usize, found: Option<String>) -> Endp
 }
 
 /// A paired host's bridge on this network now, found by its key.
-async fn find_bridge(r: &RemoteHost, wait: Duration) -> Option<String> {
-    let (_, key, _) = super::relay::PairingLink::parse(&r.url)?.lan?;
-    find_key(B64.encode(key), wait).await
+fn has_relay(r: &RemoteHost) -> bool {
+    super::relay::PairingLink::parse(&r.url).is_some_and(|l| l.relay.is_some() && l.lan.is_some())
+}
+
+/// The address the host's bridge answers at on this network, if it is
+/// here: where Bonjour finds it, else the first of pairing's addresses
+/// that takes a connection. All asked at once, for under a second.
+async fn lan_now(r: &RemoteHost) -> Option<String> {
+    let (addrs, key, _) = super::relay::PairingLink::parse(&r.url)?.lan?;
+    let addrs: Vec<String> = addrs.split(',').filter(|a| !a.is_empty()).map(str::to_owned).collect();
+    let named = find_key(B64.encode(key), Duration::from_millis(900));
+    let answering = async {
+        let probes = addrs.iter().map(|a| async move { rt::reachable(a, Duration::from_millis(800)).await.then(|| a.clone()) });
+        futures_util::future::join_all(probes).await.into_iter().flatten().next()
+    };
+    let (named, answering) = tokio::join!(named, answering);
+    named.or(answering)
+}
+
+/// The lists this device kept of the current host, as the events its
+/// answers make.
+fn cached_lists() -> Vec<Event> {
+    let mut out = vec![];
+    for (kind, name) in LISTS {
+        if let Some(payload) = super::cache::load(name) {
+            out.extend(handle(kind, &payload, &mut HashMap::new(), None, &mut vec![]));
+        }
+    }
+    out
+}
+
+/// The answers kept whole, and the names they are kept under.
+const LISTS: [(&str, &str); 3] =
+    [("project.list.response", "projects"), ("fetch_workspaces_response", "workspaces"), ("fetch_agents_response", "agents")];
+
+/// A conversation's page as the host sent it: its items, the cursor of the
+/// page before it (while there is one), and where it ends.
+pub fn timeline_page(payload: &Value) -> (Vec<Item>, Option<Value>, Option<(String, u64)>) {
+    let items = payload
+        .get("entries")
+        .and_then(Value::as_array)
+        .map(|entries| entries.iter().filter_map(|e| e.get("item").and_then(Item::from_json)).collect())
+        .unwrap_or_default();
+    let older = (payload.get("hasOlder").and_then(Value::as_bool) == Some(true))
+        .then(|| payload.get("startCursor").cloned())
+        .flatten()
+        .filter(|c| !c.is_null());
+    (items, older, end_cursor(payload))
+}
+
+/// The page of `agent_id` this device kept, for showing before the host
+/// answers.
+pub fn cached_timeline(agent_id: &str) -> Option<(Vec<Item>, Option<Value>, Option<(String, u64)>)> {
+    let page = timeline_page(&super::cache::load(&super::cache::timeline_name(agent_id))?);
+    // Without its end there is no asking for what came after.
+    page.2.is_some().then_some(page)
 }
 
 /// The address Bonjour finds the bridge with `key` (base64) at, on a thread
@@ -773,6 +854,8 @@ enum Pending {
     Workspaces,
     Providers,
     Timeline(String),
+    /// What came after the page this device kept.
+    After(String, u64),
     Older(String),
     Commands,
     Suggest(String),
@@ -915,6 +998,14 @@ async fn session(
                 if let Command::Open(id) = &cmd {
                     *open_agent = Some(id.clone());
                 }
+                if let Command::AskPictures { message_id, text } = &cmd {
+                    // Sophon's bridge answers this, not the service: only
+                    // a session that goes through one asks.
+                    if connected && endpoint.bridge_token.is_some() {
+                        send(&mut tx, &json!({ "type": "sophon_pictures_request", "messageId": message_id, "text": text })).await?;
+                    }
+                    continue;
+                }
                 if let Command::WatchDiff(cwd) = &cmd {
                     if *diff_cwd == *cwd {
                         continue;
@@ -1016,6 +1107,18 @@ async fn session(
                         return Err(format!("The daemon refused this client: {reason}"));
                     }
                     Some("session") => {}
+                    Some("sophon_pictures") => {
+                        let field = |k| msg.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
+                        let pictures: Vec<String> = msg
+                            .get("pictures")
+                            .and_then(Value::as_array)
+                            .map(|l| l.iter().filter_map(Value::as_str).filter(|p| p.starts_with("data:image/")).map(str::to_owned).collect())
+                            .unwrap_or_default();
+                        if !pictures.is_empty() && events.send(Event::Pictures { message_id: field("messageId"), text: field("text"), pictures }).is_err() {
+                            return Ok(Exit::UiGone);
+                        }
+                        continue;
+                    }
                     _ => continue,
                 }
                 let Some(inner) = msg.get("message") else { continue };
@@ -1051,6 +1154,9 @@ async fn session(
                 }
                 if kind == "subscribe_checkout_diff_response" {
                     diff_sub = payload.get("subscriptionId").and_then(Value::as_str).map(str::to_owned);
+                }
+                if let Some((_, name)) = LISTS.iter().find(|(k, _)| *k == kind) {
+                    super::cache::save(name, &payload);
                 }
                 let mut follow_ups = Vec::new();
                 for ev in handle(kind, &payload, &mut pending, open_agent.as_deref(), &mut follow_ups) {
@@ -1092,22 +1198,51 @@ fn end_cursor(payload: &Value) -> Option<(String, u64)> {
 /// Items a conversation opens with, and each earlier page brings.
 const TIMELINE_PAGE: u32 = 40;
 
+/// The latest page of a conversation, whole.
+fn tail_request(agent_id: &str, pending: &mut HashMap<String, Pending>) -> Value {
+    request(
+        pending,
+        Pending::Timeline(agent_id.to_owned()),
+        json!({
+            "type": "fetch_agent_timeline_request",
+            "agentId": agent_id,
+            "direction": "tail",
+            // A screenful at a time: earlier ones load as
+            // the conversation scrolls up, so a long agent opens as
+            // fast as a short one, through a relay too.
+            "limit": TIMELINE_PAGE,
+            "projection": "projected",
+        }),
+    )
+}
+
 fn timeline_requests(agent_id: &str, pending: &mut HashMap<String, Pending>) -> Vec<Value> {
-    vec![
-        request(
+    // With a page kept on this device (shown already), only what came
+    // after it; the host answers with the latest page instead when the
+    // kept one no longer joins on (`reset`).
+    let kept = super::cache::load(&super::cache::timeline_name(agent_id)).and_then(|p| {
+        let cursor = p.get("endCursor")?;
+        let seq = cursor.get("seq")?.as_u64()?;
+        cursor.get("epoch")?.as_str()?;
+        Some((cursor.clone(), seq))
+    });
+    let first = match kept {
+        Some((cursor, seq)) => request(
             pending,
-            Pending::Timeline(agent_id.to_owned()),
+            Pending::After(agent_id.to_owned(), seq),
             json!({
                 "type": "fetch_agent_timeline_request",
                 "agentId": agent_id,
-                "direction": "tail",
-                // A screenful at a time: earlier ones load as
-                // the conversation scrolls up, so a long agent opens as
-                // fast as a short one, through a relay too.
+                "direction": "after",
+                "cursor": cursor,
                 "limit": TIMELINE_PAGE,
                 "projection": "projected",
             }),
         ),
+        None => tail_request(agent_id, pending),
+    };
+    vec![
+        first,
         request(
             pending,
             Pending::Other("timeline subscription"),
@@ -1200,7 +1335,7 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
     match cmd {
         Command::Open(id) => timeline_requests(&id, pending),
         // Sent by the session itself, with its binary frames.
-        Command::Upload { .. } | Command::Download { .. } | Command::Reconnect => vec![],
+        Command::Upload { .. } | Command::Download { .. } | Command::Reconnect | Command::AskPictures { .. } => vec![],
         Command::Send { agent_id, text, behavior, images, attachments, message_id } => {
             let mut msg = json!({
                 "type": "send_agent_message_request",
@@ -1759,13 +1894,18 @@ fn handle(
                 }
                 _ => {}
             }
+            // A host that cannot say what came after: the latest page whole.
+            if let Some(Pending::After(id, _)) = &what {
+                follow_ups.push(tail_request(id, pending));
+                return vec![];
+            }
             let error = payload.get("error").and_then(Value::as_str).unwrap_or("request failed");
             let label = match what {
                 Some(Pending::CreateWorkspace | Pending::CreateAgent | Pending::Import) => {
                     return vec![Event::CreateFailed(error.to_owned())];
                 }
                 Some(Pending::Other(label)) => label,
-                Some(Pending::Timeline(_) | Pending::Older(_)) => "load history",
+                Some(Pending::Timeline(_) | Pending::Older(_) | Pending::After(..)) => "load history",
                 Some(Pending::Commands) => "load commands",
                 Some(Pending::Diff) => "load changes",
                 Some(Pending::CreateTerminal) => "open a terminal",
@@ -1887,11 +2027,43 @@ fn handle(
             _ => vec![],
         },
         "fetch_agent_timeline_response" => {
-            let (agent_id, older_page) = match request_id.and_then(|id| pending.remove(id)) {
-                Some(Pending::Timeline(id)) => (id, false),
-                Some(Pending::Older(id)) => (id, true),
+            let (agent_id, older_page, after) = match request_id.and_then(|id| pending.remove(id)) {
+                Some(Pending::Timeline(id)) => (id, false, None),
+                Some(Pending::Older(id)) => (id, true, None),
+                Some(Pending::After(id, from)) => (id, false, Some(from)),
                 _ => return vec![],
             };
+            let flag = |k: &str| payload.get(k).and_then(Value::as_bool) == Some(true);
+            if let Some(from) = after.filter(|_| !flag("reset")) {
+                // What came since the page this device kept, applied as
+                // live events are (each with its place, so one the
+                // subscription brought too is not shown twice). More than
+                // a page of it, a row that began before the kept page
+                // ended (it would repeat its start), or no answer: the
+                // latest page whole instead.
+                let rows = payload.get("entries").and_then(Value::as_array).cloned().unwrap_or_default();
+                let seq = |row: &Value, k: &str| row.get(k).and_then(Value::as_u64);
+                let joins = rows.iter().all(|r| seq(r, "seqStart").is_some_and(|s| s > from));
+                let epoch = payload.get("epoch").and_then(Value::as_str);
+                if payload.get("error").is_some_and(|e| !e.is_null()) || flag("hasNewer") || !joins || epoch.is_none() {
+                    follow_ups.push(tail_request(&agent_id, pending));
+                    return vec![];
+                }
+                let epoch = epoch.unwrap_or_default();
+                let mut out: Vec<Event> = rows
+                    .iter()
+                    .filter_map(|row| {
+                        let item = row.get("item").and_then(Item::from_json)?;
+                        let end = seq(row, "seqEnd").or_else(|| seq(row, "seq"))?;
+                        Some(Event::TimelineLive { agent_id: agent_id.clone(), item, cursor: Some((epoch.to_owned(), end)) })
+                    })
+                    .collect();
+                out.push(Event::TimelineSynced { agent_id: agent_id.clone() });
+                if let Some(agent) = payload.get("agent").and_then(Agent::from_json) {
+                    out.push(Event::AgentUpsert(agent));
+                }
+                return out;
+            }
             if let Some(error) = payload.get("error").and_then(Value::as_str) {
                 if older_page {
                     return vec![Event::Notice(format!("Could not load earlier messages: {error}"))];
@@ -1900,19 +2072,13 @@ fn handle(
                 let message = format!("Could not load history: {error}");
                 return vec![Event::TimelineReset { agent_id, items: vec![Item::Error { message }], older: None, cursor: None }];
             }
-            let items = payload
-                .get("entries")
-                .and_then(Value::as_array)
-                .map(|entries| entries.iter().filter_map(|e| e.get("item").and_then(Item::from_json)).collect())
-                .unwrap_or_default();
-            let older = (payload.get("hasOlder").and_then(Value::as_bool) == Some(true))
-                .then(|| payload.get("startCursor").cloned())
-                .flatten()
-                .filter(|c| !c.is_null());
+            let (items, older, cursor) = timeline_page(payload);
             let mut out: Vec<Event> = vec![if older_page {
                 Event::TimelineOlder { agent_id: agent_id.clone(), items, older }
             } else {
-                Event::TimelineReset { agent_id: agent_id.clone(), items, older, cursor: end_cursor(payload) }
+                // The latest page: what the next opening shows first.
+                super::cache::save(&super::cache::timeline_name(&agent_id), payload);
+                Event::TimelineReset { agent_id: agent_id.clone(), items, older, cursor }
             }];
             if let Some(agent) = payload.get("agent").and_then(Agent::from_json) {
                 out.push(Event::AgentUpsert(agent));
@@ -2898,6 +3064,49 @@ mod tests {
                 }
             }
         });
+    }
+
+    #[test]
+    fn what_came_after_the_kept_page_is_applied_as_live_rows() {
+        let mut pending = HashMap::new();
+        pending.insert("r1".to_owned(), Pending::After("a1".into(), 7));
+        let mut follow_ups = vec![];
+        let payload = json!({
+            "requestId": "r1", "agentId": "a1", "epoch": "e", "reset": false, "hasNewer": false,
+            "entries": [{ "seqStart": 8, "seqEnd": 9, "item": { "type": "assistant_message", "text": "hi" } }],
+        });
+        let events = handle("fetch_agent_timeline_response", &payload, &mut pending, Some("a1"), &mut follow_ups);
+        assert!(follow_ups.is_empty());
+        assert!(matches!(
+            &events[..],
+            [Event::TimelineLive { cursor: Some((e, 9)), item: Item::Assistant { text }, .. }, Event::TimelineSynced { agent_id }]
+                if e == "e" && text == "hi" && agent_id == "a1"
+        ));
+    }
+
+    #[test]
+    fn a_kept_page_that_does_not_join_on_asks_for_the_latest_page_whole() {
+        // More since than a page holds, and a row that began before the
+        // kept page ended.
+        for payload in [
+            json!({ "requestId": "r1", "epoch": "e", "hasNewer": true, "entries": [] }),
+            json!({ "requestId": "r1", "epoch": "e", "entries": [{ "seqStart": 6, "seqEnd": 9, "item": { "type": "assistant_message", "text": "hi" } }] }),
+        ] {
+            let mut pending = HashMap::new();
+            pending.insert("r1".to_owned(), Pending::After("a1".into(), 7));
+            let mut follow_ups = vec![];
+            let events = handle("fetch_agent_timeline_response", &payload, &mut pending, Some("a1"), &mut follow_ups);
+            assert!(events.is_empty());
+            assert_eq!(follow_ups.len(), 1);
+            assert_eq!(follow_ups[0]["message"]["direction"], "tail");
+            assert!(pending.values().any(|p| matches!(p, Pending::Timeline(id) if id == "a1")));
+        }
+        // The host started the conversation's record anew: its answer is the latest page.
+        let mut pending = HashMap::new();
+        pending.insert("r1".to_owned(), Pending::After("a1".into(), 7));
+        let payload = json!({ "requestId": "r1", "epoch": "e2", "reset": true, "entries": [{ "item": { "type": "assistant_message", "text": "new" } }] });
+        let events = handle("fetch_agent_timeline_response", &payload, &mut pending, Some("a1"), &mut vec![]);
+        assert!(matches!(&events[0], Event::TimelineReset { items, .. } if items.len() == 1));
     }
 
     #[test]

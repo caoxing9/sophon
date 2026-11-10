@@ -34,6 +34,7 @@ pub mod bonjour;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod bridge;
 pub mod agents;
+pub mod cache;
 pub mod connection;
 pub mod model;
 pub mod relay;

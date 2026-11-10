@@ -171,11 +171,7 @@ fn host_chip() -> impl IntoElement {
         .rounded(px(R_FULL))
         .bg(tint(FG, 0.07))
         .active(|s| s.opacity(0.7))
-        .child(status_dot(move || match conn.get() {
-            Conn::Connected { .. } => Status::Done,
-            Conn::Down(_) => Status::Failed,
-            _ => Status::Idle,
-        }))
+        .child(crate::ui::shared::conn_mark())
         .child(text(move || name.get()).text_size(px(TEXT_SM)).font_weight(FontWeight(500)).number_of_lines(1).flex_shrink(1.0))
         .child(icon(Icon::ChevronDown, 12.0).text_color(FG_MUTED))
 }
@@ -352,8 +348,13 @@ fn chats(query: Signal<String>) -> impl IntoElement {
     });
     scroll().flex_1().child(dynamic(move || {
         let items = list.get();
+        let waiting = !matches!(store::conn(), Conn::Connected { .. });
         Some(untracked(move || {
             if items.is_empty() {
+                // Nothing kept of this computer and it has not answered yet.
+                if waiting {
+                    return connecting().into_element();
+                }
                 return empty(t("No conversations yet")).into_element();
             }
             // One list, the latest first, as Messages' (the projects tab
@@ -418,8 +419,12 @@ pub(crate) fn projects(query: Signal<String>, new_agent: bool) -> impl IntoEleme
     });
     scroll().flex_1().child(dynamic(move || {
         let groups = groups.get();
+        let waiting = !matches!(store::conn(), Conn::Connected { .. });
         Some(untracked(move || {
             if groups.is_empty() {
+                if waiting {
+                    return connecting().into_element();
+                }
                 return empty(t("No workspaces yet. Start one on the computer.")).into_element();
             }
             let mut col = view().px(px(S4)).pb(px(BAR_ROOM)).gap(px(S3));
@@ -446,6 +451,20 @@ fn workspace_row(w: Workspace, new_agent: bool, divider: bool) -> AnyElement {
     row_shell(glyph(kind, Status::of_workspace(&w.status)), w.name.clone(), line, trailing, divider, move || {
         super::open_chat(&id, new_agent.then_some(Tab::Draft))
     })
+}
+
+/// In an empty list's place while the computer is being reached: the
+/// loader, and what it waits for.
+fn connecting() -> impl IntoElement {
+    view().items_center().pt(px(S8 * 2.0)).child(loader(None)).child(
+        text(|| match store::conn() {
+            Conn::Down(_) => t("Can't reach the computer · retrying").to_owned(),
+            _ => t("Connecting…").to_owned(),
+        })
+        .mt(px(S3))
+        .text_size(px(TEXT_SM))
+        .text_color(FG_MUTED),
+    )
 }
 
 fn empty(message: &'static str) -> impl IntoElement {

@@ -760,6 +760,9 @@ struct Timeline {
     /// The epoch and last seq `items` hold: live events at or before it
     /// are repeats.
     cursor: Option<(String, u64)>,
+    /// `items` are this device's copy (`daemon::cache`), shown before the
+    /// host has said what came since.
+    syncing: bool,
     /// Tool-call groups the user opened (true) or closed (false), by the
     /// group's id; kept while the conversation is open.
     folds: HashMap<String, bool>,
@@ -1288,8 +1291,26 @@ pub(crate) fn set_group_open(id: &str, open: bool) {
     }
 }
 
+/// Asks the host's Sophon for the pictures of the user messages among
+/// `items` that name one and have none here (sent from another device).
+/// Each once per conversation opening; a host without them says nothing.
+fn ask_pictures(items: &[Item]) {
+    for item in items {
+        let Item::User { text, message_id, images } = item else { continue };
+        if images.is_empty() && crate::sent_pictures::names_a_picture(text) {
+            send(Command::AskPictures { message_id: message_id.clone().unwrap_or_default(), text: text.clone() });
+        }
+    }
+}
+
 pub(crate) fn timeline_loaded() -> bool {
     global::<Timeline>().with(|t| t.loaded)
+}
+
+/// Whether the open conversation shows this device's copy still, the host
+/// not having said yet what came since.
+pub(crate) fn timeline_syncing() -> bool {
+    global::<Timeline>().with(|t| t.syncing)
 }
 
 pub(crate) fn loading_older() -> bool {
@@ -2949,11 +2970,22 @@ pub(crate) fn open_tab(tab: Tab) {
     }
     batch(|| {
         global::<Nav>().update(|n| n.tab = tab.clone());
-        global::<Timeline>().update(|t| *t = Timeline { agent_id: agent_id.clone(), ..Default::default() });
+        global::<Timeline>().update(|t| {
+            *t = Timeline { agent_id: agent_id.clone(), ..Default::default() };
+            // This device's copy of its last page at once; the host then
+            // says what came since.
+            if let Some((mut items, older, cursor)) = agent_id.as_deref().and_then(crate::daemon::connection::cached_timeline) {
+                crate::sent_pictures::restore(&mut items);
+                *t = Timeline { agent_id: agent_id.clone(), items, older, cursor, loaded: true, syncing: true, ..Default::default() };
+            }
+        });
         if tab == Tab::Draft {
             reset_form(current_workspace().map(|w| w.directory));
         }
     });
+    if global::<Timeline>().with_untracked(|t| t.syncing) {
+        scroll_timeline_end_after(&[30, 120, 250], false);
+    }
     if let Some(id) = agent_id {
         send(Command::Open(id.clone()));
         send(Command::Subagents(id.clone()));
@@ -3250,6 +3282,10 @@ pub(crate) fn submit_form() {
         f.busy = true;
         f.error = None;
     });
+    // The first message's pictures, kept by its words: the host makes its id.
+    let images = take_images();
+    let thumbs: Vec<String> = images.iter().map(|i| format!("data:{};base64,{}", i.mime, i.data)).collect();
+    crate::sent_pictures::keep_for_text(&f.prompt, &thumbs);
     send(Command::CreateAgent(CreateAgent {
         workspace_id,
         path: f.path.trim().to_owned(),
@@ -3261,7 +3297,7 @@ pub(crate) fn submit_form() {
         mode: f.mode,
         thinking: f.thinking,
         prompt: f.prompt,
-        images: take_images(),
+        images,
         attachments: take_files(),
         context: f.context.map(|(c, _)| c),
         features: f
@@ -3319,7 +3355,9 @@ fn deliver(agent_id: &str, text: &str, behavior: Option<&'static str>) {
     // Shown at once under the id the host echoes it back with, which then
     // replaces nothing and adds nothing (the echo has the text alone).
     let message_id = uuid::Uuid::new_v4().to_string();
-    let thumbs = images.iter().map(|i| format!("data:{};base64,{}", i.mime, i.data)).collect();
+    let thumbs: Vec<String> = images.iter().map(|i| format!("data:{};base64,{}", i.mime, i.data)).collect();
+    // On disk too: the host's history has the text alone.
+    crate::sent_pictures::keep(&message_id, &thumbs);
     let mut shown_here = false;
     global::<Timeline>().update(|t| {
         if t.agent_id.as_deref() == Some(agent_id) {
@@ -3774,9 +3812,12 @@ pub(crate) fn apply(event: Event) {
                 if t.agent_id.as_deref() == Some(agent_id.as_str()) {
                     opened = !t.loaded;
                     carry_images(&t.items, &mut items);
+                    crate::sent_pictures::restore(&mut items);
+                    ask_pictures(&items);
                     t.items = items;
                     t.cursor = cursor;
                     t.loaded = true;
+                    t.syncing = false;
                     t.older = older;
                 }
             });
@@ -3784,9 +3825,36 @@ pub(crate) fn apply(event: Event) {
                 scroll_timeline_end_after(&[30, 120, 250], false);
             }
         }
+        Event::TimelineSynced { agent_id } => global::<Timeline>().update(|t| {
+            if t.agent_id.as_deref() == Some(agent_id.as_str()) {
+                t.syncing = false;
+                t.loaded = true;
+                // The copy's messages too: their pictures may be elsewhere.
+                ask_pictures(&t.items);
+            }
+        }),
+        Event::Pictures { message_id, text, pictures } => {
+            // Kept here from now on, and shown where the message is open.
+            if message_id.is_empty() {
+                crate::sent_pictures::keep_for_text(&text, &pictures);
+            } else {
+                crate::sent_pictures::keep(&message_id, &pictures);
+            }
+            global::<Timeline>().update(|t| {
+                for item in t.items.iter_mut() {
+                    let Item::User { text: body, message_id: id, images } = item else { continue };
+                    let same = if message_id.is_empty() { body.trim() == text.trim() } else { id.as_deref() == Some(message_id.as_str()) };
+                    if same && images.is_empty() {
+                        *images = pictures.clone();
+                    }
+                }
+            });
+        }
         Event::TimelineOlder { agent_id, items, older } => global::<Timeline>().update(|t| {
             if t.agent_id.as_deref() == Some(agent_id.as_str()) {
                 let mut merged = items;
+                crate::sent_pictures::restore(&mut merged);
+                ask_pictures(&merged);
                 merged.append(&mut t.items);
                 t.items = merged;
                 t.older = older;

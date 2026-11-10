@@ -74,6 +74,42 @@ pub(crate) fn keep_awake_card() -> View {
     ))
 }
 
+/// What this device keeps on disk, each with its size and a button that
+/// forgets it: the pictures of the messages sent from it (`sent_pictures`),
+/// and its copies of the hosts' lists and conversations (`daemon::cache`).
+pub(crate) fn storage_card() -> View {
+    fn size(bytes: u64) -> String {
+        if bytes >= 1_048_576 { format!("{:.1} MB", bytes as f64 / 1_048_576.0) } else { format!("{} KB", bytes.div_ceil(1024)) }
+    }
+    let pictures = signal(crate::sent_pictures::usage());
+    let copies = signal(crate::daemon::cache::usage());
+    card()
+        .child(row(
+            t("Sent pictures"),
+            move || match pictures.get() {
+                (0, _) => t("Nothing kept yet").to_string(),
+                (count, bytes) => tf("{} messages · {} on this device", &[&count.to_string(), &size(bytes)]),
+            },
+            btn(t("Clear"), Variant::Outline, Sz::Sm, None, move || {
+                crate::sent_pictures::clear();
+                pictures.set(crate::sent_pictures::usage());
+            }),
+            true,
+        ))
+        .child(row(
+            t("Offline copies"),
+            move || match copies.get() {
+                (0, _) => t("Nothing kept yet").to_string(),
+                (_, bytes) => tf("Lists and recent conversations, shown before the computer answers · {}", &[&size(bytes)]),
+            },
+            btn(t("Clear"), Variant::Outline, Sz::Sm, None, move || {
+                crate::daemon::cache::clear();
+                copies.set(crate::daemon::cache::usage());
+            }),
+            false,
+        ))
+}
+
 /// The settings page frame: a centered column under the title.
 pub(crate) fn page(compact: bool, sections: View) -> impl IntoElement {
     scroll().flex_1().child(

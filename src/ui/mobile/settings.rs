@@ -17,6 +17,7 @@ pub(crate) fn settings() -> impl IntoElement {
             view()
                 .child(section(t("Appearance"), appearance_card()))
                 .child(section(t("Sending"), sending_card()))
+                .child(section(t("Storage"), storage_card()))
                 .child(section(
                     t("Computer"),
                     host_card().child(row(
