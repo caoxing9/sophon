@@ -77,7 +77,10 @@ fn devices_card() -> impl IntoElement {
                 c = line(
                     c,
                     d.device.clone(),
-                    t("Connected now, over the LAN").to_owned(),
+                    match &d.space {
+                        Some(space) => format!("{} · {space}", t("Connected now, over the LAN")),
+                        None => t("Connected now, over the LAN").to_owned(),
+                    },
                     btn(t("Disconnect"), Variant::Outline, Sz::Sm, None, move || crate::lan::disconnect(conn)).into_element(),
                 );
             }
@@ -86,7 +89,10 @@ fn devices_card() -> impl IntoElement {
                 c = line(
                     c,
                     p.name.clone(),
-                    t("Paired on the LAN").to_owned(),
+                    match &p.space {
+                        Some(space) => format!("{} · {space}", t("Paired on the LAN")),
+                        None => t("Paired on the LAN").to_owned(),
+                    },
                     btn(t("Remove"), Variant::Outline, Sz::Sm, None, move || crate::lan::revoke(&id)).into_element(),
                 );
             }

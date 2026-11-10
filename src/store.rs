@@ -782,6 +782,8 @@ pub(crate) enum Modal {
     ImportSession,
     RestartDaemon,
     AddHost,
+    /// Names a new space on this Mac.
+    CreateSpace,
     PairDevice,
     /// A phone nearby asks to pair with this Mac, showing `code` too.
     ApprovePairing { id: u64, device: String, code: String },
@@ -817,7 +819,7 @@ pub(crate) fn close_modal() {
     global::<ModalState>().update(|s| s.0 = None);
     // Dismissed without an answer: the waiting side hears no at once.
     match was {
-        Some(Modal::ApprovePairing { .. }) => crate::lan::answer_pairing(false),
+        Some(Modal::ApprovePairing { .. }) => crate::lan::answer_pairing(false, None),
         Some(Modal::PairNearby) => crate::lan::cancel_pairing(),
         _ => {}
     }
@@ -845,7 +847,7 @@ pub(crate) enum KeepAwake {
 pub(crate) fn watch_keep_awake() {
     effect(|| {
         let mode = settings().keep_awake;
-        let busy = current_host().is_none() && global::<Agents>().with(|a| a.0.iter().any(|x| x.is_running()));
+        let busy = on_this_mac() && global::<Agents>().with(|a| a.0.iter().any(|x| x.is_running()));
         #[cfg(target_os = "macos")]
         crate::awake::hold(match mode {
             KeepAwake::Off => None,
@@ -1689,14 +1691,24 @@ pub(crate) fn start_bridge() {
 /// The link a phone pairs with: the LAN bridge (at its addresses now) and
 /// the daemon's relay.
 pub(crate) fn pairing_link(relay_link: Option<&str>) -> Option<String> {
+    // The space in use: its own token, and its name for the device to show.
+    let space = current_host().filter(|h| crate::spaces::home_of(&h.url).is_some());
     #[cfg(not(target_arch = "wasm32"))]
-    let lan = crate::daemon::bridge::info().map(|b| (b.addr, b.key, b.token));
+    let lan = {
+        let home = space.as_ref().and_then(|h| crate::spaces::home_of(&h.url)).map(|h| h.to_string_lossy().into_owned());
+        crate::daemon::bridge::info_for(home.as_deref()).map(|b| (b.addr, b.key, b.token))
+    };
     #[cfg(target_arch = "wasm32")]
     let lan: Option<(String, [u8; 32], String)> = None;
     if lan.is_none() && relay_link.is_none() {
         return None;
     }
-    Some(crate::daemon::relay::PairingLink::format(lan.as_ref().map(|(a, k, t)| (a.as_str(), k, t.as_str())), relay_link))
+    let name = space.map(|h| format!("{} · {}", crate::lan::device_name(), h.label()));
+    Some(crate::daemon::relay::PairingLink::format_named(
+        lan.as_ref().map(|(a, k, t)| (a.as_str(), k, t.as_str())),
+        relay_link,
+        name.as_deref(),
+    ))
 }
 
 pub(crate) fn bridge_addr() -> Option<String> {
@@ -1865,6 +1877,65 @@ pub(crate) fn current_host() -> Option<HostProfile> {
     global::<Hosts>().with(|h| h.current.as_ref().and_then(|id| h.list.iter().find(|x| &x.id == id).cloned()))
 }
 
+/// The folder of the space on this Mac in use: `None` for the first space
+/// (Paseo's own `~/.paseo`) or another computer.
+pub(crate) fn current_space_home() -> Option<std::path::PathBuf> {
+    current_host().and_then(|h| crate::spaces::home_of(&h.url))
+}
+
+/// Whether the service in use runs on this Mac: its first space or another.
+/// What reads this Mac's files (the agents' own model lists, their CLIs,
+/// the session logs) holds for every space alike.
+pub(crate) fn on_this_mac() -> bool {
+    !crate::ui::kit::MOBILE && current_host().is_none_or(|h| crate::spaces::home_of(&h.url).is_some())
+}
+
+/// The spaces on this Mac besides the first: saved hosts at `space:` addresses.
+pub(crate) fn spaces() -> Vec<HostProfile> {
+    hosts().into_iter().filter(|h| crate::spaces::home_of(&h.url).is_some()).collect()
+}
+
+/// Starts every space's service (Sophon starting on this Mac): Paseo's app
+/// keeps only the first one running.
+pub(crate) fn start_spaces() {
+    #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+    {
+        let homes: Vec<_> = spaces().iter().filter_map(|h| crate::spaces::home_of(&h.url)).collect();
+        if !homes.is_empty() {
+            std::thread::spawn(move || {
+                for home in homes {
+                    if let Err(e) = crate::spaces::start(&home) {
+                        log::warn!("space {}: {e}", home.display());
+                    }
+                }
+            });
+        }
+    }
+}
+
+/// Makes a space called `name` and switches to it once its service runs.
+pub(crate) fn create_space(name: &str) {
+    #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+    {
+        let name = name.trim().to_owned();
+        notify(tf("Creating “{}”…", &[&name]));
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let n = name.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::spaces::create(&n));
+        });
+        spawn_detached(async move {
+            match rx.recv().await {
+                Some(Ok(home)) => add_host(&name, &crate::spaces::url_of(&home), ""),
+                Some(Err(e)) => notify(tf("Cannot create the space: {}", &[&e])),
+                None => {}
+            }
+        });
+    }
+    #[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+    let _ = name;
+}
+
 fn save_hosts() {
     let h = global::<Hosts>().with_untracked(Clone::clone);
     let json = serde_json::json!({
@@ -1917,6 +1988,9 @@ pub(crate) fn switch_host(id: Option<String>) {
 }
 
 pub(crate) fn add_host(name: &str, url: &str, password: &str) {
+    // A pairing link that names the computer (a space's) names it here.
+    let named = crate::daemon::relay::PairingLink::parse(url).and_then(|l| l.name);
+    let name = named.as_deref().unwrap_or(name);
     let id = format!("host_{}", uuid::Uuid::new_v4().simple());
     let profile = HostProfile {
         id: id.clone(),
@@ -1930,6 +2004,16 @@ pub(crate) fn add_host(name: &str, url: &str, password: &str) {
 }
 
 pub(crate) fn remove_host(id: &str) {
+    // A space's service stops with it; its folder, with its conversations,
+    // stays.
+    #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+    if let Some(home) = hosts().into_iter().find(|h| h.id == id).and_then(|h| crate::spaces::home_of(&h.url)) {
+        std::thread::spawn(move || {
+            if let Err(e) = crate::spaces::stop(&home) {
+                log::warn!("space {}: {e}", home.display());
+            }
+        });
+    }
     let was_current = global::<Hosts>().with_untracked(|h| h.current.as_deref() == Some(id));
     global::<Hosts>().update(|h| h.list.retain(|x| x.id != id));
     if was_current {
@@ -2101,7 +2185,7 @@ pub(crate) fn service_start_error() -> Option<String> {
 /// This Mac's service is down: start it, once a run (a service stopped on
 /// purpose afterwards stays stopped; Start service starts it again).
 fn auto_start_service() {
-    if crate::ui::kit::MOBILE || cfg!(target_arch = "wasm32") || current_host().is_some() {
+    if crate::ui::kit::MOBILE || cfg!(target_arch = "wasm32") || !on_this_mac() {
         return;
     }
     if global::<AutoStart>().with_untracked(|a| a.tried) {
@@ -2124,8 +2208,13 @@ pub(crate) fn start_service() {
     global::<AutoStart>().update(|a| a.error = None);
     global::<Starting>().set(Starting(true));
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Result<(), String>>();
+    let home = current_space_home();
     std::thread::spawn(move || {
-        let out = std::process::Command::new(&cli).args(["daemon", "start"]).output();
+        let mut args = vec!["daemon".to_owned(), "start".to_owned()];
+        if let Some(home) = home {
+            args.extend(["--home".to_owned(), home.to_string_lossy().into_owned()]);
+        }
+        let out = std::process::Command::new(&cli).args(&args).output();
         let _ = tx.send(match out {
             Ok(o) if o.status.success() => Ok(()),
             Ok(o) => Err(String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("").to_owned()),
@@ -2464,7 +2553,7 @@ pub(crate) fn agent_home() -> Option<String> {
             .find_map(crate::daemon::agents::home_from_config_dir)
     });
     from_claude.or_else(|| {
-        if crate::ui::kit::MOBILE || current_host().is_some() {
+        if !on_this_mac() {
             return None;
         }
         std::env::var("HOME").ok().filter(|h| h.starts_with('/'))
@@ -2533,7 +2622,7 @@ struct AgentUpdates(HashMap<String, AgentUpdate>);
 
 /// The update of the CLI at `path`, while the host is this computer.
 pub(crate) fn agent_update(path: &str) -> Option<AgentUpdate> {
-    if crate::ui::kit::MOBILE || current_host().is_some() {
+    if !on_this_mac() {
         return None;
     }
     global::<AgentUpdates>().with(|u| u.0.get(path).cloned())
@@ -2543,7 +2632,7 @@ pub(crate) fn agent_update(path: &str) -> Option<AgentUpdate> {
 /// or Homebrew call, on a thread of its own.
 #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
 fn check_agent_update(path: String) {
-    if crate::ui::kit::MOBILE || current_host().is_some() || global::<AgentUpdates>().with_untracked(|u| u.0.contains_key(&path)) {
+    if !on_this_mac() || global::<AgentUpdates>().with_untracked(|u| u.0.contains_key(&path)) {
         return;
     }
     let real = std::fs::canonicalize(&path).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| path.clone());
@@ -2575,7 +2664,7 @@ fn check_agent_update(_path: String) {}
 /// providers again for their versions. This computer's only.
 #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
 pub(crate) fn update_agent(path: &str) {
-    if crate::ui::kit::MOBILE || current_host().is_some() {
+    if !on_this_mac() {
         return;
     }
     let mut install = None;
@@ -3939,7 +4028,7 @@ struct LocalModels(HashMap<String, Vec<crate::models::LocalModel>>);
 /// have yet, in the agent's own order. `None` elsewhere, or for an agent
 /// that keeps no list.
 pub(crate) fn local_models(provider: &str) -> Option<Vec<crate::models::LocalModel>> {
-    if crate::ui::kit::MOBILE || current_host().is_some() {
+    if !on_this_mac() {
         return None;
     }
     global::<LocalModels>().with(|m| m.0.get(provider).cloned())

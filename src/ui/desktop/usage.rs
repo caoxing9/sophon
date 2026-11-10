@@ -46,7 +46,7 @@ pub(crate) fn usage_page(compact: bool) -> impl IntoElement {
 /// The session-log half: the range switch, totals, the days and the models.
 fn history_section(range: Signal<Range>) -> View {
     let local = computed(store::local_usage);
-    let remote = computed(|| store::current_host().is_some());
+    let remote = computed(|| !store::on_this_mac());
     view()
         .gap(px(S4))
         .child(

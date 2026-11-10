@@ -15,6 +15,7 @@ mod i18n;
 mod lan;
 mod platform;
 mod prompt_link;
+mod spaces;
 mod store;
 mod models;
 mod ui;
@@ -77,6 +78,7 @@ pub fn App() -> impl IntoElement {
     // The web's desktop idiom is still a page: no bridge, no updates.
     if is_desktop() && !cfg!(target_arch = "wasm32") {
         store::start_bridge();
+        store::start_spaces();
         store::watch_keep_awake();
         update::start();
         update::preview();

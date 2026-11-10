@@ -45,12 +45,29 @@ fn host_line() -> impl IntoElement {
             let hosts = store::hosts();
             let current = store::current_host().map(|h| h.id);
             Some(untracked(move || {
+                let is_space = |h: &store::HostProfile| crate::spaces::home_of(&h.url).is_some();
+                let spaces: Vec<_> = hosts.iter().filter(|h| is_space(h)).cloned().collect();
                 let mut m = view()
-                    .child(menu_heading(t("Hosts")))
-                    .child(menu_row(t("This Mac"), Some(Icon::Cpu), None, current.is_none(), || {
-                        store::switch_host(None)
+                    .child(menu_heading(if spaces.is_empty() { t("Hosts") } else { t("Spaces on this Mac") }))
+                    .child(menu_row(
+                        if spaces.is_empty() { t("This Mac") } else { t("My space") },
+                        Some(Icon::Cpu),
+                        None,
+                        current.is_none(),
+                        || store::switch_host(None),
+                    ));
+                for h in spaces {
+                    let id = h.id.clone();
+                    m = m.child(menu_row(h.label(), Some(Icon::Folder), None, current.as_deref() == Some(h.id.as_str()), move || {
+                        store::switch_host(Some(id.clone()))
                     }));
-                for h in hosts.clone() {
+                }
+                m = m.child(menu_row(t("New space…"), Some(Icon::FolderPlus), None, false, || store::open_modal(store::Modal::CreateSpace)));
+                let others: Vec<_> = hosts.iter().filter(|h| !is_space(h)).cloned().collect();
+                if !others.is_empty() {
+                    m = m.child(menu_divider()).child(menu_heading(t("Other computers")));
+                }
+                for h in others {
                     let id = h.id.clone();
                     m = m.child(menu_row(h.label(), Some(Icon::Server), None, current.as_deref() == Some(h.id.as_str()), move || {
                         store::switch_host(Some(id.clone()))
@@ -154,10 +171,10 @@ fn empty_list() -> impl IntoElement {
     let conn = computed(store::conn);
     let failed = computed(store::service_start_error);
     // This Mac's service starts on its own: a button only when that failed.
-    let retry = computed(move || matches!(conn.get(), Conn::Down(_)) && store::current_host().is_none() && failed.get().is_some());
+    let retry = computed(move || matches!(conn.get(), Conn::Down(_)) && store::on_this_mac() && failed.get().is_some());
     view().flex_1().px(px(S4)).pt(px(S4)).gap(px(S3)).items_start().child(
         text(move || match conn.get() {
-            Conn::Down(_) if store::current_host().is_some() => String::new(),
+            Conn::Down(_) if !store::on_this_mac() => String::new(),
             Conn::Down(_) => match failed.get() {
                 Some(e) => tf("The service on this Mac did not start: {}", &[&e]),
                 None => t("Starting the service…").to_owned(),

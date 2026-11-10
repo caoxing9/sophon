@@ -50,6 +50,8 @@ pub(crate) struct Connected {
     pub(crate) conn: u64,
     pub(crate) device: String,
     pub(crate) device_id: Option<String>,
+    /// The space it reaches, by name; `None`: the first.
+    pub(crate) space: Option<String>,
 }
 
 /// A device paired through the LAN.
@@ -57,6 +59,8 @@ pub(crate) struct Connected {
 pub(crate) struct Paired {
     pub(crate) id: String,
     pub(crate) name: String,
+    /// The space it joined, by name; `None`: the first.
+    pub(crate) space: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -84,8 +88,17 @@ fn refresh() {
     #[cfg(not(target_arch = "wasm32"))]
     {
         use crate::daemon::bridge;
-        let connected = bridge::connections().into_iter().map(|c| Connected { conn: c.conn, device: shown(c.device), device_id: c.device_id }).collect();
-        let paired = bridge::devices().into_iter().map(|d| Paired { id: d.id, name: d.name }).collect();
+        // A space by its folder, named as saved here.
+        let spaces = store::spaces();
+        let name_of = |home: Option<String>| {
+            let home = home?;
+            spaces.iter().find(|h| crate::spaces::home_of(&h.url).is_some_and(|p| p.to_string_lossy() == home)).map(|h| h.label())
+        };
+        let connected = bridge::connections()
+            .into_iter()
+            .map(|c| Connected { conn: c.conn, device: shown(c.device), device_id: c.device_id, space: name_of(c.space) })
+            .collect();
+        let paired = bridge::devices().into_iter().map(|d| Paired { id: d.id, name: d.name, space: name_of(d.space) }).collect();
         global::<Devices>().set(Devices { connected, paired });
     }
 }
@@ -116,7 +129,10 @@ pub(crate) fn revoke_all() {
     store::notify(t("Every device must pair again").into());
 }
 
-type Reply = tokio::sync::oneshot::Sender<Option<Option<String>>>;
+#[cfg(not(target_arch = "wasm32"))]
+type Reply = tokio::sync::oneshot::Sender<Option<crate::daemon::bridge::PairAnswer>>;
+#[cfg(target_arch = "wasm32")]
+type Reply = tokio::sync::oneshot::Sender<Option<()>>;
 
 thread_local! {
     /// The pairing request waiting on someone here, and its answer's way back.
@@ -190,9 +206,10 @@ pub(crate) fn watch_bridge(mut events: tokio::sync::mpsc::UnboundedReceiver<crat
     });
 }
 
-/// Answers the pairing request: allowed, the phone gets this Mac's relay too
-/// (so it connects from anywhere), read from the service here.
-pub(crate) fn answer_pairing(allow: bool) {
+/// Answers the pairing request: allowed, the phone joins `space` (a saved
+/// space's host id; `None`: this Mac's first space) and gets that space's
+/// relay too (so it connects from anywhere), read from its service here.
+pub(crate) fn answer_pairing(allow: bool, space: Option<String>) {
     let asking = ASKING.with_borrow_mut(Option::take);
     store::close_modal();
     let Some((_, reply)) = asking else { return };
@@ -202,20 +219,35 @@ pub(crate) fn answer_pairing(allow: bool) {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let space = space.and_then(|id| store::spaces().into_iter().find(|h| h.id == id));
+        let home = space.as_ref().and_then(|h| crate::spaces::home_of(&h.url));
+        let name = space.map(|h| format!("{} · {}", device_name(), h.label()));
         let cli = store::service_cli();
         std::thread::spawn(move || {
-            let relay = cli.and_then(|cli| {
-                let out = std::process::Command::new(cli).args(["daemon", "pair", "--json"]).output().ok()?;
-                let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
-                (v.get("relayEnabled").and_then(serde_json::Value::as_bool) == Some(true))
-                    .then(|| v.get("url")?.as_str().map(str::to_owned))
-                    .flatten()
-            });
-            let _ = reply.send(Some(relay));
+            #[cfg(not(target_os = "ios"))]
+            let relay = match &home {
+                Some(home) => crate::spaces::relay_link(home),
+                None => cli.and_then(|cli| {
+                    let out = std::process::Command::new(cli).args(["daemon", "pair", "--json"]).output().ok()?;
+                    let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+                    (v.get("relayEnabled").and_then(serde_json::Value::as_bool) == Some(true))
+                        .then(|| v.get("url")?.as_str().map(str::to_owned))
+                        .flatten()
+                }),
+            };
+            #[cfg(target_os = "ios")]
+            let relay = {
+                let _ = cli;
+                None
+            };
+            let space = home.map(|h| h.to_string_lossy().into_owned());
+            let _ = reply.send(Some(crate::daemon::bridge::PairAnswer { relay, space, name }));
         });
     }
     #[cfg(target_arch = "wasm32")]
-    let _ = reply.send(Some(None));
+    {
+        let _ = (reply, space);
+    }
 }
 
 // --------------------------------------------- a phone: computers nearby

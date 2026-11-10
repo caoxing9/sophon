@@ -681,6 +681,10 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
 /// Where a saved host's session goes: its LAN bridge, its relay, or its
 /// direct address.
 fn endpoint_for(r: &RemoteHost, lan_index: usize, found: Option<String>) -> Endpoint {
+    // Another space on this Mac: its own service, found as the first one is.
+    if let Some(home) = crate::spaces::home_of(&r.url) {
+        return discover_in(&home);
+    }
     if let Some(link) = super::relay::PairingLink::parse(&r.url) {
         let candidate = link.lan.clone().and_then(|(addrs, key, token)| {
             let mut list: Vec<&str> = found.as_deref().into_iter().collect();
@@ -2622,7 +2626,11 @@ fn home_dir() -> PathBuf {
 /// on every start. The credential is only offered to the address `paseo.pid`
 /// names, as the daemon's CLI does.
 pub fn discover() -> Endpoint {
-    let home = daemon_home();
+    discover_in(&daemon_home())
+}
+
+/// The service of the Paseo home `home` on this machine (a space's).
+pub fn discover_in(home: &std::path::Path) -> Endpoint {
     let read_json = |name: &str| {
         std::fs::read_to_string(home.join(name)).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok())
     };

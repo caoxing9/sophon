@@ -99,6 +99,7 @@ fn body(m: Modal) -> View {
         Modal::AddAgentKey => crate::ui::shared::agents::add_api_key(),
         Modal::RemoveAgent { id, label } => crate::ui::shared::agents::remove_agent(id, label),
         Modal::AddHost => add_host(),
+        Modal::CreateSpace => create_space(),
         Modal::PairDevice => pair_device(),
         Modal::ApprovePairing { device, code, .. } => approve_pairing(device, code),
         Modal::PairNearby => pair_nearby(),
@@ -543,6 +544,29 @@ fn labels(workspace: String) -> View {
         ))
 }
 
+/// Names a new space: its own projects and conversations on this Mac.
+fn create_space() -> View {
+    let name = signal(String::new());
+    let create = move || {
+        let n = name.get_untracked();
+        if !n.trim().is_empty() {
+            store::create_space(&n);
+            store::close_modal();
+        }
+    };
+    sheet(t("New space"))
+        .child(
+            text(t("A space has its own projects, conversations and schedules on this Mac, for another person or another kind of work. Its agents can still open any folder here"))
+                .text_size(px(TEXT_SM))
+                .line_height(px(18.0))
+                .text_color(FG_MUTED),
+        )
+        .child(field().value(move || name.get()).on_change(move |v: &str| name.set(v.to_owned())).on_submit(move |_: &str| create()).placeholder(t("Name, e.g. Lin")).auto_focus(true))
+        .child(actions(
+            btn(t("Create"), Variant::Primary, Sz::Md, Some(Icon::FolderPlus), create).disabled(move || name.with(|n| n.trim().is_empty())),
+        ))
+}
+
 fn add_host() -> View {
     let name = signal(String::new());
     let url = signal(String::new());
@@ -611,8 +635,9 @@ fn pairing_code(code: &str) -> View {
         .child(text(code.to_owned()).text_size(px(32.0)).font_weight(FontWeight(500)).font_family(|| MONO))
 }
 
-/// This Mac: a phone nearby asks to pair.
+/// This Mac: a phone nearby asks to pair, into one of its spaces.
 fn approve_pairing(device: String, code: String) -> View {
+    let space = signal(None::<String>);
     sheet(t("Pairing request"))
         .child(
             text(tf("“{}” on this network asks to connect to this Mac. Allowed, it can use your agents here, from anywhere", &[&device]))
@@ -622,14 +647,32 @@ fn approve_pairing(device: String, code: String) -> View {
         )
         .child(pairing_code(&code))
         .child(text(t("Allow only if the device shows the same code")).text_size(px(TEXT_SM)).text_color(FG_MUTED).self_center())
+        .child(space_choice(space))
         .child(
             view()
                 .flex_row()
                 .justify_end()
                 .gap(px(S2))
-                .child(btn(t("Deny"), Variant::Secondary, Sz::Md, None, || crate::lan::answer_pairing(false)))
-                .child(btn(t("Allow"), Variant::Primary, Sz::Md, Some(Icon::Check), || crate::lan::answer_pairing(true))),
+                .child(btn(t("Deny"), Variant::Secondary, Sz::Md, None, || crate::lan::answer_pairing(false, None)))
+                .child(btn(t("Allow"), Variant::Primary, Sz::Md, Some(Icon::Check), move || {
+                    crate::lan::answer_pairing(true, space.get_untracked())
+                })),
         )
+}
+
+/// Which space on this Mac a device joins, when there is more than one.
+fn space_choice(space: Signal<Option<String>>) -> AnyElement {
+    let spaces = store::spaces();
+    if spaces.is_empty() {
+        return view().into_element();
+    }
+    let mut options: Vec<(Option<String>, SharedString)> = vec![(None, t("My space").into())];
+    options.extend(spaces.into_iter().map(|h| (Some(h.id.clone()), h.label().into())));
+    view()
+        .gap(px(S2))
+        .child(text(t("Joins the space")).text_size(px(TEXT_SM)).text_color(FG_MUTED))
+        .child(segmented(options, move || space.get(), move |v| space.set(v)))
+        .into_element()
 }
 
 /// A phone (or another Mac): pairing with a computer nearby.

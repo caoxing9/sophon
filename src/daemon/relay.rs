@@ -483,6 +483,16 @@ mod tests {
     }
 
     #[test]
+    fn a_pairing_link_names_its_computer() {
+        let key = [5u8; 32];
+        let link = PairingLink::format_named(Some(("10.0.0.2:61034", &key, "tok")), None, Some("MacBook Pro · 林"));
+        let parsed = PairingLink::parse(&link).unwrap();
+        assert_eq!(parsed.name.as_deref(), Some("MacBook Pro · 林"));
+        assert_eq!(parsed.lan, Some(("10.0.0.2:61034".into(), key, "tok".into())));
+        assert_eq!(PairingLink::parse(&PairingLink::format(Some(("a:1", &key, "t")), None)).unwrap().name, None);
+    }
+
+    #[test]
     fn parses_pairing_links() {
         let key = B64.encode([3u8; 32]);
         let json = json!({ "v": 2, "serverId": "srv_1", "daemonPublicKeyB64": key, "relay": { "endpoint": "relay.paseo.sh:443", "useTls": true } });
@@ -543,31 +553,57 @@ pub fn generate_key() -> ([u8; 32], [u8; 32]) {
 pub struct PairingLink {
     pub lan: Option<(String, [u8; 32], String)>,
     pub relay: Option<RelayOffer>,
+    /// What the paired computer is called here (a space's
+    /// `MacBook Pro · Lin`), when the link names it.
+    pub name: Option<String>,
 }
 
 impl PairingLink {
     pub fn parse(input: &str) -> Option<Self> {
         let s = input.trim();
         let relay = RelayOffer::parse(s);
-        let lan = s.strip_prefix("sophon://pair").or_else(|| s.strip_prefix("victor://pair")).and_then(|rest| {
-            let query = rest.trim_start_matches('/').strip_prefix('?')?;
-            let query = query.split('#').next().unwrap_or_default();
-            let param = |name: &str| {
-                query.split('&').find_map(|kv| {
-                    let (k, v) = kv.split_once('=')?;
-                    (k == name).then(|| percent_decode(v))
-                })
-            };
-            Some((param("lan")?, key(&param("lanKey")?)?, param("token")?))
-        });
-        (lan.is_some() || relay.is_some()).then_some(Self { lan, relay })
+        let query = s
+            .strip_prefix("sophon://pair")
+            .or_else(|| s.strip_prefix("victor://pair"))
+            .and_then(|rest| rest.trim_start_matches('/').strip_prefix('?'))
+            .map(|q| q.split('#').next().unwrap_or_default());
+        let param = |name: &str| {
+            query?.split('&').find_map(|kv| {
+                let (k, v) = kv.split_once('=')?;
+                (k == name).then(|| percent_decode(v))
+            })
+        };
+        let lan = (|| Some((param("lan")?, key(&param("lanKey")?)?, param("token")?)))();
+        let name = param("name").filter(|n| !n.trim().is_empty());
+        (lan.is_some() || relay.is_some()).then_some(Self { lan, relay, name })
     }
 
     pub fn format(lan: Option<(&str, &[u8; 32], &str)>, relay_link: Option<&str>) -> String {
+        Self::format_named(lan, relay_link, None)
+    }
+
+    /// [`Self::format`] naming the computer (`name=`), as the device that
+    /// pairs saves it.
+    pub fn format_named(lan: Option<(&str, &[u8; 32], &str)>, relay_link: Option<&str>, name: Option<&str>) -> String {
+        let enc = |v: &str| {
+            v.bytes()
+                .map(|b| match b {
+                    b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b':' | b',' => (b as char).to_string(),
+                    _ => format!("%{b:02X}"),
+                })
+                .collect::<String>()
+        };
         let mut s = "sophon://pair".to_owned();
+        let mut params: Vec<String> = Vec::new();
         if let Some((addr, key, token)) = lan {
-            let enc = |v: &str| v.replace('%', "%25").replace('+', "%2B").replace('/', "%2F").replace('=', "%3D");
-            s.push_str(&format!("?lan={addr}&lanKey={}&token={token}", enc(&B64.encode(key))));
+            params.push(format!("lan={addr}&lanKey={}&token={token}", enc(&B64.encode(key))));
+        }
+        if let Some(name) = name.filter(|n| !n.trim().is_empty()) {
+            params.push(format!("name={}", enc(name)));
+        }
+        if !params.is_empty() {
+            s.push('?');
+            s.push_str(&params.join("&"));
         }
         if let Some(fragment) = relay_link.and_then(|r| r.find("#offer=").map(|i| &r[i..])) {
             s.push_str(fragment);

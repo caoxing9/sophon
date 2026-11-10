@@ -53,13 +53,25 @@ pub struct Device {
     pub id: String,
     pub name: String,
     pub token: String,
+    /// The space on this Mac it reaches (its Paseo home); `None`: the first.
+    pub space: Option<String>,
+}
+
+/// Someone at this Mac allowed a pairing: the relay link to hand the phone
+/// (`None`: LAN only) and the space it joins (`None`: the first).
+#[derive(Debug, Clone, Default)]
+pub struct PairAnswer {
+    pub relay: Option<String>,
+    pub space: Option<String>,
+    /// What the phone calls this computer (a space's name with it).
+    pub name: Option<String>,
 }
 
 /// What the bridge tells the app.
 pub enum BridgeEvent {
     /// A phone on the LAN asks to pair, showing `code`: the reply is `None`
-    /// to refuse, else the relay link to hand it (`Some(None)`: LAN only).
-    PairRequest { id: u64, device: String, code: String, reply: oneshot::Sender<Option<Option<String>>> },
+    /// to refuse, else what it gets.
+    PairRequest { id: u64, device: String, code: String, reply: oneshot::Sender<Option<PairAnswer>> },
     /// The asking phone left before an answer.
     PairEnded { id: u64 },
     Connected { conn: u64, device: String },
@@ -71,15 +83,19 @@ pub enum BridgeEvent {
 pub struct Connection {
     pub conn: u64,
     pub device: String,
-    /// Its paired device's id; `None` for the QR's token.
+    /// Its paired device's id; `None` for a QR's token.
     pub device_id: Option<String>,
+    /// The space it reaches; `None`: the first.
+    pub space: Option<String>,
 }
 
 struct State {
     private: [u8; 32],
     public: [u8; 32],
-    /// The pairing QR's token.
+    /// The pairing QR's token (the first space's).
     token: String,
+    /// The other spaces' QR tokens, by space.
+    space_tokens: Vec<(String, String)>,
     port: u16,
     devices: Vec<Device>,
     conns: HashMap<u64, (Connection, Arc<Notify>)>,
@@ -101,7 +117,7 @@ fn load_or_create() -> State {
     let fresh = || {
         let (private, public) = relay::generate_key();
         let token = uuid::Uuid::new_v4().simple().to_string();
-        State { private, public, token, port: 0, devices: vec![], conns: HashMap::new(), next: 1, asking: false, events: None }
+        State { private, public, token, space_tokens: vec![], port: 0, devices: vec![], conns: HashMap::new(), next: 1, asking: false, events: None }
     };
     let Ok(text) = std::fs::read_to_string(state_path()) else { return fresh() };
     let Ok(v) = serde_json::from_str::<Value>(&text) else { return fresh() };
@@ -116,13 +132,21 @@ fn load_or_create() -> State {
         .flatten()
         .filter_map(|d| {
             let s = |k: &str| d.get(k).and_then(Value::as_str).map(str::to_owned);
-            Some(Device { id: s("id")?, name: s("name")?, token: s("token")? })
+            Some(Device { id: s("id")?, name: s("name")?, token: s("token")?, space: s("space") })
         })
+        .collect();
+    let space_tokens = v
+        .get("spaceTokens")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter_map(|(space, token)| Some((space.clone(), token.as_str()?.to_owned())))
         .collect();
     State {
         private,
         public,
         token: token.to_owned(),
+        space_tokens,
         port: v.get("port").and_then(Value::as_u64).unwrap_or(0) as u16,
         devices,
         conns: HashMap::new(),
@@ -135,13 +159,15 @@ fn load_or_create() -> State {
 fn save(s: &State) {
     let path = state_path();
     let _ = path.parent().map(std::fs::create_dir_all);
-    let devices: Vec<Value> = s.devices.iter().map(|d| json!({ "id": d.id, "name": d.name, "token": d.token })).collect();
+    let devices: Vec<Value> = s.devices.iter().map(|d| json!({ "id": d.id, "name": d.name, "token": d.token, "space": d.space })).collect();
+    let space_tokens: serde_json::Map<String, Value> = s.space_tokens.iter().map(|(k, v)| (k.clone(), v.clone().into())).collect();
     let json = json!({
         "private": B64.encode(s.private),
         "public": B64.encode(s.public),
         "token": s.token,
         "port": s.port,
         "devices": devices,
+        "spaceTokens": space_tokens,
     });
     if std::fs::write(&path, json.to_string()).is_ok() {
         #[cfg(unix)]
@@ -161,9 +187,30 @@ fn addrs(port: u16) -> Option<String> {
     Some(list.join(","))
 }
 
-/// What the pairing QR carries now.
+/// What the first space's pairing QR carries now.
 pub fn info() -> Option<BridgeInfo> {
-    with(|s| (s.port, s.public, s.token.clone())).and_then(|(port, key, token)| Some(BridgeInfo { addr: addrs(port)?, key, token }))
+    info_for(None)
+}
+
+/// What the pairing QR of `space` (a Paseo home; `None`: the first) carries
+/// now: a token of that space's, made the first time.
+pub fn info_for(space: Option<&str>) -> Option<BridgeInfo> {
+    with(|s| {
+        let token = match space {
+            None => s.token.clone(),
+            Some(space) => match s.space_tokens.iter().find(|(k, _)| k == space) {
+                Some((_, t)) => t.clone(),
+                None => {
+                    let t = uuid::Uuid::new_v4().simple().to_string();
+                    s.space_tokens.push((space.to_owned(), t.clone()));
+                    save(s);
+                    t
+                }
+            },
+        };
+        (s.port, s.public, token)
+    })
+    .and_then(|(port, key, token)| Some(BridgeInfo { addr: addrs(port)?, key, token }))
 }
 
 /// The devices paired through the LAN.
@@ -202,6 +249,7 @@ pub fn revoke_all() -> Option<BridgeInfo> {
     let cut: Vec<Arc<Notify>> = with(|s| {
         s.devices.clear();
         s.token = uuid::Uuid::new_v4().simple().to_string();
+        s.space_tokens.clear();
         save(s);
         s.conns.values().map(|(_, n)| n.clone()).collect()
     })
@@ -301,14 +349,17 @@ pub fn start() -> Option<(BridgeInfo, mpsc::UnboundedReceiver<BridgeEvent>)> {
     Some((info, rx))
 }
 
-/// Who a token belongs to: the QR's (named as the phone says) or a
-/// paired device's.
-fn authorize(token: &str, said: &str) -> Option<(String, Option<String>)> {
+/// Who a token belongs to: a QR's (named as the phone says; its space's)
+/// or a paired device's: (name, device id, space).
+fn authorize(token: &str, said: &str) -> Option<(String, Option<String>, Option<String>)> {
     with(|s| {
         if token == s.token {
-            return Some((said.to_owned(), None));
+            return Some((said.to_owned(), None, None));
         }
-        s.devices.iter().find(|d| d.token == token).map(|d| (d.name.clone(), Some(d.id.clone())))
+        if let Some((space, _)) = s.space_tokens.iter().find(|(_, t)| t == token) {
+            return Some((said.to_owned(), None, Some(space.clone())));
+        }
+        s.devices.iter().find(|d| d.token == token).map(|d| (d.name.clone(), Some(d.id.clone()), d.space.clone()))
     })
     .flatten()
 }
@@ -349,7 +400,7 @@ async fn serve(stream: TcpStream) -> Result<(), String> {
         }
     };
     let said = first.get("device").and_then(Value::as_str).filter(|d| !d.trim().is_empty()).unwrap_or("Unknown device").to_owned();
-    let (device, device_id) = match first.get("type").and_then(Value::as_str) {
+    let (device, device_id, space) = match first.get("type").and_then(Value::as_str) {
         Some("sophon_bridge_auth" | "victor_bridge_auth") => {
             let token = first.get("token").and_then(Value::as_str).unwrap_or_default();
             authorize(token, &said).ok_or("wrong pairing token")?
@@ -368,12 +419,12 @@ async fn serve(stream: TcpStream) -> Result<(), String> {
     let conn = with(|s| {
         let conn = s.next;
         s.next += 1;
-        s.conns.insert(conn, (Connection { conn, device: device.clone(), device_id }, cut.clone()));
+        s.conns.insert(conn, (Connection { conn, device: device.clone(), device_id, space: space.clone() }, cut.clone()));
         conn
     })
     .ok_or("no bridge")?;
     emit(BridgeEvent::Connected { conn, device });
-    let result = forward(&mut ptx, &mut prx, &mut seal, &mut unseal, &cut).await;
+    let result = forward(&mut ptx, &mut prx, &mut seal, &mut unseal, &cut, space.as_deref()).await;
     with(|s| s.conns.remove(&conn));
     emit(BridgeEvent::Disconnected { conn });
     result
@@ -407,27 +458,42 @@ async fn pair(device: &str, seal: &relay::Sender, prx: &mut PhoneRx) -> Value {
         _ = tokio::time::sleep(Duration::from_secs(180)) => None,
     };
     with(|s| s.asking = false);
-    let Some(relay_link) = answer else {
+    let Some(PairAnswer { relay: relay_link, space, name }) = answer else {
         emit(BridgeEvent::PairEnded { id });
         return refused;
     };
     let made = with(|s| {
-        let d = Device { id: uuid::Uuid::new_v4().simple().to_string(), name: device.to_owned(), token: uuid::Uuid::new_v4().simple().to_string() };
+        let d = Device {
+            id: uuid::Uuid::new_v4().simple().to_string(),
+            name: device.to_owned(),
+            token: uuid::Uuid::new_v4().simple().to_string(),
+            space: space.clone(),
+        };
         s.devices.push(d.clone());
         save(s);
         (d, s.port, s.public)
     });
     let Some((d, port, public)) = made else { return refused };
     let Some(lan) = addrs(port) else { return refused };
-    let link = relay::PairingLink::format(Some((&lan, &public, &d.token)), relay_link.as_deref());
+    let link = relay::PairingLink::format_named(Some((&lan, &public, &d.token)), relay_link.as_deref(), name.as_deref());
     json!({ "type": "sophon_pair_ok", "link": link })
 }
 
 /// Frames both ways between the phone and the local daemon, until either
 /// side closes or the app cuts the phone off.
-async fn forward(ptx: &mut PhoneTx, prx: &mut PhoneRx, seal: &mut relay::Sender, unseal: &mut relay::Receiver, cut: &Notify) -> Result<(), String> {
-    // 3. The local daemon, and frames both ways.
-    let endpoint = discover();
+async fn forward(
+    ptx: &mut PhoneTx,
+    prx: &mut PhoneRx,
+    seal: &mut relay::Sender,
+    unseal: &mut relay::Receiver,
+    cut: &Notify,
+    space: Option<&str>,
+) -> Result<(), String> {
+    // 3. The space's service, and frames both ways.
+    let endpoint = match space {
+        Some(home) => super::connection::discover_in(std::path::Path::new(home)),
+        None => discover(),
+    };
     let (daemon, _) = tokio_tungstenite::connect_async(endpoint.url.as_str()).await.map_err(|e| e.to_string())?;
     let (mut dtx, mut drx) = daemon.split();
     let credential = endpoint.local_credential.clone();
@@ -566,7 +632,7 @@ mod tests {
                         assert_eq!(device, "Test Phone");
                         codes_tx.send(code).unwrap();
                         let allow = answers_rx.recv().unwrap();
-                        let _ = reply.send(allow.then(|| Some(relay_link.clone())));
+                        let _ = reply.send(allow.then(|| PairAnswer { relay: Some(relay_link.clone()), ..Default::default() }));
                     }
                 }
             });
@@ -589,7 +655,7 @@ mod tests {
         assert_eq!(key, info.key);
         assert_ne!(token, info.token, "a token of its own, not the QR's");
         assert_eq!(parsed.relay.map(|r| r.server_id).as_deref(), Some("srv_test"), "the relay comes along");
-        let (name, id) = authorize(&token, "ignored").expect("the bridge takes its token");
+        let (name, id, _) = authorize(&token, "ignored").expect("the bridge takes its token");
         assert_eq!(name, "Test Phone");
         assert_eq!(devices().len(), 1);
 
@@ -602,7 +668,13 @@ mod tests {
         assert!(authorize(&token, "x").is_none(), "revoked");
         let qr = info.token.clone();
         assert!(authorize(&qr, "QR Phone").is_some());
+        // A space's QR token reaches that space, and only it.
+        let lin = info_for(Some("/spaces/lin")).unwrap();
+        assert_ne!(lin.token, info.token);
+        assert_eq!(info_for(Some("/spaces/lin")).unwrap().token, lin.token, "kept");
+        assert_eq!(authorize(&lin.token, "Lin's Mac").and_then(|(_, _, space)| space).as_deref(), Some("/spaces/lin"));
         let fresh = revoke_all().unwrap();
+        assert!(authorize(&lin.token, "x").is_none(), "a space's token changes too");
         assert!(authorize(&qr, "x").is_none(), "the QR's token changed");
         assert!(authorize(&fresh.token, "x").is_some());
         let _ = std::fs::remove_dir_all(dir);
