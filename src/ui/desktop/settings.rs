@@ -20,6 +20,7 @@ pub(crate) fn settings(compact: bool) -> impl IntoElement {
             view()
                 .child(section(t("Appearance"), appearance_card()))
                 .child(section(t("Sending"), sending_card()))
+                .child(section(t("Power"), keep_awake_card()))
                 .child(section(
                     t("Host"),
                     host_card()

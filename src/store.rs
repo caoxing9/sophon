@@ -813,6 +813,36 @@ pub(crate) fn close_modal() {
 #[derive(Clone, Debug, PartialEq, Default)]
 pub(crate) struct Settings {
     pub(crate) send_behavior: SendBehavior,
+    pub(crate) keep_awake: KeepAwake,
+}
+
+/// Whether this Mac stays awake while its agents run.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub(crate) enum KeepAwake {
+    Off,
+    /// Idle sleep held off; the display still sleeps.
+    #[default]
+    On,
+    /// The display stays on too.
+    Display,
+}
+
+/// Holds this Mac awake while an agent of its own runs, as the setting
+/// says. A remote host's agents keep their own computer busy, not this one.
+pub(crate) fn watch_keep_awake() {
+    effect(|| {
+        let mode = settings().keep_awake;
+        let busy = current_host().is_none() && global::<Agents>().with(|a| a.0.iter().any(|x| x.is_running()));
+        #[cfg(target_os = "macos")]
+        crate::awake::hold(match mode {
+            KeepAwake::Off => None,
+            _ if !busy => None,
+            KeepAwake::On => Some(false),
+            KeepAwake::Display => Some(true),
+        });
+        #[cfg(not(target_os = "macos"))]
+        let _ = (mode, busy);
+    });
 }
 /// What a notice's button does.
 #[derive(Clone, Debug, PartialEq)]
@@ -1929,6 +1959,11 @@ fn save_prefs() {
             SendBehavior::Interrupt => "interrupt",
             SendBehavior::Queue => "queue",
         },
+        "keepAwake": match s.keep_awake {
+            KeepAwake::Off => "off",
+            KeepAwake::On => "on",
+            KeepAwake::Display => "display",
+        },
         "sidebarHidden": global::<SidebarHidden>().with_untracked(|h| h.0),
         "explorerOpen": global::<Explorer>().with_untracked(|e| e.open),
         "sidebarWidth": global::<SidebarWidth>().with_untracked(|w| w.0),
@@ -1959,7 +1994,15 @@ pub(crate) fn load_prefs() {
         Some("queue") => SendBehavior::Queue,
         _ => SendBehavior::Steer,
     };
-    global::<Settings>().update(|s| s.send_behavior = behavior);
+    let keep_awake = match v.get("keepAwake").and_then(serde_json::Value::as_str) {
+        Some("off") => KeepAwake::Off,
+        Some("display") => KeepAwake::Display,
+        _ => KeepAwake::On,
+    };
+    global::<Settings>().update(|s| {
+        s.send_behavior = behavior;
+        s.keep_awake = keep_awake;
+    });
     if let Some(h) = v.get("sidebarHidden").and_then(serde_json::Value::as_bool) {
         global::<SidebarHidden>().update(|s| s.0 = h);
     }

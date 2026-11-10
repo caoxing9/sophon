@@ -59,6 +59,21 @@ pub(crate) fn sending_card() -> View {
     ))
 }
 
+/// Whether this Mac stays awake while its agents run (the desktop's).
+pub(crate) fn keep_awake_card() -> View {
+    use store::KeepAwake;
+    card().child(row(
+        t("Prevent sleep"),
+        t("Keeps this Mac awake while its agents run"),
+        segmented(
+            vec![(KeepAwake::Off, t("Off").into()), (KeepAwake::On, t("On").into()), (KeepAwake::Display, t("Screen on too").into())],
+            || store::settings().keep_awake,
+            |k| store::edit_settings(|s| s.keep_awake = k),
+        ),
+        true,
+    ))
+}
+
 /// The settings page frame: a centered column under the title.
 pub(crate) fn page(compact: bool, sections: View) -> impl IntoElement {
     scroll().flex_1().child(

@@ -7,6 +7,8 @@ use nsh_base::theme;
 use nsh_core::{element::{AssetFile, AssetKind}, prelude::*};
 
 mod agent_update;
+#[cfg(target_os = "macos")]
+mod awake;
 pub mod daemon;
 mod fold;
 mod i18n;
@@ -74,6 +76,7 @@ pub fn App() -> impl IntoElement {
     // The web's desktop idiom is still a page: no bridge, no updates.
     if is_desktop() && !cfg!(target_arch = "wasm32") {
         store::start_bridge();
+        store::watch_keep_awake();
         update::start();
         update::preview();
     }
