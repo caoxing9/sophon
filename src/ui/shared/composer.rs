@@ -502,13 +502,21 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
 /// Messages waiting for the running turn to end.
 fn queue_track(live: bool) -> impl IntoElement {
     let queued = computed(move || if live { store::selected_id().map(|id| store::queue(&id)).unwrap_or_default() } else { vec![] });
+    let held = computed(move || live && store::selected_id().is_some_and(|id| store::queue_held(&id)));
     view().child(dynamic(move || {
         let list = queued.get();
+        held.get();
         if list.is_empty() {
             return None;
         }
         Some(untracked(move || {
-            let mut track = card().mb(px(S2)).px(px(S3)).py(px(S2)).gap(px(S1)).child(section_label(t("Queued")));
+            // Waiting after an Escape: said, with the key that takes them back.
+            let held = store::selected_id().is_some_and(|id| store::queue_held(&id));
+            let mut track = card().mb(px(S2)).px(px(S3)).py(px(S2)).gap(px(S1)).child(section_label(if held {
+                t("Queued · paused — Esc to edit, send to continue")
+            } else {
+                t("Queued")
+            }));
             for (i, msg) in list.clone().into_iter().enumerate() {
                 track = track.child(
                     view()

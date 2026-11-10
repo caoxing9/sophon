@@ -770,6 +770,10 @@ struct Timeline {
 /// Messages waiting for the running turn to end, per agent.
 #[derive(Clone, Default)]
 struct Queues(HashMap<String, Vec<String>>);
+/// The agents whose queue waits: stopped with Escape, its messages stay
+/// until they are sent on or taken back to be edited.
+#[derive(Clone, Default)]
+struct QueueHeld(std::collections::HashSet<String>);
 #[derive(Clone, Default)]
 struct Commands(HashMap<String, Vec<SlashCommand>>);
 #[derive(Clone, Default)]
@@ -2382,6 +2386,46 @@ pub(crate) fn queue(agent_id: &str) -> Vec<String> {
     global::<Queues>().with(|q| q.0.get(agent_id).cloned().unwrap_or_default())
 }
 
+/// Whether `agent_id`'s queue waits (stopped with Escape).
+pub(crate) fn queue_held(agent_id: &str) -> bool {
+    global::<QueueHeld>().with(|h| h.0.contains(agent_id))
+}
+
+/// Escape in the open agent's composer, as Claude Code's: while the agent
+/// runs it stops it, and what is queued waits instead of being sent; once
+/// more, the queued messages come back into the composer to be edited.
+pub(crate) fn escape_composer() {
+    let Some(agent) = selected_agent() else { return };
+    let queued = global::<Queues>().with_untracked(|q| q.0.get(&agent.id).cloned().unwrap_or_default());
+    if agent.is_running() {
+        if !queued.is_empty() {
+            global::<QueueHeld>().update(|h| {
+                h.0.insert(agent.id.clone());
+            });
+        }
+        send(Command::Cancel(agent.id));
+        return;
+    }
+    // Attachments stand as chips in the composer's text, which this would
+    // replace: they are sent or removed first.
+    if queued.is_empty() || !pending_images().is_empty() || !pending_files().is_empty() {
+        return;
+    }
+    global::<Queues>().update(|q| {
+        q.0.remove(&agent.id);
+    });
+    global::<QueueHeld>().update(|h| {
+        h.0.remove(&agent.id);
+    });
+    let mut text = queued.join("\n");
+    let draft = draft(&agent.id);
+    if !draft.trim().is_empty() {
+        text.push('\n');
+        text.push_str(&draft);
+    }
+    set_draft(&agent.id, &text);
+}
+
 pub(crate) fn unqueue(agent_id: &str, index: usize) {
     global::<Queues>().update(|q| {
         if let Some(list) = q.0.get_mut(agent_id)
@@ -3328,6 +3372,10 @@ pub(crate) fn send_message(text: &str) -> bool {
         notify(t("Wait for the files to finish uploading").into());
         return false;
     }
+    // A message sent sets a waiting queue going again, after it.
+    global::<QueueHeld>().update(|h| {
+        h.0.remove(&agent.id);
+    });
     let behavior = settings().send_behavior;
     // A pending permission must be answered first; queueing would wait forever.
     if agent.is_running() && behavior == SendBehavior::Queue && agent.pending.is_empty() {
@@ -3415,7 +3463,7 @@ pub(crate) fn watch_notification_presses() {
 
 /// Sends the next queued message once its agent stops running.
 fn flush_queue(agent: &Agent) {
-    if agent.is_running() {
+    if agent.is_running() || global::<QueueHeld>().with_untracked(|h| h.0.contains(&agent.id)) {
         return;
     }
     let next = global::<Queues>().with_untracked(|q| q.0.get(&agent.id).and_then(|l| l.first().cloned()));

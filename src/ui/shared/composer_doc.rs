@@ -338,6 +338,19 @@ fn new_session(key: &str, text: &str) -> EditorSession {
             }),
         ));
     }
+    // Escape in an agent's composer: stops the agent, then takes the
+    // queued messages back (`store::escape_composer`).
+    if key.starts_with("agent:") {
+        bindings.push((
+            "Escape".into(),
+            command(move |_, dispatch| {
+                if dispatch.is_some() {
+                    set_timeout(Duration::ZERO, crate::store::escape_composer);
+                }
+                true
+            }),
+        ));
+    }
     // The app's shortcuts, run after the key as the send is.
     // Commands are `Send`: each holds its shortcut's place in the list.
     let names: Vec<String> = APP_KEYS.with_borrow(|k| k.iter().map(|(name, _)| editor_key_name(name)).collect());

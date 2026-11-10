@@ -746,6 +746,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Power", "电源"),
     ("Prevent sleep", "防止休眠"),
     ("Syncing…", "同步中…"),
+    ("Queued · paused — Esc to edit, send to continue", "排队中 · 已暂停 — 按 Esc 取回编辑，发送则继续"),
     ("Offline copies", "本地副本"),
     ("Lists and recent conversations, shown before the computer answers · {}", "列表和最近的对话，连上电脑前先显示 · {}"),
     ("Storage", "存储"),
