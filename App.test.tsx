@@ -51,3 +51,13 @@ test("opens the usage page from the sidebar", async () => {
   expect(app.texts()).toContain("Plan limits");
   expect(app.texts()).toContain("7 days");
 });
+
+test("the model picker shows the agents, the models and their reasoning", async () => {
+  const app = await open(".", { width: 1100, height: 760 });
+  await app.press("New workspace >> nth=0");
+  await app.press("label:Model");
+  expect(app.texts()).toContain("Reasoning");
+  expect(app.count("label:Favorites")).toBe(1);
+  await app.keyboard.press("escape");
+  expect(app.texts()).not.toContain("Reasoning");
+});

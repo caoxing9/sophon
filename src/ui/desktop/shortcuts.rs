@@ -45,6 +45,9 @@ fn keys(with_menu: bool) -> Vec<(String, std::rc::Rc<dyn Fn()>)> {
     ];
     for n in 1..=9usize {
         out.push(key(&format!("mod+{n}"), move || {
+            if crate::ui::shared::model_picker::take_digit(n) {
+                return;
+            }
             if let Some(tab) = store::tab_list().get(n - 1).cloned() {
                 store::open_tab(tab);
             }

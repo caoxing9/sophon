@@ -95,6 +95,10 @@ pub(crate) enum Icon {
     Upload,
     Workflow,
     Wrench,
+    Zap,
+    Lock,
+    PenLine,
+    ShieldOff,
     X,
 }
 
@@ -186,6 +190,10 @@ fn markup(icon: Icon) -> &'static str {
         Icon::Undo2 => include_str!("../../../assets/icons/undo-2.svg"),
         Icon::Upload => include_str!("../../../assets/icons/upload.svg"),
         Icon::Workflow => include_str!("../../../assets/icons/workflow.svg"),
+        Icon::Zap => include_str!("../../../assets/icons/zap.svg"),
+        Icon::Lock => include_str!("../../../assets/icons/lock.svg"),
+        Icon::PenLine => include_str!("../../../assets/icons/pen-line.svg"),
+        Icon::ShieldOff => include_str!("../../../assets/icons/shield-off.svg"),
         Icon::Wrench => include_str!("../../../assets/icons/wrench.svg"),
         Icon::X => include_str!("../../../assets/icons/x.svg"),
     }

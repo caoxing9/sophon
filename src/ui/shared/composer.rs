@@ -249,10 +249,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                     .child(menu_row(t("Paste image"), Some(Icon::Copy), None, false, with_key(paste_image_into))),
                 )
                 .child(mic_button(doc))
-                .child(model_picker(live))
-                .child(thinking_picker(live))
-                .child(mode_picker(live))
-                .child(feature_controls(live)),
+                .child(model_picker(live)),
                 )
                 .child(view().flex_shrink_0().child(disc(running, busy, empty, submit))),
         ))
@@ -599,7 +596,7 @@ fn model_picker(live: bool) -> impl IntoElement {
     super::model_picker::model_picker(live, name)
 }
 
-fn thinking_options(live: bool) -> Vec<crate::daemon::model::Opt> {
+pub(crate) fn thinking_options(live: bool) -> Vec<crate::daemon::model::Opt> {
     let c = store::controls(live);
     // The agent's own list first: its levels for this model.
     let local = c.model.as_deref().and_then(|m| store::local_models(&c.provider)?.into_iter().find(|x| x.id == m));
@@ -614,86 +611,6 @@ fn thinking_options(live: bool) -> Vec<crate::daemon::model::Opt> {
         .and_then(|p| c.model.as_deref().and_then(|m| p.model(m).cloned()).or_else(|| p.default_model().cloned()))
         .map(|m| m.thinking)
         .unwrap_or_default()
-}
-
-fn thinking_picker(live: bool) -> impl IntoElement {
-    let has = computed(move || !thinking_options(live).is_empty());
-    let label = computed(move || {
-        let c = store::controls(live);
-        let opts = thinking_options(live);
-        c.thinking
-            .as_deref()
-            .and_then(|t| opts.iter().find(|o| o.id == t))
-            .or(opts.first())
-            .map(|o| o.label.clone())
-            .unwrap_or_default()
-    });
-    when(has, move || {
-        dropup(picker_trigger(Some(Icon::Brain), move || label.get())).child(thinking_rows(live))
-    })
-}
-
-fn thinking_rows(live: bool) -> impl IntoElement {
-    view().child(dynamic(move || {
-            let c = store::controls(live);
-            let opts = thinking_options(live);
-            if opts.is_empty() {
-                return None;
-            }
-            Some(untracked(move || {
-                let mut list = view().child(menu_heading(t("Thinking")));
-                for o in &opts {
-                    let id = o.id.clone();
-                    list = list.child(menu_row(
-                        o.label.clone(),
-                        None,
-                        Some(o.description.clone().into()),
-                        c.thinking.as_deref() == Some(o.id.as_str()),
-                        move || store::set_control(live, Control::Thinking(id.clone())),
-                    ));
-                }
-                list.into_element()
-            }))
-    }))
-}
-
-fn mode_picker(live: bool) -> impl IntoElement {
-    let has = computed(move || !store::controls(live).modes.is_empty());
-    let label = computed(move || {
-        let c = store::controls(live);
-        c.mode
-            .as_deref()
-            .and_then(|m| c.modes.iter().find(|o| o.id == m))
-            .or(c.modes.first())
-            .map(|o| o.label.clone())
-            .unwrap_or_default()
-    });
-    when(has, move || {
-        dropup(picker_trigger(Some(Icon::Layers), move || label.get())).child(mode_rows(live))
-    })
-}
-
-fn mode_rows(live: bool) -> impl IntoElement {
-    view().child(dynamic(move || {
-            let c = store::controls(live);
-            if c.modes.is_empty() {
-                return None;
-            }
-            Some(untracked(move || {
-                let mut list = view().child(menu_heading(t("Mode")));
-                for o in &c.modes {
-                    let id = o.id.clone();
-                    list = list.child(menu_row(
-                        o.label.clone(),
-                        None,
-                        Some(o.description.clone().into()),
-                        c.mode.as_deref() == Some(o.id.as_str()),
-                        move || store::set_control(live, Control::Mode(id.clone())),
-                    ));
-                }
-                list.into_element()
-            }))
-    }))
 }
 
 /// A hint line under a composer (errors, where it starts).
@@ -807,61 +724,6 @@ pub(crate) fn context_meter() -> impl IntoElement {
                     ),
                 )
                 .child(text(label).text_size(px(TEXT_XS)).font_family(|| MONO).text_color(tone))
-        }))
-    }))
-}
-
-/// The provider's features: toggles as chips, choices as menus.
-fn feature_controls(live: bool) -> impl IntoElement {
-    let list = computed(move || store::features(live));
-    view().flex_row().items_center().gap(px(2.0)).child(dynamic(move || {
-        let features = list.get();
-        if features.is_empty() {
-            return None;
-        }
-        Some(untracked(move || {
-            let mut row = view().flex_row().items_center().gap(px(2.0));
-            for f in features.clone() {
-                match f.value.clone() {
-                    Ok(on) => {
-                        let id = f.id.clone();
-                        row = row.child(
-                            nsh_base::button()
-                                .on_press(move || store::set_feature(live, &id, (!on).into()))
-                                .flex_row()
-                                .items_center()
-                                .gap(px(5.0))
-                                .h(px(CONTROL_SM))
-                                .px(px(S2))
-                                .rounded(px(R_FULL))
-                                .bg(if on { tint(ACCENT, 0.12) } else { tint(ACCENT, 0.0) })
-                                .hover(|s| s.bg(highlight()))
-                                .child(icon(Icon::Sparkles, 14.0).text_color(if on { ACCENT } else { FG_MUTED }))
-                                .child(text(f.label.clone()).text_size(px(TEXT_SM)).font_weight(FontWeight(500)).text_color(if on { ACCENT } else { FG_MUTED })),
-                        );
-                    }
-                    Err((value, options)) => {
-                        let current = value
-                            .as_deref()
-                            .and_then(|v| options.iter().find(|o| o.id == v))
-                            .map(|o| o.label.clone())
-                            .unwrap_or_else(|| f.label.clone());
-                        let mut menu = dropup(picker_trigger(Some(Icon::Settings2), current)).child(menu_heading(f.label.clone()));
-                        for o in options {
-                            let (id, oid) = (f.id.clone(), o.id.clone());
-                            menu = menu.child(menu_row(
-                                o.label.clone(),
-                                None,
-                                Some(o.description.clone().into()),
-                                value.as_deref() == Some(o.id.as_str()),
-                                move || store::set_feature(live, &id, oid.clone().into()),
-                            ));
-                        }
-                        row = row.child(menu);
-                    }
-                }
-            }
-            row
         }))
     }))
 }
