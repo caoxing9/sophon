@@ -2931,6 +2931,65 @@ mod tests {
 
     #[test]
     #[ignore]
+    fn daemon_config_shape_live() {
+        // The local daemon's config as it answers it: which keys it has.
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let (ev_tx, mut ev_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+            tokio::spawn(run(ev_tx, cmd_rx));
+            loop {
+                if let Some(Event::Connected { .. }) = ev_rx.recv().await { break; }
+            }
+            cmd_tx.send(Command::GetConfig).unwrap();
+            let got = tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    if let Some(Event::DaemonConfig(c)) = ev_rx.recv().await { return c; }
+                }
+            })
+            .await;
+            match got {
+                Ok(c) => {
+                    for p in ["/mcp/injectIntoAgents", "/autoArchiveAfterMerge", "/idleRuntimeCleanup", "/resumeOnStartup", "/usage/enabled", "/relay/enabled", "/appendSystemPrompt"] {
+                        println!("{p}: {}", c.pointer(p).map_or("MISSING".to_owned(), |v| v.to_string().chars().take(40).collect()));
+                    }
+                    println!("top keys: {:?}", c.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()));
+                }
+                Err(_) => println!("no config answer"),
+            }
+        });
+    }
+
+    #[test]
+    #[ignore]
+    fn host_flag_toggle_live() {
+        // The local daemon: Archive after merge on, then off; each answer
+        // carries the new value.
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let (ev_tx, mut ev_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+            tokio::spawn(run(ev_tx, cmd_rx));
+            loop {
+                if let Some(Event::Connected { .. }) = ev_rx.recv().await { break; }
+            }
+            for on in [true, false] {
+                cmd_tx.send(Command::SetConfig(json!({ "autoArchiveAfterMerge": on }))).unwrap();
+                let got = tokio::time::timeout(Duration::from_secs(10), async {
+                    loop {
+                        if let Some(Event::DaemonConfig(c)) = ev_rx.recv().await { return c; }
+                    }
+                })
+                .await
+                .expect("an answer");
+                println!("set {on}: answered {:?}", got.get("autoArchiveAfterMerge"));
+                assert_eq!(got.get("autoArchiveAfterMerge"), Some(&json!(on)));
+            }
+        });
+    }
+
+    #[test]
+    #[ignore]
     fn upload_live() {
         // The local daemon; uploads a file and prints the attachment.
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();

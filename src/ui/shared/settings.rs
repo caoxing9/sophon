@@ -2,7 +2,7 @@
 //! controls in the rows' trailing slot. The desktop and the phone each
 //! assemble their page from them.
 
-use crate::i18n::{Lang, t};
+use crate::i18n::{Lang, t, tf};
 use nsh_core::{
     element::{FontWeight, View},
     prelude::*,
@@ -209,6 +209,22 @@ fn flag(pointer: &'static str, default: bool) -> impl IntoElement {
     )
 }
 
+/// A host setting as a row with its switch. The service answers its config
+/// with every setting it has, defaults included: one missing is one an older
+/// service lacks, shown off with a note rather than a switch that flips back.
+fn host_flag(title: &'static str, hint: &'static str, pointer: &'static str, default: bool, first: bool) -> View {
+    let supported = store::daemon_config().is_some_and(|c| c.pointer(pointer).is_some());
+    if supported {
+        return row(title, hint, flag(pointer, default), first);
+    }
+    row(
+        title,
+        tf("{} · Needs a newer service on this host", &[hint]),
+        switch(|| false, |_| {}).disabled(true).opacity(0.4),
+        first,
+    )
+}
+
 pub(crate) fn behavior_card() -> impl IntoElement {
     let prompt = signal(String::new());
     let loaded = computed(|| store::daemon_config().is_some());
@@ -223,12 +239,12 @@ pub(crate) fn behavior_card() -> impl IntoElement {
         }
         Some(untracked(move || {
             card()
-                .child(row(t("Inject Sophon tools"), t("Agents can open terminals, start agents and more through MCP"), flag("/mcp/injectIntoAgents", true), true))
-                .child(row(t("Archive after merge"), t("Archive a workspace once its branch is merged"), flag("/autoArchiveAfterMerge", false), false))
-                .child(row(t("Free idle agents"), t("Stop idle agent runtimes to save memory; they resume on demand"), flag("/idleRuntimeCleanup", false), false))
-                .child(row(t("Resume on startup"), t("Pick up running agents when the service restarts"), flag("/resumeOnStartup", false), false))
-                .child(row(t("Usage reports"), t("Collect token and cost usage per provider"), flag("/usage/enabled", false), false))
-                .child(row(t("Remote relay"), t("Reach this host from your phone through the encrypted relay"), flag("/relay/enabled", true), false))
+                .child(host_flag(t("Inject Sophon tools"), t("Agents can open terminals, start agents and more through MCP"), "/mcp/injectIntoAgents", true, true))
+                .child(host_flag(t("Archive after merge"), t("Archive a workspace once its branch is merged"), "/autoArchiveAfterMerge", false, false))
+                .child(host_flag(t("Free idle agents"), t("Stop idle agent runtimes to save memory; they resume on demand"), "/idleRuntimeCleanup", false, false))
+                .child(host_flag(t("Resume on startup"), t("Pick up running agents when the service restarts"), "/resumeOnStartup", false, false))
+                .child(host_flag(t("Usage reports"), t("Collect token and cost usage per provider"), "/usage/enabled", false, false))
+                .child(host_flag(t("Remote relay"), t("Reach this host from your phone through the encrypted relay"), "/relay/enabled", true, false))
                 .child(
                     view()
                         .px(px(S4))
