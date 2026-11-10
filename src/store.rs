@@ -35,6 +35,7 @@ pub(crate) enum Screen {
     Settings,
     History,
     Schedules,
+    Usage,
     Workspace(String),
 }
 
@@ -177,9 +178,94 @@ pub(crate) fn save_project_config() {
 }
 
 pub(crate) fn open_usage() {
-    send(Command::Usage);
-    open_modal(Modal::Usage);
+    global::<Nav>().update(|n| n.screen = Screen::Usage);
+    send(Command::WatchDiff(None));
+    refresh_usage();
 }
+
+/// Asks the daemon for the plan limits and re-reads this computer's
+/// session logs.
+pub(crate) fn refresh_usage() {
+    send(Command::Usage);
+    refresh_local_usage();
+}
+
+/// The limit readings so far (`usage-history.json`), read on first use.
+#[derive(Clone, Default)]
+struct LimitHistory(Option<crate::usage::limits::History>);
+
+pub(crate) fn limit_history() -> crate::usage::limits::History {
+    let loaded = global::<LimitHistory>().with_untracked(|h| h.0.is_some());
+    if !loaded {
+        let h = crate::usage::limits::History::load();
+        untracked(|| global::<LimitHistory>().set(LimitHistory(Some(h))));
+    }
+    global::<LimitHistory>().with(|h| h.0.clone().unwrap_or_default())
+}
+
+/// The key a window's readings are kept under.
+pub(crate) fn limit_key(provider: &crate::daemon::connection::ProviderUsage, window: &crate::daemon::connection::UsageWindow) -> String {
+    format!("{}/{}", provider.id, window.id)
+}
+
+/// Keeps a reading of each window the daemon reported, for the trend and
+/// the forecast.
+fn record_limits(list: &[crate::daemon::connection::ProviderUsage]) {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+    let mut history = untracked(limit_history);
+    let mut changed = false;
+    for p in list {
+        for w in &p.windows {
+            if let Some(pct) = w.used {
+                let resets = w.resets_at.as_deref().and_then(crate::usage::parse::rfc3339);
+                changed |= history.record(&limit_key(p, w), now, pct, resets);
+            }
+        }
+    }
+    if changed {
+        history.save();
+        global::<LimitHistory>().set(LimitHistory(Some(history)));
+    }
+}
+
+/// This computer's session-log statistics: the last report, and whether a
+/// read is under way.
+#[derive(Clone, Default, PartialEq)]
+pub(crate) struct LocalUsage {
+    pub(crate) report: Option<crate::usage::Report>,
+    pub(crate) loading: bool,
+}
+
+pub(crate) fn local_usage() -> LocalUsage {
+    global::<LocalUsage>().with(Clone::clone)
+}
+
+/// Re-reads the session logs on a thread of its own (only new and changed
+/// files are read), then shows the sums.
+#[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+fn refresh_local_usage() {
+    if global::<LocalUsage>().with_untracked(|u| u.loading) {
+        return;
+    }
+    global::<LocalUsage>().update(|u| u.loading = true);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(crate::usage::scan::scan());
+    });
+    spawn_detached(async move {
+        let report = rx.recv().await;
+        global::<LocalUsage>().update(|u| {
+            u.loading = false;
+            if report.is_some() {
+                u.report = report;
+            }
+        });
+    });
+}
+
+/// No session logs to read on a phone or in a browser.
+#[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+fn refresh_local_usage() {}
 
 /// Sends review notes on a diff to the workspace's newest agent.
 pub(crate) fn send_review(path: Option<&str>, note: &str) -> bool {
@@ -695,7 +781,6 @@ pub(crate) enum Modal {
     Update,
     ImportSession,
     RestartDaemon,
-    Usage,
     AddHost,
     PairDevice,
     Labels { workspace: String },
@@ -3495,7 +3580,10 @@ pub(crate) fn apply(event: Event) {
             *p = Pairing { loaded: true, qr_svg: link.as_deref().and_then(qr_svg), sophon_url: link, url, relay_enabled, error };
         }),
         Event::Labels(list) => global::<LabelCatalog>().update(|l| l.0 = list),
-        Event::Usage(list) => global::<UsageState>().update(|u| u.0 = Some(list)),
+        Event::Usage(list) => {
+            record_limits(&list);
+            global::<UsageState>().update(|u| u.0 = Some(list));
+        }
         Event::DaemonConfig(cfg) => global::<DaemonConfig>().update(|c| c.0 = Some(cfg)),
         Event::Diagnostic { provider, text } => {
             let d = crate::daemon::agents::parse_diagnostic(&text);

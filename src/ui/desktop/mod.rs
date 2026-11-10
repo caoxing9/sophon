@@ -14,6 +14,7 @@ mod settings;
 pub(crate) mod shortcuts;
 mod sidebar;
 mod terminal;
+mod usage;
 mod workspace;
 
 use crate::i18n::t;
@@ -213,6 +214,7 @@ enum Main {
     Settings,
     History,
     Schedules,
+    Usage,
     Workspace,
 }
 
@@ -224,6 +226,7 @@ fn main(compact: bool) -> impl IntoElement {
         Screen::Settings => Main::Settings,
         Screen::History => Main::History,
         Screen::Schedules => Main::Schedules,
+        Screen::Usage => Main::Usage,
         Screen::Workspace(_) => Main::Workspace,
     });
     view()
@@ -237,6 +240,7 @@ fn main(compact: bool) -> impl IntoElement {
                 Main::Settings => settings::settings(compact).into_element(),
                 Main::History => history::history(compact).into_element(),
                 Main::Schedules => schedules::schedules(compact).into_element(),
+                Main::Usage => usage::usage_page(compact).into_element(),
                 Main::Workspace => workspace::workspace(compact).into_element(),
             }))
         }))

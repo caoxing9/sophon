@@ -28,6 +28,8 @@ env_logger = "0.11"
 tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net", "fs"] }
 tokio-tungstenite = { version = "0.28", features = ["native-tls"] }
 if-addrs = "0.13"
+# Local days for the usage page's sums (already in the tree through nsh-base).
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "=0.2.129"

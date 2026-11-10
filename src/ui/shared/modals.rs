@@ -95,7 +95,6 @@ fn body(m: Modal) -> View {
         Modal::AddProject => add_project(),
         Modal::SwitchBranch => switch_branch(),
         Modal::ImportSession => import_session(),
-        Modal::Usage => usage(),
         Modal::AddAgentAccount => crate::ui::shared::agents::add_account(),
         Modal::AddAgentKey => crate::ui::shared::agents::add_api_key(),
         Modal::RemoveAgent { id, label } => crate::ui::shared::agents::remove_agent(id, label),
@@ -432,60 +431,6 @@ fn import_session() -> View {
                 }
             }))
         })))
-        .child(actions(view()))
-}
-
-fn usage() -> View {
-    let data = computed(store::usage);
-    sheet(t("Usage"))
-        .w(px(560.0))
-        .child(dynamic(move || {
-            let d = data.get();
-            Some(untracked(move || match d.clone() {
-                None => text(t("Loading…")).text_color(FG_MUTED).into_element(),
-                Some(list) if list.is_empty() => text(t("No usage reported by your providers")).text_size(px(TEXT_BASE)).text_color(FG_MUTED).into_element(),
-                Some(list) => {
-                    let mut col = view().gap(px(S4));
-                    for p in list {
-                        let mut c = card().p(px(S4)).gap(px(S3)).child(
-                            view()
-                                .flex_row()
-                                .items_center()
-                                .gap(px(S2))
-                                .child(text(p.name.clone()).text_size(px(TEXT_BASE)).font_weight(FontWeight(500)))
-                                .child(text(p.plan.clone().unwrap_or_default()).text_size(px(TEXT_SM)).text_color(FG_MUTED)),
-                        );
-                        if let Some(e) = p.error.clone() {
-                            c = c.child(text(e).text_size(px(TEXT_SM)).text_color(DANGER));
-                        }
-                        for (label, pct, resets) in p.windows {
-                            let used = pct.unwrap_or(0.0).clamp(0.0, 100.0);
-                            let tone = if used >= 90.0 { DANGER } else if used >= 70.0 { WARNING } else { ACCENT };
-                            c = c.child(
-                                view()
-                                    .gap(px(5.0))
-                                    .child(
-                                        view()
-                                            .flex_row()
-                                            .child(text(label).text_size(px(TEXT_SM)).flex_1())
-                                            .child(text(format!("{used:.0}%")).text_size(px(TEXT_SM)).font_family(|| MONO).text_color(FG_MUTED)),
-                                    )
-                                    .child(
-                                        view().h(px(6.0)).rounded(px(R_FULL)).bg(SURFACE3).child(
-                                            view().h_full().w(relative(used as f32 / 100.0)).rounded(px(R_FULL)).bg(tone),
-                                        ),
-                                    )
-                                    .when_some(resets, |v, r| {
-                                        v.child(text(tf("Resets {}", &[&r.get(..16).unwrap_or(&r).replace('T', " ")])).text_size(px(TEXT_XS)).text_color(FG_FAINT))
-                                    }),
-                            );
-                        }
-                        col = col.child(c);
-                    }
-                    scroll().max_h(px(480.0)).child(col).into_element()
-                }
-            }))
-        }))
         .child(actions(view()))
 }
 
