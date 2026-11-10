@@ -638,6 +638,21 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Rewind both to here", "对话和文件都回退到这里"),
     ("Agent settings", "Agent 设置"),
     ("Workspace", "工作区"),
+    // A folded run of tool calls: "Ran 3 commands, edited 2 files".
+    ("ran 1 command", "运行了 1 条命令"),
+    ("ran {} commands", "运行了 {} 条命令"),
+    ("edited 1 file", "编辑了 1 个文件"),
+    ("edited {} files", "编辑了 {} 个文件"),
+    ("read 1 file", "读取了 1 个文件"),
+    ("read {} files", "读取了 {} 个文件"),
+    ("ran 1 search", "搜索了 1 次"),
+    ("ran {} searches", "搜索了 {} 次"),
+    ("fetched 1 page", "获取了 1 个网页"),
+    ("fetched {} pages", "获取了 {} 个网页"),
+    ("1 other action", "执行了 1 项其他操作"),
+    ("{} other actions", "执行了 {} 项其他操作"),
+    (", ", "，"),
+    ("{} failed", "{} 项失败"),
 ];
 
 #[cfg(test)]

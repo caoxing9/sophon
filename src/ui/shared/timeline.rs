@@ -15,6 +15,7 @@ use crate::{
         Item, Permission,
         model::{Question, plan_of, questions_of},
     },
+    fold::{Group, Row},
     store,
 };
 
@@ -24,6 +25,8 @@ enum RowKind {
     Assistant,
     Reasoning,
     Tool,
+    /// A run of tool calls, summed up.
+    Group,
     Todo,
     Error,
     Notice,
@@ -58,15 +61,17 @@ pub(crate) fn timeline() -> impl IntoElement {
                     .child(loader(None))
                     .into_element();
             }
-            let count = store::item_count();
+            // Rows, not items: a run of tool calls is one row while folded.
+            let rows = computed(store::display_rows);
+            let count = rows.with_untracked(Vec::len);
             let list = element_ref();
             store::set_timeline_list(list.clone());
-            view().flex_1().child(virtual_list(store::item_count, move |at: Position| row(at, running))
+            view().flex_1().child(virtual_list(move || rows.with(Vec::len), move |at: Position| row(at, rows, running))
                 // On the phone, a drag down the conversation takes the
                 // keyboard with it, as Messages does.
                 .keyboard_dismiss_mode(if MOBILE { KeyboardDismissMode::Interactive } else { KeyboardDismissMode::None })
                 .element_ref(&list)
-                .keys(store::item_keys)
+                .keys(move || rows.with(|r| store::row_keys(r)))
                 .estimated_item_size(px(80.0))
                 .initial_scroll_index(count.saturating_sub(1))
                 .follow_end(px(40.0))
@@ -89,10 +94,26 @@ pub(crate) fn timeline() -> impl IntoElement {
     }))
 }
 
-fn row(at: Position, running: Memo<bool>) -> impl IntoElement {
-    let item = computed(move || store::item_at(at.index()));
-    let kind = computed(move || item.with(|i| i.as_ref().map(RowKind::of)));
-    let streaming = computed(move || running.get() && at.index() + 1 == store::item_count());
+fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElement {
+    let shown = computed(move || rows.with(|r| r.get(at.index()).cloned()));
+    // The item's index, for a row that shows one.
+    let index = computed(move || match shown.get() {
+        Some(Row::Item { index, .. }) => Some(index),
+        _ => None,
+    });
+    let grouped = computed(move || matches!(shown.get(), Some(Row::Item { grouped: true, .. })));
+    let group = computed(move || match shown.get() {
+        Some(Row::Group(g)) => Some(g),
+        _ => None,
+    });
+    let item = computed(move || index.get().and_then(store::item_at));
+    let kind = computed(move || {
+        if group.with(Option::is_some) {
+            return Some(RowKind::Group);
+        }
+        item.with(|i| i.as_ref().map(RowKind::of))
+    });
+    let streaming = computed(move || running.get() && index.get().is_some_and(|i| i + 1 == store::item_count()));
     let text_of = move || {
         item.with(|i| match i {
             Some(Item::User { text, .. } | Item::Assistant { text } | Item::Reasoning { text }) => text.clone(),
@@ -105,8 +126,9 @@ fn row(at: Position, running: Memo<bool>) -> impl IntoElement {
         if !f.open || f.query.trim().is_empty() {
             return 0u8;
         }
+        let Some(index) = index.get() else { return 0 };
         let m = store::find_matches();
-        match m.iter().position(|&i| i == at.index()) {
+        match m.iter().position(|&i| i == index) {
             Some(p) if p == f.current => 2,
             Some(_) => 1,
             None => 0,
@@ -183,7 +205,10 @@ fn row(at: Position, running: Memo<bool>) -> impl IntoElement {
                             .flex_1(),
                     )
                     .into_element(),
-                RowKind::Tool => tool_row(item).into_element(),
+                // A call under an open group sits indented under its
+                // summary, past the summary's chevron.
+                RowKind::Tool => view().pl(move || px(if grouped.get() { S4 } else { 0.0 })).child(tool_row(item)).into_element(),
+                RowKind::Group => group_row(group).into_element(),
                 RowKind::Todo => todo_card(item).into_element(),
                 RowKind::Error => view()
                     .flex_row()
@@ -323,6 +348,60 @@ fn user_actions(item: Memo<Option<Item>>) -> View {
             .into_element()
         }))
     }))
+}
+
+/// A run of tool calls as one row: what they did ("Ran 3 commands,
+/// edited 2 files"), failures and progress, and a chevron. Pressed, its
+/// calls show under it, or fold away again.
+fn group_row(group: Memo<Option<Group>>) -> impl IntoElement {
+    let summary = computed(move || group.get().map(|g| store::group_summary(g.start, g.end)).unwrap_or_default());
+    let open = computed(move || group.with(|g| g.as_ref().is_some_and(|g| g.open)));
+    nsh_base::button()
+        .on_press(move || {
+            if let Some(g) = group.get_untracked() {
+                store::set_group_open(&g.id, !g.open);
+            }
+        })
+        .flex_row()
+        .items_center()
+        .gap(px(S2))
+        .px(px(S2))
+        .h(px(30.0))
+        .rounded(px(R_LG))
+        .hover(|s| s.bg(highlight()))
+        .child(
+            icon(Icon::ChevronRight, 13.0)
+                .text_color(FG_FAINT)
+                .rotate(move || Radians(if open.get() { std::f32::consts::FRAC_PI_2 } else { 0.0 }))
+                .transition_transform(),
+        )
+        .child(
+            text(move || summary.with(|s| s.describe()))
+                .text_size(px(TEXT_BASE))
+                .text_color(FG_MUTED)
+                .number_of_lines(1)
+                .flex_shrink(1.0),
+        )
+        // Failures show on the summary, so a folded group hides no error.
+        .child(dynamic(move || {
+            let failed = summary.with(|s| s.failures())?;
+            Some(untracked(move || {
+                text(format!("· {failed}")).text_size(px(TEXT_BASE)).text_color(DANGER).flex_shrink_0().into_element()
+            }))
+        }))
+        .child(view().flex_1())
+        .child(dynamic(move || {
+            let (running, failed) = summary.with(|s| (s.running > 0, s.failed > 0));
+            Some(untracked(move || {
+                if running {
+                    status_dot(|| Status::Running).into_element()
+                } else if failed {
+                    icon(Icon::X, 14.0).text_color(DANGER).into_element()
+                } else {
+                    icon(Icon::Check, 14.0).text_color(SUCCESS).into_element()
+                }
+            }))
+        }))
 }
 
 /// Tool calls open under their rows, by call id: the list recycles its

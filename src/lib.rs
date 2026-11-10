@@ -7,6 +7,7 @@ use nsh_base::theme;
 use nsh_core::{element::{AssetFile, AssetKind}, prelude::*};
 
 pub mod daemon;
+mod fold;
 mod i18n;
 mod platform;
 mod store;
