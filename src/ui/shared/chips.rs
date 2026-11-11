@@ -38,8 +38,15 @@ fn attr<'a>(node: &'a Node, name: &str) -> &'a str {
 /// A chip's box: a little under the line's height (centred on its x height,
 /// it then reaches no further than the text), the accent faint around and
 /// under it, a little apart from the text after it.
+/// How far a chip sits above the line's middle. The line's middle is half
+/// the x height above the baseline, the middle of small Latin letters;
+/// capitals and Chinese characters have theirs higher, and beside them a
+/// chip there looks low.
+pub(crate) const CHIP_LIFT: f32 = -1.5;
+
 fn chip_box(el: nsh_base::ButtonElement) -> nsh_base::ButtonElement {
     el.flex_row()
+        .translate_y(px(CHIP_LIFT))
         .items_center()
         .gap(px(4.0))
         .h(px(18.0))
@@ -116,7 +123,8 @@ impl NodeView for MentionView {
             .h(px(18.0))
             .ml(px(1.0))
             .mr(px(4.0))
-                .px(px(5.0))
+            .translate_y(px(CHIP_LIFT))
+            .px(px(5.0))
             .rounded(px(R_MD))
             .border_1()
             .border_color(tint(ACCENT, 0.18))
