@@ -437,7 +437,7 @@ fn sent_chip(name: String, thumb: Option<String>) -> View {
         None => chip.child(icon(if crate::ui::shared::composer_doc::is_image_name(&name) { Icon::Image } else { Icon::File }, 13.0).text_color(FG_MUTED)),
     };
     let chip_name = name.clone();
-    let chip = chip.child(text(name).text_size(px(TEXT_SM)).text_color(FG).number_of_lines(1));
+    let chip = chip.child(text(crate::ui::shared::chips::chip_name(&name)).text_size(px(TEXT_SM)).text_color(FG).number_of_lines(1));
     // A picture's chip opens it large (and shows it under the pointer).
     let chip = match thumb {
         Some(uri) => {
