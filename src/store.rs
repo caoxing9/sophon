@@ -1037,9 +1037,63 @@ pub(crate) fn agents() -> Vec<Agent> {
     global::<Agents>().with(|a| a.0.clone())
 }
 
-/// Every workspace, those being archived left out.
+/// The workspaces the lists show: not those being archived, and not a
+/// schedule's runs ([`is_a_run`]).
 pub(crate) fn workspaces() -> Vec<Workspace> {
-    global::<Workspaces>().with(|w| w.0.iter().filter(|w| !w.archiving).cloned().collect())
+    let runs = runs_hidden();
+    global::<Workspaces>().with(|w| w.0.iter().filter(|w| !w.archiving && !runs.contains(&w.id)).cloned().collect())
+}
+
+/// The run workspaces the user opened from a schedule's runs: listed like
+/// any other from then on. Kept with the preferences.
+#[derive(Clone, Default)]
+struct KeptRuns(Vec<String>);
+
+/// The workspace to open once the host lists it again (a run's, being
+/// restored from the archive), and its agent.
+#[derive(Clone, Default)]
+struct OpenWhenListed(Option<(String, String)>);
+
+/// Counts the restored conversations opened ([`open_when_listed`]): the
+/// phone, whose screens are a stack of its own, shows the conversation then.
+#[derive(Clone, Copy, Default)]
+struct RestoredOpens(u32);
+
+pub(crate) fn restored_opens() -> u32 {
+    global::<RestoredOpens>().with(|r| r.0)
+}
+
+/// Whether `agent` is a schedule's run the lists leave out: started by a
+/// schedule, in a workspace the user did not open from the schedule's runs.
+pub(crate) fn is_hidden_run(agent: &Agent) -> bool {
+    agent.scheduled
+        && global::<KeptRuns>().with(|k| !agent.workspace_id.as_ref().is_some_and(|ws| k.0.contains(ws)))
+}
+
+/// The workspaces that are a schedule's runs and stay out of the lists: all
+/// of a workspace's agents were started by a schedule, and the user did not
+/// open it. The service makes one per run and archives it when the run
+/// ends, so listed they would come and go on their own, every minute for a
+/// schedule that runs so. They are under the schedule's runs.
+fn runs_hidden() -> Vec<String> {
+    let kept = global::<KeptRuns>().with(|k| k.0.clone());
+    let open = match screen() {
+        Screen::Workspace(id) => Some(id),
+        _ => None,
+    };
+    global::<Agents>().with(|a| {
+        let mut of_runs: Vec<&str> = Vec::new();
+        let mut of_others: Vec<&str> = Vec::new();
+        for agent in a.0.iter().filter(|a| a.parent_id.is_none()) {
+            let Some(ws) = agent.workspace_id.as_deref() else { continue };
+            if agent.scheduled { of_runs.push(ws) } else { of_others.push(ws) }
+        }
+        of_runs
+            .into_iter()
+            .filter(|ws| !of_others.contains(ws) && !kept.iter().any(|k| k == ws) && open.as_deref() != Some(*ws))
+            .map(str::to_owned)
+            .collect()
+    })
 }
 
 pub(crate) fn agent(id: &str) -> Option<Agent> {
@@ -1192,8 +1246,7 @@ impl Group {
 
 pub(crate) fn groups() -> Vec<Group> {
     let projects = projects();
-    let workspaces: Vec<Workspace> =
-        global::<Workspaces>().with(|w| w.0.iter().filter(|w| !w.archiving).cloned().collect());
+    let workspaces = workspaces();
 
     let mut project_list = projects;
     for w in &workspaces {
@@ -1309,11 +1362,13 @@ pub(crate) fn set_group_open(id: &str, open: bool) {
 /// Asks the host's Sophon for the pictures of the user messages among
 /// `items` that name one and have none here (sent from another device).
 /// Each once per conversation opening; a host without them says nothing.
-fn ask_pictures(items: &[Item]) {
+fn ask_pictures(items: &[Item], agent_id: Option<&str>) {
+    // The conversation's folder: where the host reads the agent's record.
+    let cwd = agent_id.and_then(agent).map(|a| a.cwd).unwrap_or_default();
     for item in items {
         let Item::User { text, message_id, images } = item else { continue };
         if images.is_empty() && crate::sent_pictures::names_a_picture(text) {
-            send(Command::AskPictures { message_id: message_id.clone().unwrap_or_default(), text: text.clone() });
+            send(Command::AskPictures { message_id: message_id.clone().unwrap_or_default(), text: text.clone(), cwd: cwd.clone() });
         }
     }
 }
@@ -2205,6 +2260,7 @@ fn save_prefs() {
         "explorerWidth": global::<ExplorerWidth>().with_untracked(|w| w.0),
         "terminalHeight": global::<TerminalPanel>().with_untracked(|p| p.height),
         "projectOrder": global::<ProjectOrder>().with_untracked(|o| o.0.clone()),
+        "keptRuns": global::<KeptRuns>().with_untracked(|k| k.0.clone()),
         "lastWorkspace": global::<LastOpen>().with_untracked(|l| l.workspace.clone()),
         "lastAgent": global::<LastOpen>().with_untracked(|l| l.agent.clone()),
         "collapsedProjects": global::<Collapsed>().with_untracked(|c| c.0.clone()),
@@ -2263,6 +2319,7 @@ pub(crate) fn load_prefs() {
     let string = |k: &str| v.get(k).and_then(serde_json::Value::as_str).map(str::to_owned);
     global::<LastOpen>().set(LastOpen { workspace: string("lastWorkspace"), agent: string("lastAgent"), done: false });
     global::<Collapsed>().set(Collapsed(strings("collapsedProjects")));
+    global::<KeptRuns>().set(KeptRuns(strings("keptRuns")));
     global::<FavoriteModels>().set(FavoriteModels(strings("favoriteModels")));
     if let Some(h) = v.get("terminalHeight").and_then(serde_json::Value::as_f64) {
         global::<TerminalPanel>().update(|p| p.height = (h as f32).clamp(120.0, 900.0));
@@ -2659,20 +2716,47 @@ pub(crate) fn toggle_schedule_runs(id: &str) {
     }
 }
 
-/// Opens the conversation a run started. The service archives a run's
-/// workspace when the run ends, so it is restored first, as History does.
+/// Opens the conversation a run started, and lists its workspace from then
+/// on. The service archives a run's workspace when the run ends: that is
+/// restored first (the workspace, then its agent), and the conversation
+/// opens once the host lists the workspace again. Also how any conversation
+/// whose workspace was archived under it opens.
 pub(crate) fn open_run_agent(agent_id: &str, workspace_id: Option<&str>) {
-    let listed = agent(agent_id).and_then(|a| a.workspace_id);
-    if listed.is_none() && workspace_id.is_some() {
-        send(Command::Unarchive(agent_id.to_owned()));
-    }
-    match listed.as_deref().or(workspace_id) {
-        Some(workspace) => {
-            global::<Nav>().update(|n| n.screen = Screen::Workspace(workspace.to_owned()));
-            watch_changes(workspace);
-            open_tab(Tab::Agent(agent_id.to_owned()));
+    let workspace_id = workspace_id.map(str::to_owned).or_else(|| agent(agent_id).and_then(|a| a.workspace_id));
+    let workspace_id = workspace_id.as_deref();
+    let listed = agent(agent_id).and_then(|a| a.workspace_id).filter(|ws| workspace(ws).is_some());
+    let Some(ws) = listed.clone().or_else(|| workspace_id.map(str::to_owned)) else {
+        notify(t("That conversation is no longer listed; look in History").to_owned());
+        return;
+    };
+    global::<KeptRuns>().update(|k| {
+        if !k.0.contains(&ws) {
+            k.0.push(ws.clone());
+            // The last few hundred: runs opened long ago are archived again or gone.
+            let extra = k.0.len().saturating_sub(300);
+            k.0.drain(..extra);
         }
-        None => notify(t("That conversation is no longer listed; look in History").to_owned()),
+    });
+    save_prefs();
+    if listed.is_some() {
+        open_workspace(&ws);
+        open_tab(Tab::Agent(agent_id.to_owned()));
+        return;
+    }
+    global::<OpenWhenListed>().set(OpenWhenListed(Some((ws.clone(), agent_id.to_owned()))));
+    send(Command::UndoArchive(ws));
+    send(Command::Unarchive(agent_id.to_owned()));
+    notify(t("Restoring the conversation…").to_owned());
+}
+
+/// Opens the run's conversation that was waiting for its workspace.
+fn open_when_listed() {
+    let Some((ws, agent)) = global::<OpenWhenListed>().with_untracked(|o| o.0.clone()) else { return };
+    if workspace(&ws).is_some() {
+        global::<OpenWhenListed>().set(OpenWhenListed(None));
+        open_workspace(&ws);
+        open_tab(Tab::Agent(agent));
+        global::<RestoredOpens>().update(|r| r.0 += 1);
     }
 }
 
@@ -3123,6 +3207,19 @@ struct SubagentState {
 #[derive(Clone, Default)]
 struct Background(HashMap<String, Vec<crate::daemon::connection::BackgroundItem>>);
 
+/// The agent whose ended sub-agents the user asked to see (the agent's
+/// menu): they are listed over the composer only while one runs.
+#[derive(Clone, Default)]
+struct SubagentsShown(Option<String>);
+
+pub(crate) fn subagents_shown(parent: &str) -> bool {
+    global::<SubagentsShown>().with(|s| s.0.as_deref() == Some(parent))
+}
+
+pub(crate) fn toggle_subagents(parent: &str) {
+    global::<SubagentsShown>().update(|s| s.0 = if s.0.as_deref() == Some(parent) { None } else { Some(parent.to_owned()) });
+}
+
 pub(crate) fn subagents(parent: &str) -> Vec<crate::daemon::connection::Subagent> {
     global::<SubagentState>().with(|s| s.by_parent.get(parent).cloned().unwrap_or_default())
 }
@@ -3483,7 +3580,7 @@ fn deliver(agent_id: &str, text: &str, behavior: Option<&'static str>) {
     let message_id = uuid::Uuid::new_v4().to_string();
     let thumbs: Vec<String> = images.iter().map(|i| format!("data:{};base64,{}", i.mime, i.data)).collect();
     // On disk too: the host's history has the text alone.
-    crate::sent_pictures::keep(&message_id, &thumbs);
+    crate::sent_pictures::keep(&message_id, text, &thumbs);
     let mut shown_here = false;
     global::<Timeline>().update(|t| {
         if t.agent_id.as_deref() == Some(agent_id) {
@@ -3595,6 +3692,51 @@ pub(crate) fn search_sessions(query: &str) {
 pub(crate) fn import_session(s: &crate::daemon::connection::RecentSession) {
     send(Command::ImportSession { provider: s.provider.clone(), handle: s.handle.clone(), cwd: s.cwd.clone() });
     notify(t("Importing session…").into());
+}
+
+/// The sessions being imported together, one after another (each import
+/// loads a conversation on the host: all at once would start them all at
+/// once).
+#[derive(Clone, Default)]
+struct Importing {
+    left: Vec<crate::daemon::connection::RecentSession>,
+    total: usize,
+    failed: usize,
+}
+
+/// Imports `sessions`, the first now and each next one as the one before
+/// it ends. The host puts each in the workspace of its folder, making the
+/// workspace (and so its project in the lists) where there is none.
+pub(crate) fn import_sessions(sessions: Vec<crate::daemon::connection::RecentSession>) {
+    if sessions.is_empty() || importing() {
+        return;
+    }
+    notify(tf("Importing {} sessions…", &[&sessions.len().to_string()]));
+    global::<Importing>().set(Importing { total: sessions.len(), left: sessions, failed: 0 });
+    import_next();
+}
+
+/// Whether sessions are being imported together.
+pub(crate) fn importing() -> bool {
+    global::<Importing>().with_untracked(|i| i.total > 0)
+}
+
+fn import_next() {
+    let next = global::<Importing>().with_untracked(|i| i.left.first().cloned());
+    match next {
+        Some(s) => {
+            global::<Importing>().update(|i| {
+                i.left.remove(0);
+            });
+            send(Command::ImportSession { provider: s.provider, handle: s.handle, cwd: s.cwd });
+        }
+        None => {
+            let (total, failed) = global::<Importing>().with_untracked(|i| (i.total, i.failed));
+            global::<Importing>().set(Importing::default());
+            let done = (total - failed).to_string();
+            notify(if failed == 0 { tf("Imported {} sessions", &[&done]) } else { tf("Imported {} sessions; {} could not be imported", &[&done, &failed.to_string()]) });
+        }
+    }
 }
 
 pub(crate) fn run_script(name: &str, start: bool) {
@@ -3793,6 +3935,20 @@ pub(crate) fn rename_workspace(id: &str, title: &str) {
     send(Command::RenameWorkspace { workspace_id: id.to_owned(), title: title.to_owned() });
 }
 
+/// The notice's number: another for each notice shown.
+pub(crate) fn notice_id() -> Option<u64> {
+    global::<Notice>().with(|n| n.0.as_ref().map(|(id, _, _)| *id))
+}
+
+/// Puts notice `id` away, if it is still the one shown.
+pub(crate) fn dismiss_notice_numbered(id: u64) {
+    global::<Notice>().update(|n| {
+        if n.0.as_ref().is_some_and(|(cur, _, _)| *cur == id) {
+            n.0 = None;
+        }
+    });
+}
+
 pub(crate) fn dismiss_notice() {
     global::<Notice>().update(|n| n.0 = None);
 }
@@ -3802,7 +3958,10 @@ pub(crate) fn notify(message: String) {
 }
 
 pub(crate) fn notify_with(message: String, action: Option<NoticeAction>) {
-    let id = global::<Notice>().with_untracked(|n| n.0.as_ref().map_or(0, |(id, _, _)| id + 1));
+    // Never the same twice: a timer left from a notice long gone must not
+    // take a later one away.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     global::<Notice>().update(|n| n.0 = Some((id, message, action)));
     set_timeout(std::time::Duration::from_secs(8), move || {
         global::<Notice>().update(|n| {
@@ -3840,6 +3999,12 @@ pub(crate) fn apply(event: Event) {
             }
         }
         Event::Disconnected { reason } => {
+            // The answers to an import under way are lost with the session:
+            // what is left of it is given up, not to wait on them for ever.
+            if importing() {
+                global::<Importing>().set(Importing::default());
+                notify(t("The import stopped: the connection was lost").to_owned());
+            }
             global::<ConnState>().update(|c| c.0 = Conn::Down(reason));
             auto_start_service();
         }
@@ -3851,13 +4016,17 @@ pub(crate) fn apply(event: Event) {
         Event::ProjectRemove(id) => global::<Projects>().update(|p| p.0.retain(|x| x.id != id)),
         Event::WorkspacesReset(list) => {
             global::<Workspaces>().update(|w| w.0 = list);
+            open_when_listed();
             restore_last_open();
             prompt_links_known(|p| p.workspaces_known = true);
         }
-        Event::WorkspaceUpsert(ws) => global::<Workspaces>().update(|w| {
-            w.0.retain(|x| x.id != ws.id);
-            w.0.push(ws);
-        }),
+        Event::WorkspaceUpsert(ws) => {
+            global::<Workspaces>().update(|w| {
+                w.0.retain(|x| x.id != ws.id);
+                w.0.push(ws);
+            });
+            open_when_listed();
+        }
         Event::WorkspaceRemove(id) => {
             global::<Workspaces>().update(|w| w.0.retain(|x| x.id != id));
             if screen() == Screen::Workspace(id) {
@@ -3887,7 +4056,19 @@ pub(crate) fn apply(event: Event) {
             }
             prompt_links_known(|p| p.providers_known = true);
         }
+        // One of the sessions imported together: the next, without
+        // opening each as it comes.
+        Event::Created(_) if importing() => import_next(),
+        Event::CreateFailed(error) if importing() => {
+            log::warn!("import: {error}");
+            global::<Importing>().update(|i| i.failed += 1);
+            import_next();
+        }
         Event::Created(agent) => {
+            // "Importing session…" has done its work.
+            if global::<Notice>().with_untracked(|n| n.0.as_ref().is_some_and(|(_, m, _)| m == t("Importing session…"))) {
+                dismiss_notice();
+            }
             edit_form(|f| {
                 f.busy = false;
                 f.prompt.clear();
@@ -3939,7 +4120,7 @@ pub(crate) fn apply(event: Event) {
                     opened = !t.loaded;
                     carry_images(&t.items, &mut items);
                     crate::sent_pictures::restore(&mut items);
-                    ask_pictures(&items);
+                    ask_pictures(&items, Some(&agent_id));
                     t.items = items;
                     t.cursor = cursor;
                     t.loaded = true;
@@ -3955,8 +4136,11 @@ pub(crate) fn apply(event: Event) {
             if t.agent_id.as_deref() == Some(agent_id.as_str()) {
                 t.syncing = false;
                 t.loaded = true;
-                // The copy's messages too: their pictures may be elsewhere.
-                ask_pictures(&t.items);
+                // What the host said came since the copy has no pictures yet:
+                // those kept here first, then the host's Sophon is asked
+                // for the rest (the copy's messages too).
+                crate::sent_pictures::restore(&mut t.items);
+                ask_pictures(&t.items, Some(&agent_id));
             }
         }),
         Event::Pictures { message_id, text, pictures } => {
@@ -3964,7 +4148,7 @@ pub(crate) fn apply(event: Event) {
             if message_id.is_empty() {
                 crate::sent_pictures::keep_for_text(&text, &pictures);
             } else {
-                crate::sent_pictures::keep(&message_id, &pictures);
+                crate::sent_pictures::keep(&message_id, &text, &pictures);
             }
             global::<Timeline>().update(|t| {
                 for item in t.items.iter_mut() {
@@ -3980,7 +4164,7 @@ pub(crate) fn apply(event: Event) {
             if t.agent_id.as_deref() == Some(agent_id.as_str()) {
                 let mut merged = items;
                 crate::sent_pictures::restore(&mut merged);
-                ask_pictures(&merged);
+                ask_pictures(&merged, Some(&agent_id));
                 merged.append(&mut t.items);
                 t.items = merged;
                 t.older = older;

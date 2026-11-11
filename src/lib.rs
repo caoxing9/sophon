@@ -6,6 +6,8 @@
 use nsh_base::theme;
 use nsh_core::{element::{AssetFile, AssetKind}, prelude::*};
 
+#[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+mod agent_pictures;
 mod agent_update;
 #[cfg(target_os = "macos")]
 mod awake;

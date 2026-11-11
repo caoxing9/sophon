@@ -45,7 +45,7 @@ fn home() -> PathBuf {
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
 }
 
-fn roots() -> Vec<(Source, PathBuf)> {
+pub(crate) fn roots() -> Vec<(Source, PathBuf)> {
     let mut out = vec![];
     match std::env::var("CLAUDE_CONFIG_DIR").ok().filter(|v| !v.trim().is_empty()) {
         // Claude Code takes a comma-separated list here.
@@ -65,7 +65,7 @@ fn roots() -> Vec<(Source, PathBuf)> {
 
 /// The `.jsonl` files under `dir` changed since `since`, with their size
 /// and modification time.
-fn walk(dir: &Path, source: Source, since: SystemTime, depth: u32, out: &mut Vec<(PathBuf, Source, u64, Option<SystemTime>)>) {
+pub(crate) fn walk(dir: &Path, source: Source, since: SystemTime, depth: u32, out: &mut Vec<(PathBuf, Source, u64, Option<SystemTime>)>) {
     let Ok(read) = fs::read_dir(dir) else { return };
     for entry in read.flatten() {
         let path = entry.path();

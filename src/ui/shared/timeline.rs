@@ -425,12 +425,11 @@ fn sent_chip(name: String, thumb: Option<String>) -> View {
         .h(px(22.0))
         .pl(px(4.0))
         .pr(px(7.0))
-        .mx(px(2.0))
+        .translate_y(px(crate::ui::shared::chips::CHIP_LIFT))
         .rounded(px(R_MD))
         .bg(SURFACE0)
         .border_1()
-        .border_color(tint(ACCENT, 0.35))
-        .align_middle();
+        .border_color(tint(ACCENT, 0.35));
     let chip = match &thumb {
         Some(uri) => chip.child(
             image(SharedString::from(uri.clone())).w(px(16.0)).h(px(16.0)).object_fit(nsh_core::ResizeMode::Cover).rounded(px(3.0)),
@@ -438,9 +437,9 @@ fn sent_chip(name: String, thumb: Option<String>) -> View {
         None => chip.child(icon(if crate::ui::shared::composer_doc::is_image_name(&name) { Icon::Image } else { Icon::File }, 13.0).text_color(FG_MUTED)),
     };
     let chip_name = name.clone();
-    let chip = chip.child(text(name).text_size(px(TEXT_SM)).text_color(FG).number_of_lines(1));
+    let chip = chip.child(text(crate::ui::shared::chips::chip_name(&name)).text_size(px(TEXT_SM)).text_color(FG).number_of_lines(1));
     // A picture's chip opens it large (and shows it under the pointer).
-    match thumb {
+    let chip = match thumb {
         Some(uri) => {
             let (open_name, open_uri) = (chip_name, uri.clone());
             chip.hover(|s| s.border_color(ACCENT))
@@ -452,7 +451,10 @@ fn sent_chip(name: String, thumb: Option<String>) -> View {
                 )
         }
         None => chip,
-    }
+    };
+    // The room beside it is the box's the line lays out (as the composer's
+    // editor wraps its chips): a margin of the chip's own is not counted.
+    view().pl(px(1.0)).pr(px(5.0)).align_middle().child(chip)
 }
 
 fn user_row(item: Memo<Option<Item>>, bubble: impl IntoElement + 'static) -> impl IntoElement {
@@ -972,6 +974,8 @@ pub(crate) fn tracks() -> View {
         })
     });
     let subs = computed(|| store::selected_id().map(|id| store::subagents(&id)).unwrap_or_default());
+    // The sub-agents' list as the user left it (open or folded), if they did.
+    let subs_open = signal(None::<bool>);
     let work = computed(|| store::selected_id().map(|id| store::background(&id)).unwrap_or_default());
     view()
         .w_full()
@@ -1002,8 +1006,33 @@ pub(crate) fn tracks() -> View {
             if list.is_empty() {
                 return None;
             }
+            // Over the composer while one runs. Once all have ended they
+            // are out of the conversation's way: the agent's menu lists
+            // them again. A press on the first line folds or opens it.
+            let running = list.iter().filter(|s| s.status == "running").count();
+            let asked = list.first().is_some_and(|s| store::subagents_shown(&s.parent));
+            if running == 0 && !asked {
+                return None;
+            }
+            let open = subs_open.get().unwrap_or(true);
             Some(untracked(move || {
-                let mut c = card().mb(px(S2)).px(px(S3)).py(px(S2)).gap(px(2.0)).child(section_label(tf("Sub-agents · {}", &[&list.len().to_string()])));
+                let label = if running > 0 {
+                    tf("Sub-agents · {} · {} running", &[&list.len().to_string(), &running.to_string()])
+                } else {
+                    tf("Sub-agents · {}", &[&list.len().to_string()])
+                };
+                let mut c = card().mb(px(S2)).px(px(S3)).py(px(S2)).gap(px(2.0)).child(
+                    nsh_base::button()
+                        .on_press(move || subs_open.set(Some(!open)))
+                        .flex_row()
+                        .items_center()
+                        .gap(px(S1))
+                        .child(icon(if open { Icon::ChevronDown } else { Icon::ChevronRight }, 13.0).text_color(FG_MUTED))
+                        .child(section_label(label)),
+                );
+                if !open {
+                    return c;
+                }
                 for s in list.clone() {
                     let status = match s.status.as_str() {
                         "running" => Status::Running,

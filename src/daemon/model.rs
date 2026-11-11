@@ -280,6 +280,8 @@ pub struct Agent {
     pub status: String,
     pub requires_attention: bool,
     pub archived: bool,
+    /// Started by a schedule's run (the service labels it `paseo.schedule-id`).
+    pub scheduled: bool,
     pub updated_at: String,
     pub pending: Vec<Permission>,
 }
@@ -318,6 +320,7 @@ impl Agent {
             status: str_of(v, "status").unwrap_or_else(|| "idle".into()),
             requires_attention: v.get("requiresAttention").and_then(Value::as_bool).unwrap_or(false),
             archived: v.get("archivedAt").is_some_and(|a| !a.is_null()),
+            scheduled: v.pointer("/labels/paseo.schedule-id").is_some_and(|l| !l.is_null()),
             updated_at: str_of(v, "updatedAt").unwrap_or_default(),
             pending: v
                 .get("pendingPermissions")
@@ -727,6 +730,16 @@ mod tests {
         assert!(agent.is_running());
         assert_eq!(agent.pending[0].description, "rm -rf build");
         assert!(agent.pending[0].actions[0].allow);
+    }
+
+    #[test]
+    fn an_agent_a_schedule_started_is_known_by_its_label() {
+        let run = json!({"id": "a1", "provider": "claude", "cwd": "/x", "status": "idle",
+            "labels": {"paseo.schedule-id": "e9156b21", "paseo.schedule-run": "r1"}});
+        assert!(Agent::from_json(&run).unwrap().scheduled);
+        let own = json!({"id": "a2", "provider": "claude", "cwd": "/x", "status": "idle", "labels": {"team": "a"}});
+        assert!(!Agent::from_json(&own).unwrap().scheduled);
+        assert!(!Agent::from_json(&json!({"id": "a3", "provider": "claude", "cwd": "/x", "status": "idle"})).unwrap().scheduled);
     }
 
     #[test]

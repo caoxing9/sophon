@@ -29,7 +29,9 @@ pub enum Command {
     Send { agent_id: String, text: String, behavior: Option<&'static str>, images: Vec<ImageInput>, attachments: Vec<Value>, message_id: String },
     /// Asks the host's Sophon (its bridge) for the pictures of a message
     /// this device has none of: sent from another device, or forgotten.
-    AskPictures { message_id: String, text: String },
+    /// `cwd`: the conversation's folder, where the host looks in the
+    /// agent's own record of it.
+    AskPictures { message_id: String, text: String, cwd: String },
     /// Asks the host's Sophon for its session-log statistics (a phone has
     /// no logs of its own).
     HostUsage,
@@ -189,6 +191,8 @@ pub struct ScheduleRun {
     pub agent_id: Option<String>,
     /// The workspace the run's agent worked in; archived when the run ends.
     pub workspace_id: Option<String>,
+    /// What the agent answered last, when the run ended with an answer.
+    pub output: Option<String>,
     pub error: Option<String>,
 }
 
@@ -202,6 +206,7 @@ impl ScheduleRun {
             status: s("status").unwrap_or_default(),
             agent_id: s("agentId"),
             workspace_id: s("workspaceId"),
+            output: s("output").map(|o| o.trim().to_owned()).filter(|o| !o.is_empty()),
             error: s("error"),
         })
     }
@@ -1076,11 +1081,24 @@ async fn session(
                     }
                     continue;
                 }
-                if let Command::AskPictures { message_id, text } = &cmd {
-                    // Sophon's bridge answers this, not the service: only
-                    // a session that goes through one asks.
+                if let Command::AskPictures { message_id, text, cwd } = &cmd {
+                    // Sophon's bridge answers this, not the service: a
+                    // session that goes through one asks it.
                     if connected && endpoint.bridge_token.is_some() {
-                        send(&mut tx, &json!({ "type": "sophon_pictures_request", "messageId": message_id, "text": text })).await?;
+                        send(&mut tx, &json!({ "type": "sophon_pictures_request", "messageId": message_id, "text": text, "cwd": cwd })).await?;
+                        continue;
+                    }
+                    // Straight to the service on this computer: the agents'
+                    // records are here to read.
+                    #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+                    if endpoint.relay.is_none() && ["127.0.0.1", "localhost", "[::1]"].iter().any(|h| endpoint.url.contains(h)) {
+                        let (events, message_id, text, cwd) = (events.clone(), message_id.clone(), text.clone(), cwd.clone());
+                        std::thread::spawn(move || {
+                            let pictures = crate::agent_pictures::find(&cwd, &message_id, &text);
+                            if !pictures.is_empty() {
+                                let _ = events.send(Event::Pictures { message_id, text, pictures });
+                            }
+                        });
                     }
                     continue;
                 }
@@ -1648,7 +1666,7 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
             json!({ "type": "restart_server_request", "reason": "Restarted from Sophon" }),
         )],
         Command::RecentSessions { query } => {
-            let mut msg = json!({ "type": "fetch_recent_provider_sessions_request", "limit": 60 });
+            let mut msg = json!({ "type": "fetch_recent_provider_sessions_request", "limit": 200 });
             if !query.trim().is_empty() {
                 msg["query"] = json!(query.trim());
             }
@@ -2477,9 +2495,11 @@ fn handle(
         "agent.provider_subagents.timeline.get.response" => {
             request_id.and_then(|id| pending.remove(id));
             let s = |k: &str| payload.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
-            let items = payload
-                .get("entries")
-                .and_then(Value::as_array)
+            // `rows` from a service that projects the sub-agent's timeline
+            // (what this client asks for), `entries` from one before that.
+            let items = ["rows", "entries"]
+                .iter()
+                .find_map(|k| payload.get(*k).and_then(Value::as_array))
                 .map(|e| e.iter().filter_map(|e| e.get("item").and_then(Item::from_json)).collect())
                 .unwrap_or_default();
             vec![Event::SubagentTimeline { parent: s("parentAgentId"), id: s("subagentId"), items }]

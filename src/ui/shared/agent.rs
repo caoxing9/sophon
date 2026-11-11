@@ -120,6 +120,13 @@ pub(crate) fn agent_actions(agent: Memo<Option<crate::daemon::Agent>>) -> impl I
                 .child(menu_row(t("Rename"), Some(Icon::Pencil), None, false, move || {
                     store::open_modal(store::Modal::RenameAgent { id: rename.clone(), name: title.clone() })
                 }));
+            // Its sub-agents, ended ones too: listed over the composer.
+            let subs = store::subagents(&a.id).len();
+            if subs > 0 {
+                let (parent, shown) = (a.id.clone(), store::subagents_shown(&a.id));
+                let label = if shown { tf("Hide sub-agents · {}", &[&subs.to_string()]) } else { tf("Show sub-agents · {}", &[&subs.to_string()]) };
+                menu = menu.child(menu_row(label, Some(Icon::Bot), None, false, move || store::toggle_subagents(&parent)));
+            }
             if stop {
                 menu = menu.child(menu_row(t("Stop"), Some(Icon::Square), None, false, store::stop_selected));
             }

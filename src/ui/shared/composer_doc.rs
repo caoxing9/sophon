@@ -69,14 +69,15 @@ pub(crate) fn schema() -> Schema {
     paragraph.group = Some("block".into());
     let mut text = NodeSpec::default();
     text.group = Some("inline".into());
-    // Chips are atoms the caret steps over and Backspace deletes whole;
-    // not selectable, as Tiptap's mention, so arrows never stop on one.
+    // Chips are atoms Backspace deletes whole. An arrow stops on one,
+    // selecting it (its outline shows it), as on a picture in a document:
+    // the next press goes on, Backspace or typing takes it away.
     let chip = |attrs: Vec<(String, AttrSpec)>| {
         let mut n = NodeSpec::default();
         n.inline = true;
         n.group = Some("inline".into());
         n.atom = true;
-        n.selectable = false;
+        n.selectable = true;
         n.attrs = attrs;
         n
     };
@@ -174,9 +175,16 @@ pub(crate) enum Segment {
     Chip(String),
 }
 
+/// Whether `name` is how Claude Code's own terminal names a pasted
+/// picture in the message (`[Image #1]`): a session started there and
+/// imported has these.
+fn is_terminal_image(name: &str) -> bool {
+    name.strip_prefix("Image #").is_some_and(|n| !n.is_empty() && n.len() <= 4 && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// Whether `name` is a picture's, by its extension.
 pub(crate) fn is_image_name(name: &str) -> bool {
-    name.rsplit_once('.').is_some_and(|(_, ext)| {
+    is_terminal_image(name) || name.rsplit_once('.').is_some_and(|(_, ext)| {
         matches!(ext.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "heic" | "heif" | "bmp" | "tiff" | "avif")
     })
 }
@@ -191,7 +199,7 @@ pub(crate) fn segments(text: &str) -> Vec<Segment> {
         let after = &rest[open + 1..];
         let name = after.find(']').map(|close| &after[..close]).filter(|n| {
             let ext = n.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
-            !n.is_empty()
+            is_terminal_image(n) || !n.is_empty()
                 && n.len() <= 160
                 && !n.contains(['[', '\n'])
                 && n.trim() == *n

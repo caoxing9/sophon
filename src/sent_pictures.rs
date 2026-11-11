@@ -23,9 +23,28 @@ pub(crate) fn text_key(text: &str) -> String {
     format!("t-{hash:016x}")
 }
 
-/// Keeps `pictures` (data URIs) for the message with this id.
-pub(crate) fn keep(message_id: &str, pictures: &[String]) {
-    write(id_key(message_id), pictures);
+/// Keeps `pictures` (data URIs) for the message with this id, and under
+/// its words too: the host gives a message another id once it reads the
+/// conversation back from the agent's own record (after a restart of the
+/// agent or the service), and the words are what is left to know it by.
+pub(crate) fn keep(message_id: &str, text: &str, pictures: &[String]) {
+    let key = id_key(message_id);
+    if key.is_empty() || pictures.is_empty() || cfg!(target_arch = "wasm32") {
+        return;
+    }
+    if !text.trim().is_empty() {
+        // The pictures once: the words' file lists the messages that had
+        // these words, in the order sent.
+        let dir = dir();
+        let _ = std::fs::create_dir_all(&dir);
+        let words = text_key(text);
+        let mut ids = same_words(&words);
+        if !ids.contains(&key) {
+            ids.push(key.clone());
+            let _ = std::fs::write(dir.join(format!("{words}.json")), serde_json::json!({ "see": ids }).to_string());
+        }
+    }
+    write(key, pictures);
 }
 
 /// Keeps them for a message known by its words alone.
@@ -62,7 +81,23 @@ pub(crate) fn clear() {
 
 fn read(key: &str) -> Option<Vec<String>> {
     let body = std::fs::read(dir().join(format!("{key}.json"))).ok()?;
-    serde_json::from_slice(&body).ok()
+    match serde_json::from_slice(&body).ok()? {
+        serde_json::Value::Array(pictures) => Some(pictures.into_iter().filter_map(|p| p.as_str().map(str::to_owned)).collect()),
+        // The words' file of messages kept by their ids: the last one's.
+        serde_json::Value::Object(_) => read(same_words(key).last()?),
+        _ => None,
+    }
+}
+
+/// The ids of the messages kept that had the words of key `words`, in the
+/// order sent.
+fn same_words(words: &str) -> Vec<String> {
+    let list = || -> Option<Vec<String>> {
+        let body = std::fs::read(dir().join(format!("{words}.json"))).ok()?;
+        let value: serde_json::Value = serde_json::from_slice(&body).ok()?;
+        Some(value.get("see")?.as_array()?.iter().filter_map(|i| i.as_str()).map(id_key).filter(|k| !k.is_empty()).collect())
+    };
+    list().unwrap_or_default()
 }
 
 /// The pictures kept for a message: by its id, else by its words.
@@ -84,12 +119,27 @@ pub(crate) fn restore(items: &mut [Item]) {
     if !dir().is_dir() {
         return;
     }
-    for item in items.iter_mut() {
+    // From the last: of the messages with the same words, the last here is
+    // the last sent, the one before it the one sent before (the host's ids
+    // for them are not the ids they were kept under).
+    let mut taken: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for item in items.iter_mut().rev() {
         let Item::User { text, message_id, images } = item else { continue };
         if !images.is_empty() {
             continue;
         }
-        let found = message_id.as_deref().map(id_key).filter(|k| !k.is_empty()).and_then(|k| read(&k)).or_else(|| read(&text_key(text)));
+        let by_id = message_id.as_deref().map(id_key).filter(|k| !k.is_empty()).and_then(|k| read(&k));
+        let found = by_id.or_else(|| {
+            let words = text_key(text);
+            let ids = same_words(&words);
+            if ids.is_empty() {
+                // A conversation's first message, kept by its words alone.
+                return read(&words);
+            }
+            let back = taken.entry(words).or_default();
+            *back += 1;
+            read(ids.get(ids.len().checked_sub(*back)?)?)
+        });
         if let Some(found) = found {
             *images = found;
         }
@@ -105,6 +155,36 @@ mod tests {
         assert_eq!(text_key(" [a.png] what "), text_key("[a.png] what"));
         assert_ne!(text_key("a"), text_key("b"));
         assert!(text_key("a").starts_with("t-"));
+    }
+
+    #[test]
+    fn a_message_kept_by_its_id_is_found_by_its_words() {
+        let dir = std::env::temp_dir().join(format!("sophon-pictures-{}", std::process::id()));
+        // SAFETY: the tests of this module alone read the folder.
+        unsafe { std::env::set_var("SOPHON_DATA_DIR", &dir) };
+        keep("m-1", "[a.png] look", &["data:x".to_owned()]);
+        // The pictures are written on a thread of their own.
+        for _ in 0..200 {
+            if read("m-1").is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(of("another-id", "[a.png] look"), vec!["data:x".to_owned()]);
+        // The same words again, another picture: each message its own.
+        keep("m-2", "[a.png] look", &["data:y".to_owned()]);
+        for _ in 0..200 {
+            if read("m-2").is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let message = |id: &str| Item::User { text: "[a.png] look".into(), message_id: Some(id.into()), images: vec![] };
+        let mut items = vec![message("h-1"), message("h-2")];
+        restore(&mut items);
+        let pictures: Vec<_> = items.iter().map(|i| match i { Item::User { images, .. } => images.clone(), _ => vec![] }).collect();
+        assert_eq!(pictures, vec![vec!["data:x".to_owned()], vec!["data:y".to_owned()]]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -676,8 +676,19 @@ async fn forward<S: AsyncRead + AsyncWrite + Unpin>(
                     if v.get("type").and_then(Value::as_str) == Some("sophon_pictures_request") {
                         let field = |k| v.get(k).and_then(Value::as_str).unwrap_or_default();
                         let pictures = crate::sent_pictures::of(field("messageId"), field("text"));
-                        let answer = json!({ "type": "sophon_pictures", "messageId": field("messageId"), "text": field("text"), "pictures": pictures });
-                        let sealed = seal.seal(Message::Text(answer.to_string()))?;
+                        let answer = |pictures: Vec<String>| json!({ "type": "sophon_pictures", "messageId": field("messageId"), "text": field("text"), "pictures": pictures });
+                        // None kept here: the agent's own record of the
+                        // conversation has them, read on a thread of its own.
+                        #[cfg(not(target_os = "ios"))]
+                        if pictures.is_empty() {
+                            let (own_tx, id, text, cwd) = (own_tx.clone(), field("messageId").to_owned(), field("text").to_owned(), field("cwd").to_owned());
+                            std::thread::spawn(move || {
+                                let pictures = crate::agent_pictures::find(&cwd, &id, &text);
+                                let _ = own_tx.send(json!({ "type": "sophon_pictures", "messageId": id, "text": text, "pictures": pictures }).to_string());
+                            });
+                            continue;
+                        }
+                        let sealed = seal.seal(Message::Text(answer(pictures).to_string()))?;
                         ptx.send(to_ws(sealed)).await.map_err(|e| e.to_string())?;
                         continue;
                     }
@@ -716,7 +727,7 @@ fn keep_pictures(frame: &Value) {
     }
     let field = |k| m.get(k).and_then(Value::as_str);
     match field("messageId") {
-        Some(id) => crate::sent_pictures::keep(id, &pictures),
+        Some(id) => crate::sent_pictures::keep(id, field("text").unwrap_or_default(), &pictures),
         None => {
             if let Some(text) = field("initialPrompt").or(field("text")) {
                 crate::sent_pictures::keep_for_text(text, &pictures);

@@ -12,6 +12,148 @@ use crate::ui::kit::text;
 use crate::ui::kit::*;
 use crate::store::{self, Modal};
 
+/// A picture on the phone, as a photo viewer shows one: it fills the
+/// screen, a pinch zooms it (dragging moves it while zoomed), two taps zoom
+/// in and back out, one tap puts it away.
+fn zooming_picture(uri: String) -> AnyElement {
+    const DOUBLE_TAP: std::time::Duration = std::time::Duration::from_millis(260);
+    let zoom = signal(1.0f32);
+    let taps = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    scroll()
+        .flex_1()
+        .zoom_range(1.0, 5.0)
+        .zoom(zoom)
+        .center_content(true)
+        .scrollbar(false)
+        .bg(AdaptiveColor::rgb(0x000000, 0x000000).opacity(0.92))
+        .child(
+            nsh_base::button()
+                .on_press(move || {
+                    taps.set(taps.get() + 1);
+                    if taps.get() >= 2 {
+                        taps.set(0);
+                        zoom.set(if zoom.get_untracked() > 1.0 { 1.0 } else { 2.5 });
+                        return;
+                    }
+                    let taps = taps.clone();
+                    set_timeout(DOUBLE_TAP, move || {
+                        if taps.get() == 1 {
+                            taps.set(0);
+                            store::close_modal();
+                        }
+                    });
+                })
+                .accessibility_label(t("Close"))
+                .w(move || Length::from(px(window().width.0)))
+                .h(move || Length::from(px(window().height.0)))
+                .child(image(SharedString::from(uri)).flex_1().object_fit(nsh_core::ResizeMode::Contain)),
+        )
+        .into_element()
+}
+
+/// A picture on the desktop: a trackpad pinch (Control + wheel with a
+/// mouse) zooms it, a drag moves it, and the bar under it zooms by steps,
+/// turns it a quarter, mirrors it and puts it back as it was. A press
+/// puts it away.
+fn desktop_picture(uri: String) -> AnyElement {
+    use nsh_core::element::{GestureEvent, Interactive, Spring};
+    const STEP: f32 = 1.25;
+    const LIMITS: (f32, f32) = (0.25, 8.0);
+    let [x, y, scale, angle] = [0.0, 0.0, 1.0, 0.0].map(animated_value);
+    // Where the bar's steps start from: the scale, and the quarter turns.
+    let level = std::rc::Rc::new(std::cell::Cell::new(1.0f32));
+    let turns = std::rc::Rc::new(std::cell::Cell::new(0.0f32));
+    let mirrored = signal(false);
+    let zoom_to = {
+        let level = level.clone();
+        move |to: f32| {
+            let to = to.clamp(LIMITS.0, LIMITS.1);
+            level.set(to);
+            let _ = scale.spring(to, Spring::default());
+            if to <= 1.0 {
+                let _ = x.spring(0.0, Spring::default());
+                let _ = y.spring(0.0, Spring::default());
+            }
+        }
+    };
+    let white = AdaptiveColor::rgb(0xffffff, 0xffffff);
+    let tool = move |glyph: Icon, label: &'static str, on_press: Box<dyn Fn()>| {
+        nsh_base::button()
+            .on_press(move || on_press())
+            .accessibility_label(label)
+            .w(px(32.0))
+            .h(px(32.0))
+            .rounded(px(R_FULL))
+            .items_center()
+            .justify_center()
+            .hover(|s| s.bg(AdaptiveColor::rgb(0xffffff, 0xffffff).opacity(0.16)))
+            .child(icon(glyph, 16.0).text_color(white))
+    };
+    let (zoom_in, zoom_out, reset_zoom, pinched) = (zoom_to.clone(), zoom_to.clone(), zoom_to.clone(), zoom_to);
+    let (level_in, level_out, level_pinch) = (level.clone(), level.clone(), level.clone());
+    let (turns_turn, turns_reset) = (turns.clone(), turns);
+    view()
+        .flex_1()
+        .bg(AdaptiveColor::rgb(0x000000, 0x000000).opacity(0.55))
+        .child(
+            view()
+                .on_press(|_: &PressEvent| store::close_modal())
+                .flex_1()
+                .overflow_hidden()
+                .pan_values(Some(&x), Some(&y))
+                .pinch_value(&scale)
+                .on_pinch_end(move |e: &GestureEvent| pinched(level_pinch.get() * e.value))
+                .child(
+                    view()
+                        .flex_1()
+                        .m(px(S4))
+                        .bind_translate_x(&x)
+                        .bind_translate_y(&y)
+                        .bind_scale(&scale)
+                        .bind_rotate(&angle)
+                        .child(
+                            image(SharedString::from(uri))
+                                .flex_1()
+                                .object_fit(nsh_core::ResizeMode::Contain)
+                                .scale_x(move || if mirrored.get() { -1.0_f32 } else { 1.0 }),
+                        ),
+                ),
+        )
+        .child(
+            view().absolute().bottom(px(20.0)).left(px(0.0)).right(px(0.0)).items_center().pointer_events(nsh_core::PointerEvents::BoxNone).child(
+                view()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(2.0))
+                    .p(px(4.0))
+                    .rounded(px(R_FULL))
+                    .bg(AdaptiveColor::rgb(0x000000, 0x000000).opacity(0.6))
+                    .child(tool(Icon::Minus, t("Zoom out"), Box::new(move || zoom_out(level_out.get() / STEP))))
+                    .child(tool(Icon::Plus, t("Zoom in"), Box::new(move || zoom_in(level_in.get() * STEP))))
+                    .child(tool(
+                        Icon::RotateCw,
+                        t("Rotate"),
+                        Box::new(move || {
+                            turns_turn.set(turns_turn.get() + 1.0);
+                            let _ = angle.spring(turns_turn.get() * 90.0, Spring::default());
+                        }),
+                    ))
+                    .child(tool(Icon::FlipHorizontal, t("Flip"), Box::new(move || mirrored.update(|m| *m = !*m))))
+                    .child(tool(
+                        Icon::Maximize2,
+                        t("Actual fit"),
+                        Box::new(move || {
+                            reset_zoom(1.0);
+                            turns_reset.set(0.0);
+                            let _ = angle.spring(0.0, Spring::default());
+                            mirrored.set(false);
+                        }),
+                    )),
+            ),
+        )
+        .into_element()
+}
+
 pub(crate) fn modal_layer() -> impl IntoElement {
     let open = computed(|| store::modal().is_some());
     when(open, || {
@@ -43,19 +185,11 @@ pub(crate) fn modal_layer() -> impl IntoElement {
                                 view()
                                     .flex_1()
                                     .self_stretch()
-                                    .child(
-                                        nsh_base::button()
-                                            .on_press(store::close_modal)
-                                            .accessibility_label(t("Close"))
-                                            .flex_1()
-                                            .bg(AdaptiveColor::rgb(0x000000, 0x000000).opacity(0.55))
-                                            .child(
-                                                image(SharedString::from(uri.clone()))
-                                                    .flex_1()
-                                                    .m(px(S4))
-                                                    .object_fit(nsh_core::ResizeMode::Contain),
-                                            ),
-                                    )
+                                    .child(if MOBILE {
+                                        zooming_picture(uri.clone())
+                                    } else {
+                                        desktop_picture(uri.clone())
+                                    })
                                     .child(
                                         nsh_base::button()
                                             .on_press(store::close_modal)
@@ -570,11 +704,20 @@ fn switch_branch() -> View {
 }
 
 fn import_session() -> View {
+    use crate::daemon::connection::RecentSession;
     let query = signal(String::new());
     let list = computed(store::recent_sessions);
-    sheet(t("Import a session"))
+    let import_all = move |sessions: Vec<RecentSession>| {
+        store::import_sessions(sessions);
+        store::close_modal();
+    };
+    sheet(t("Import sessions"))
         .w(px(620.0))
-        .child(text(t("Continue a Claude Code or Codex session you started outside Sophon")).text_size(px(TEXT_SM)).text_color(FG_MUTED))
+        .child(
+            text(t("Continue the Claude Code and Codex sessions you started outside Sophon. Each goes to the project of its folder"))
+                .text_size(px(TEXT_SM))
+                .text_color(FG_MUTED),
+        )
         .child(
             field()
                 .value(move || query.get())
@@ -585,38 +728,75 @@ fn import_session() -> View {
                 .placeholder(t("Search sessions"))
                 .auto_focus(true),
         )
-        .child(scroll().max_h(px(380.0)).child(dynamic(move || {
+        .child(scroll().max_h(px(420.0)).child(dynamic(move || {
             let sessions = list.get();
             Some(untracked(move || match sessions.clone() {
                 None => text(t("Loading…")).text_color(FG_MUTED).into_element(),
                 Some(s) if s.is_empty() => text(t("No sessions found")).text_size(px(TEXT_BASE)).text_color(FG_MUTED).into_element(),
                 Some(s) => {
-                    let mut col = view().gap(px(2.0));
-                    for sess in s {
-                        let pick = sess.clone();
-                        col = col.child(
-                            nsh_base::button()
-                                .on_press(move || {
-                                    store::import_session(&pick);
-                                    store::close_modal();
-                                })
-                                .gap(px(2.0))
-                                .px(px(S2))
-                                .py(px(6.0))
-                                .rounded(px(R_LG))
-                                .hover(|st| st.bg(highlight()))
-                                .child(text(sess.title.clone()).text_size(px(TEXT_BASE)).number_of_lines(1))
-                                .child(
-                                    text(format!(
-                                        "{} · {} · {}",
-                                        sess.provider_label,
-                                        crate::daemon::model::folder_name(&sess.cwd),
-                                        sess.last_activity.get(..10).unwrap_or_default()
-                                    ))
+                    // By folder, the folder of the latest session first.
+                    let mut folders: Vec<(String, Vec<RecentSession>)> = Vec::new();
+                    for sess in &s {
+                        match folders.iter_mut().find(|(cwd, _)| *cwd == sess.cwd) {
+                            Some((_, of)) => of.push(sess.clone()),
+                            None => folders.push((sess.cwd.clone(), vec![sess.clone()])),
+                        }
+                    }
+                    let everything = s.clone();
+                    let mut col = view().gap(px(S3)).child(
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                text(tf("{} sessions in {} folders", &[&s.len().to_string(), &folders.len().to_string()]))
                                     .text_size(px(TEXT_SM))
                                     .text_color(FG_MUTED),
-                                ),
+                            )
+                            .child(btn(t("Import all"), Variant::Primary, Sz::Sm, None, move || import_all(everything.clone()))),
+                    );
+                    for (cwd, of) in folders {
+                        let all = of.clone();
+                        let mut group = view().gap(px(2.0)).child(
+                            view()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(S2))
+                                .px(px(S2))
+                                .child(icon(Icon::Folder, 14.0).text_color(FG_MUTED))
+                                .child(text(crate::daemon::model::folder_name(&cwd)).text_size(px(TEXT_BASE)).font_weight(FontWeight(600)).number_of_lines(1))
+                                .child(text(cwd.clone()).flex_1().min_w(px(0.0)).text_size(px(TEXT_XS)).text_color(FG_FAINT).number_of_lines(1))
+                                .child(btn(
+                                    tf("Import {}", &[&of.len().to_string()]),
+                                    Variant::Secondary,
+                                    Sz::Sm,
+                                    None,
+                                    move || import_all(all.clone()),
+                                )),
                         );
+                        for sess in of {
+                            let pick = sess.clone();
+                            group = group.child(
+                                nsh_base::button()
+                                    .on_press(move || {
+                                        store::import_session(&pick);
+                                        store::close_modal();
+                                    })
+                                    .gap(px(2.0))
+                                    .ml(px(22.0))
+                                    .px(px(S2))
+                                    .py(px(5.0))
+                                    .rounded(px(R_LG))
+                                    .hover(|st| st.bg(highlight()))
+                                    .child(text(sess.title.clone()).text_size(px(TEXT_BASE)).number_of_lines(1))
+                                    .child(
+                                        text(format!("{} · {}", sess.provider_label, sess.last_activity.get(..10).unwrap_or_default()))
+                                            .text_size(px(TEXT_SM))
+                                            .text_color(FG_MUTED),
+                                    ),
+                            );
+                        }
+                        col = col.child(group);
                     }
                     col.into_element()
                 }

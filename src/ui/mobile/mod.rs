@@ -173,6 +173,19 @@ fn stack() -> impl IntoElement {
             });
         }
     });
+    // A conversation restored from the archive opens once its workspace is
+    // listed again: its screen is pushed then.
+    let seen = signal(store::restored_opens());
+    effect(move || {
+        let opens = store::restored_opens();
+        if opens != seen.get_untracked() {
+            seen.set(opens);
+            untracked(|| {
+                global::<Routes>().update(|r| r.0.clear());
+                push(Route::Chat);
+            });
+        }
+    });
     nav_stack()
         .flex_1()
         .child(nav_page().key("home").header_visible(false).child(home::home()))
