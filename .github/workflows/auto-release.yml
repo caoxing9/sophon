@@ -107,7 +107,7 @@ jobs:
           PY
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -qam "Release $NEXT"
+          git commit -qam "chore(release): $NEXT"
           git push origin HEAD:main
           gh workflow run release.yml --ref main -f version="$NEXT"
           echo "$V -> $NEXT: $CHANGED commits since v$V; release started"

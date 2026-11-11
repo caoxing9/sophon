@@ -52,11 +52,11 @@ scripts/set-version.sh "$NEXT"
 # Cargo.lock names the crate's version too.
 cargo update --quiet --offline --package sophon 2>/dev/null || cargo check --quiet
 git add nsh.json Cargo.toml Cargo.lock
-git commit --quiet -m "Release $NEXT"
+git commit --quiet -m "chore(release): $NEXT"
 
 if [ "$DIRECT" = 0 ]; then
   git push --quiet -u origin "release-$NEXT"
-  gh pr create --base main --title "Release $NEXT" --body "Sets the version to $NEXT. Merging this starts the release."
+  gh pr create --base main --title "chore(release): $NEXT" --body "Sets the version to $NEXT. Merging this starts the release."
   git checkout --quiet main
   echo "$NOW -> $NEXT: merge the pull request to release"
   exit 0
