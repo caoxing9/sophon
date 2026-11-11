@@ -44,11 +44,15 @@ jobs:
       - name: NSH revision
         id: nshrev
         run: echo "rev=$(sed -n 's/^nsh-core = .*rev = \"\([0-9a-f]*\)\".*/\1/p' Cargo.toml | head -n 1)" >> "$GITHUB_OUTPUT"
+      # CI's key: its nsh job builds the CLI once per NSH pin on main, and
+      # a release reads that instead of building it again (15 to 25 minutes
+      # of each job, when the key was this workflow's own and a tag's run
+      # could not read another tag's cache).
       - name: The nsh CLI cache
         uses: actions/cache@v4
         with:
           path: ~/.cache/sophon-nsh
-          key: nsh-${{ runner.os }}-${{ matrix.arch }}-${{ steps.nshrev.outputs.rev }}
+          key: nsh-cli-${{ runner.os }}-${{ steps.nshrev.outputs.rev }}
       - name: The nsh CLI (the commit Cargo.toml pins)
         run: echo "$(scripts/install-nsh.sh)" >> "$GITHUB_PATH"
       - name: Version
@@ -92,7 +96,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/sophon-nsh
-          key: nsh-${{ runner.os }}-aarch64-${{ steps.nshrev.outputs.rev }}
+          key: nsh-cli-${{ runner.os }}-${{ steps.nshrev.outputs.rev }}
       - name: The nsh CLI (the commit Cargo.toml pins)
         run: echo "$(scripts/install-nsh.sh)" >> "$GITHUB_PATH"
       - name: Version
@@ -159,7 +163,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ~/.cache/sophon-nsh
-          key: nsh-${{ runner.os }}-aarch64-${{ steps.nshrev.outputs.rev }}
+          key: nsh-cli-${{ runner.os }}-${{ steps.nshrev.outputs.rev }}
       - uses: dtolnay/rust-toolchain@stable
       - name: The nsh CLI (the commit Cargo.toml pins)
         run: echo "$(scripts/install-nsh.sh)" >> "$GITHUB_PATH"
