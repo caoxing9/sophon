@@ -12,6 +12,45 @@ use crate::ui::kit::text;
 use crate::ui::kit::*;
 use crate::store::{self, Modal};
 
+/// A picture on the phone, as a photo viewer shows one: it fills the
+/// screen, a pinch zooms it (dragging moves it while zoomed), two taps zoom
+/// in and back out, one tap puts it away.
+fn zooming_picture(uri: String) -> AnyElement {
+    const DOUBLE_TAP: std::time::Duration = std::time::Duration::from_millis(260);
+    let zoom = signal(1.0f32);
+    let taps = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    scroll()
+        .flex_1()
+        .zoom_range(1.0, 5.0)
+        .zoom(zoom)
+        .center_content(true)
+        .scrollbar(false)
+        .bg(AdaptiveColor::rgb(0x000000, 0x000000).opacity(0.92))
+        .child(
+            nsh_base::button()
+                .on_press(move || {
+                    taps.set(taps.get() + 1);
+                    if taps.get() >= 2 {
+                        taps.set(0);
+                        zoom.set(if zoom.get_untracked() > 1.0 { 1.0 } else { 2.5 });
+                        return;
+                    }
+                    let taps = taps.clone();
+                    set_timeout(DOUBLE_TAP, move || {
+                        if taps.get() == 1 {
+                            taps.set(0);
+                            store::close_modal();
+                        }
+                    });
+                })
+                .accessibility_label(t("Close"))
+                .w(move || Length::from(px(window().width.0)))
+                .h(move || Length::from(px(window().height.0)))
+                .child(image(SharedString::from(uri)).flex_1().object_fit(nsh_core::ResizeMode::Contain)),
+        )
+        .into_element()
+}
+
 pub(crate) fn modal_layer() -> impl IntoElement {
     let open = computed(|| store::modal().is_some());
     when(open, || {
@@ -43,7 +82,9 @@ pub(crate) fn modal_layer() -> impl IntoElement {
                                 view()
                                     .flex_1()
                                     .self_stretch()
-                                    .child(
+                                    .child(if MOBILE {
+                                        zooming_picture(uri.clone())
+                                    } else {
                                         nsh_base::button()
                                             .on_press(store::close_modal)
                                             .accessibility_label(t("Close"))
@@ -54,8 +95,9 @@ pub(crate) fn modal_layer() -> impl IntoElement {
                                                     .flex_1()
                                                     .m(px(S4))
                                                     .object_fit(nsh_core::ResizeMode::Contain),
-                                            ),
-                                    )
+                                            )
+                                            .into_element()
+                                    })
                                     .child(
                                         nsh_base::button()
                                             .on_press(store::close_modal)
