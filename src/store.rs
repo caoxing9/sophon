@@ -4041,7 +4041,10 @@ pub(crate) fn apply(event: Event) {
             if t.agent_id.as_deref() == Some(agent_id.as_str()) {
                 t.syncing = false;
                 t.loaded = true;
-                // The copy's messages too: their pictures may be elsewhere.
+                // What the host said came since the copy has no pictures yet:
+                // those kept here first, then the host's Sophon is asked
+                // for the rest (the copy's messages too).
+                crate::sent_pictures::restore(&mut t.items);
                 ask_pictures(&t.items);
             }
         }),

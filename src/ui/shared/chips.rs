@@ -77,7 +77,8 @@ struct AttachmentView {
 }
 
 impl NodeView for AttachmentView {
-    fn create(&self, _cx: &NodeViewCx, node: &Node) -> AnyElement {
+    fn create(&self, cx: &NodeViewCx, node: &Node) -> AnyElement {
+        let selected = cx.selected();
         let id = attr(node, "id").to_owned();
         let name = attr(node, "name").to_owned();
         let image = attr(node, "kind") == "image";
@@ -111,6 +112,8 @@ impl NodeView for AttachmentView {
             .accessibility_label(name.clone())
             .pl(px(if image { 3.0 } else { 6.0 }))
             .pr(px(7.0))
+            .border_color(move || if selected.get() { tint(ACCENT, 0.9) } else { tint(ACCENT, 0.18) })
+            .bg(move || if selected.get() { tint(ACCENT, 0.18) } else { tint(ACCENT, 0.06) })
             .hover(|s| s.bg(tint(ACCENT, 0.12)))
             .active(|s| s.bg(tint(ACCENT, 0.16)))
             .bind_opacity(&fade)
@@ -123,7 +126,8 @@ impl NodeView for AttachmentView {
 struct MentionView;
 
 impl NodeView for MentionView {
-    fn create(&self, _cx: &NodeViewCx, node: &Node) -> AnyElement {
+    fn create(&self, cx: &NodeViewCx, node: &Node) -> AnyElement {
+        let selected = cx.selected();
         let path = attr(node, "path").to_owned();
         let dir = node.attrs().get("dir").and_then(Value::as_bool).unwrap_or(false);
         // The path's last part: enough to tell files apart in a line.
@@ -141,8 +145,8 @@ impl NodeView for MentionView {
             .px(px(5.0))
             .rounded(px(R_MD))
             .border_1()
-            .border_color(tint(ACCENT, 0.18))
-            .bg(tint(ACCENT, 0.06))
+            .border_color(move || if selected.get() { tint(ACCENT, 0.9) } else { tint(ACCENT, 0.18) })
+            .bg(move || if selected.get() { tint(ACCENT, 0.18) } else { tint(ACCENT, 0.06) })
             .label(path)
             .child(icon(if dir { Icon::Folder } else { Icon::FileText }, 12.0).text_color(ACCENT))
             .child(text(chip_name(&tail)).text_size(px(TEXT_SM)).line_height(px(16.0)).font_family(|| MONO).text_color(ACCENT).number_of_lines(1))

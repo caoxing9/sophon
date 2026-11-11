@@ -69,14 +69,15 @@ pub(crate) fn schema() -> Schema {
     paragraph.group = Some("block".into());
     let mut text = NodeSpec::default();
     text.group = Some("inline".into());
-    // Chips are atoms the caret steps over and Backspace deletes whole;
-    // not selectable, as Tiptap's mention, so arrows never stop on one.
+    // Chips are atoms Backspace deletes whole. An arrow stops on one,
+    // selecting it (its outline shows it), as on a picture in a document:
+    // the next press goes on, Backspace or typing takes it away.
     let chip = |attrs: Vec<(String, AttrSpec)>| {
         let mut n = NodeSpec::default();
         n.inline = true;
         n.group = Some("inline".into());
         n.atom = true;
-        n.selectable = false;
+        n.selectable = true;
         n.attrs = attrs;
         n
     };
