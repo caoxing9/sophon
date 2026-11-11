@@ -19,9 +19,12 @@ const fn p(input: f64, output: f64, cache_write: f64, cache_read: f64) -> Price 
 }
 
 /// Model ids as the logs write them (dates and provider prefixes cut off
-/// first, see [`of`]). Anthropic's as of 2026-10; OpenAI's for the models
-/// whose prices were published.
+/// first, see [`of`]). Anthropic's and OpenAI's pricing pages as of
+/// 2026-11-11; OpenAI's at its standard tier and short context (a prompt
+/// over 272K tokens costs more, which is not counted), with no charge for
+/// writing its cache.
 const TABLE: &[(&str, Price)] = &[
+    ("claude-fable-5-2", p(8.0, 40.0, 10.0, 0.20)),
     ("claude-fable-5-1", p(10.0, 50.0, 12.5, 0.25)),
     ("claude-fable-5", p(10.0, 50.0, 12.5, 1.0)),
     ("claude-opus-5-5", p(4.0, 20.0, 5.0, 0.20)),
@@ -39,6 +42,10 @@ const TABLE: &[(&str, Price)] = &[
     ("claude-sonnet-4", p(3.0, 15.0, 3.75, 0.30)),
     ("claude-haiku-5-5", p(0.10, 0.50, 0.125, 0.01)),
     ("claude-haiku-4-5", p(1.0, 5.0, 1.25, 0.10)),
+    ("gpt-6.1-sol", p(2.0, 10.0, 0.0, 0.10)),
+    ("gpt-6-sol", p(2.0, 10.0, 0.0, 0.20)),
+    // Its promotional price, to 2026-11-30.
+    ("gpt-5.6-sol", p(4.0, 20.0, 0.0, 0.40)),
     ("gpt-5", p(1.25, 10.0, 0.0, 0.125)),
     ("gpt-5-codex", p(1.25, 10.0, 0.0, 0.125)),
     ("gpt-5-mini", p(0.25, 2.0, 0.0, 0.025)),
@@ -78,8 +85,10 @@ mod tests {
         assert_eq!(of("claude-sonnet-4-5-20250929").map(|p| p.input), Some(3.0));
         assert_eq!(of("anthropic/claude-haiku-4-5").map(|p| p.output), Some(5.0));
         // A newer model is unpriced, not priced as its family.
-        assert_eq!(of("claude-fable-5-2"), None);
-        assert_eq!(of("gpt-6.1-sol"), None);
+        assert_eq!(of("claude-fable-5-3"), None);
+        assert_eq!(of("gpt-6.1-terra"), None);
+        assert_eq!(of("claude-fable-5-2").map(|p| p.input), Some(8.0));
+        assert_eq!(of("codex/gpt-6.1-sol").map(|p| p.cache_read), Some(0.10));
         assert_eq!(of("<synthetic>"), None);
     }
 
