@@ -19,7 +19,7 @@ name: Auto release
 on:
   push:
     branches: [main]
-    paths-ignore: ["Casks/**", "**.md", "docs/**", ".github/**"]
+    paths-ignore: ["Casks/**", "**.md", "docs/**", ".github/**", "scripts/release.sh"]
   workflow_dispatch:
     inputs:
       bump:
@@ -81,7 +81,7 @@ jobs:
           fi
           # What changed since: the app itself, not its cask (written by
           # each release), documents or these workflows.
-          CHANGED=$(git log --oneline "v$V..HEAD" -- . ':!Casks' ':!*.md' ':!docs' ':!.github' | wc -l | tr -d ' ')
+          CHANGED=$(git log --oneline "v$V..HEAD" -- . ':!Casks' ':!*.md' ':!docs' ':!.github' ':!scripts/release.sh' | wc -l | tr -d ' ')
           if [ "$CHANGED" = 0 ]; then
             echo "nothing to release since v$V"
             exit 0
@@ -107,7 +107,7 @@ jobs:
           PY
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -qam "Release $NEXT"
+          git commit -qam "chore(release): $NEXT"
           git push origin HEAD:main
           gh workflow run release.yml --ref main -f version="$NEXT"
           echo "$V -> $NEXT: $CHANGED commits since v$V; release started"

@@ -1,4 +1,4 @@
-# Builds Sophon for macOS (Apple silicon and Intel) and iOS on a version tag,
+# Builds Sophon for macOS (Apple silicon) and, with the signing secrets, iOS,
 # publishes a GitHub Release with the update manifest the app checks
 # (`latest.json`), updates the Homebrew cask, and, when the App Store
 # secrets are set, uploads the iOS build to TestFlight.
@@ -41,14 +41,31 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.arch }}
+          cache-targets: false
       - name: NSH revision
         id: nshrev
-        run: echo "rev=$(sed -n 's/^nsh-core = .*rev = \"\([0-9a-f]*\)\".*/\1/p' Cargo.toml | head -n 1)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "rev=$(sed -n 's/^nsh-core = .*rev = \"\([0-9a-f]*\)\".*/\1/p' Cargo.toml | head -n 1)" >> "$GITHUB_OUTPUT"
+          echo "month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+      # The whole target directory, under the key CI's "Package macOS" saves
+      # on main: nsh's runner builds into it from a workspace rust-cache does
+      # not know, and was built from nothing each time.
+      - name: The target directory
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: target-macos-${{ runner.os }}-${{ steps.nshrev.outputs.month }}-${{ steps.nshrev.outputs.rev }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            target-macos-${{ runner.os }}-${{ steps.nshrev.outputs.month }}-${{ steps.nshrev.outputs.rev }}-
+      # CI's key: its nsh job builds the CLI once per NSH pin on main, and
+      # a release reads that instead of building it again (15 to 25 minutes
+      # of each job, when the key was this workflow's own and a tag's run
+      # could not read another tag's cache).
       - name: The nsh CLI cache
         uses: actions/cache@v4
         with:
           path: ~/.cache/sophon-nsh
-          key: nsh-${{ runner.os }}-${{ matrix.arch }}-${{ steps.nshrev.outputs.rev }}
+          key: nsh-cli-${{ runner.os }}-${{ steps.nshrev.outputs.rev }}
       - name: The nsh CLI (the commit Cargo.toml pins)
         run: echo "$(scripts/install-nsh.sh)" >> "$GITHUB_PATH"
       - name: Version
@@ -73,34 +90,52 @@ jobs:
       HAS_SIGNING: ${{ secrets.IOS_CERT_P12 != '' && secrets.IOS_PROFILE != '' }}
       HAS_ASC: ${{ secrets.ASC_KEY_P8 != '' }}
     steps:
+      # Without the signing secrets there is nothing to build for a phone:
+      # every step is skipped and the job ends in seconds. (The Simulator
+      # app is CI's to build, on every pull request.)
       - uses: actions/checkout@v4
+        if: env.HAS_SIGNING == 'true'
       - name: The newest Xcode (the newest SDKs)
+        if: env.HAS_SIGNING == 'true'
         run: |
           X=$(ls -d /Applications/Xcode_*.app | grep -iv beta | sort -V | tail -n 1)
           sudo xcode-select -s "$X"
           xcodebuild -version
       - uses: dtolnay/rust-toolchain@stable
+        if: env.HAS_SIGNING == 'true'
         with:
-          targets: aarch64-apple-ios, aarch64-apple-ios-sim
+          targets: aarch64-apple-ios
       - uses: Swatinem/rust-cache@v2
+        if: env.HAS_SIGNING == 'true'
         with:
           key: ios
+          cache-targets: false
       - name: NSH revision
+        if: env.HAS_SIGNING == 'true'
         id: nshrev
-        run: echo "rev=$(sed -n 's/^nsh-core = .*rev = \"\([0-9a-f]*\)\".*/\1/p' Cargo.toml | head -n 1)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "rev=$(sed -n 's/^nsh-core = .*rev = \"\([0-9a-f]*\)\".*/\1/p' Cargo.toml | head -n 1)" >> "$GITHUB_OUTPUT"
+          echo "month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+      - name: The target directory
+        if: env.HAS_SIGNING == 'true'
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: target-ios-device-${{ runner.os }}-${{ steps.nshrev.outputs.month }}-${{ steps.nshrev.outputs.rev }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            target-ios-device-${{ runner.os }}-${{ steps.nshrev.outputs.month }}-${{ steps.nshrev.outputs.rev }}-
       - name: The nsh CLI cache
+        if: env.HAS_SIGNING == 'true'
         uses: actions/cache@v4
         with:
           path: ~/.cache/sophon-nsh
-          key: nsh-${{ runner.os }}-aarch64-${{ steps.nshrev.outputs.rev }}
+          key: nsh-cli-${{ runner.os }}-${{ steps.nshrev.outputs.rev }}
       - name: The nsh CLI (the commit Cargo.toml pins)
+        if: env.HAS_SIGNING == 'true'
         run: echo "$(scripts/install-nsh.sh)" >> "$GITHUB_PATH"
       - name: Version
+        if: env.HAS_SIGNING == 'true'
         run: scripts/set-version.sh "${{ inputs.version || github.ref_name }}" "${{ github.run_number }}"
-      - name: Simulator build
-        run: |
-          nsh package --target ios-simulator --icon assets/app-icon/icon-ios-1024.png
-          cd .nsh/out && zip -qry "Sophon-$(../../scripts/version.sh)-ios-simulator.zip" Sophon.app && rm -rf Sophon.app
       # Device build and TestFlight: set IOS_CERT_P12 (base64 .p12),
       # IOS_CERT_PASSWORD, IOS_PROFILE (base64 .mobileprovision) and, for
       # the upload, ASC_APP_ID, ASC_ISSUER_ID, ASC_KEY_ID, ASC_KEY_P8.
@@ -135,11 +170,11 @@ jobs:
           printf '%s' "$ASC_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
           nsh publish ios --private-key "$RUNNER_TEMP/AuthKey.p8" .nsh/out/Sophon.ipa
       - uses: actions/upload-artifact@v4
+        if: env.HAS_SIGNING == 'true'
         with:
           name: ios
-          path: |
-            .nsh/out/*.zip
-            .nsh/out/*.ipa
+          if-no-files-found: ignore
+          path: .nsh/out/*.ipa
 
   release:
     needs: [macos, ios]
@@ -159,7 +194,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ~/.cache/sophon-nsh
-          key: nsh-${{ runner.os }}-aarch64-${{ steps.nshrev.outputs.rev }}
+          key: nsh-cli-${{ runner.os }}-${{ steps.nshrev.outputs.rev }}
       - uses: dtolnay/rust-toolchain@stable
       - name: The nsh CLI (the commit Cargo.toml pins)
         run: echo "$(scripts/install-nsh.sh)" >> "$GITHUB_PATH"
