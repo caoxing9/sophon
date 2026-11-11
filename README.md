@@ -86,8 +86,7 @@ the app and restarts it. `brew upgrade --cask sophon` works too.
 
 ### iOS
 
-There is no App Store or TestFlight build yet. Each release has `Sophon-<version>-ios-simulator.zip` for the iOS
-Simulator. To run it on your own iPhone with a free Apple ID: sign in to Xcode (*Settings → Accounts*), plug in the
+There is no App Store or TestFlight build yet. To run it on your own iPhone with a free Apple ID: sign in to Xcode (*Settings → Accounts*), plug in the
 iPhone, turn on *Developer Mode* (*Settings → Privacy & Security*), set up the build tools (below) and run
 
 ```sh
@@ -149,15 +148,13 @@ The version is committed to `main` (`nsh.json`, `Cargo.toml`, `Cargo.lock`) befo
 build names itself what was released last and does not offer that release as an update. By hand,
 `scripts/release.sh patch|minor|major|<x.y.z>` opens a pull request that sets the version; merging it releases it.
 
-The [release workflow](.github/workflows/release.yml) builds the macOS apps (Apple silicon and Intel) and the iOS
-Simulator app, publishes the GitHub Release with `latest.json` (what installed apps update from), and updates the
+The [release workflow](.github/workflows/release.yml) builds the macOS app (Apple silicon), publishes the GitHub Release with `latest.json` (what installed apps update from), and updates the
 Homebrew cask. Each release has:
 
 | Asset | For |
 |---|---|
 | `Sophon-<v>-macos-aarch64.dmg` | Installing by hand |
 | `Sophon-<v>-macos-aarch64.tar.gz` | The installer, Homebrew and in-app updates |
-| `Sophon-<v>-ios-simulator.zip` | The iOS Simulator |
 | `latest.json` | The update feed |
 
 With App Store signing secrets set (`IOS_CERT_P12`, `IOS_CERT_PASSWORD`, `IOS_PROFILE`, `ASC_APP_ID`,

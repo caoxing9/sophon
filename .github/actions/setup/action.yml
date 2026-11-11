@@ -11,6 +11,13 @@ inputs:
     description: Extra Rust targets.
     required: false
     default: ""
+  keep-target:
+    description: >-
+      "true" for a job that packages: keeps the whole target directory. A package builds a second workspace
+      (nsh's runner, `.nsh/rust`) into it, which rust-cache does not know and deletes from what it saves, so
+      the runner was built from nothing each time (5.5 of a 6 minute job).
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -36,6 +43,21 @@ runs:
     - uses: Swatinem/rust-cache@v2
       with:
         key: ${{ inputs.cache-key }}
+        # With the target directory kept whole below, only Cargo's registry and git checkouts here.
+        cache-targets: ${{ inputs.keep-target != 'true' }}
+    - name: The month (the kept target directory starts over with each)
+      if: inputs.keep-target == 'true'
+      id: month
+      shell: bash
+      run: echo "month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+    # Saved once per Cargo.lock; a run with another starts from the newest of the month and NSH pin.
+    - uses: actions/cache@v4
+      if: inputs.keep-target == 'true'
+      with:
+        path: target
+        key: target-${{ inputs.cache-key }}-${{ runner.os }}-${{ steps.month.outputs.month }}-${{ inputs.rev }}-${{ hashFiles('Cargo.lock') }}
+        restore-keys: |
+          target-${{ inputs.cache-key }}-${{ runner.os }}-${{ steps.month.outputs.month }}-${{ inputs.rev }}-
     - name: nsh on PATH
       shell: bash
       run: echo "$(scripts/install-nsh.sh)" >> "$GITHUB_PATH"

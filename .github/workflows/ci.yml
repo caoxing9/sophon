@@ -81,6 +81,7 @@ jobs:
         with:
           rev: ${{ needs.nsh.outputs.rev }}
           cache-key: macos
+          keep-target: true
       - run: nsh package --target macos -o dist/macos
       - run: ditto -c -k --keepParent dist/macos/Sophon.app dist/Sophon-macos.zip
       - uses: actions/upload-artifact@v4
@@ -98,6 +99,7 @@ jobs:
         with:
           rev: ${{ needs.nsh.outputs.rev }}
           cache-key: ios
+          keep-target: true
           targets: aarch64-apple-ios-sim
       - run: nsh package --target ios-simulator --icon assets/app-icon/icon-ios-1024.png -o dist/ios-simulator
       - run: ditto -c -k --keepParent dist/ios-simulator/Sophon.app dist/Sophon-ios-simulator.zip
