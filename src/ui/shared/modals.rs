@@ -704,11 +704,20 @@ fn switch_branch() -> View {
 }
 
 fn import_session() -> View {
+    use crate::daemon::connection::RecentSession;
     let query = signal(String::new());
     let list = computed(store::recent_sessions);
-    sheet(t("Import a session"))
+    let import_all = move |sessions: Vec<RecentSession>| {
+        store::import_sessions(sessions);
+        store::close_modal();
+    };
+    sheet(t("Import sessions"))
         .w(px(620.0))
-        .child(text(t("Continue a Claude Code or Codex session you started outside Sophon")).text_size(px(TEXT_SM)).text_color(FG_MUTED))
+        .child(
+            text(t("Continue the Claude Code and Codex sessions you started outside Sophon. Each goes to the project of its folder"))
+                .text_size(px(TEXT_SM))
+                .text_color(FG_MUTED),
+        )
         .child(
             field()
                 .value(move || query.get())
@@ -719,38 +728,75 @@ fn import_session() -> View {
                 .placeholder(t("Search sessions"))
                 .auto_focus(true),
         )
-        .child(scroll().max_h(px(380.0)).child(dynamic(move || {
+        .child(scroll().max_h(px(420.0)).child(dynamic(move || {
             let sessions = list.get();
             Some(untracked(move || match sessions.clone() {
                 None => text(t("Loading…")).text_color(FG_MUTED).into_element(),
                 Some(s) if s.is_empty() => text(t("No sessions found")).text_size(px(TEXT_BASE)).text_color(FG_MUTED).into_element(),
                 Some(s) => {
-                    let mut col = view().gap(px(2.0));
-                    for sess in s {
-                        let pick = sess.clone();
-                        col = col.child(
-                            nsh_base::button()
-                                .on_press(move || {
-                                    store::import_session(&pick);
-                                    store::close_modal();
-                                })
-                                .gap(px(2.0))
-                                .px(px(S2))
-                                .py(px(6.0))
-                                .rounded(px(R_LG))
-                                .hover(|st| st.bg(highlight()))
-                                .child(text(sess.title.clone()).text_size(px(TEXT_BASE)).number_of_lines(1))
-                                .child(
-                                    text(format!(
-                                        "{} · {} · {}",
-                                        sess.provider_label,
-                                        crate::daemon::model::folder_name(&sess.cwd),
-                                        sess.last_activity.get(..10).unwrap_or_default()
-                                    ))
+                    // By folder, the folder of the latest session first.
+                    let mut folders: Vec<(String, Vec<RecentSession>)> = Vec::new();
+                    for sess in &s {
+                        match folders.iter_mut().find(|(cwd, _)| *cwd == sess.cwd) {
+                            Some((_, of)) => of.push(sess.clone()),
+                            None => folders.push((sess.cwd.clone(), vec![sess.clone()])),
+                        }
+                    }
+                    let everything = s.clone();
+                    let mut col = view().gap(px(S3)).child(
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                text(tf("{} sessions in {} folders", &[&s.len().to_string(), &folders.len().to_string()]))
                                     .text_size(px(TEXT_SM))
                                     .text_color(FG_MUTED),
-                                ),
+                            )
+                            .child(btn(t("Import all"), Variant::Primary, Sz::Sm, None, move || import_all(everything.clone()))),
+                    );
+                    for (cwd, of) in folders {
+                        let all = of.clone();
+                        let mut group = view().gap(px(2.0)).child(
+                            view()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(S2))
+                                .px(px(S2))
+                                .child(icon(Icon::Folder, 14.0).text_color(FG_MUTED))
+                                .child(text(crate::daemon::model::folder_name(&cwd)).text_size(px(TEXT_BASE)).font_weight(FontWeight(600)).number_of_lines(1))
+                                .child(text(cwd.clone()).flex_1().min_w(px(0.0)).text_size(px(TEXT_XS)).text_color(FG_FAINT).number_of_lines(1))
+                                .child(btn(
+                                    tf("Import {}", &[&of.len().to_string()]),
+                                    Variant::Secondary,
+                                    Sz::Sm,
+                                    None,
+                                    move || import_all(all.clone()),
+                                )),
                         );
+                        for sess in of {
+                            let pick = sess.clone();
+                            group = group.child(
+                                nsh_base::button()
+                                    .on_press(move || {
+                                        store::import_session(&pick);
+                                        store::close_modal();
+                                    })
+                                    .gap(px(2.0))
+                                    .ml(px(22.0))
+                                    .px(px(S2))
+                                    .py(px(5.0))
+                                    .rounded(px(R_LG))
+                                    .hover(|st| st.bg(highlight()))
+                                    .child(text(sess.title.clone()).text_size(px(TEXT_BASE)).number_of_lines(1))
+                                    .child(
+                                        text(format!("{} · {}", sess.provider_label, sess.last_activity.get(..10).unwrap_or_default()))
+                                            .text_size(px(TEXT_SM))
+                                            .text_color(FG_MUTED),
+                                    ),
+                            );
+                        }
+                        col = col.child(group);
                     }
                     col.into_element()
                 }

@@ -3681,6 +3681,51 @@ pub(crate) fn import_session(s: &crate::daemon::connection::RecentSession) {
     notify(t("Importing session…").into());
 }
 
+/// The sessions being imported together, one after another (each import
+/// loads a conversation on the host: all at once would start them all at
+/// once).
+#[derive(Clone, Default)]
+struct Importing {
+    left: Vec<crate::daemon::connection::RecentSession>,
+    total: usize,
+    failed: usize,
+}
+
+/// Imports `sessions`, the first now and each next one as the one before
+/// it ends. The host puts each in the workspace of its folder, making the
+/// workspace (and so its project in the lists) where there is none.
+pub(crate) fn import_sessions(sessions: Vec<crate::daemon::connection::RecentSession>) {
+    if sessions.is_empty() || importing() {
+        return;
+    }
+    notify(tf("Importing {} sessions…", &[&sessions.len().to_string()]));
+    global::<Importing>().set(Importing { total: sessions.len(), left: sessions, failed: 0 });
+    import_next();
+}
+
+/// Whether sessions are being imported together.
+pub(crate) fn importing() -> bool {
+    global::<Importing>().with_untracked(|i| i.total > 0)
+}
+
+fn import_next() {
+    let next = global::<Importing>().with_untracked(|i| i.left.first().cloned());
+    match next {
+        Some(s) => {
+            global::<Importing>().update(|i| {
+                i.left.remove(0);
+            });
+            send(Command::ImportSession { provider: s.provider, handle: s.handle, cwd: s.cwd });
+        }
+        None => {
+            let (total, failed) = global::<Importing>().with_untracked(|i| (i.total, i.failed));
+            global::<Importing>().set(Importing::default());
+            let done = (total - failed).to_string();
+            notify(if failed == 0 { tf("Imported {} sessions", &[&done]) } else { tf("Imported {} sessions; {} could not be imported", &[&done, &failed.to_string()]) });
+        }
+    }
+}
+
 pub(crate) fn run_script(name: &str, start: bool) {
     if let Some(w) = current_workspace() {
         send(Command::Script { workspace: w.id, name: name.to_owned(), start });
@@ -3924,6 +3969,12 @@ pub(crate) fn apply(event: Event) {
             }
         }
         Event::Disconnected { reason } => {
+            // The answers to an import under way are lost with the session:
+            // what is left of it is given up, not to wait on them for ever.
+            if importing() {
+                global::<Importing>().set(Importing::default());
+                notify(t("The import stopped: the connection was lost").to_owned());
+            }
             global::<ConnState>().update(|c| c.0 = Conn::Down(reason));
             auto_start_service();
         }
@@ -3974,6 +4025,14 @@ pub(crate) fn apply(event: Event) {
                 }
             }
             prompt_links_known(|p| p.providers_known = true);
+        }
+        // One of the sessions imported together: the next, without
+        // opening each as it comes.
+        Event::Created(_) if importing() => import_next(),
+        Event::CreateFailed(error) if importing() => {
+            log::warn!("import: {error}");
+            global::<Importing>().update(|i| i.failed += 1);
+            import_next();
         }
         Event::Created(agent) => {
             edit_form(|f| {

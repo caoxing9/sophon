@@ -1666,7 +1666,7 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
             json!({ "type": "restart_server_request", "reason": "Restarted from Sophon" }),
         )],
         Command::RecentSessions { query } => {
-            let mut msg = json!({ "type": "fetch_recent_provider_sessions_request", "limit": 60 });
+            let mut msg = json!({ "type": "fetch_recent_provider_sessions_request", "limit": 200 });
             if !query.trim().is_empty() {
                 msg["query"] = json!(query.trim());
             }
