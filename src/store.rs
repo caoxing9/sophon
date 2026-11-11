@@ -3565,7 +3565,7 @@ fn deliver(agent_id: &str, text: &str, behavior: Option<&'static str>) {
     let message_id = uuid::Uuid::new_v4().to_string();
     let thumbs: Vec<String> = images.iter().map(|i| format!("data:{};base64,{}", i.mime, i.data)).collect();
     // On disk too: the host's history has the text alone.
-    crate::sent_pictures::keep(&message_id, &thumbs);
+    crate::sent_pictures::keep(&message_id, text, &thumbs);
     let mut shown_here = false;
     global::<Timeline>().update(|t| {
         if t.agent_id.as_deref() == Some(agent_id) {
@@ -4050,7 +4050,7 @@ pub(crate) fn apply(event: Event) {
             if message_id.is_empty() {
                 crate::sent_pictures::keep_for_text(&text, &pictures);
             } else {
-                crate::sent_pictures::keep(&message_id, &pictures);
+                crate::sent_pictures::keep(&message_id, &text, &pictures);
             }
             global::<Timeline>().update(|t| {
                 for item in t.items.iter_mut() {

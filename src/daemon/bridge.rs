@@ -716,7 +716,7 @@ fn keep_pictures(frame: &Value) {
     }
     let field = |k| m.get(k).and_then(Value::as_str);
     match field("messageId") {
-        Some(id) => crate::sent_pictures::keep(id, &pictures),
+        Some(id) => crate::sent_pictures::keep(id, field("text").unwrap_or_default(), &pictures),
         None => {
             if let Some(text) = field("initialPrompt").or(field("text")) {
                 crate::sent_pictures::keep_for_text(text, &pictures);
