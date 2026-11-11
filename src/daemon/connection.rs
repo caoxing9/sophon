@@ -189,6 +189,8 @@ pub struct ScheduleRun {
     pub agent_id: Option<String>,
     /// The workspace the run's agent worked in; archived when the run ends.
     pub workspace_id: Option<String>,
+    /// What the agent answered last, when the run ended with an answer.
+    pub output: Option<String>,
     pub error: Option<String>,
 }
 
@@ -202,6 +204,7 @@ impl ScheduleRun {
             status: s("status").unwrap_or_default(),
             agent_id: s("agentId"),
             workspace_id: s("workspaceId"),
+            output: s("output").map(|o| o.trim().to_owned()).filter(|o| !o.is_empty()),
             error: s("error"),
         })
     }

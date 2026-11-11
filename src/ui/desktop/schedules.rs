@@ -170,6 +170,12 @@ fn runs_list(runs: Vec<ScheduleRun>) -> View {
             }));
         }
         list = list.child(line);
+        // What the agent answered: usually all there is to read of a run.
+        if let Some(output) = run.output.clone() {
+            list = list.child(
+                text(output).text_size(px(TEXT_SM)).line_height(px(18.0)).text_color(FG_MUTED).number_of_lines(3).pb(px(S2)),
+            );
+        }
     }
     list
 }

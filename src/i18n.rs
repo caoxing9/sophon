@@ -445,6 +445,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("No schedules yet", "还没有定时任务"),
     ("What should the agent do each time?", "每次要 Agent 做什么？"),
     ("Cadence", "频率"),
+    ("Restoring the conversation…", "正在恢复对话…"),
     ("Edit schedule", "编辑定时任务"),
     ("Runs", "记录"),
     ("No runs yet", "还没有运行过"),

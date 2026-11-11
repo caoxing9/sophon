@@ -1037,9 +1037,47 @@ pub(crate) fn agents() -> Vec<Agent> {
     global::<Agents>().with(|a| a.0.clone())
 }
 
-/// Every workspace, those being archived left out.
+/// The workspaces the lists show: not those being archived, and not a
+/// schedule's runs ([`is_a_run`]).
 pub(crate) fn workspaces() -> Vec<Workspace> {
-    global::<Workspaces>().with(|w| w.0.iter().filter(|w| !w.archiving).cloned().collect())
+    let runs = runs_hidden();
+    global::<Workspaces>().with(|w| w.0.iter().filter(|w| !w.archiving && !runs.contains(&w.id)).cloned().collect())
+}
+
+/// The run workspaces the user opened from a schedule's runs: listed like
+/// any other from then on. Kept with the preferences.
+#[derive(Clone, Default)]
+struct KeptRuns(Vec<String>);
+
+/// The workspace to open once the host lists it again (a run's, being
+/// restored from the archive), and its agent.
+#[derive(Clone, Default)]
+struct OpenWhenListed(Option<(String, String)>);
+
+/// The workspaces that are a schedule's runs and stay out of the lists: all
+/// of a workspace's agents were started by a schedule, and the user did not
+/// open it. The service makes one per run and archives it when the run
+/// ends, so listed they would come and go on their own, every minute for a
+/// schedule that runs so. They are under the schedule's runs.
+fn runs_hidden() -> Vec<String> {
+    let kept = global::<KeptRuns>().with(|k| k.0.clone());
+    let open = match screen() {
+        Screen::Workspace(id) => Some(id),
+        _ => None,
+    };
+    global::<Agents>().with(|a| {
+        let mut of_runs: Vec<&str> = Vec::new();
+        let mut of_others: Vec<&str> = Vec::new();
+        for agent in a.0.iter().filter(|a| a.parent_id.is_none()) {
+            let Some(ws) = agent.workspace_id.as_deref() else { continue };
+            if agent.scheduled { of_runs.push(ws) } else { of_others.push(ws) }
+        }
+        of_runs
+            .into_iter()
+            .filter(|ws| !of_others.contains(ws) && !kept.iter().any(|k| k == ws) && open.as_deref() != Some(*ws))
+            .map(str::to_owned)
+            .collect()
+    })
 }
 
 pub(crate) fn agent(id: &str) -> Option<Agent> {
@@ -1192,8 +1230,7 @@ impl Group {
 
 pub(crate) fn groups() -> Vec<Group> {
     let projects = projects();
-    let workspaces: Vec<Workspace> =
-        global::<Workspaces>().with(|w| w.0.iter().filter(|w| !w.archiving).cloned().collect());
+    let workspaces = workspaces();
 
     let mut project_list = projects;
     for w in &workspaces {
@@ -2205,6 +2242,7 @@ fn save_prefs() {
         "explorerWidth": global::<ExplorerWidth>().with_untracked(|w| w.0),
         "terminalHeight": global::<TerminalPanel>().with_untracked(|p| p.height),
         "projectOrder": global::<ProjectOrder>().with_untracked(|o| o.0.clone()),
+        "keptRuns": global::<KeptRuns>().with_untracked(|k| k.0.clone()),
         "lastWorkspace": global::<LastOpen>().with_untracked(|l| l.workspace.clone()),
         "lastAgent": global::<LastOpen>().with_untracked(|l| l.agent.clone()),
         "collapsedProjects": global::<Collapsed>().with_untracked(|c| c.0.clone()),
@@ -2263,6 +2301,7 @@ pub(crate) fn load_prefs() {
     let string = |k: &str| v.get(k).and_then(serde_json::Value::as_str).map(str::to_owned);
     global::<LastOpen>().set(LastOpen { workspace: string("lastWorkspace"), agent: string("lastAgent"), done: false });
     global::<Collapsed>().set(Collapsed(strings("collapsedProjects")));
+    global::<KeptRuns>().set(KeptRuns(strings("keptRuns")));
     global::<FavoriteModels>().set(FavoriteModels(strings("favoriteModels")));
     if let Some(h) = v.get("terminalHeight").and_then(serde_json::Value::as_f64) {
         global::<TerminalPanel>().update(|p| p.height = (h as f32).clamp(120.0, 900.0));
@@ -2659,20 +2698,43 @@ pub(crate) fn toggle_schedule_runs(id: &str) {
     }
 }
 
-/// Opens the conversation a run started. The service archives a run's
-/// workspace when the run ends, so it is restored first, as History does.
+/// Opens the conversation a run started, and lists its workspace from then
+/// on. The service archives a run's workspace when the run ends: that is
+/// restored first (the workspace, then its agent), and the conversation
+/// opens once the host lists the workspace again.
 pub(crate) fn open_run_agent(agent_id: &str, workspace_id: Option<&str>) {
-    let listed = agent(agent_id).and_then(|a| a.workspace_id);
-    if listed.is_none() && workspace_id.is_some() {
-        send(Command::Unarchive(agent_id.to_owned()));
-    }
-    match listed.as_deref().or(workspace_id) {
-        Some(workspace) => {
-            global::<Nav>().update(|n| n.screen = Screen::Workspace(workspace.to_owned()));
-            watch_changes(workspace);
-            open_tab(Tab::Agent(agent_id.to_owned()));
+    let listed = agent(agent_id).and_then(|a| a.workspace_id).filter(|ws| workspace(ws).is_some());
+    let Some(ws) = listed.clone().or_else(|| workspace_id.map(str::to_owned)) else {
+        notify(t("That conversation is no longer listed; look in History").to_owned());
+        return;
+    };
+    global::<KeptRuns>().update(|k| {
+        if !k.0.contains(&ws) {
+            k.0.push(ws.clone());
+            // The last few hundred: runs opened long ago are archived again or gone.
+            let extra = k.0.len().saturating_sub(300);
+            k.0.drain(..extra);
         }
-        None => notify(t("That conversation is no longer listed; look in History").to_owned()),
+    });
+    save_prefs();
+    if listed.is_some() {
+        open_workspace(&ws);
+        open_tab(Tab::Agent(agent_id.to_owned()));
+        return;
+    }
+    global::<OpenWhenListed>().set(OpenWhenListed(Some((ws.clone(), agent_id.to_owned()))));
+    send(Command::UndoArchive(ws));
+    send(Command::Unarchive(agent_id.to_owned()));
+    notify(t("Restoring the conversation…").to_owned());
+}
+
+/// Opens the run's conversation that was waiting for its workspace.
+fn open_when_listed() {
+    let Some((ws, agent)) = global::<OpenWhenListed>().with_untracked(|o| o.0.clone()) else { return };
+    if workspace(&ws).is_some() {
+        global::<OpenWhenListed>().set(OpenWhenListed(None));
+        open_workspace(&ws);
+        open_tab(Tab::Agent(agent));
     }
 }
 
@@ -3851,13 +3913,17 @@ pub(crate) fn apply(event: Event) {
         Event::ProjectRemove(id) => global::<Projects>().update(|p| p.0.retain(|x| x.id != id)),
         Event::WorkspacesReset(list) => {
             global::<Workspaces>().update(|w| w.0 = list);
+            open_when_listed();
             restore_last_open();
             prompt_links_known(|p| p.workspaces_known = true);
         }
-        Event::WorkspaceUpsert(ws) => global::<Workspaces>().update(|w| {
-            w.0.retain(|x| x.id != ws.id);
-            w.0.push(ws);
-        }),
+        Event::WorkspaceUpsert(ws) => {
+            global::<Workspaces>().update(|w| {
+                w.0.retain(|x| x.id != ws.id);
+                w.0.push(ws);
+            });
+            open_when_listed();
+        }
         Event::WorkspaceRemove(id) => {
             global::<Workspaces>().update(|w| w.0.retain(|x| x.id != id));
             if screen() == Screen::Workspace(id) {
