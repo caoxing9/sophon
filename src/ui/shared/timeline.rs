@@ -1006,11 +1006,15 @@ pub(crate) fn tracks() -> View {
             if list.is_empty() {
                 return None;
             }
-            // Open while one runs; once all have ended it folds to its one
-            // line, out of the conversation's way. A press on that line
-            // opens or folds it, which then stays as the user left it.
+            // Over the composer while one runs. Once all have ended they
+            // are out of the conversation's way: the agent's menu lists
+            // them again. A press on the first line folds or opens it.
             let running = list.iter().filter(|s| s.status == "running").count();
-            let open = subs_open.get().unwrap_or(running > 0);
+            let asked = list.first().is_some_and(|s| store::subagents_shown(&s.parent));
+            if running == 0 && !asked {
+                return None;
+            }
+            let open = subs_open.get().unwrap_or(true);
             Some(untracked(move || {
                 let label = if running > 0 {
                     tf("Sub-agents · {} · {} running", &[&list.len().to_string(), &running.to_string()])

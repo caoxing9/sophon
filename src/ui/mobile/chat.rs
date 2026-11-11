@@ -154,6 +154,12 @@ fn agent_sheet() {
         SheetItem::new(t("Fork into new agent"), store::fork_selected).icon(Icon::GitCompare),
         SheetItem::new(t("Rename"), move || store::open_modal(store::Modal::RenameAgent { id: rename.clone(), name: title.clone() })).icon(Icon::Pencil),
     ];
+    let subs = store::subagents(&a.id).len();
+    if subs > 0 {
+        let parent = a.id.clone();
+        let label = if store::subagents_shown(&a.id) { crate::i18n::tf("Hide sub-agents · {}", &[&subs.to_string()]) } else { crate::i18n::tf("Show sub-agents · {}", &[&subs.to_string()]) };
+        items.push(SheetItem::new(label, move || store::toggle_subagents(&parent)).icon(Icon::Bot));
+    }
     if a.is_running() {
         items.push(SheetItem::new(t("Stop"), store::stop_selected).icon(Icon::Square));
     }

@@ -3207,6 +3207,19 @@ struct SubagentState {
 #[derive(Clone, Default)]
 struct Background(HashMap<String, Vec<crate::daemon::connection::BackgroundItem>>);
 
+/// The agent whose ended sub-agents the user asked to see (the agent's
+/// menu): they are listed over the composer only while one runs.
+#[derive(Clone, Default)]
+struct SubagentsShown(Option<String>);
+
+pub(crate) fn subagents_shown(parent: &str) -> bool {
+    global::<SubagentsShown>().with(|s| s.0.as_deref() == Some(parent))
+}
+
+pub(crate) fn toggle_subagents(parent: &str) {
+    global::<SubagentsShown>().update(|s| s.0 = if s.0.as_deref() == Some(parent) { None } else { Some(parent.to_owned()) });
+}
+
 pub(crate) fn subagents(parent: &str) -> Vec<crate::daemon::connection::Subagent> {
     global::<SubagentState>().with(|s| s.by_parent.get(parent).cloned().unwrap_or_default())
 }

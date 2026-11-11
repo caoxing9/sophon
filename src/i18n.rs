@@ -563,6 +563,8 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Same Wi-Fi · {}", "同一 Wi-Fi · {}"),
     ("Tasks {}/{}", "任务 {}/{}"),
     ("Sub-agents · {}", "子 Agent · {}"),
+    ("Show sub-agents · {}", "显示子 Agent · {}"),
+    ("Hide sub-agents · {}", "隐藏子 Agent · {}"),
     ("Sub-agents · {} · {} running", "子 Agent · {} · {} 个运行中"),
     ("{} files", "{} 个文件"),
     ("Send {} line comments, with a note…", "发送 {} 条行评论，可附说明…"),
