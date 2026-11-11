@@ -175,9 +175,16 @@ pub(crate) enum Segment {
     Chip(String),
 }
 
+/// Whether `name` is how Claude Code's own terminal names a pasted
+/// picture in the message (`[Image #1]`): a session started there and
+/// imported has these.
+fn is_terminal_image(name: &str) -> bool {
+    name.strip_prefix("Image #").is_some_and(|n| !n.is_empty() && n.len() <= 4 && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// Whether `name` is a picture's, by its extension.
 pub(crate) fn is_image_name(name: &str) -> bool {
-    name.rsplit_once('.').is_some_and(|(_, ext)| {
+    is_terminal_image(name) || name.rsplit_once('.').is_some_and(|(_, ext)| {
         matches!(ext.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "heic" | "heif" | "bmp" | "tiff" | "avif")
     })
 }
@@ -192,7 +199,7 @@ pub(crate) fn segments(text: &str) -> Vec<Segment> {
         let after = &rest[open + 1..];
         let name = after.find(']').map(|close| &after[..close]).filter(|n| {
             let ext = n.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
-            !n.is_empty()
+            is_terminal_image(n) || !n.is_empty()
                 && n.len() <= 160
                 && !n.contains(['[', '\n'])
                 && n.trim() == *n

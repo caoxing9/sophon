@@ -2495,9 +2495,11 @@ fn handle(
         "agent.provider_subagents.timeline.get.response" => {
             request_id.and_then(|id| pending.remove(id));
             let s = |k: &str| payload.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
-            let items = payload
-                .get("entries")
-                .and_then(Value::as_array)
+            // `rows` from a service that projects the sub-agent's timeline
+            // (what this client asks for), `entries` from one before that.
+            let items = ["rows", "entries"]
+                .iter()
+                .find_map(|k| payload.get(*k).and_then(Value::as_array))
                 .map(|e| e.iter().filter_map(|e| e.get("item").and_then(Item::from_json)).collect())
                 .unwrap_or_default();
             vec![Event::SubagentTimeline { parent: s("parentAgentId"), id: s("subagentId"), items }]

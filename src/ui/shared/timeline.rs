@@ -974,6 +974,8 @@ pub(crate) fn tracks() -> View {
         })
     });
     let subs = computed(|| store::selected_id().map(|id| store::subagents(&id)).unwrap_or_default());
+    // The sub-agents' list as the user left it (open or folded), if they did.
+    let subs_open = signal(None::<bool>);
     let work = computed(|| store::selected_id().map(|id| store::background(&id)).unwrap_or_default());
     view()
         .w_full()
@@ -1004,8 +1006,29 @@ pub(crate) fn tracks() -> View {
             if list.is_empty() {
                 return None;
             }
+            // Open while one runs; once all have ended it folds to its one
+            // line, out of the conversation's way. A press on that line
+            // opens or folds it, which then stays as the user left it.
+            let running = list.iter().filter(|s| s.status == "running").count();
+            let open = subs_open.get().unwrap_or(running > 0);
             Some(untracked(move || {
-                let mut c = card().mb(px(S2)).px(px(S3)).py(px(S2)).gap(px(2.0)).child(section_label(tf("Sub-agents · {}", &[&list.len().to_string()])));
+                let label = if running > 0 {
+                    tf("Sub-agents · {} · {} running", &[&list.len().to_string(), &running.to_string()])
+                } else {
+                    tf("Sub-agents · {}", &[&list.len().to_string()])
+                };
+                let mut c = card().mb(px(S2)).px(px(S3)).py(px(S2)).gap(px(2.0)).child(
+                    nsh_base::button()
+                        .on_press(move || subs_open.set(Some(!open)))
+                        .flex_row()
+                        .items_center()
+                        .gap(px(S1))
+                        .child(icon(if open { Icon::ChevronDown } else { Icon::ChevronRight }, 13.0).text_color(FG_MUTED))
+                        .child(section_label(label)),
+                );
+                if !open {
+                    return c;
+                }
                 for s in list.clone() {
                     let status = match s.status.as_str() {
                         "running" => Status::Running,

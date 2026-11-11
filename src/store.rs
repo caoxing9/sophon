@@ -3922,6 +3922,20 @@ pub(crate) fn rename_workspace(id: &str, title: &str) {
     send(Command::RenameWorkspace { workspace_id: id.to_owned(), title: title.to_owned() });
 }
 
+/// The notice's number: another for each notice shown.
+pub(crate) fn notice_id() -> Option<u64> {
+    global::<Notice>().with(|n| n.0.as_ref().map(|(id, _, _)| *id))
+}
+
+/// Puts notice `id` away, if it is still the one shown.
+pub(crate) fn dismiss_notice_numbered(id: u64) {
+    global::<Notice>().update(|n| {
+        if n.0.as_ref().is_some_and(|(cur, _, _)| *cur == id) {
+            n.0 = None;
+        }
+    });
+}
+
 pub(crate) fn dismiss_notice() {
     global::<Notice>().update(|n| n.0 = None);
 }
@@ -3931,7 +3945,10 @@ pub(crate) fn notify(message: String) {
 }
 
 pub(crate) fn notify_with(message: String, action: Option<NoticeAction>) {
-    let id = global::<Notice>().with_untracked(|n| n.0.as_ref().map_or(0, |(id, _, _)| id + 1));
+    // Never the same twice: a timer left from a notice long gone must not
+    // take a later one away.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     global::<Notice>().update(|n| n.0 = Some((id, message, action)));
     set_timeout(std::time::Duration::from_secs(8), move || {
         global::<Notice>().update(|n| {
@@ -4035,6 +4052,10 @@ pub(crate) fn apply(event: Event) {
             import_next();
         }
         Event::Created(agent) => {
+            // "Importing session…" has done its work.
+            if global::<Notice>().with_untracked(|n| n.0.as_ref().is_some_and(|(_, m, _)| m == t("Importing session…"))) {
+                dismiss_notice();
+            }
             edit_form(|f| {
                 f.busy = false;
                 f.prompt.clear();

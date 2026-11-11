@@ -9,6 +9,15 @@ use crate::ui::kit::text;
 
 pub(crate) fn notice_bar() -> impl IntoElement {
     let message = computed(store::notice);
+    // Each notice goes after a while. Timed here, where the bar lives: a
+    // timer started where the notice was raised ends with that place (a
+    // sheet that closes as it raises one), and the notice stayed for ever.
+    let id = computed(store::notice_id);
+    effect(move || {
+        if let Some(id) = id.get() {
+            set_timeout(std::time::Duration::from_secs(8), move || store::dismiss_notice_numbered(id));
+        }
+    });
     view().child(dynamic(move || {
         let (m, action) = message.get()?;
         Some(untracked(move || {
