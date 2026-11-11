@@ -9,6 +9,7 @@ use nsh_core::{element::{AssetFile, AssetKind}, prelude::*};
 mod agent_update;
 #[cfg(target_os = "macos")]
 mod awake;
+mod cadence;
 pub mod daemon;
 mod fold;
 mod i18n;

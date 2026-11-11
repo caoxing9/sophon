@@ -1,7 +1,7 @@
-//! The main surface with no workspace open. Launching opens the one open
-//! last (`store::restore_last_open`), so this shows for a host with no
-//! workspaces at all: the mark and one way forward. With workspaces it
-//! stays a quiet, empty surface (the sidebar is where to pick one).
+//! The main surface with no workspace open. Launching, or switching host,
+//! opens the workspace open last (`store::restore_last_open`); until that
+//! was looked for this stays empty. After it, the mark and one way forward:
+//! an empty surface reads as something broken.
 
 use crate::i18n::t;
 use nsh_core::prelude::*;
@@ -10,8 +10,9 @@ use crate::store;
 use crate::ui::kit::*;
 
 pub(crate) fn home() -> impl IntoElement {
-    let none = computed(|| store::workspaces().is_empty());
-    view().flex_1().items_center().justify_center().pb(px(S8)).child(when(none, || {
+    // With no workspaces (none yet, or not connected) there is none to wait for.
+    let settled = computed(|| store::last_open_restored() || store::workspaces().is_empty());
+    view().flex_1().items_center().justify_center().pb(px(S8)).child(when(settled, || {
         view()
             .items_center()
             .gap(px(S6))

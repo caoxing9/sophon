@@ -95,7 +95,7 @@ pub(crate) fn current_version() -> String {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn curl(url: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn curl(url: &str) -> Result<Vec<u8>, String> {
     let out = Command::new("curl")
         .args(["-fsSL", "--max-time", "30", url])
         .stderr(Stdio::piped())

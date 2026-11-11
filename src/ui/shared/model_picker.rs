@@ -161,6 +161,11 @@ pub(crate) fn model_picker(live: bool, current_name: Memo<String>) -> impl IntoE
         .open(move || Some(open.get()))
         .on_open_change(move |e: &PopoverEvent| {
             if let PopoverEvent::OpenChange(next, _) = e {
+                // A provider switcher may have rewritten the agents'
+                // configs since: read their models again on each open.
+                if *next {
+                    store::load_local_models();
+                }
                 open.set(*next);
             }
         })

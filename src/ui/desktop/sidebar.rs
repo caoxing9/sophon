@@ -19,7 +19,9 @@ pub(crate) fn sidebar() -> View {
         .child(
             view()
                 .px(px(S2))
-                .pb(px(S2))
+                // The space between the two groups, which the first
+                // project's own top margin no longer gives.
+                .pb(px(S4))
                 .child(nav_item(Icon::SquarePen, t("New workspace"), || store::screen() == Screen::NewWorkspace, || {
                     store::open_new_workspace(None)
                 }))
@@ -69,12 +71,12 @@ fn host_line() -> impl IntoElement {
                             Some(Icon::Cpu),
                             None,
                             current.is_none(),
-                            || store::switch_host(None),
+                            || store::choose_host(None),
                         ));
                     for h in spaces {
                         let id = h.id.clone();
                         m = m.child(menu_row(h.label(), Some(Icon::Folder), None, current.as_deref() == Some(h.id.as_str()), move || {
-                            store::switch_host(Some(id.clone()))
+                            store::choose_host(Some(id.clone()))
                         }));
                     }
                     m = m.child(menu_row(t("New space…"), Some(Icon::FolderPlus), None, false, || store::open_modal(store::Modal::CreateSpace)));
@@ -89,7 +91,7 @@ fn host_line() -> impl IntoElement {
                 for h in others {
                     let id = h.id.clone();
                     m = m.child(menu_row(h.label(), Some(Icon::Server), None, current.as_deref() == Some(h.id.as_str()), move || {
-                        store::switch_host(Some(id.clone()))
+                        store::choose_host(Some(id.clone()))
                     }));
                 }
                 m = m
@@ -121,16 +123,14 @@ fn host_body() -> View {
         .items_center()
         .gap(px(S2))
         .px(px(S2))
-        .py(px(S2))
+        // As tall as the rows under it, its status mark where their icons are.
+        .h(px(CONTROL_MD))
         .mb(px(S1))
-        .child(
-            mark(26.0, Lift::Small),
-        )
         .rounded(px(R_LG))
         .hover(|s| s.bg(sidebar_hover()))
         .child(
-            // The host alone: the mark beside it says whose app this is.
-            // A long name ends in an ellipsis inside the row.
+            // The host alone: no app mark beside it, which says nothing
+            // here. A long name ends in an ellipsis inside the row.
             view()
                 .flex_1()
                 .min_w(px(0.0))

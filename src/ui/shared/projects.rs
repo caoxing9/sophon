@@ -92,7 +92,9 @@ fn project_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
         .mx(px(S2))
         .pl(px(S1))
         .pr(px(2.0))
-        .mt(px(S3))
+        // Projects sit as close as the rows above them: folded, they read
+        // as one list.
+        .mt(px(if MOBILE { S3 } else { 2.0 }))
         .mb(px(2.0))
         // As tall and as round as the conversations' rows under it.
         .h(px(ROW_HEIGHT))

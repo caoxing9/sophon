@@ -621,9 +621,16 @@ async fn forward<S: AsyncRead + AsyncWrite + Unpin>(
     // relay and the sockets may not notice for minutes.
     let mut heard = tokio::time::Instant::now();
     let mut check = tokio::time::interval(Duration::from_secs(5));
+    // Answers of this app's own (not the service's) that take a while to
+    // make, sent when they are ready.
+    let (own_tx, mut own_rx) = mpsc::unbounded_channel::<String>();
     loop {
         tokio::select! {
             _ = cut.notified() => break,
+            Some(answer) = own_rx.recv() => {
+                let sealed = seal.seal(Message::Text(answer))?;
+                ptx.send(to_ws(sealed)).await.map_err(|e| e.to_string())?;
+            }
             _ = check.tick() => {
                 if heard.elapsed() > SILENCE {
                     log::info!("a device went silent; it is gone");
@@ -649,9 +656,23 @@ async fn forward<S: AsyncRead + AsyncWrite + Unpin>(
                 // to a device that asks: one that did not send them, or
                 // has forgotten them.
                 if let Message::Text(t) = &plain
-                    && (t.as_str().contains("\"images\"") || t.as_str().contains("sophon_pictures_request"))
+                    && (t.as_str().contains("\"images\"") || t.as_str().contains("sophon_pictures_request") || t.as_str().contains("sophon_usage_request"))
                     && let Ok(v) = serde_json::from_str::<Value>(t.as_str())
                 {
+                    // This computer's session-log statistics, for a phone
+                    // (which has no logs): read on a thread of its own.
+                    if v.get("type").and_then(Value::as_str) == Some("sophon_usage_request") {
+                        let own_tx = own_tx.clone();
+                        // (A phone is never the host: it has no logs to read.)
+                        #[cfg(not(target_os = "ios"))]
+                        std::thread::spawn(move || {
+                            let report = crate::usage::scan::scan();
+                            let _ = own_tx.send(json!({ "type": "sophon_usage", "report": report.to_json() }).to_string());
+                        });
+                        #[cfg(target_os = "ios")]
+                        let _ = own_tx.send(json!({ "type": "sophon_usage" }).to_string());
+                        continue;
+                    }
                     if v.get("type").and_then(Value::as_str) == Some("sophon_pictures_request") {
                         let field = |k| v.get(k).and_then(Value::as_str).unwrap_or_default();
                         let pictures = crate::sent_pictures::of(field("messageId"), field("text"));

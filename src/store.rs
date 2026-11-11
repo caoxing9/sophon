@@ -263,9 +263,16 @@ fn refresh_local_usage() {
     });
 }
 
-/// No session logs to read on a phone or in a browser.
+/// A phone or a browser has no session logs: the host's Sophon reads its
+/// own and sends the sums (through its bridge).
 #[cfg(any(target_os = "ios", target_arch = "wasm32"))]
-fn refresh_local_usage() {}
+fn refresh_local_usage() {
+    if global::<LocalUsage>().with_untracked(|u| u.loading) {
+        return;
+    }
+    global::<LocalUsage>().update(|u| u.loading = true);
+    send(Command::HostUsage);
+}
 
 /// Sends review notes on a diff to the workspace's newest agent.
 pub(crate) fn send_review(path: Option<&str>, note: &str) -> bool {
@@ -770,6 +777,10 @@ struct Timeline {
 /// Messages waiting for the running turn to end, per agent.
 #[derive(Clone, Default)]
 struct Queues(HashMap<String, Vec<String>>);
+/// The agents whose queue waits: stopped with Escape, its messages stay
+/// until they are sent on or taken back to be edited.
+#[derive(Clone, Default)]
+struct QueueHeld(std::collections::HashSet<String>);
 #[derive(Clone, Default)]
 struct Commands(HashMap<String, Vec<SlashCommand>>);
 #[derive(Clone, Default)]
@@ -806,6 +817,7 @@ pub(crate) enum Modal {
     Commit,
     Palette,
     NewSchedule,
+    EditSchedule(crate::daemon::connection::Schedule),
     AddProject,
     RenameProject { id: String, name: String },
     SwitchBranch,
@@ -2093,6 +2105,20 @@ pub(crate) fn load_hosts() {
 }
 
 /// Connects to `id` (`None`: this machine), starting fresh.
+/// The host picked in a menu: nothing when it is the one in use (a switch
+/// would drop its lists and what is open, to load the same again).
+pub(crate) fn choose_host(id: Option<String>) {
+    if global::<Hosts>().with_untracked(|h| h.current != id) {
+        switch_host(id);
+    }
+}
+
+/// Whether the workspace open last was looked for already: until then the
+/// home screen stays empty, as that workspace is about to cover it.
+pub(crate) fn last_open_restored() -> bool {
+    global::<LastOpen>().with(|l| l.done)
+}
+
 pub(crate) fn switch_host(id: Option<String>) {
     global::<Hosts>().update(|h| h.current = id.clone());
     save_hosts();
@@ -2104,6 +2130,8 @@ pub(crate) fn switch_host(id: Option<String>) {
         global::<Diagnostics>().update(|d| *d = Diagnostics::default());
         global::<DaemonConfig>().update(|c| c.0 = None);
         global::<Nav>().update(|n| *n = Nav::default());
+        // The workspace open last is looked for in this host's too.
+        global::<LastOpen>().update(|l| l.done = false);
     });
     let remote = current_host().map(|h| crate::daemon::connection::RemoteHost { url: h.url, password: h.password });
     crate::daemon::connection::switch_host(remote);
@@ -2382,6 +2410,46 @@ pub(crate) fn queue(agent_id: &str) -> Vec<String> {
     global::<Queues>().with(|q| q.0.get(agent_id).cloned().unwrap_or_default())
 }
 
+/// Whether `agent_id`'s queue waits (stopped with Escape).
+pub(crate) fn queue_held(agent_id: &str) -> bool {
+    global::<QueueHeld>().with(|h| h.0.contains(agent_id))
+}
+
+/// Escape in the open agent's composer, as Claude Code's: while the agent
+/// runs it stops it, and what is queued waits instead of being sent; once
+/// more, the queued messages come back into the composer to be edited.
+pub(crate) fn escape_composer() {
+    let Some(agent) = selected_agent() else { return };
+    let queued = global::<Queues>().with_untracked(|q| q.0.get(&agent.id).cloned().unwrap_or_default());
+    if agent.is_running() {
+        if !queued.is_empty() {
+            global::<QueueHeld>().update(|h| {
+                h.0.insert(agent.id.clone());
+            });
+        }
+        send(Command::Cancel(agent.id));
+        return;
+    }
+    // Attachments stand as chips in the composer's text, which this would
+    // replace: they are sent or removed first.
+    if queued.is_empty() || !pending_images().is_empty() || !pending_files().is_empty() {
+        return;
+    }
+    global::<Queues>().update(|q| {
+        q.0.remove(&agent.id);
+    });
+    global::<QueueHeld>().update(|h| {
+        h.0.remove(&agent.id);
+    });
+    let mut text = queued.join("\n");
+    let draft = draft(&agent.id);
+    if !draft.trim().is_empty() {
+        text.push('\n');
+        text.push_str(&draft);
+    }
+    set_draft(&agent.id, &text);
+}
+
 pub(crate) fn unqueue(agent_id: &str, index: usize) {
     global::<Queues>().update(|q| {
         if let Some(list) = q.0.get_mut(agent_id)
@@ -2555,7 +2623,11 @@ pub(crate) fn open_session(agent: &Agent) {
 }
 
 #[derive(Clone, Default)]
-struct SchedulesState(Option<Vec<crate::daemon::connection::Schedule>>);
+struct SchedulesState {
+    list: Option<Vec<crate::daemon::connection::Schedule>>,
+    /// The runs of the schedules opened on the page, by schedule id.
+    runs: HashMap<String, Vec<crate::daemon::connection::ScheduleRun>>,
+}
 
 pub(crate) fn open_schedules() {
     global::<Nav>().update(|n| n.screen = Screen::Schedules);
@@ -2564,25 +2636,72 @@ pub(crate) fn open_schedules() {
 }
 
 pub(crate) fn schedules() -> Option<Vec<crate::daemon::connection::Schedule>> {
-    global::<SchedulesState>().with(|s| s.0.clone())
+    global::<SchedulesState>().with(|s| s.list.clone())
+}
+
+/// A schedule's runs, newest first, once asked for (`toggle_schedule_runs`).
+pub(crate) fn schedule_runs(id: &str) -> Option<Vec<crate::daemon::connection::ScheduleRun>> {
+    global::<SchedulesState>().with(|s| s.runs.get(id).cloned())
+}
+
+/// Shows a schedule's runs, or puts them away.
+pub(crate) fn toggle_schedule_runs(id: &str) {
+    let shown = global::<SchedulesState>().with_untracked(|s| s.runs.contains_key(id));
+    if shown {
+        global::<SchedulesState>().update(|s| {
+            s.runs.remove(id);
+        });
+    } else {
+        global::<SchedulesState>().update(|s| {
+            s.runs.insert(id.to_owned(), Vec::new());
+        });
+        send(Command::ScheduleRuns(id.to_owned()));
+    }
+}
+
+/// Opens the conversation a run started. The service archives a run's
+/// workspace when the run ends, so it is restored first, as History does.
+pub(crate) fn open_run_agent(agent_id: &str, workspace_id: Option<&str>) {
+    let listed = agent(agent_id).and_then(|a| a.workspace_id);
+    if listed.is_none() && workspace_id.is_some() {
+        send(Command::Unarchive(agent_id.to_owned()));
+    }
+    match listed.as_deref().or(workspace_id) {
+        Some(workspace) => {
+            global::<Nav>().update(|n| n.screen = Screen::Workspace(workspace.to_owned()));
+            watch_changes(workspace);
+            open_tab(Tab::Agent(agent_id.to_owned()));
+        }
+        None => notify(t("That conversation is no longer listed; look in History").to_owned()),
+    }
 }
 
 pub(crate) fn schedule_op(id: &str, op: &'static str) {
     send(Command::ScheduleOp { id: id.to_owned(), op });
 }
 
-pub(crate) fn create_schedule(name: String, prompt: String, cadence: String, cwd: String, worktree: bool) {
+fn schedule_of(name: String, prompt: String, cadence: String, cwd: String, worktree: bool) -> crate::daemon::connection::NewSchedule {
     let f = form();
     let provider = if f.provider.is_empty() { "claude".to_owned() } else { f.provider };
-    send(Command::CreateSchedule(crate::daemon::connection::NewSchedule {
+    crate::daemon::connection::NewSchedule {
         name,
         prompt,
         cadence,
+        timezone: crate::cadence::local_zone(),
         cwd,
         provider,
         model: f.model,
         worktree,
-    }));
+    }
+}
+
+pub(crate) fn create_schedule(name: String, prompt: String, cadence: String, cwd: String, worktree: bool) {
+    send(Command::CreateSchedule(schedule_of(name, prompt, cadence, cwd, worktree)));
+}
+
+/// Changes a schedule; its agent and model stay as they were.
+pub(crate) fn update_schedule(id: &str, name: String, prompt: String, cadence: String, cwd: String, worktree: bool) {
+    send(Command::UpdateSchedule { id: id.to_owned(), to: schedule_of(name, prompt, cadence, cwd, worktree) });
 }
 
 #[derive(Clone, Default)]
@@ -3328,6 +3447,10 @@ pub(crate) fn send_message(text: &str) -> bool {
         notify(t("Wait for the files to finish uploading").into());
         return false;
     }
+    // A message sent sets a waiting queue going again, after it.
+    global::<QueueHeld>().update(|h| {
+        h.0.remove(&agent.id);
+    });
     let behavior = settings().send_behavior;
     // A pending permission must be answered first; queueing would wait forever.
     if agent.is_running() && behavior == SendBehavior::Queue && agent.pending.is_empty() {
@@ -3415,7 +3538,7 @@ pub(crate) fn watch_notification_presses() {
 
 /// Sends the next queued message once its agent stops running.
 fn flush_queue(agent: &Agent) {
-    if agent.is_running() {
+    if agent.is_running() || global::<QueueHeld>().with_untracked(|h| h.0.contains(&agent.id)) {
         return;
     }
     let next = global::<Queues>().with_untracked(|q| q.0.get(&agent.id).and_then(|l| l.first().cloned()));
@@ -4050,6 +4173,12 @@ pub(crate) fn apply(event: Event) {
             *p = Pairing { loaded: true, qr_svg: link.as_deref().and_then(qr_svg), sophon_url: link, url, relay_enabled, error };
         }),
         Event::Labels(list) => global::<LabelCatalog>().update(|l| l.0 = list),
+        Event::HostUsage(report) => global::<LocalUsage>().update(|u| {
+            u.loading = false;
+            if let Some(report) = report.as_ref().and_then(crate::usage::Report::from_json) {
+                u.report = Some(report);
+            }
+        }),
         Event::Usage(list) => {
             record_limits(&list);
             global::<UsageState>().update(|u| u.0 = Some(list));
@@ -4110,7 +4239,22 @@ pub(crate) fn apply(event: Event) {
         }),
         Event::Commits { commits, error, .. } => global::<CommitsState>().update(|c| c.0 = Some((commits, error))),
         Event::Branches { list, .. } => global::<BranchesState>().update(|b| b.0 = list),
-        Event::Schedules(list) => global::<SchedulesState>().update(|s| s.0 = Some(list)),
+        Event::Schedules(list) => {
+            // The runs shown may have a new one: asked again with the list.
+            for id in global::<SchedulesState>().with_untracked(|s| s.runs.keys().cloned().collect::<Vec<_>>()) {
+                send(Command::ScheduleRuns(id));
+            }
+            global::<SchedulesState>().update(|s| s.list = Some(list));
+        }
+        Event::ScheduleRuns { id, mut runs } => {
+            runs.sort_by(|a, b| b.started.cmp(&a.started));
+            global::<SchedulesState>().update(|s| {
+                // Put away while the answer was on its way: stays away.
+                if let Some(kept) = s.runs.get_mut(&id) {
+                    *kept = runs;
+                }
+            });
+        }
         Event::Notice(message) => notify(crate::i18n::tr(&message)),
     }
 }

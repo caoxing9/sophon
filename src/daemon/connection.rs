@@ -30,6 +30,9 @@ pub enum Command {
     /// Asks the host's Sophon (its bridge) for the pictures of a message
     /// this device has none of: sent from another device, or forgotten.
     AskPictures { message_id: String, text: String },
+    /// Asks the host's Sophon for its session-log statistics (a phone has
+    /// no logs of its own).
+    HostUsage,
     /// Uploads a file to the host for the next message; answered by
     /// [`Event::Uploaded`] with the same `id`.
     Upload { id: String, name: String, mime: String, bytes: Vec<u8> },
@@ -135,6 +138,10 @@ pub enum Command {
     /// `op`: `pause`, `resume`, `delete` or `run-once`.
     ScheduleOp { id: String, op: &'static str },
     CreateSchedule(NewSchedule),
+    /// Changes a schedule: its name, prompt, cadence, folder and isolation.
+    UpdateSchedule { id: String, to: NewSchedule },
+    /// Asks for a schedule's runs.
+    ScheduleRuns(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -143,6 +150,8 @@ pub struct NewSchedule {
     pub prompt: String,
     /// A cron expression (`0 9 * * 1-5`), or `every:<ms>`.
     pub cadence: String,
+    /// The zone a cron expression's times are in; the service's is UTC.
+    pub timezone: Option<String>,
     pub cwd: String,
     pub provider: String,
     pub model: Option<String>,
@@ -160,6 +169,56 @@ pub struct Schedule {
     pub next_run: Option<String>,
     pub last_run: Option<String>,
     pub target: String,
+    /// The cadence as the form takes it: a cron expression, or `every:<ms>`.
+    pub expression: String,
+    /// The name as given; empty when it has none.
+    pub given_name: String,
+    /// Where a new agent starts, when the schedule starts one.
+    pub cwd: String,
+    pub worktree: bool,
+}
+
+/// One time a schedule ran.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ScheduleRun {
+    pub id: String,
+    pub started: String,
+    pub ended: Option<String>,
+    /// `running` | `succeeded` | `failed`.
+    pub status: String,
+    pub agent_id: Option<String>,
+    /// The workspace the run's agent worked in; archived when the run ends.
+    pub workspace_id: Option<String>,
+    pub error: Option<String>,
+}
+
+impl ScheduleRun {
+    fn from_json(v: &Value) -> Option<Self> {
+        let s = |k: &str| v.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned);
+        Some(Self {
+            id: s("id")?,
+            started: s("startedAt").or_else(|| s("scheduledFor")).unwrap_or_default(),
+            ended: s("endedAt"),
+            status: s("status").unwrap_or_default(),
+            agent_id: s("agentId"),
+            workspace_id: s("workspaceId"),
+            error: s("error"),
+        })
+    }
+}
+
+/// A cadence as the service takes it.
+fn cadence_json(cadence: &str, timezone: Option<&str>) -> Value {
+    match cadence.strip_prefix("every:").and_then(|ms| ms.parse::<u64>().ok()) {
+        Some(ms) => json!({ "type": "every", "everyMs": ms }),
+        None => {
+            let mut cron = json!({ "type": "cron", "expression": cadence });
+            if let Some(zone) = timezone {
+                cron["timezone"] = json!(zone);
+            }
+            cron
+        }
+    }
 }
 
 impl Schedule {
@@ -168,13 +227,9 @@ impl Schedule {
         let cadence = match v.pointer("/cadence/type").and_then(Value::as_str) {
             Some("every") => {
                 let ms = v.pointer("/cadence/everyMs").and_then(Value::as_u64).unwrap_or(0);
-                match ms {
-                    m if m % 86_400_000 == 0 => format!("Every {} day(s)", m / 86_400_000),
-                    m if m % 3_600_000 == 0 => format!("Every {} hour(s)", m / 3_600_000),
-                    m => format!("Every {} min", m / 60_000),
-                }
+                crate::cadence::interval_words(ms, crate::i18n::is_zh())
             }
-            _ => format!("cron {}", v.pointer("/cadence/expression").and_then(Value::as_str).unwrap_or_default()),
+            _ => crate::cadence::describe(v.pointer("/cadence/expression").and_then(Value::as_str).unwrap_or_default()),
         };
         let target = match v.pointer("/target/type").and_then(Value::as_str) {
             Some("new-agent") => {
@@ -189,6 +244,13 @@ impl Schedule {
             name: s("name").filter(|n| !n.is_empty()).unwrap_or_else(|| "Untitled schedule".into()),
             prompt: s("prompt").unwrap_or_default(),
             cadence,
+            expression: match v.pointer("/cadence/type").and_then(Value::as_str) {
+                Some("every") => format!("every:{}", v.pointer("/cadence/everyMs").and_then(Value::as_u64).unwrap_or(0)),
+                _ => v.pointer("/cadence/expression").and_then(Value::as_str).unwrap_or_default().to_owned(),
+            },
+            given_name: s("name").unwrap_or_default(),
+            cwd: v.pointer("/target/config/cwd").and_then(Value::as_str).unwrap_or_default().to_owned(),
+            worktree: v.pointer("/target/config/isolation").and_then(Value::as_str) == Some("worktree"),
             status: s("status").unwrap_or_default(),
             next_run: s("nextRunAt"),
             last_run: s("lastRunAt"),
@@ -521,6 +583,9 @@ pub enum Event {
     /// The conversation shown from this device's copy has everything the
     /// host has now (what came since arrived as `TimelineLive`).
     TimelineSynced { agent_id: String },
+    /// The host's session-log statistics as its Sophon read them
+    /// (`HostUsage`); `None` when this session cannot ask for them.
+    HostUsage(Option<Value>),
     /// The pictures the host's Sophon kept for a message (`AskPictures`).
     Pictures { message_id: String, text: String, pictures: Vec<String> },
     Commands { agent_id: String, list: Vec<SlashCommand> },
@@ -541,6 +606,7 @@ pub enum Event {
     GitDone { cwd: String, action: &'static str, error: Option<String>, url: Option<String> },
     History { search: String, agents: Vec<Agent> },
     Schedules(Vec<Schedule>),
+    ScheduleRuns { id: String, runs: Vec<ScheduleRun> },
     Commits { cwd: String, commits: Vec<Commit>, error: Option<String> },
     Subagents { parent: String, list: Vec<Subagent> },
     Rewound { agent: String, error: Option<String> },
@@ -693,6 +759,9 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
                         backoff = Duration::from_secs(1);
                         break;
                     }
+                    // Asked while away: no answer, said so (no notice).
+                    Some(Command::HostUsage) => { let _ = events.send(Event::HostUsage(None)); }
+                    Some(Command::AskPictures { .. }) => {}
                     // Just started: try now, then again soon.
                     Some(Command::Reconnect) => {
                         backoff = Duration::from_millis(250);
@@ -868,6 +937,7 @@ enum Pending {
     History(String),
     Schedules,
     ScheduleChange(&'static str),
+    ScheduleRuns(String),
     Project,
     /// The event subscription; `true` while asking for the newer events,
     /// retried without them on a daemon that refuses them.
@@ -998,6 +1068,14 @@ async fn session(
                 if let Command::Open(id) = &cmd {
                     *open_agent = Some(id.clone());
                 }
+                if let Command::HostUsage = &cmd {
+                    if connected && endpoint.bridge_token.is_some() {
+                        send(&mut tx, &json!({ "type": "sophon_usage_request" })).await?;
+                    } else if events.send(Event::HostUsage(None)).is_err() {
+                        return Ok(Exit::UiGone);
+                    }
+                    continue;
+                }
                 if let Command::AskPictures { message_id, text } = &cmd {
                     // Sophon's bridge answers this, not the service: only
                     // a session that goes through one asks.
@@ -1107,6 +1185,12 @@ async fn session(
                         return Err(format!("The daemon refused this client: {reason}"));
                     }
                     Some("session") => {}
+                    Some("sophon_usage") => {
+                        if events.send(Event::HostUsage(msg.get("report").cloned())).is_err() {
+                            return Ok(Exit::UiGone);
+                        }
+                        continue;
+                    }
                     Some("sophon_pictures") => {
                         let field = |k| msg.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
                         let pictures: Vec<String> = msg
@@ -1335,7 +1419,7 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
     match cmd {
         Command::Open(id) => timeline_requests(&id, pending),
         // Sent by the session itself, with its binary frames.
-        Command::Upload { .. } | Command::Download { .. } | Command::Reconnect | Command::AskPictures { .. } => vec![],
+        Command::Upload { .. } | Command::Download { .. } | Command::Reconnect | Command::AskPictures { .. } | Command::HostUsage => vec![],
         Command::Send { agent_id, text, behavior, images, attachments, message_id } => {
             let mut msg = json!({
                 "type": "send_agent_message_request",
@@ -1668,10 +1752,7 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
             json!({ "type": format!("schedule/{op}"), "scheduleId": id }),
         )],
         Command::CreateSchedule(n) => {
-            let cadence = match n.cadence.strip_prefix("every:").and_then(|ms| ms.parse::<u64>().ok()) {
-                Some(ms) => json!({ "type": "every", "everyMs": ms }),
-                None => json!({ "type": "cron", "expression": n.cadence }),
-            };
+            let cadence = cadence_json(&n.cadence, n.timezone.as_deref());
             let mut config = json!({
                 "provider": n.provider,
                 "cwd": n.cwd,
@@ -1690,6 +1771,24 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
                 msg["name"] = json!(n.name.trim());
             }
             vec![request(pending, Pending::ScheduleChange("create"), msg)]
+        }
+        Command::UpdateSchedule { id, to } => {
+            let name = to.name.trim();
+            let mut msg = json!({
+                "type": "schedule/update",
+                "scheduleId": id,
+                "name": if name.is_empty() { Value::Null } else { json!(name) },
+                "prompt": to.prompt,
+                "cadence": cadence_json(&to.cadence, to.timezone.as_deref()),
+            });
+            // Only a schedule that starts an agent has a folder to change.
+            if !to.cwd.is_empty() {
+                msg["newAgentConfig"] = json!({ "cwd": to.cwd, "isolation": if to.worktree { "worktree" } else { "local" } });
+            }
+            vec![request(pending, Pending::ScheduleChange("update"), msg)]
+        }
+        Command::ScheduleRuns(id) => {
+            vec![request(pending, Pending::ScheduleRuns(id.clone()), json!({ "type": "schedule/logs", "scheduleId": id }))]
         }
         Command::Unarchive(agent_id) => vec![request(
             pending,
@@ -1912,7 +2011,7 @@ fn handle(
                 Some(Pending::AttachTerminal) => "attach the terminal",
                 Some(Pending::Explorer) => "read files",
                 Some(Pending::History(_)) => "load history",
-                Some(Pending::Schedules | Pending::ScheduleChange(_)) => "update schedules",
+                Some(Pending::Schedules | Pending::ScheduleChange(_) | Pending::ScheduleRuns(_)) => "update schedules",
                 Some(Pending::Project) => "add the project",
                 Some(Pending::Events(_)) => "subscribe to events",
                 Some(Pending::FileOp(_)) => "change the file",
@@ -2437,6 +2536,13 @@ fn handle(
                 return vec![Event::Notice(format!("Could not load schedules: {e}"))];
             }
             vec![Event::Schedules(list_of(payload, "schedules", Schedule::from_json))]
+        }
+        "schedule/logs/response" => {
+            let Some(Pending::ScheduleRuns(id)) = request_id.and_then(|id| pending.remove(id)) else { return vec![] };
+            if let Some(e) = payload.get("error").and_then(Value::as_str) {
+                return vec![Event::Notice(format!("Could not load the schedule's runs: {e}"))];
+            }
+            vec![Event::ScheduleRuns { id, runs: list_of(payload, "runs", ScheduleRun::from_json) }]
         }
         k if k.starts_with("schedule/") && k.ends_with("/response") => {
             let what = match request_id.and_then(|id| pending.remove(id)) {

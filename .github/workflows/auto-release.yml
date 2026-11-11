@@ -1,0 +1,115 @@
+# Every merge to main is a release, with no one tagging: the patch version
+# goes up by one (0.2.1, 0.2.2, …) and that is released.
+#
+# - Merges that land while a release is still building wait for it and go
+#   out together as the next one, so a burst of merges is not a burst of
+#   versions.
+# - Changes to documents, the cask or the workflows alone release nothing.
+# - The minor or major version (1.0.0, when it is time) goes up only by
+#   hand: Actions → Auto release → Run workflow.
+# - A version put on main by hand (`scripts/release.sh`) that has no tag
+#   yet is released as it is.
+#
+# The version is committed to main before the release is built, so a local
+# build names itself what was released last. The release itself is the
+# Release workflow, started here: a tag pushed with this workflow's token
+# would not start it, and neither do the commits it and Release push.
+name: Auto release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["Casks/**", "**.md", "docs/**", ".github/**"]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Which part of the version goes up"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+permissions:
+  contents: write
+  actions: write
+
+# One at a time; of those waiting, only the newest is kept, which is what
+# folds the merges made during a build into one release.
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Wait for a release that is still building
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          for try in $(seq 1 110); do
+            BUSY=$(gh run list --repo "$REPO" --workflow release.yml --limit 20 --json status --jq '[.[] | select(.status != "completed")] | length')
+            [ "$BUSY" = 0 ] && exit 0
+            echo "a release is building; waiting"
+            sleep 60
+          done
+          echo "::error::a release has been building for over 110 minutes"
+          exit 1
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Decide the version and start its release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUMP: ${{ inputs.bump || 'patch' }}
+        run: |
+          set -eu
+          V=$(scripts/version.sh)
+          echo "$V" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "not a version: $V"; exit 1; }
+
+          # A version main already carries that was never released: put
+          # there by hand, or one whose release failed (this tries it again
+          # rather than skipping a number).
+          if ! git rev-parse -q --verify "refs/tags/v$V" >/dev/null; then
+            gh workflow run release.yml --ref main -f version="$V"
+            echo "started the release of $V (on main, not tagged yet)"
+            # Until its run is listed: the next one here waits on that list.
+            sleep 30
+            exit 0
+          fi
+          # What changed since: the app itself, not its cask (written by
+          # each release), documents or these workflows.
+          CHANGED=$(git log --oneline "v$V..HEAD" -- . ':!Casks' ':!*.md' ':!docs' ':!.github' | wc -l | tr -d ' ')
+          if [ "$CHANGED" = 0 ]; then
+            echo "nothing to release since v$V"
+            exit 0
+          fi
+
+          IFS=. read -r MAJOR MINOR PATCH <<EOV
+          $V
+          EOV
+          case "$BUMP" in
+            major) NEXT="$((MAJOR + 1)).0.0" ;;
+            minor) NEXT="$MAJOR.$((MINOR + 1)).0" ;;
+            *) NEXT="$MAJOR.$MINOR.$((PATCH + 1))" ;;
+          esac
+          scripts/set-version.sh "$NEXT"
+          # Cargo.lock names the crate's version too: the one line, without
+          # resolving anything.
+          python3 - "$NEXT" <<'PY'
+          import re, sys
+          s = open("Cargo.lock").read()
+          s, n = re.subn(r'(\[\[package\]\]\nname = "sophon"\nversion = )"[^"]*"', rf'\1"{sys.argv[1]}"', s, count=1)
+          assert n == 1, "sophon is not in Cargo.lock"
+          open("Cargo.lock", "w").write(s)
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -qam "Release $NEXT"
+          git push origin HEAD:main
+          gh workflow run release.yml --ref main -f version="$NEXT"
+          echo "$V -> $NEXT: $CHANGED commits since v$V; release started"
+          # Until its run is listed: the next one here waits on that list.
+          sleep 30

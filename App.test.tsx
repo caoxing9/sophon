@@ -97,3 +97,15 @@ test("settings manage the spaces on this Mac", async () => {
   expect(app.texts()).toContain("My space");
   expect(app.texts()).toContain("New space…");
 });
+
+test("a new schedule is set without writing cron", async () => {
+  const app = await open(".", { width: 1100, height: 900 });
+  await app.press("Schedules >> nth=0");
+  await app.waitFor("text:New schedule");
+  await app.press("New schedule >> nth=0");
+  await app.waitFor("text:Repeats");
+  // Every day at 9:00 to begin with, said back in words.
+  expect(app.texts()).toContain("Runs: Every day at 9:00");
+  expect(app.texts()).toContain("Every week");
+  expect(app.texts()).not.toContain("Cron expression, e.g. 0 9 * * 1-5");
+});

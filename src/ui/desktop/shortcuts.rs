@@ -6,6 +6,7 @@ use nsh_core::prelude::*;
 use crate::ui::kit::text;
 
 use crate::ui::kit::*;
+use crate::daemon::connection::GitAction;
 use crate::store::{self, ExplorerTab, Modal, Screen, Tab};
 
 /// Binds the app's shortcuts for as long as the shell lives.
@@ -141,6 +142,25 @@ fn items() -> Vec<CommandItem> {
         items.push(CommandItem::new("changes", t("Show changes")).group(t("Actions")).keywords(["diff", "git"]));
         items.push(CommandItem::new("files", t("Show files")).group(t("Actions")).keywords(["tree", "explorer"]));
         items.push(CommandItem::new("commit", t("Commit all changes")).group(t("Git")).keywords(["git"]));
+        for (id, label) in [
+            ("git-push", t("Push")),
+            ("git-pull", t("Pull")),
+            ("git-branch", t("Switch branch…")),
+            ("git-stash", t("Stash changes")),
+            ("git-pop", t("Pop latest stash")),
+        ] {
+            items.push(CommandItem::new(id, label).group(t("Git")).keywords(["git"]));
+        }
+        // An open pull request is merged; without one, one is made.
+        let open_pr = store::git().pr.is_some_and(|p| !p.merged && !p.state.eq_ignore_ascii_case("closed"));
+        let pr: &[(&str, &str)] = if open_pr {
+            &[("git-squash", t("Squash and merge")), ("git-merge", t("Merge pull request"))]
+        } else {
+            &[("git-pr", t("Create pull request"))]
+        };
+        for (id, label) in pr {
+            items.push(CommandItem::new(*id, *label).group(t("Git")).keywords(["git", "pr"]));
+        }
         for a in store::current_workspace().map(|w| store::workspace_agents(&w.id)).unwrap_or_default() {
             items.push(CommandItem::new(format!("agent:{}", a.id), a.title.clone()).group(t("Agents")).keywords([a.provider]));
         }
@@ -176,6 +196,17 @@ fn run(id: &str) {
         "changes" => store::set_explorer_tab(ExplorerTab::Changes),
         "files" => store::set_explorer_tab(ExplorerTab::Files),
         "commit" => store::open_modal(Modal::Commit),
+        "git-push" => store::git_action(GitAction::Push),
+        "git-pull" => store::git_action(GitAction::Pull),
+        "git-branch" => {
+            store::search_branches("");
+            store::open_modal(Modal::SwitchBranch)
+        }
+        "git-stash" => store::git_action(GitAction::Stash),
+        "git-pop" => store::git_action(GitAction::PopStash),
+        "git-pr" => store::git_action(GitAction::CreatePr),
+        "git-squash" => store::git_action(GitAction::MergePr("squash")),
+        "git-merge" => store::git_action(GitAction::MergePr("merge")),
         _ => {
             if let Some(ws) = id.strip_prefix("ws:") {
                 store::open_workspace(ws);
