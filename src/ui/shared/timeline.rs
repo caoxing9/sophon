@@ -425,14 +425,11 @@ fn sent_chip(name: String, thumb: Option<String>) -> View {
         .h(px(22.0))
         .pl(px(4.0))
         .pr(px(7.0))
-        .ml(px(1.0))
-        .mr(px(5.0))
         .translate_y(px(crate::ui::shared::chips::CHIP_LIFT))
         .rounded(px(R_MD))
         .bg(SURFACE0)
         .border_1()
-        .border_color(tint(ACCENT, 0.35))
-        .align_middle();
+        .border_color(tint(ACCENT, 0.35));
     let chip = match &thumb {
         Some(uri) => chip.child(
             image(SharedString::from(uri.clone())).w(px(16.0)).h(px(16.0)).object_fit(nsh_core::ResizeMode::Cover).rounded(px(3.0)),
@@ -442,7 +439,7 @@ fn sent_chip(name: String, thumb: Option<String>) -> View {
     let chip_name = name.clone();
     let chip = chip.child(text(name).text_size(px(TEXT_SM)).text_color(FG).number_of_lines(1));
     // A picture's chip opens it large (and shows it under the pointer).
-    match thumb {
+    let chip = match thumb {
         Some(uri) => {
             let (open_name, open_uri) = (chip_name, uri.clone());
             chip.hover(|s| s.border_color(ACCENT))
@@ -454,7 +451,10 @@ fn sent_chip(name: String, thumb: Option<String>) -> View {
                 )
         }
         None => chip,
-    }
+    };
+    // The room beside it is the box's the line lays out (as the composer's
+    // editor wraps its chips): a margin of the chip's own is not counted.
+    view().pl(px(1.0)).pr(px(5.0)).align_middle().child(chip)
 }
 
 fn user_row(item: Memo<Option<Item>>, bubble: impl IntoElement + 'static) -> impl IntoElement {
