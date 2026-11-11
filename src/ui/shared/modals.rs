@@ -51,6 +51,109 @@ fn zooming_picture(uri: String) -> AnyElement {
         .into_element()
 }
 
+/// A picture on the desktop: a trackpad pinch (Control + wheel with a
+/// mouse) zooms it, a drag moves it, and the bar under it zooms by steps,
+/// turns it a quarter, mirrors it and puts it back as it was. A press
+/// puts it away.
+fn desktop_picture(uri: String) -> AnyElement {
+    use nsh_core::element::{GestureEvent, Interactive, Spring};
+    const STEP: f32 = 1.25;
+    const LIMITS: (f32, f32) = (0.25, 8.0);
+    let [x, y, scale, angle] = [0.0, 0.0, 1.0, 0.0].map(animated_value);
+    // Where the bar's steps start from: the scale, and the quarter turns.
+    let level = std::rc::Rc::new(std::cell::Cell::new(1.0f32));
+    let turns = std::rc::Rc::new(std::cell::Cell::new(0.0f32));
+    let mirrored = signal(false);
+    let zoom_to = {
+        let level = level.clone();
+        move |to: f32| {
+            let to = to.clamp(LIMITS.0, LIMITS.1);
+            level.set(to);
+            let _ = scale.spring(to, Spring::default());
+            if to <= 1.0 {
+                let _ = x.spring(0.0, Spring::default());
+                let _ = y.spring(0.0, Spring::default());
+            }
+        }
+    };
+    let white = AdaptiveColor::rgb(0xffffff, 0xffffff);
+    let tool = move |glyph: Icon, label: &'static str, on_press: Box<dyn Fn()>| {
+        nsh_base::button()
+            .on_press(move || on_press())
+            .accessibility_label(label)
+            .w(px(32.0))
+            .h(px(32.0))
+            .rounded(px(R_FULL))
+            .items_center()
+            .justify_center()
+            .hover(|s| s.bg(AdaptiveColor::rgb(0xffffff, 0xffffff).opacity(0.16)))
+            .child(icon(glyph, 16.0).text_color(white))
+    };
+    let (zoom_in, zoom_out, reset_zoom, pinched) = (zoom_to.clone(), zoom_to.clone(), zoom_to.clone(), zoom_to);
+    let (level_in, level_out, level_pinch) = (level.clone(), level.clone(), level.clone());
+    let (turns_turn, turns_reset) = (turns.clone(), turns);
+    view()
+        .flex_1()
+        .bg(AdaptiveColor::rgb(0x000000, 0x000000).opacity(0.55))
+        .child(
+            view()
+                .on_press(|_: &PressEvent| store::close_modal())
+                .flex_1()
+                .overflow_hidden()
+                .pan_values(Some(&x), Some(&y))
+                .pinch_value(&scale)
+                .on_pinch_end(move |e: &GestureEvent| pinched(level_pinch.get() * e.value))
+                .child(
+                    view()
+                        .flex_1()
+                        .m(px(S4))
+                        .bind_translate_x(&x)
+                        .bind_translate_y(&y)
+                        .bind_scale(&scale)
+                        .bind_rotate(&angle)
+                        .child(
+                            image(SharedString::from(uri))
+                                .flex_1()
+                                .object_fit(nsh_core::ResizeMode::Contain)
+                                .scale_x(move || if mirrored.get() { -1.0_f32 } else { 1.0 }),
+                        ),
+                ),
+        )
+        .child(
+            view().absolute().bottom(px(20.0)).left(px(0.0)).right(px(0.0)).items_center().pointer_events(nsh_core::PointerEvents::BoxNone).child(
+                view()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(2.0))
+                    .p(px(4.0))
+                    .rounded(px(R_FULL))
+                    .bg(AdaptiveColor::rgb(0x000000, 0x000000).opacity(0.6))
+                    .child(tool(Icon::Minus, t("Zoom out"), Box::new(move || zoom_out(level_out.get() / STEP))))
+                    .child(tool(Icon::Plus, t("Zoom in"), Box::new(move || zoom_in(level_in.get() * STEP))))
+                    .child(tool(
+                        Icon::RotateCw,
+                        t("Rotate"),
+                        Box::new(move || {
+                            turns_turn.set(turns_turn.get() + 1.0);
+                            let _ = angle.spring(turns_turn.get() * 90.0, Spring::default());
+                        }),
+                    ))
+                    .child(tool(Icon::FlipHorizontal, t("Flip"), Box::new(move || mirrored.update(|m| *m = !*m))))
+                    .child(tool(
+                        Icon::Maximize2,
+                        t("Actual fit"),
+                        Box::new(move || {
+                            reset_zoom(1.0);
+                            turns_reset.set(0.0);
+                            let _ = angle.spring(0.0, Spring::default());
+                            mirrored.set(false);
+                        }),
+                    )),
+            ),
+        )
+        .into_element()
+}
+
 pub(crate) fn modal_layer() -> impl IntoElement {
     let open = computed(|| store::modal().is_some());
     when(open, || {
@@ -85,18 +188,7 @@ pub(crate) fn modal_layer() -> impl IntoElement {
                                     .child(if MOBILE {
                                         zooming_picture(uri.clone())
                                     } else {
-                                        nsh_base::button()
-                                            .on_press(store::close_modal)
-                                            .accessibility_label(t("Close"))
-                                            .flex_1()
-                                            .bg(AdaptiveColor::rgb(0x000000, 0x000000).opacity(0.55))
-                                            .child(
-                                                image(SharedString::from(uri.clone()))
-                                                    .flex_1()
-                                                    .m(px(S4))
-                                                    .object_fit(nsh_core::ResizeMode::Contain),
-                                            )
-                                            .into_element()
+                                        desktop_picture(uri.clone())
                                     })
                                     .child(
                                         nsh_base::button()
