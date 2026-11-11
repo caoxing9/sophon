@@ -115,6 +115,8 @@ fn read(path: &Path, source: Source, state: &mut FileState, oldest: i64) {
 
 /// Brings the remembered files up to date and sums them.
 pub(crate) fn scan() -> Report {
+    // Today's prices, before anything is summed with them.
+    super::price::refresh();
     let now = super::now();
     let since = UNIX_EPOCH + Duration::from_secs(now.max(0) as u64) - LOOK_BACK;
     let oldest = now - LOOK_BACK.as_secs() as i64;
