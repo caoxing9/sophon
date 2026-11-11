@@ -391,6 +391,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Remove image", "移除图片"),
     ("No image on the clipboard", "剪贴板里没有图片"),
     ("Could not read the pasted image", "无法读取粘贴的图片"),
+    ("Could not read the pasted file", "无法读取粘贴的文件"),
     ("Dictate", "听写"),
     ("Stop", "停止"),
     ("Mode", "模式"),

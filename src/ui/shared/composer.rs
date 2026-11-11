@@ -831,8 +831,27 @@ fn attach_pasted(key: &str, e: &RichEditorPastedFiles) {
         if path.is_dir() {
             continue;
         }
-        let Ok(bytes) = std::fs::read(&path) else { continue };
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            // A file inside another app's own folder (a picture copied in
+            // WeChat) is not the app's to read: the picture itself is on
+            // the clipboard beside its address.
+            Err(_) => match clipboard_image() {
+                Some((mime, data)) => {
+                    insert_images(key, vec![crate::daemon::connection::ImageInput {
+                        name,
+                        mime: mime.to_owned(),
+                        data: base64::engine::general_purpose::STANDARD.encode(&data),
+                    }]);
+                    continue;
+                }
+                None => {
+                    store::notify(t("Could not read the pasted file").to_owned());
+                    continue;
+                }
+            },
+        };
         let mime = nsh_core::picker::mime_for_file(&name, &bytes).to_owned();
         if mime.starts_with("image/") {
             insert_images(key, vec![crate::daemon::connection::ImageInput {
@@ -844,6 +863,22 @@ fn attach_pasted(key: &str, e: &RichEditorPastedFiles) {
             insert_file(key, name, mime, bytes);
         }
     }
+}
+
+/// The image on the clipboard, as the JPEG or PNG the copying app offers.
+#[cfg(target_os = "macos")]
+fn clipboard_image() -> Option<(&'static str, Vec<u8>)> {
+    use objc2_app_kit::NSPasteboard;
+    use objc2_foundation::NSString;
+    let board = NSPasteboard::generalPasteboard();
+    [("image/jpeg", "public.jpeg"), ("image/png", "public.png")]
+        .into_iter()
+        .find_map(|(mime, kind)| board.dataForType(&NSString::from_str(kind)).map(|data| (mime, data.to_vec())))
+}
+
+#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+fn clipboard_image() -> Option<(&'static str, Vec<u8>)> {
+    None
 }
 
 /// A `file:` URL's path with its `%XX` escapes decoded.

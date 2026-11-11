@@ -367,7 +367,7 @@ fn chats(query: Signal<String>) -> impl IntoElement {
         let q = query.get();
         let mut agents: Vec<(Agent, Option<Workspace>)> = store::agents()
             .into_iter()
-            .filter(|a| !a.archived && a.parent_id.is_none())
+            .filter(|a| !a.archived && a.parent_id.is_none() && !store::is_hidden_run(a))
             .map(|a| {
                 let w = a.workspace_id.as_deref().and_then(store::workspace);
                 (a, w)
@@ -423,8 +423,10 @@ fn chat_row(a: Agent, w: Option<Workspace>, divider: bool) -> AnyElement {
         });
     let (id, ws) = (a.id.clone(), w.as_ref().map(|w| w.id.clone()));
     row_shell(glyph(Icon::Bot, status), a.title.clone(), line, trailing, divider, move || {
-        if let Some(ws) = &ws {
-            super::open_chat(ws, Some(Tab::Agent(id.clone())));
+        match &ws {
+            Some(ws) => super::open_chat(ws, Some(Tab::Agent(id.clone()))),
+            // Its workspace was archived under it: restored, then shown.
+            None => store::open_run_agent(&id, None),
         }
     })
 }

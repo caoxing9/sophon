@@ -3113,6 +3113,7 @@ dependencies = [
  "nsh-ui",
  "nsh-updater",
  "objc2",
+ "objc2-app-kit",
  "objc2-foundation",
  "objc2-ui-kit",
  "qrcode",

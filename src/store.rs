@@ -1054,6 +1054,22 @@ struct KeptRuns(Vec<String>);
 #[derive(Clone, Default)]
 struct OpenWhenListed(Option<(String, String)>);
 
+/// Counts the restored conversations opened ([`open_when_listed`]): the
+/// phone, whose screens are a stack of its own, shows the conversation then.
+#[derive(Clone, Copy, Default)]
+struct RestoredOpens(u32);
+
+pub(crate) fn restored_opens() -> u32 {
+    global::<RestoredOpens>().with(|r| r.0)
+}
+
+/// Whether `agent` is a schedule's run the lists leave out: started by a
+/// schedule, in a workspace the user did not open from the schedule's runs.
+pub(crate) fn is_hidden_run(agent: &Agent) -> bool {
+    agent.scheduled
+        && global::<KeptRuns>().with(|k| !agent.workspace_id.as_ref().is_some_and(|ws| k.0.contains(ws)))
+}
+
 /// The workspaces that are a schedule's runs and stay out of the lists: all
 /// of a workspace's agents were started by a schedule, and the user did not
 /// open it. The service makes one per run and archives it when the run
@@ -2701,8 +2717,11 @@ pub(crate) fn toggle_schedule_runs(id: &str) {
 /// Opens the conversation a run started, and lists its workspace from then
 /// on. The service archives a run's workspace when the run ends: that is
 /// restored first (the workspace, then its agent), and the conversation
-/// opens once the host lists the workspace again.
+/// opens once the host lists the workspace again. Also how any conversation
+/// whose workspace was archived under it opens.
 pub(crate) fn open_run_agent(agent_id: &str, workspace_id: Option<&str>) {
+    let workspace_id = workspace_id.map(str::to_owned).or_else(|| agent(agent_id).and_then(|a| a.workspace_id));
+    let workspace_id = workspace_id.as_deref();
     let listed = agent(agent_id).and_then(|a| a.workspace_id).filter(|ws| workspace(ws).is_some());
     let Some(ws) = listed.clone().or_else(|| workspace_id.map(str::to_owned)) else {
         notify(t("That conversation is no longer listed; look in History").to_owned());
@@ -2735,6 +2754,7 @@ fn open_when_listed() {
         global::<OpenWhenListed>().set(OpenWhenListed(None));
         open_workspace(&ws);
         open_tab(Tab::Agent(agent));
+        global::<RestoredOpens>().update(|r| r.0 += 1);
     }
 }
 
