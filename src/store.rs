@@ -1362,11 +1362,13 @@ pub(crate) fn set_group_open(id: &str, open: bool) {
 /// Asks the host's Sophon for the pictures of the user messages among
 /// `items` that name one and have none here (sent from another device).
 /// Each once per conversation opening; a host without them says nothing.
-fn ask_pictures(items: &[Item]) {
+fn ask_pictures(items: &[Item], agent_id: Option<&str>) {
+    // The conversation's folder: where the host reads the agent's record.
+    let cwd = agent_id.and_then(agent).map(|a| a.cwd).unwrap_or_default();
     for item in items {
         let Item::User { text, message_id, images } = item else { continue };
         if images.is_empty() && crate::sent_pictures::names_a_picture(text) {
-            send(Command::AskPictures { message_id: message_id.clone().unwrap_or_default(), text: text.clone() });
+            send(Command::AskPictures { message_id: message_id.clone().unwrap_or_default(), text: text.clone(), cwd: cwd.clone() });
         }
     }
 }
@@ -4025,7 +4027,7 @@ pub(crate) fn apply(event: Event) {
                     opened = !t.loaded;
                     carry_images(&t.items, &mut items);
                     crate::sent_pictures::restore(&mut items);
-                    ask_pictures(&items);
+                    ask_pictures(&items, Some(&agent_id));
                     t.items = items;
                     t.cursor = cursor;
                     t.loaded = true;
@@ -4045,7 +4047,7 @@ pub(crate) fn apply(event: Event) {
                 // those kept here first, then the host's Sophon is asked
                 // for the rest (the copy's messages too).
                 crate::sent_pictures::restore(&mut t.items);
-                ask_pictures(&t.items);
+                ask_pictures(&t.items, Some(&agent_id));
             }
         }),
         Event::Pictures { message_id, text, pictures } => {
@@ -4069,7 +4071,7 @@ pub(crate) fn apply(event: Event) {
             if t.agent_id.as_deref() == Some(agent_id.as_str()) {
                 let mut merged = items;
                 crate::sent_pictures::restore(&mut merged);
-                ask_pictures(&merged);
+                ask_pictures(&merged, Some(&agent_id));
                 merged.append(&mut t.items);
                 t.items = merged;
                 t.older = older;

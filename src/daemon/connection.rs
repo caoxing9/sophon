@@ -29,7 +29,9 @@ pub enum Command {
     Send { agent_id: String, text: String, behavior: Option<&'static str>, images: Vec<ImageInput>, attachments: Vec<Value>, message_id: String },
     /// Asks the host's Sophon (its bridge) for the pictures of a message
     /// this device has none of: sent from another device, or forgotten.
-    AskPictures { message_id: String, text: String },
+    /// `cwd`: the conversation's folder, where the host looks in the
+    /// agent's own record of it.
+    AskPictures { message_id: String, text: String, cwd: String },
     /// Asks the host's Sophon for its session-log statistics (a phone has
     /// no logs of its own).
     HostUsage,
@@ -1079,11 +1081,24 @@ async fn session(
                     }
                     continue;
                 }
-                if let Command::AskPictures { message_id, text } = &cmd {
-                    // Sophon's bridge answers this, not the service: only
-                    // a session that goes through one asks.
+                if let Command::AskPictures { message_id, text, cwd } = &cmd {
+                    // Sophon's bridge answers this, not the service: a
+                    // session that goes through one asks it.
                     if connected && endpoint.bridge_token.is_some() {
-                        send(&mut tx, &json!({ "type": "sophon_pictures_request", "messageId": message_id, "text": text })).await?;
+                        send(&mut tx, &json!({ "type": "sophon_pictures_request", "messageId": message_id, "text": text, "cwd": cwd })).await?;
+                        continue;
+                    }
+                    // Straight to the service on this computer: the agents'
+                    // records are here to read.
+                    #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+                    if endpoint.relay.is_none() && ["127.0.0.1", "localhost", "[::1]"].iter().any(|h| endpoint.url.contains(h)) {
+                        let (events, message_id, text, cwd) = (events.clone(), message_id.clone(), text.clone(), cwd.clone());
+                        std::thread::spawn(move || {
+                            let pictures = crate::agent_pictures::find(&cwd, &message_id, &text);
+                            if !pictures.is_empty() {
+                                let _ = events.send(Event::Pictures { message_id, text, pictures });
+                            }
+                        });
                     }
                     continue;
                 }
