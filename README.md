@@ -160,8 +160,8 @@ Homebrew cask. Each release has:
 With App Store signing secrets set (`IOS_CERT_P12`, `IOS_CERT_PASSWORD`, `IOS_PROFILE`, `ASC_APP_ID`,
 `ASC_ISSUER_ID`, `ASC_KEY_ID`, `ASC_KEY_P8`), it also builds a signed `Sophon.ipa` and uploads it to TestFlight.
 
-[CI](.github/workflows/ci.yml) runs on every push and pull request: check, Rust and UI tests, and packages for macOS and
-the iOS Simulator (downloadable from the run's artifacts).
+[CI](.github/workflows/ci.yml) runs on every push and pull request: check (the iOS build included), Rust and UI tests, and
+a macOS package (downloadable from the run's artifacts).
 
 ## Acknowledgements
 
