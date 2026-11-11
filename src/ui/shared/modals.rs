@@ -141,7 +141,8 @@ fn body(m: Modal) -> View {
             }))),
         Modal::Commit => commit(),
         Modal::Palette => view(),
-        Modal::NewSchedule => new_schedule(),
+        Modal::NewSchedule => schedule_form(None),
+        Modal::EditSchedule(s) => schedule_form(Some(s)),
         Modal::AddProject => add_project(),
         Modal::SwitchBranch => switch_branch(),
         Modal::ImportSession => import_session(),
@@ -261,23 +262,74 @@ fn commit() -> View {
         .child(actions(btn(t("Commit"), Variant::Primary, Sz::Md, Some(Icon::GitCommitHorizontal), go)))
 }
 
-fn new_schedule() -> View {
-    let name = signal(String::new());
-    let prompt = signal(String::new());
-    let cron = signal("0 9 * * 1-5".to_owned());
-    let path = signal(store::projects().into_iter().map(|p| p.root_path).find(|p| !p.is_empty()).unwrap_or_default());
-    let worktree = signal(false);
-    let presets: Vec<(String, SharedString)> = vec![
-        ("every:3600000".into(), t("Hourly").into()),
-        ("0 9 * * *".into(), t("Daily 9:00").into()),
-        ("0 9 * * 1-5".into(), t("Weekdays 9:00").into()),
-    ];
+/// How a new schedule repeats, as the form asks it.
+#[derive(Clone, Copy, PartialEq)]
+enum Repeat {
+    Every,
+    Daily,
+    Weekly,
+    Custom,
+}
+
+/// The form of a schedule: a new one, or `existing` to change.
+fn schedule_form(existing: Option<crate::daemon::connection::Schedule>) -> View {
+    use crate::cadence::{self, Picked};
+    let editing = existing.as_ref().map(|s| s.id.clone());
+    // One that messages an agent it already has: no folder to pick.
+    let no_folder = existing.as_ref().is_some_and(|s| s.cwd.is_empty());
+    // What an existing one repeats on, back in the form's choices.
+    let was = existing.as_ref().map(|s| cadence::picked(&s.expression));
+    let first_project = || store::projects().into_iter().map(|p| p.root_path).find(|p| !p.is_empty()).unwrap_or_default();
+    let name = signal(existing.as_ref().map(|s| s.given_name.clone()).unwrap_or_default());
+    let prompt = signal(existing.as_ref().map(|s| s.prompt.clone()).unwrap_or_default());
+    let path = signal(existing.as_ref().map(|s| s.cwd.clone()).filter(|c| !c.is_empty()).unwrap_or_else(first_project));
+    let worktree = signal(existing.as_ref().is_some_and(|s| s.worktree));
+    let repeat = signal(match &was {
+        Some(Picked::Every { .. }) => Repeat::Every,
+        Some(Picked::Weekly(..)) => Repeat::Weekly,
+        Some(Picked::Custom(_)) => Repeat::Custom,
+        Some(Picked::Daily(..)) | None => Repeat::Daily,
+    });
+    // Every `count` of a unit: 1 a minute, 60 an hour, 1440 a day.
+    let (count, unit) = match &was {
+        Some(Picked::Every { count, unit }) => (count.to_string(), *unit),
+        _ => ("1".to_owned(), 60),
+    };
+    let (count, unit) = (signal(count), signal(unit));
+    let minutes = computed(move || count.with(|c| c.trim().parse::<u32>().ok()).filter(|n| (1..=999).contains(n)).map(|n| n * unit.get()));
+    let time = signal(match &was {
+        Some(Picked::Daily(h, m) | Picked::Weekly(_, (h, m))) => format!("{h}:{m:02}"),
+        _ => "9:00".to_owned(),
+    });
+    // Monday to Friday; 0 is Sunday.
+    let days = signal(match &was {
+        Some(Picked::Weekly(days, _)) => days.clone(),
+        _ => vec![1u8, 2, 3, 4, 5],
+    });
+    let custom = signal(match was {
+        Some(Picked::Custom(c)) => c,
+        _ => "0 9 * * 1-5".to_owned(),
+    });
+    // The cron expression of what is picked, when it is whole.
+    let expression = computed(move || match repeat.get() {
+        Repeat::Every => minutes.get().map(cadence::every),
+        Repeat::Daily => time.with(|t| cadence::parse_time(t)).map(cadence::daily),
+        Repeat::Weekly => time.with(|t| cadence::parse_time(t)).and_then(|t| days.with(|d| cadence::weekly(d, t))),
+        Repeat::Custom => custom.with(|c| (c.split_whitespace().count() == 5).then(|| c.trim().to_owned())),
+    });
+    let is_edit = editing.is_some();
     let create = move || {
         let p = prompt.get_untracked();
-        if p.trim().is_empty() || path.get_untracked().is_empty() {
+        let Some(cron) = expression.get_untracked() else { return };
+        if p.trim().is_empty() || (!no_folder && path.get_untracked().is_empty()) {
             return;
         }
-        store::create_schedule(name.get_untracked(), p, cron.get_untracked(), path.get_untracked(), worktree.get_untracked());
+        let path = if no_folder { String::new() } else { path.get_untracked() };
+        let (name, worktree) = (name.get_untracked(), worktree.get_untracked());
+        match &editing {
+            Some(id) => store::update_schedule(id, name, p, cron, path, worktree),
+            None => store::create_schedule(name, p, cron, path, worktree),
+        }
         store::close_modal();
     };
     let mut projects = view().flex_row().flex_wrap().gap(px(S2));
@@ -285,7 +337,32 @@ fn new_schedule() -> View {
         let (a, b) = (p.root_path.clone(), p.root_path.clone());
         projects = projects.child(chip(p.name.clone(), Some(Icon::Folder), move || path.get() == a, move || path.set(b.clone())));
     }
-    sheet(t("New schedule"))
+    // A few characters beside a segmented control: as tall and as round as
+    // it, so the row reads as one line of controls.
+    let short = |width: f32| field().w(px(width)).h(px(CONTROL_SM + 4.0)).rounded(px(R_FULL)).text_size(px(TEXT_SM)).text_center();
+    let lead = |label: &'static str| text(label).text_size(px(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG_MUTED);
+    let time_row = move || {
+        view()
+            .flex_row()
+            .items_center()
+            .gap(px(S2))
+            .child(lead(t("At")))
+            .child(short(76.0).value(move || time.get()).on_change(move |v: &str| time.set(v.to_owned())).placeholder("9:00"))
+    };
+    // What was picked, said back: the check that it was understood.
+    let summary = move || -> SharedString {
+        match expression.get() {
+            Some(cron) if repeat.get() == Repeat::Custom && cadence::describe(&cron).starts_with("cron ") => t("Runs on this cron expression").into(),
+            Some(cron) => format!("{}{}", t("Runs: "), cadence::describe(&cron)).into(),
+            None => match repeat.get() {
+                Repeat::Custom => t("Five fields: minute, hour, day, month, weekday").into(),
+                Repeat::Every => t("Type a number, like 45").into(),
+                Repeat::Weekly if days.with(Vec::is_empty) => t("Pick at least one day").into(),
+                _ => t("Type a time, like 9:30 or 18:00").into(),
+            },
+        }
+    };
+    sheet(if is_edit { t("Edit schedule") } else { t("New schedule") })
         .w(px(520.0))
         .child(field().value(move || name.get()).on_change(move |v: &str| name.set(v.to_owned())).placeholder(t("Name (optional)")))
         .child(
@@ -297,21 +374,71 @@ fn new_schedule() -> View {
                 .on_change(move |v: &str| prompt.set(v.to_owned()))
                 .placeholder(t("What should the agent do each time?")),
         )
-        .child(section_label(t("Project")))
-        .child(projects)
-        .child(segmented(vec![(false, t("Local").into()), (true, t("Worktree").into())], move || worktree.get(), move |w| worktree.set(w)))
-        .child(section_label(t("Cadence")))
-        .child(segmented(presets, move || cron.get(), move |c| cron.set(c)))
-        .child(
-            field()
-                .value(move || cron.get())
-                .on_change(move |v: &str| cron.set(v.to_owned()))
-                .font_family(|| MONO)
-                .placeholder(t("Cron expression, e.g. 0 9 * * 1-5")),
-        )
+        .when(!no_folder, |v| {
+            v.child(section_label(t("Project")))
+                .child(projects)
+                .child(segmented(vec![(false, t("Local").into()), (true, t("Worktree").into())], move || worktree.get(), move |w| worktree.set(w)))
+        })
+        .child(section_label(t("Repeats")))
+        .child(segmented(
+            vec![
+                (Repeat::Every, t("Every so often").into()),
+                (Repeat::Daily, t("Every day").into()),
+                (Repeat::Weekly, t("Every week").into()),
+                (Repeat::Custom, t("Custom").into()),
+            ],
+            move || repeat.get(),
+            move |r| repeat.set(r),
+        ))
+        .child(dynamic(move || {
+            let r = repeat.get();
+            Some(untracked(move || match r {
+                Repeat::Every => view()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(S2))
+                    .child(lead(t("Every")))
+                    .child(short(56.0).value(move || count.get()).on_change(move |v: &str| count.set(v.to_owned())).placeholder("1"))
+                    .child(segmented(
+                        vec![(1u32, t("Minutes").into()), (60, t("Hours").into()), (1440, t("Days").into())],
+                        move || unit.get(),
+                        move |u| unit.set(u),
+                    )),
+                Repeat::Daily => time_row(),
+                Repeat::Weekly => {
+                    let zh = crate::i18n::is_zh();
+                    let mut row = view().flex_row().flex_wrap().gap(px(S2));
+                    // Monday first.
+                    for d in [1u8, 2, 3, 4, 5, 6, 0] {
+                        row = row.child(chip(
+                            cadence::day_name(d, zh),
+                            None,
+                            move || days.with(|l| l.contains(&d)),
+                            move || {
+                                days.update(|l| match l.iter().position(|x| *x == d) {
+                                    Some(i) => {
+                                        l.remove(i);
+                                    }
+                                    None => l.push(d),
+                                })
+                            },
+                        ));
+                    }
+                    view().gap(px(S3)).child(row).child(time_row())
+                }
+                Repeat::Custom => view().child(
+                    field()
+                        .value(move || custom.get())
+                        .on_change(move |v: &str| custom.set(v.to_owned()))
+                        .font_family(|| MONO)
+                        .placeholder(t("Cron expression, e.g. 0 9 * * 1-5")),
+                ),
+            }))
+        }))
+        .child(text(summary).text_size(px(TEXT_SM)).text_color(FG_MUTED))
         .child(actions(
-            btn(t("Create"), Variant::Primary, Sz::Md, Some(Icon::CalendarClock), create)
-                .disabled(move || prompt.with(|p| p.trim().is_empty()) || path.with(String::is_empty)),
+            btn(if is_edit { t("Save") } else { t("Create") }, Variant::Primary, Sz::Md, Some(Icon::CalendarClock), create)
+                .disabled(move || prompt.with(|p| p.trim().is_empty()) || (!no_folder && path.with(String::is_empty)) || expression.with(Option::is_none)),
         ))
 }
 

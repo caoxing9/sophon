@@ -71,12 +71,12 @@ fn host_line() -> impl IntoElement {
                             Some(Icon::Cpu),
                             None,
                             current.is_none(),
-                            || store::switch_host(None),
+                            || store::choose_host(None),
                         ));
                     for h in spaces {
                         let id = h.id.clone();
                         m = m.child(menu_row(h.label(), Some(Icon::Folder), None, current.as_deref() == Some(h.id.as_str()), move || {
-                            store::switch_host(Some(id.clone()))
+                            store::choose_host(Some(id.clone()))
                         }));
                     }
                     m = m.child(menu_row(t("New space…"), Some(Icon::FolderPlus), None, false, || store::open_modal(store::Modal::CreateSpace)));
@@ -91,7 +91,7 @@ fn host_line() -> impl IntoElement {
                 for h in others {
                     let id = h.id.clone();
                     m = m.child(menu_row(h.label(), Some(Icon::Server), None, current.as_deref() == Some(h.id.as_str()), move || {
-                        store::switch_host(Some(id.clone()))
+                        store::choose_host(Some(id.clone()))
                     }));
                 }
                 m = m
