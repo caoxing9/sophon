@@ -141,12 +141,13 @@ nsh package --target ios-simulator --icon assets/app-icon/icon-ios-1024.png
 
 ## Release
 
-```sh
-scripts/set-version.sh 0.2.0
-git commit -am "Release 0.2.0"
-git tag v0.2.0
-git push origin main v0.2.0
-```
+Releases are automatic ([auto-release.yml](.github/workflows/auto-release.yml)): every merge to `main` that changes
+the app raises the patch version by one (0.2.1, 0.2.2, …) and releases it. Merges made while a release is building
+go out together as the next one. For a minor or major version: Actions → Auto release → Run workflow.
+
+The version is committed to `main` (`nsh.json`, `Cargo.toml`, `Cargo.lock`) before the release is built, so a local
+build names itself what was released last and does not offer that release as an update. By hand,
+`scripts/release.sh patch|minor|major|<x.y.z>` opens a pull request that sets the version; merging it releases it.
 
 The [release workflow](.github/workflows/release.yml) builds the macOS apps (Apple silicon and Intel) and the iOS
 Simulator app, publishes the GitHub Release with `latest.json` (what installed apps update from), and updates the
