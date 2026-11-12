@@ -157,11 +157,16 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                                     .on_press(move || {
                                         let Some(key) = key.get_untracked() else { return };
                                         dismiss_keyboard();
-                                        let (images, files) = (key.clone(), key);
-                                        show_sheet(None, vec![
+                                        let (camera, images, files) = (key.clone(), key.clone(), key);
+                                        let mut items = vec![
                                             SheetItem::new(t("Photo Library"), move || pick_images_into(images.clone())).icon(Icon::Image),
                                             SheetItem::new(t("Choose Files"), move || pick_files_into(files.clone())).icon(Icon::Folder),
-                                        ]);
+                                        ];
+                                        // First, where there is a camera.
+                                        if camera_available() {
+                                            items.insert(0, SheetItem::new(t("Take Photo"), move || take_photo_into(camera.clone())).icon(Icon::Camera));
+                                        }
+                                        show_sheet(None, items);
                                     })
                                     .accessibility_label(t("Attach"))
                                     .w(px(36.0))
@@ -706,6 +711,34 @@ fn pick_images_into(key: String) {
             })
             .collect::<Vec<_>>();
         insert_images(&key, images);
+    });
+}
+
+/// Whether the device has a camera to take a photo with now.
+fn camera_available() -> bool {
+    #[cfg(target_os = "ios")]
+    return crate::platform::ios_camera::available();
+    #[cfg(not(target_os = "ios"))]
+    false
+}
+
+/// A photo taken now with the phone's camera, attached as an image.
+#[cfg_attr(not(target_os = "ios"), allow(unused_variables))]
+fn take_photo_into(key: String) {
+    // Once the sheet that offered it has gone: the camera's screen cannot
+    // come up over one that is leaving.
+    #[cfg(target_os = "ios")]
+    set_timeout(std::time::Duration::from_millis(350), move || {
+        crate::platform::ios_camera::take_photo(move |photo| {
+            use base64::Engine;
+            let Some(bytes) = photo else { return };
+            let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+            insert_images(&key, vec![crate::daemon::connection::ImageInput {
+                name: format!("photo-{at}.jpg"),
+                mime: "image/jpeg".to_owned(),
+                data: base64::engine::general_purpose::STANDARD.encode(&bytes),
+            }]);
+        });
     });
 }
 
