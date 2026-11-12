@@ -18,10 +18,10 @@ pub(crate) fn sidebar() -> View {
         .child(host_line())
         .child(
             view()
-                .px(px(S2))
+                .px(sp(S2))
                 // The space between the two groups, which the first
                 // project's own top margin no longer gives.
-                .pb(px(S4))
+                .pb(sp(S4))
                 .child(nav_item(Icon::SquarePen, t("New workspace"), || store::screen() == Screen::NewWorkspace, || {
                     store::open_new_workspace(None)
                 }))
@@ -53,7 +53,7 @@ fn host_line() -> impl IntoElement {
     // A narrow window shows the sidebar alone, across it.
     let sidebar = if window().width.0 < 600.0 { window().width.0 } else { store::sidebar_width() };
     let width = sidebar - 2.0 * S2;
-    view().px(px(S2)).child(dropdown_wide(host_body(), width)
+    view().px(sp(S2)).child(dropdown_wide(host_body(), width)
         .child(dynamic(|| {
             let hosts = store::hosts();
             let current = store::current_host().map(|h| h.id);
@@ -121,11 +121,11 @@ fn host_body() -> View {
     view()
         .flex_row()
         .items_center()
-        .gap(px(S2))
-        .px(px(S2))
+        .gap(sp(S2))
+        .px(sp(S2))
         // As tall as the rows under it, its status mark where their icons are.
-        .h(px(CONTROL_MD))
-        .mb(px(S1))
+        .h(sp(CONTROL_MD))
+        .mb(sp(S1))
         .rounded(px(R_LG))
         .hover(|s| s.bg(sidebar_hover()))
         .child(
@@ -152,7 +152,7 @@ fn host_body() -> View {
                                     Conn::Down(_) => tf("{} offline", &[&name.unwrap_or_else(|| t("This Mac").into())]),
                                 }
                             })
-                            .text_size(px(TEXT_BASE))
+                            .text_size(tx(TEXT_BASE))
                             .font_weight(FontWeight(500))
                             .number_of_lines(1)
                             .flex_shrink(1.0)
@@ -176,17 +176,17 @@ fn nav_item(
         .on_press(on_press)
         .flex_row()
         .items_center()
-        .gap(px(S2))
-        .h(px(CONTROL_MD))
+        .gap(sp(S2))
+        .h(sp(CONTROL_MD))
         // Rows that fill under the pointer keep a hairline apart.
         .my(px(1.0))
-        .px(px(S2))
+        .px(sp(S2))
         .rounded(px(R_LG))
         .bg(move || if active.get() { SIDEBAR_SELECTED } else { tint(SIDEBAR, 0.0) })
         .hover(|s| s.bg(sidebar_hover()))
         .active(|s| s.opacity(0.7))
         .child(icon(glyph, 16.0).text_color(FG_MUTED))
-        .child(text(label).text_size(px(TEXT_BASE)).text_color(FG))
+        .child(text(label).text_size(tx(TEXT_BASE)).text_color(FG))
 }
 
 fn empty_list() -> impl IntoElement {
@@ -198,10 +198,10 @@ fn empty_list() -> impl IntoElement {
 fn connect_elsewhere() -> impl IntoElement {
     view()
         .flex_1()
-        .px(px(S3))
-        .pt(px(S3))
-        .gap(px(S3))
-        .child(text(t("Connect to the computer your agents run on")).text_size(px(TEXT_SM)).line_height(px(18.0)).text_color(FG_MUTED))
+        .px(sp(S3))
+        .pt(sp(S3))
+        .gap(sp(S3))
+        .child(text(t("Connect to the computer your agents run on")).text_size(tx(TEXT_SM)).line_height(px(18.0)).text_color(FG_MUTED))
         .child(crate::ui::shared::modals::nearby_list())
         .child(btn(t("Add host…"), Variant::Secondary, Sz::Sm, Some(Icon::Plus), || store::open_modal(store::Modal::AddHost)))
 }
@@ -211,7 +211,7 @@ fn service_status() -> impl IntoElement {
     let failed = computed(store::service_start_error);
     // This Mac's service starts on its own: a button only when that failed.
     let retry = computed(move || matches!(conn.get(), Conn::Down(_)) && store::on_this_mac() && failed.get().is_some());
-    view().flex_1().px(px(S4)).pt(px(S4)).gap(px(S3)).items_start().child(
+    view().flex_1().px(sp(S4)).pt(sp(S4)).gap(sp(S3)).items_start().child(
         text(move || match conn.get() {
             Conn::Down(_) if !store::on_this_mac() => String::new(),
             Conn::Down(_) => match failed.get() {
@@ -221,7 +221,7 @@ fn service_status() -> impl IntoElement {
             Conn::Connected { .. } => t("No projects yet").to_owned(),
             _ => String::new(),
         })
-        .text_size(px(TEXT_SM))
+        .text_size(tx(TEXT_SM))
         .line_height(px(18.0))
         .text_color(FG_MUTED),
     )
@@ -240,9 +240,9 @@ fn footer() -> impl IntoElement {
     view()
         .flex_row()
         .items_center()
-        .gap(px(S1))
-        .px(px(S2))
-        .py(px(S2))
+        .gap(sp(S1))
+        .px(sp(S2))
+        .py(sp(S2))
         .border_t_1()
         .border_color(tint(BORDER, 0.6))
         .child(
@@ -290,7 +290,7 @@ fn update_pill() -> impl IntoElement {
             Phase::Installing => 1.0,
             _ => 0.0,
         }));
-        view().px(px(S2)).pb(px(S2)).child(
+        view().px(sp(S2)).pb(sp(S2)).child(
             button()
                 .on_press(move || {
                     if !busy.get_untracked() {
@@ -300,9 +300,9 @@ fn update_pill() -> impl IntoElement {
                 .accessibility_label(crate::i18n::t("Update the app"))
                 .flex_row()
                 .items_center()
-                .gap(px(S2))
+                .gap(sp(S2))
                 .h(px(36.0))
-                .px(px(S3))
+                .px(sp(S3))
                 .rounded(px(R_LG))
                 .overflow_hidden()
                 .bg(tint(ACCENT, 0.12))
@@ -321,8 +321,8 @@ fn update_pill() -> impl IntoElement {
                         .bg(tint(ACCENT, 0.16)),
                 )
                 .child(icon(Icon::CircleArrowUp, 16.0).text_color(ACCENT))
-                .child(text(label).text_size(px(TEXT_SM)).font_weight(FontWeight(600)).text_color(FG).flex_1().number_of_lines(1))
-                .child(text(move || format!("v{}", st.with(|s| s.current.clone()))).text_size(px(TEXT_XS)).text_color(FG_MUTED)),
+                .child(text(label).text_size(tx(TEXT_SM)).font_weight(FontWeight(600)).text_color(FG).flex_1().number_of_lines(1))
+                .child(text(move || format!("v{}", st.with(|s| s.current.clone()))).text_size(tx(TEXT_XS)).text_color(FG_MUTED)),
         )
     })
 }

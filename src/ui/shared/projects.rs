@@ -35,7 +35,7 @@ pub(crate) fn project_list(actions: bool, empty: impl Fn() -> AnyElement + 'stat
             }
             scroll()
                 .flex_1()
-                .child(view().pb(px(S2)).child(each(move || groups.get(), store::Group::key, move |g, _| group(g, actions))))
+                .child(view().pb(sp(S2)).child(each(move || groups.get(), store::Group::key, move |g, _| group(g, actions))))
                 .into_element()
         }))
     }))
@@ -100,13 +100,13 @@ fn workspace_entry(w: ReadSignal<crate::daemon::Workspace>, actions: bool) -> im
                     .child(when(move || more.get() > 0, move || {
                         button()
                             .on_press(move || limit.update(|l| *l += 20))
-                            .mx(px(S2))
+                            .mx(sp(S2))
                             .h(px(ROW_HEIGHT - 4.0))
                             .pl(px(S2 + 15.0 + S2))
                             .justify_center()
                             .rounded(px(R_LG))
                             .hover(|s| s.bg(sidebar_hover()))
-                            .child(text(move || crate::i18n::tf("Show {} more", &[&more.get().to_string()])).text_size(px(TEXT_SM)).text_color(FG_MUTED))
+                            .child(text(move || crate::i18n::tf("Show {} more", &[&more.get().to_string()])).text_size(tx(TEXT_SM)).text_color(FG_MUTED))
                     }))
                     .into_element()
             } else {
@@ -130,11 +130,11 @@ fn conversation_row(agent: ReadSignal<crate::daemon::Agent>, actions: bool) -> i
         .min_w(px(0.0))
         .flex_row()
         .items_center()
-        .gap(px(S2))
-        .h(px(ROW_HEIGHT))
-        .pl(px(S2))
+        .gap(sp(S2))
+        .h(sp(ROW_HEIGHT))
+        .pl(sp(S2))
         .child(view().w(px(15.0)).items_center().child(status_dot(move || agent.with(|a| Status::of_agent(&a.status, a.requires_attention || !a.pending.is_empty())))))
-        .child(text(move || agent.with(|a| a.title.clone())).text_size(px(TEXT_BASE)).text_color(FG).number_of_lines(1).flex_1());
+        .child(text(move || agent.with(|a| a.title.clone())).text_size(tx(TEXT_BASE)).text_color(FG).number_of_lines(1).flex_1());
     let more = dropdown(
         view()
             .w(px(24.0))
@@ -148,7 +148,7 @@ fn conversation_row(agent: ReadSignal<crate::daemon::Agent>, actions: bool) -> i
     .align(nsh_core::overlay::Align::End)
     .child(view().child(menu_row(t("Archive"), Some(Icon::Archive), None, false, move || store::archive_agent(&id))));
     view()
-        .mx(px(S2))
+        .mx(sp(S2))
         .mb(px(2.0))
         .rounded(px(R_LG))
         .bg(move || if selected.get() { SIDEBAR_SELECTED } else { tint(SIDEBAR, 0.0) })
@@ -157,7 +157,7 @@ fn conversation_row(agent: ReadSignal<crate::daemon::Agent>, actions: bool) -> i
             view()
                 .flex_row()
                 .items_center()
-                .pr(px(S1))
+                .pr(sp(S1))
                 .rounded(px(R_LG))
                 .group()
                 .hover(|s| s.bg(sidebar_hover()))
@@ -170,7 +170,7 @@ fn conversation_row(agent: ReadSignal<crate::daemon::Agent>, actions: bool) -> i
 }
 
 fn section_row(item: Memo<Option<Row>>) -> impl IntoElement {
-    view().px(px(S4)).pt(px(S3)).pb(px(S1)).child(section_label(move || match item.get() {
+    view().px(sp(S4)).pt(sp(S3)).pb(sp(S1)).child(section_label(move || match item.get() {
         Some(Row::Section(s)) => s,
         _ => String::new(),
     }))
@@ -190,16 +190,16 @@ fn project_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
     let header = view()
         .flex_row()
         .items_center()
-        .gap(px(S2))
-        .mx(px(S2))
-        .pl(px(S1))
+        .gap(sp(S2))
+        .mx(sp(S2))
+        .pl(sp(S1))
         .pr(px(2.0))
         // Projects sit as close as the rows above them: folded, they read
         // as one list.
         .mt(px(if MOBILE { S3 } else { 2.0 }))
         .mb(px(2.0))
         // As tall and as round as the conversations' rows under it.
-        .h(px(ROW_HEIGHT))
+        .h(sp(ROW_HEIGHT))
         .rounded(px(R_LG))
         .translate_y(move || DefiniteLength::from(px(drag.get())))
         .bg(move || if dragging.get() { sidebar_hover() } else { tint(SIDEBAR, 0.0) })
@@ -221,7 +221,7 @@ fn project_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
                 .flex_row()
                 .items_center()
                 .gap(px(6.0))
-                .h(px(ROW_HEIGHT))
+                .h(sp(ROW_HEIGHT))
                 .child(
                     icon(Icon::ChevronDown, 13.0)
                         .text_color(FG_FAINT)
@@ -231,7 +231,7 @@ fn project_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
                 .child(icon(Icon::Folder, 15.0).text_color(FG_FAINT))
                 .child(
                     text(move || project.with(|p| p.as_ref().map(|p| p.name.clone()).unwrap_or_default()))
-                        .text_size(px(TEXT_SM))
+                        .text_size(tx(TEXT_SM))
                         .font_weight(FontWeight(500))
                         .text_color(FG_MUTED)
                         .group_hover(|s| s.text_color(FG))
@@ -319,13 +319,13 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
         .min_w(px(0.0))
         .flex_row()
         .items_center()
-        .gap(px(S2))
-        .h(px(ROW_HEIGHT))
-        .pl(px(S2))
+        .gap(sp(S2))
+        .h(sp(ROW_HEIGHT))
+        .pl(sp(S2))
         .child(view().w(px(15.0)).items_center().child(status_dot(status)))
         .child(
             text(move || ws.with(|w| w.as_ref().map(|w| w.name.clone()).unwrap_or_default()))
-                .text_size(px(TEXT_BASE))
+                .text_size(tx(TEXT_BASE))
                 .text_color(move || if selected.get() { FG } else { FG })
                 .number_of_lines(1)
                 .flex_1(),
@@ -350,7 +350,7 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
                     _ => String::new(),
                 })
             })
-            .text_size(px(TEXT_XS))
+            .text_size(tx(TEXT_XS))
             .font_family(mono_font)
             .text_color(FG_FAINT),
         );
@@ -406,7 +406,7 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
     // Two layers: the chosen row's fill below, the pointer's translucent
     // one over it (so a chosen row under the pointer darkens a step too).
     view()
-        .mx(px(S2))
+        .mx(sp(S2))
         // A hairline between rows that fill under the pointer.
         .mb(px(2.0))
         .rounded(px(R_LG))
@@ -416,7 +416,7 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
             view()
                 .flex_row()
                 .items_center()
-                .pr(px(S1))
+                .pr(sp(S1))
                 .rounded(px(R_LG))
                 .group()
                 .hover(|s| s.bg(sidebar_hover()))

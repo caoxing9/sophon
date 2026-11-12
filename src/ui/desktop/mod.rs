@@ -147,14 +147,14 @@ fn quit_hint() -> impl IntoElement {
         .pointer_events(PointerEvents::None)
         .child(
             glass_strong(view())
-                .px(px(S6))
-                .py(px(S4))
+                .px(sp(S6))
+                .py(sp(S4))
                 .rounded(px(R_LG + 4.0))
                 .opacity(move || if hint.get().is_some() { 1.0_f32 } else { 0.0 })
                 .transition_opacity()
                 .child(
                     crate::ui::kit::text(move || hint.get().map(t).unwrap_or_default())
-                        .text_size(px(TEXT_LG))
+                        .text_size(tx(TEXT_LG))
                         .font_weight(nsh_core::element::FontWeight(600))
                         .text_color(FG),
                 ),

@@ -155,28 +155,28 @@ fn panel(title: Option<String>, items: Vec<SheetItem>) -> impl IntoElement {
         )
         .child(
             view()
-                .px(px(S2))
-                .pb_safe_area_plus(px(S2))
-                .gap(px(S2))
+                .px(sp(S2))
+                .pb_safe_area_plus(sp(S2))
+                .gap(sp(S2))
                 .bind_translate_y(&rise)
                 .child(
                     liquid_glass(view())
                         .rounded(px(28.0))
                         .overflow_hidden()
-                        .child(view().items_center().pt(px(S2)).child(view().w(px(36.0)).h(px(5.0)).rounded(px(R_FULL)).bg(tint(FG, 0.18))))
+                        .child(view().items_center().pt(sp(S2)).child(view().w(px(36.0)).h(px(5.0)).rounded(px(R_FULL)).bg(tint(FG, 0.18))))
                         .when_some(title, |v, title| {
                             v.child(
                                 text(title)
-                                    .px(px(S4))
-                                    .pt(px(S2))
-                                    .pb(px(S1))
-                                    .text_size(px(TEXT_SM))
+                                    .px(sp(S4))
+                                    .pt(sp(S2))
+                                    .pb(sp(S1))
+                                    .text_size(tx(TEXT_SM))
                                     .font_weight(FontWeight(600))
                                     .text_color(FG_MUTED)
                                     .number_of_lines(1),
                             )
                         })
-                        .child(scroll().max_h(px(480.0)).child(rows.pb(px(S1)))),
+                        .child(scroll().max_h(px(480.0)).child(rows.pb(sp(S1)))),
                 )
                 .child(
                     liquid_glass(view()).rounded(px(R_FULL)).child(
@@ -187,7 +187,7 @@ fn panel(title: Option<String>, items: Vec<SheetItem>) -> impl IntoElement {
                             .justify_center()
                             .rounded(px(R_FULL))
                             .active(|s| s.bg(highlight()))
-                            .child(text(crate::i18n::t("Cancel")).text_size(px(TEXT_LG)).font_weight(FontWeight(600))),
+                            .child(text(crate::i18n::t("Cancel")).text_size(tx(TEXT_LG)).font_weight(FontWeight(600))),
                     ),
                 ),
         )
@@ -202,9 +202,9 @@ fn row(item: SheetItem, divider: bool) -> impl IntoElement {
         .on_press(move || close_then(Some(run.clone())))
         .flex_row()
         .items_center()
-        .gap(px(S3))
+        .gap(sp(S3))
         .min_h(px(52.0))
-        .px(px(S4))
+        .px(sp(S4))
         .active(|s| s.bg(highlight()))
         .child(match item.glyph {
             Some(g) => view().w(px(22.0)).items_center().child(icon(g, 20.0).text_color(if item.destructive { DANGER } else { FG_MUTED })),
@@ -214,9 +214,9 @@ fn row(item: SheetItem, divider: bool) -> impl IntoElement {
             view()
                 .flex_1()
                 .min_w(px(0.0))
-                .py(px(S3))
+                .py(sp(S3))
                 .when(divider, |v| v)
-                .child(text(item.label).text_size(px(TEXT_LG)).text_color(ink).number_of_lines(2)),
+                .child(text(item.label).text_size(tx(TEXT_LG)).text_color(ink).number_of_lines(2)),
         )
         .child(match item.checked {
             true => icon(Icon::Check, 18.0).text_color(ACCENT).into_element(),

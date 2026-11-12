@@ -31,7 +31,7 @@ pub(crate) fn agents_card(editable: bool) -> impl IntoElement {
         Some(untracked(move || {
             let mut v = view();
             if list.is_empty() {
-                v = v.child(view().px(px(S4)).py(px(S4)).child(text(t("Loading…")).text_size(px(TEXT_SM)).text_color(FG_MUTED)));
+                v = v.child(view().px(sp(S4)).py(sp(S4)).child(text(t("Loading…")).text_size(tx(TEXT_SM)).text_color(FG_MUTED)));
             }
             for (i, ((p, d), u)) in list.into_iter().zip(diags).zip(updates).enumerate() {
                 v = v.child(agent_row(p, d, u, cfg.as_ref(), editable, i == 0));
@@ -42,9 +42,9 @@ pub(crate) fn agents_card(editable: bool) -> impl IntoElement {
                         .flex_row()
                         .flex_wrap()
                         .items_center()
-                        .gap(px(S2))
-                        .px(px(S4))
-                        .py(px(S3))
+                        .gap(sp(S2))
+                        .px(sp(S4))
+                        .py(sp(S3))
                         .border_t_1()
                         .border_color(BORDER)
                         .child(btn(t("Add account…"), Variant::Outline, Sz::Sm, Some(Icon::Plus), || {
@@ -83,8 +83,8 @@ fn agent_row(p: Provider, d: Option<Diagnostic>, u: Option<store::AgentUpdate>, 
         .flex_row()
         .flex_wrap()
         .items_center()
-        .gap(px(S2))
-        .child(text(p.label.clone()).text_size(px(TEXT_BASE)).font_weight(FontWeight(500)))
+        .gap(sp(S2))
+        .child(text(p.label.clone()).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)))
         .child(badge(status, tone));
     if gateway {
         title = title.child(badge(t("Through a gateway"), if native_claude { WARNING } else { FG_MUTED }));
@@ -120,7 +120,7 @@ fn agent_row(p: Provider, d: Option<Diagnostic>, u: Option<store::AgentUpdate>, 
     }
     if on && !p.available() && p.status != "loading" {
         let why = p.error.clone().or(d.error.clone()).unwrap_or_else(|| t("Not installed, or not found on the service's PATH").into());
-        body = body.child(text(why).text_size(px(TEXT_SM)).text_color(DANGER));
+        body = body.child(text(why).text_size(tx(TEXT_SM)).text_color(DANGER));
     }
     if gateway && native_claude {
         body = body.child(
@@ -132,7 +132,7 @@ fn agent_row(p: Provider, d: Option<Diagnostic>, u: Option<store::AgentUpdate>, 
                 .child(
                     text(t("Some of its models come through a gateway. Claude Code must run natively, on your own account: use its own models"))
                         .flex_1()
-                        .text_size(px(TEXT_SM))
+                        .text_size(tx(TEXT_SM))
                         .text_color(WARNING),
                 ),
         );
@@ -146,7 +146,7 @@ fn agent_row(p: Provider, d: Option<Diagnostic>, u: Option<store::AgentUpdate>, 
     let install = store::agent_install(&p.id);
     let installable = editable && store::on_this_mac() && on && p.status == "unavailable" && crate::agent_update::installable(&p.id);
     if let Some(e) = install.as_ref().and_then(|i| i.error.clone()) {
-        body = body.child(text(tf("Could not install it: {}", &[&e])).text_size(px(TEXT_SM)).text_color(DANGER));
+        body = body.child(text(tf("Could not install it: {}", &[&e])).text_size(tx(TEXT_SM)).text_color(DANGER));
     }
     // Installed, and its own account not signed in (the desktop app's
     // sign-in is not the CLI's): its sign-in, in Terminal.
@@ -155,7 +155,7 @@ fn agent_row(p: Provider, d: Option<Diagnostic>, u: Option<store::AgentUpdate>, 
         .flatten()
         .filter(|_| p.id == "claude");
 
-    let mut trailing = view().flex_row().items_center().gap(px(S2));
+    let mut trailing = view().flex_row().items_center().gap(sp(S2));
     if installable {
         let id = p.id.clone();
         let running = install.as_ref().is_some_and(|i| i.running);
@@ -194,9 +194,9 @@ fn agent_row(p: Provider, d: Option<Diagnostic>, u: Option<store::AgentUpdate>, 
     view()
         .flex_row()
         .items_start()
-        .gap(px(S3))
-        .px(px(S4))
-        .py(px(S4))
+        .gap(sp(S3))
+        .px(sp(S4))
+        .py(sp(S4))
         .when(!first, |v| v.border_t_1().border_color(BORDER))
         .child(
             view()
@@ -216,23 +216,23 @@ fn agent_row(p: Provider, d: Option<Diagnostic>, u: Option<store::AgentUpdate>, 
 /// A newer version, the update under way, or why it failed. Its button sits
 /// by the switch.
 fn update_line(u: &store::AgentUpdate, newer: Option<&str>) -> Option<View> {
-    let row = view().flex_row().flex_wrap().items_center().gap(px(S2));
+    let row = view().flex_row().flex_wrap().items_center().gap(sp(S2));
     if u.updating {
         return Some(row.child(muted(t("Updating…").into())));
     }
     if let Some(e) = &u.error {
-        let row = row.child(text(tf("Update failed: {}", &[e])).text_size(px(TEXT_SM)).text_color(DANGER));
+        let row = row.child(text(tf("Update failed: {}", &[e])).text_size(tx(TEXT_SM)).text_color(DANGER));
         return Some(match &u.install {
             Some(i) => row.child(muted(tf("Run it yourself: {}", &[&crate::agent_update::command_line(i)])).font_family(mono_font)),
             None => row,
         });
     }
     let latest = newer?;
-    Some(row.child(text(tf("Version {} is out", &[latest])).text_size(px(TEXT_SM)).text_color(ACCENT)))
+    Some(row.child(text(tf("Version {} is out", &[latest])).text_size(tx(TEXT_SM)).text_color(ACCENT)))
 }
 
 fn muted(s: String) -> nsh_core::element::Text {
-    text(s).text_size(px(TEXT_SM)).text_color(FG_MUTED)
+    text(s).text_size(tx(TEXT_SM)).text_color(FG_MUTED)
 }
 
 /// `Claude account · me@x.com · Max 20x · until 2026-11-29`, or that it is
@@ -240,7 +240,7 @@ fn muted(s: String) -> nsh_core::element::Text {
 fn login_line(d: &Diagnostic) -> Option<nsh_core::element::Text> {
     let l = d.login.as_ref()?;
     if !l.signed_in {
-        return Some(text(t("Not signed in")).text_size(px(TEXT_SM)).text_color(WARNING));
+        return Some(text(t("Not signed in")).text_size(tx(TEXT_SM)).text_color(WARNING));
     }
     let mut parts: Vec<String> = vec![match l.method.as_deref() {
         Some("claude.ai") => t("Claude account").into(),
@@ -282,15 +282,15 @@ fn command_box(cmd: String) -> View {
     view()
         .flex_row()
         .items_center()
-        .gap(px(S2))
-        .pl(px(S3))
-        .pr(px(S1))
-        .py(px(S1))
+        .gap(sp(S2))
+        .pl(sp(S3))
+        .pr(sp(S1))
+        .py(sp(S1))
         .rounded(px(R_LG))
         .bg(SURFACE2)
         .border_1()
         .border_color(BORDER)
-        .child(text(cmd).flex_1().min_w(px(0.0)).font_family(mono_font).text_size(px(TEXT_SM)))
+        .child(text(cmd).flex_1().min_w(px(0.0)).font_family(mono_font).text_size(tx(TEXT_SM)))
         .child(icon_btn(Icon::Copy, Sz::Sm, t("Copy"), move || {
             set_clipboard(copy.clone());
             store::notify(t("Command copied").into());
@@ -315,7 +315,7 @@ fn base_choice(base: Signal<Base>) -> View {
 }
 
 fn hint(s: impl IntoReactive<SharedString>) -> nsh_core::element::Text {
-    text(s).text_size(px(TEXT_SM)).line_height(px(18.0)).text_color(FG_MUTED)
+    text(s).text_size(tx(TEXT_SM)).line_height(px(18.0)).text_color(FG_MUTED)
 }
 
 /// Another account of Claude Code or Codex: a separate instance whose
@@ -347,13 +347,13 @@ pub(crate) fn add_account() -> View {
         let done = added.get();
         Some(untracked(move || match done {
             Some((label, cmd)) => view()
-                .gap(px(S3))
+                .gap(sp(S3))
                 .child(hint(tf("“{}” is added. Sign it in on that computer, then press Check again", &[&label])))
                 .child(command_box(cmd))
                 .child(actions(btn(t("Done"), Variant::Primary, Sz::Md, None, store::close_modal)))
                 .into_element(),
             None => view()
-                .gap(px(S3))
+                .gap(sp(S3))
                 .child(hint(t("A separate agent with its own login, next to the one you have. Sophon never switches accounts on its own")))
                 .child(base_choice(base))
                 .child(field().value(move || name.get()).on_change(move |v: &str| name.set(v.to_owned())).placeholder(t("Name, e.g. Work")))
@@ -420,7 +420,7 @@ pub(crate) fn add_api_key() -> View {
         store::close_modal();
     };
 
-    let mut presets = view().flex_row().flex_wrap().gap(px(S2));
+    let mut presets = view().flex_row().flex_wrap().gap(sp(S2));
     for (i, p) in PRESETS.iter().enumerate() {
         presets = presets.child(chip(p.label, None, move || preset.get() == Some(i), move || preset.set(Some(i))));
     }
@@ -435,7 +435,7 @@ pub(crate) fn add_api_key() -> View {
             Some(untracked(move || {
                 if custom {
                     view()
-                        .gap(px(S3))
+                        .gap(sp(S3))
                         .child(base_choice(base))
                         .child(
                             field()
@@ -471,7 +471,7 @@ pub(crate) fn add_api_key() -> View {
             }
         }))
         .child(field().value(move || key.get()).on_change(move |v: &str| key.set(v.to_owned())).masked(true).placeholder(t("API key")))
-        .child(hint(t("The key is kept in the service's config file on that computer, like any provider's")).text_size(px(TEXT_XS)))
+        .child(hint(t("The key is kept in the service's config file on that computer, like any provider's")).text_size(tx(TEXT_XS)))
         .child(hint(move || problem.get().map(t).unwrap_or_default()).text_color(WARNING))
         .child(actions(
             btn(t("Add"), Variant::Primary, Sz::Md, Some(Icon::Plus), add).disabled(move || problem.with(Option::is_some)),

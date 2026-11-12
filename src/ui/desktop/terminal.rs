@@ -33,7 +33,7 @@ pub(crate) fn terminal_pane(id: String) -> impl IntoElement {
         });
     }
     let (input_id, resize_id) = (id.clone(), id.clone());
-    view().flex_1().bg(SURFACE0).p(px(S3)).child(
+    view().flex_1().bg(SURFACE0).p(sp(S3)).child(
         terminal()
             .component_ref(&term)
             .accessibility_label(t("Terminal"))
@@ -75,10 +75,10 @@ pub(crate) fn terminal_panel() -> impl IntoElement {
             view()
                 .flex_row()
                 .items_center()
-                .gap(px(S1))
+                .gap(sp(S1))
                 .h(px(34.0))
-                .pl(px(S3))
-                .pr(px(S2))
+                .pl(sp(S3))
+                .pr(sp(S2))
                 .border_b_1()
                 .border_color(tint(BORDER, 0.6))
                 .child(each(store::terminals, |t| t.id.clone(), move |t, _| terminal_chip(t.get_untracked(), active)))
@@ -107,7 +107,7 @@ fn terminal_chip(info: crate::daemon::connection::TerminalInfo, active: Memo<Opt
         .items_center()
         .gap(px(6.0))
         .h(px(26.0))
-        .pl(px(S2))
+        .pl(sp(S2))
         .pr(px(4.0))
         .max_w(px(220.0))
         .rounded(px(R_MD))
@@ -116,7 +116,7 @@ fn terminal_chip(info: crate::daemon::connection::TerminalInfo, active: Memo<Opt
         .child(icon(Icon::SquareTerminal, 13.0).text_color(FG_MUTED))
         .child(
             text(label)
-                .text_size(px(TEXT_SM))
+                .text_size(tx(TEXT_SM))
                 .text_color(move || if on.get() { FG } else { FG_MUTED })
                 .number_of_lines(1)
                 .flex_shrink(1.0),

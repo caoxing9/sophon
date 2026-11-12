@@ -61,6 +61,18 @@ pub(crate) fn tint(color: AdaptiveColor, alpha: f32) -> AdaptiveColor {
     color.opacity(alpha)
 }
 
+/// A text size from the ramp, at the size the user set (`fontSize` in the
+/// settings: the base size in points, 14 by default). Read as each view is
+/// made: a change mounts the UI again.
+pub(crate) fn tx(size: f32) -> nsh_core::geometry::Points {
+    nsh_core::geometry::px((size * crate::store::ui_scale().0 * 2.0).round() / 2.0)
+}
+
+/// A spacing or a control's height from the ramps, tighter in compact mode.
+pub(crate) fn sp(size: f32) -> nsh_core::geometry::Points {
+    nsh_core::geometry::px((size * crate::store::ui_scale().1).round())
+}
+
 // Type ramp (points).
 pub(crate) const TEXT_XS: f32 = 11.0;
 pub(crate) const TEXT_SM: f32 = 12.0;

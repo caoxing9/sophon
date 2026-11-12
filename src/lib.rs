@@ -119,6 +119,8 @@ pub fn App() -> impl IntoElement {
         .child(dynamic(|| {
             let _ = i18n::lang();
             let (font, _) = store::fonts();
+            // The text size and compact mode too: sizes are read as views are made.
+            let _ = store::look();
             Some(untracked(move || {
                 let shell = view().flex_1().child(ui::shell());
                 match font.clone() {

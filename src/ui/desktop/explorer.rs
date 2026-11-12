@@ -84,11 +84,11 @@ pub(crate) fn explorer() -> View {
             view()
                 .flex_row()
                 .items_center()
-                .gap(px(S2))
-                .pl(px(S3))
-                .pr(px(S2))
-                .pt(px(S2))
-                .pb(px(S1))
+                .gap(sp(S2))
+                .pl(sp(S3))
+                .pr(sp(S2))
+                .pt(sp(S2))
+                .pb(sp(S1))
                 .window_drag(true)
                 .child(segmented(
                 vec![
@@ -142,8 +142,8 @@ fn files_view() -> View {
             })
             .keys(move || rows.with(|r| r.iter().map(|x| x.entry.path.clone()).collect::<Vec<_>>()))
             .estimated_item_size(px(28.0))
-            .content_padding_top(px(S1))
-            .content_padding_bottom(px(S2))
+            .content_padding_top(sp(S1))
+            .content_padding_bottom(sp(S2))
             .flex_1()
             .into_element()
         }))
@@ -153,7 +153,7 @@ fn files_view() -> View {
 fn tree_row(row: Memo<Option<store::TreeRow>>) -> impl IntoElement {
     nsh_base::context_menu()
         .popup_style(|s| {
-            s.bg(POPOVER).rounded(px(R_XL)).border_1().border_color(BORDER).p(px(S1)).min_w(px(200.0)).shadow_lg()
+            s.bg(POPOVER).rounded(px(R_XL)).border_1().border_color(BORDER).p(sp(S1)).min_w(px(200.0)).shadow_lg()
         })
         .trigger(tree_row_body(row))
         .child(dynamic(move || {
@@ -202,13 +202,13 @@ fn tree_row_body(row: Memo<Option<store::TreeRow>>) -> impl IntoElement {
                 }
             }
         })
-        .mx(px(S2))
+        .mx(sp(S2))
         .flex_row()
         .items_center()
         .gap(px(6.0))
         .h(px(28.0))
         .pl(move || px(S2 + row.with(|r| r.as_ref().map_or(0, |r| r.depth)) as f32 * 14.0))
-        .pr(px(S2))
+        .pr(sp(S2))
         .rounded(px(R_LG))
         .bg(move || if selected.get() { highlight() } else { tint(SURFACE1, 0.0) })
         .hover(|s| s.bg(highlight()))
@@ -225,7 +225,7 @@ fn tree_row_body(row: Memo<Option<store::TreeRow>>) -> impl IntoElement {
         }))
         .child(
             text(move || row.with(|r| r.as_ref().map(|r| r.entry.name.clone()).unwrap_or_default()))
-                .text_size(px(TEXT_BASE))
+                .text_size(tx(TEXT_BASE))
                 .number_of_lines(1)
                 .flex_1(),
         )
@@ -239,16 +239,16 @@ fn changes_view() -> View {
             view()
                 .flex_row()
                 .items_center()
-                .gap(px(S2))
+                .gap(sp(S2))
                 .h(px(32.0))
-                .px(px(S4))
+                .px(sp(S4))
                 .child(
                     text(move || changes.with(|c| match c.files.len() {
                         0 => String::new(),
                         1 => t("1 file").into(),
                         n => tf("{} files", &[&n.to_string()]),
                     }))
-                    .text_size(px(TEXT_SM))
+                    .text_size(tx(TEXT_SM))
                     .text_color(FG_MUTED),
                 )
                 .child(view().flex_1())
@@ -258,7 +258,7 @@ fn changes_view() -> View {
                         if a + d == 0 { String::new() } else { format!("+{a} −{d}") }
                     })
                 })
-                .text_size(px(TEXT_SM))
+                .text_size(tx(TEXT_SM))
                 .font_family(mono_font)
                 .text_color(FG_MUTED)),
         )
@@ -278,18 +278,18 @@ fn changes_view() -> View {
                 view()
                     .flex_1()
                     .child(
-                        view().px(px(S2)).pt(px(S2)).child(
+                        view().px(sp(S2)).pt(sp(S2)).child(
                             button()
                                 .on_press(|| store::open_tab(Tab::Diff(None)))
                                 .flex_row()
                                 .items_center()
-                                .gap(px(S2))
+                                .gap(sp(S2))
                                 .h(px(30.0))
-                                .px(px(S2))
+                                .px(sp(S2))
                                 .rounded(px(R_LG))
                                 .hover(|s| s.bg(highlight()))
                                 .child(icon(Icon::FileDiff, 15.0).text_color(FG_MUTED))
-                                .child(text(t("All changes")).text_size(px(TEXT_BASE))),
+                                .child(text(t("All changes")).text_size(tx(TEXT_BASE))),
                         ),
                     )
                     .child(
@@ -299,7 +299,7 @@ fn changes_view() -> View {
                         })
                         .keys(move || changes.with(|c| c.files.iter().map(|f| f.path.clone()).collect::<Vec<_>>()))
                         .estimated_item_size(px(30.0))
-                        .content_padding_bottom(px(S2))
+                        .content_padding_bottom(sp(S2))
                         .flex_1(),
                     )
                     .into_element()
@@ -310,10 +310,10 @@ fn changes_view() -> View {
 fn empty_note(glyph: Icon, message: String) -> View {
     view()
         .flex_row()
-        .gap(px(S2))
-        .p(px(S4))
+        .gap(sp(S2))
+        .p(sp(S4))
         .child(icon(glyph, 15.0).text_color(FG_FAINT))
-        .child(text(message).text_size(px(TEXT_SM)).text_color(FG_MUTED).flex_1())
+        .child(text(message).text_size(tx(TEXT_SM)).text_color(FG_MUTED).flex_1())
 }
 
 /// An empty panel's message, centered: a glyph on a soft disc, a title and
@@ -323,22 +323,22 @@ fn empty_state(glyph: Icon, title: &'static str, detail: &'static str) -> View {
         .flex_1()
         .items_center()
         .justify_center()
-        .gap(px(S2))
-        .px(px(S6))
+        .gap(sp(S2))
+        .px(sp(S6))
         .pb(px(48.0))
         .child(
             view()
                 .w(px(44.0))
                 .h(px(44.0))
-                .mb(px(S1))
+                .mb(sp(S1))
                 .rounded(px(R_FULL))
                 .items_center()
                 .justify_center()
                 .bg(SURFACE2)
                 .child(icon(glyph, 20.0).text_color(FG_MUTED)),
         )
-        .child(text(title).text_size(px(TEXT_BASE)).font_weight(FontWeight(600)).text_color(FG).text_center())
-        .child(text(detail).text_size(px(TEXT_SM)).line_height(px(19.0)).text_color(FG_MUTED).text_center())
+        .child(text(title).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).text_color(FG).text_center())
+        .child(text(detail).text_size(tx(TEXT_SM)).line_height(px(19.0)).text_color(FG_MUTED).text_center())
 }
 
 /// Git could not answer: a folder outside Git says so in words (its files
@@ -346,7 +346,7 @@ fn empty_state(glyph: Icon, title: &'static str, detail: &'static str) -> View {
 fn git_error(e: String) -> View {
     if e.to_lowercase().contains("not a git repository") {
         return empty_state(Icon::GitBranch, t("Not a Git repository"), t("Changes and commits show for folders under Git; the files are still here"))
-            .child(view().mt(px(S2)).child(btn(t("Browse files"), Variant::Secondary, Sz::Sm, Some(Icon::FolderTree), || {
+            .child(view().mt(sp(S2)).child(btn(t("Browse files"), Variant::Secondary, Sz::Sm, Some(Icon::FolderTree), || {
                 store::set_explorer_tab(ExplorerTab::Files)
             })));
     }
@@ -354,11 +354,11 @@ fn git_error(e: String) -> View {
         .flex_1()
         .items_center()
         .justify_center()
-        .gap(px(S2))
-        .px(px(S6))
+        .gap(sp(S2))
+        .px(sp(S6))
         .child(icon(Icon::CircleAlert, 20.0).text_color(DANGER))
-        .child(text(t("Couldn't read Git")).text_size(px(TEXT_BASE)).font_weight(FontWeight(600)).text_color(FG))
-        .child(text(e).text_size(px(TEXT_SM)).text_color(FG_MUTED).text_center().selectable(true))
+        .child(text(t("Couldn't read Git")).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).text_color(FG))
+        .child(text(e).text_size(tx(TEXT_SM)).text_color(FG_MUTED).text_center().selectable(true))
 }
 
 fn loading_state() -> View {
@@ -383,12 +383,12 @@ fn file_row(file: Memo<Option<DiffFile>>) -> impl IntoElement {
                 store::open_tab(Tab::Diff(Some(f.path)));
             }
         })
-        .mx(px(S2))
+        .mx(sp(S2))
         .flex_row()
         .items_center()
         .gap(px(6.0))
         .h(px(30.0))
-        .px(px(S2))
+        .px(sp(S2))
         .rounded(px(R_LG))
         .bg(move || if selected.get() { highlight() } else { tint(SURFACE1, 0.0) })
         .hover(|s| s.bg(highlight()))
@@ -402,7 +402,7 @@ fn file_row(file: Memo<Option<DiffFile>>) -> impl IntoElement {
                 })
             })
             .w(px(12.0))
-            .text_size(px(TEXT_XS))
+            .text_size(tx(TEXT_XS))
             .font_weight(FontWeight(600))
             .font_family(mono_font)
             .text_color(move || {
@@ -415,27 +415,27 @@ fn file_row(file: Memo<Option<DiffFile>>) -> impl IntoElement {
         )
         .child(
             text(move || file.with(|f| f.as_ref().map(|f| split_path(&f.path).0).unwrap_or_default()))
-                .text_size(px(TEXT_BASE))
+                .text_size(tx(TEXT_BASE))
                 .number_of_lines(1)
                 .flex_shrink_0()
                 .max_w(px(170.0)),
         )
         .child(
             text(move || file.with(|f| f.as_ref().map(|f| split_path(&f.path).1).unwrap_or_default()))
-                .text_size(px(TEXT_SM))
+                .text_size(tx(TEXT_SM))
                 .text_color(FG_FAINT)
                 .number_of_lines(1)
                 .flex_1(),
         )
         .child(
             text(move || file.with(|f| f.as_ref().map(|f| format!("+{}", f.additions)).unwrap_or_default()))
-                .text_size(px(TEXT_XS))
+                .text_size(tx(TEXT_XS))
                 .font_family(mono_font)
                 .text_color(SUCCESS),
         )
         .child(
             text(move || file.with(|f| f.as_ref().map(|f| format!("−{}", f.deletions)).unwrap_or_default()))
-                .text_size(px(TEXT_XS))
+                .text_size(tx(TEXT_XS))
                 .font_family(mono_font)
                 .text_color(DANGER),
         )
@@ -511,27 +511,27 @@ pub(crate) fn diff_pane(path: Option<String>) -> impl IntoElement {
     let header = view()
         .flex_row()
         .items_center()
-        .gap(px(S2))
+        .gap(sp(S2))
         .h(px(44.0))
-        .pl(px(S4))
-        .pr(px(S2))
+        .pl(sp(S4))
+        .pr(sp(S2))
         .border_b_1()
         .border_color(tint(BORDER, 0.7))
         .child(icon(Icon::FileDiff, 15.0).text_color(FG_MUTED))
-        .child(text(name).text_size(px(TEXT_BASE)).font_weight(FontWeight(600)).number_of_lines(1).flex_shrink(1.0))
-        .child(dir.map(|d| text(d).text_size(px(TEXT_SM)).text_color(FG_FAINT).number_of_lines(1).flex_shrink(1.0)))
+        .child(text(name).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).number_of_lines(1).flex_shrink(1.0))
+        .child(dir.map(|d| text(d).text_size(tx(TEXT_SM)).text_color(FG_FAINT).number_of_lines(1).flex_shrink(1.0)))
         .child(view().flex_1())
         .child(
             view()
                 .flex_row()
                 .gap(px(6.0))
-                .child(text(move || format!("+{}", stats.get().0)).text_size(px(TEXT_SM)).font_family(mono_font).text_color(SUCCESS))
-                .child(text(move || format!("\u{2212}{}", stats.get().1)).text_size(px(TEXT_SM)).font_family(mono_font).text_color(DANGER)),
+                .child(text(move || format!("+{}", stats.get().0)).text_size(tx(TEXT_SM)).font_family(mono_font).text_color(SUCCESS))
+                .child(text(move || format!("\u{2212}{}", stats.get().1)).text_size(tx(TEXT_SM)).font_family(mono_font).text_color(DANGER)),
         )
         .child(dynamic(move || {
             (!one_sided.get()).then(|| untracked(move || {
                 view()
-                    .ml(px(S2))
+                    .ml(sp(S2))
                     .child(segmented(
                         vec![(true, t("Unified").into()), (false, t("Split").into())],
                         move || prefs.with(|p| p.unified),
@@ -549,13 +549,13 @@ pub(crate) fn diff_pane(path: Option<String>) -> impl IntoElement {
                     .flex_1()
                     .items_center()
                     .justify_center()
-                    .child(text(t("No changes")).text_size(px(TEXT_BASE)).text_color(FG_MUTED))
+                    .child(text(t("No changes")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED))
                     .into_element();
             }
             let mut d = diff_view()
                 .patch(move || Some(SharedString::from(patch.get())))
                 .layout(move || if one_sided.get() || prefs.with(|p| p.unified) { DiffLayout::Unified } else { DiffLayout::Split })
-                .text_size(px(TEXT_CODE))
+                .text_size(tx(TEXT_CODE))
                 .annotations(move || annotations.get())
                 .render_add_annotation(move |r: &DiffLineRange| {
                     let r = *r;
@@ -605,19 +605,19 @@ pub(crate) fn diff_pane(path: Option<String>) -> impl IntoElement {
     let review = glass_strong(view())
         .flex_row()
         .items_center()
-        .gap(px(S2))
+        .gap(sp(S2))
         .w_full()
         .max_w(px(CONTENT_MAX_WIDTH))
         .self_center()
         .h(px(48.0))
-        .pl(px(S4))
+        .pl(sp(S4))
         .pr(px(6.0))
         .rounded(px(R_FULL))
         .child(icon(Icon::Pencil, 16.0).text_color(FG_MUTED))
         .child(
             input()
                 .flex_1()
-                .text_size(px(TEXT_BASE))
+                .text_size(tx(TEXT_BASE))
                 .text_color(FG)
                 .caret_color(|| color(ACCENT))
                 .selection_color(|| color(tint(ACCENT, 0.3)))
@@ -647,10 +647,10 @@ pub(crate) fn diff_pane(path: Option<String>) -> impl IntoElement {
         );
     view()
         .flex_1()
-        .px(px(S4))
-        .pt(px(S1))
-        .pb(px(S3))
-        .gap(px(S3))
+        .px(sp(S4))
+        .pt(sp(S1))
+        .pb(sp(S3))
+        .gap(sp(S3))
         .child(glass(view()).flex_1().rounded(px(R_GLASS)).overflow_hidden().child(header).child(body))
         .child(review)
 }
@@ -680,8 +680,8 @@ fn comment_draft(draft: Signal<Option<DiffLineRange>>, text_sig: Signal<String>,
     let save2 = save.clone();
     let empty = computed(move || text_sig.with(|t| t.trim().is_empty()));
     comment_shell()
-        .gap(px(S2))
-        .child(text(label).text_size(px(TEXT_XS)).text_color(FG_MUTED).font_weight(FontWeight(600)))
+        .gap(sp(S2))
+        .child(text(label).text_size(tx(TEXT_XS)).text_color(FG_MUTED).font_weight(FontWeight(600)))
         .child(
             field()
                 .auto_focus(true)
@@ -699,7 +699,7 @@ fn comment_draft(draft: Signal<Option<DiffLineRange>>, text_sig: Signal<String>,
             view()
                 .flex_row()
                 .justify_end()
-                .gap(px(S2))
+                .gap(sp(S2))
                 .child(btn(t("Cancel"), Variant::Ghost, Sz::Sm, None, move || draft.set(None)))
                 .child(btn(t("Comment"), Variant::Primary, Sz::Sm, None, move || {
                     let t = text_sig.get_untracked();
@@ -716,7 +716,7 @@ fn comment_card(c: LineComment, remove: impl Fn() + 'static) -> View {
     comment_shell()
         .flex_row()
         .items_start()
-        .gap(px(S2))
+        .gap(sp(S2))
         .child(
             view()
                 .w(px(22.0))
@@ -731,17 +731,17 @@ fn comment_card(c: LineComment, remove: impl Fn() + 'static) -> View {
             view()
                 .flex_1()
                 .gap(px(2.0))
-                .child(text(lines_label(c.range)).text_size(px(TEXT_XS)).text_color(FG_MUTED).font_weight(FontWeight(600)))
-                .child(text(c.text).text_size(px(TEXT_SM)).text_color(FG)),
+                .child(text(lines_label(c.range)).text_size(tx(TEXT_XS)).text_color(FG_MUTED).font_weight(FontWeight(600)))
+                .child(text(c.text).text_size(tx(TEXT_SM)).text_color(FG)),
         )
         .child(icon_btn(Icon::Trash2, Sz::Sm, t("Delete comment"), remove))
 }
 
 fn comment_shell() -> View {
     view()
-        .mx(px(S3))
-        .my(px(S2))
-        .p(px(S3))
+        .mx(sp(S3))
+        .my(sp(S2))
+        .p(sp(S3))
         .max_w(px(640.0))
         .rounded(px(R_LG))
         .bg(glass_fill_strong())
@@ -759,7 +759,7 @@ fn commits_view() -> View {
             Some((_, Some(e))) => git_error(e).into_element(),
             Some((list, None)) if list.is_empty() => empty_state(Icon::GitCommitHorizontal, t("No commits yet"), t("Commits show here once there are some")).into_element(),
             Some((list, None)) => {
-                let mut col = view().gap(px(2.0)).py(px(S1));
+                let mut col = view().gap(px(2.0)).py(sp(S1));
                 for c in list {
                     let sha = c.sha.clone();
                     let mut files = view().gap(px(1.0)).pt(px(4.0));
@@ -772,32 +772,32 @@ fn commits_view() -> View {
                                 .items_center()
                                 .gap(px(6.0))
                                 .h(px(24.0))
-                                .px(px(S1))
+                                .px(sp(S1))
                                 .rounded(px(R_MD))
                                 .hover(|s| s.bg(highlight()))
-                                .child(text(split_path(&path).0).text_size(px(TEXT_SM)).number_of_lines(1).flex_1())
-                                .child(text(format!("+{add}")).text_size(px(TEXT_XS)).font_family(mono_font).text_color(SUCCESS))
-                                .child(text(format!("−{del}")).text_size(px(TEXT_XS)).font_family(mono_font).text_color(DANGER)),
+                                .child(text(split_path(&path).0).text_size(tx(TEXT_SM)).number_of_lines(1).flex_1())
+                                .child(text(format!("+{add}")).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(SUCCESS))
+                                .child(text(format!("−{del}")).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(DANGER)),
                         );
                     }
                     col = col.child(
                         view()
-                            .mx(px(S2))
-                            .px(px(S2))
+                            .mx(sp(S2))
+                            .px(sp(S2))
                             .py(px(6.0))
                             .rounded(px(R_LG))
                             .hover(|s| s.bg(highlight()))
                             .gap(px(2.0))
-                            .child(text(c.subject.clone()).text_size(px(TEXT_BASE)).number_of_lines(2))
+                            .child(text(c.subject.clone()).text_size(tx(TEXT_BASE)).number_of_lines(2))
                             .child(
                                 view()
                                     .flex_row()
                                     .items_center()
                                     .gap(px(6.0))
-                                    .child(text(c.short.clone()).text_size(px(TEXT_XS)).font_family(mono_font).text_color(FG_MUTED))
+                                    .child(text(c.short.clone()).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(FG_MUTED))
                                     .child(
                                         text(format!("{} · {}", c.author, c.date.get(..10).unwrap_or_default()))
-                                            .text_size(px(TEXT_XS))
+                                            .text_size(tx(TEXT_XS))
                                             .text_color(FG_FAINT)
                                             .number_of_lines(1)
                                             .flex_1(),
@@ -824,13 +824,13 @@ pub(crate) fn commit_diff_pane(sha: String, path: String) -> impl IntoElement {
             view()
                 .flex_row()
                 .items_center()
-                .gap(px(S2))
+                .gap(sp(S2))
                 .h(px(40.0))
-                .px(px(S4))
+                .px(sp(S4))
                 .border_b_1()
                 .border_color(BORDER)
                 .child(icon(Icon::GitCommitHorizontal, 15.0).text_color(FG_MUTED))
-                .child(text(title).text_size(px(TEXT_BASE)).font_family(mono_font).number_of_lines(1).flex_1()),
+                .child(text(title).text_size(tx(TEXT_BASE)).font_family(mono_font).number_of_lines(1).flex_1()),
         )
         .child(dynamic(move || {
             let d = data.get();
@@ -839,7 +839,7 @@ pub(crate) fn commit_diff_pane(sha: String, path: String) -> impl IntoElement {
                 None => empty_note(Icon::RotateCw, t("Loading…").into()).into_element(),
                 Some(Err(e)) => empty_note(Icon::Info, e).into_element(),
                 Some(Ok(f)) => {
-                    let mut v = diff_view().patch(SharedString::from(f.patch)).layout(DiffLayout::Unified).text_size(px(TEXT_CODE)).flex_1();
+                    let mut v = diff_view().patch(SharedString::from(f.patch)).layout(DiffLayout::Unified).text_size(tx(TEXT_CODE)).flex_1();
                     if let Some(l) = language.clone() {
                         v = v.language(SharedString::from(l));
                     }

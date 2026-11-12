@@ -34,8 +34,8 @@ fn welcome(open_scan: impl Fn() + Clone + 'static) -> impl IntoElement {
     scroll().flex_1().child(
         view()
             .min_h(move || Length::from(px(window().height.0 - safe_area().top.0 - safe_area().bottom.0)))
-            .px(px(S6))
-            .pb(px(S6))
+            .px(sp(S6))
+            .pb(sp(S6))
             .items_center()
             .child(
                 view()
@@ -47,29 +47,29 @@ fn welcome(open_scan: impl Fn() + Clone + 'static) -> impl IntoElement {
                     .child(
                         view()
                             .items_center()
-                            .gap(px(S2))
-                            .mt(px(S4))
+                            .gap(sp(S2))
+                            .mt(sp(S4))
                             .mb(px(48.0))
-                            .child(text(t("Welcome to Sophon")).text_size(px(TEXT_BASE)).font_weight(FontWeight(500)).text_center())
-                            .child(text(t("Connect your computer to get started")).text_size(px(TEXT_BASE)).text_color(FG_MUTED).text_center()),
+                            .child(text(t("Welcome to Sophon")).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)).text_center())
+                            .child(text(t("Connect your computer to get started")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED).text_center()),
                     )
                     .child(
                         view()
                             .w_full()
                             .max_w(px(420.0))
-                            .gap(px(S3))
+                            .gap(sp(S3))
                             .child(action(Icon::QrCode, t("Scan QR code"), true, open_scan))
                             .child(action(Icon::Link2, t("Direct connection"), false, || store::open_modal(store::Modal::AddHost)))
                             .child(action(Icon::ClipboardPaste, t("Paste pairing link"), false, || store::open_modal(store::Modal::AddHost))),
                     )
-                    .child(view().w_full().max_w(px(420.0)).mt(px(S6)).child(crate::ui::shared::modals::nearby_list()))
+                    .child(view().w_full().max_w(px(420.0)).mt(sp(S6)).child(crate::ui::shared::modals::nearby_list()))
                     .child(saved_hosts())
-                    .child(view().mt(px(S6)).child(btn(t("Settings"), Variant::Ghost, Sz::Md, Some(Icon::Settings), store::open_settings))),
+                    .child(view().mt(sp(S6)).child(btn(t("Settings"), Variant::Ghost, Sz::Md, Some(Icon::Settings), store::open_settings))),
             )
             .child(
                 text(format!("v{}", crate::update::current_version()))
-                    .mt(px(S6))
-                    .text_size(px(TEXT_SM))
+                    .mt(sp(S6))
+                    .text_size(tx(TEXT_SM))
                     .text_color(FG_MUTED)
                     .text_center(),
             ),
@@ -84,15 +84,15 @@ fn action(glyph: Icon, label: &'static str, primary: bool, on_press: impl Fn() +
         .flex_row()
         .items_center()
         .justify_center()
-        .gap(px(S3))
-        .py(px(S4))
+        .gap(sp(S3))
+        .py(sp(S4))
         .rounded(px(R_XL))
         .bg(if primary { ACCENT } else { SURFACE2 })
         .border_1()
         .border_color(if primary { ACCENT } else { BORDER })
         .active(|s| s.opacity(0.75))
         .child(icon(glyph, 18.0).text_color(ink))
-        .child(text(label).text_size(px(TEXT_BASE)).font_weight(FontWeight(500)).text_color(ink))
+        .child(text(label).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)).text_color(ink))
 }
 
 /// Computers paired before, to connect again.
@@ -111,17 +111,17 @@ fn saved_hosts() -> impl IntoElement {
                         .on_press(move || store::switch_host(Some(id.clone())))
                         .flex_row()
                         .items_center()
-                        .gap(px(S3))
+                        .gap(sp(S3))
                         .h(px(52.0))
-                        .px(px(S4))
+                        .px(sp(S4))
                         .when(i > 0, |v| v.border_t_1().border_color(BORDER))
                         .active(|s| s.bg(highlight()))
                         .child(icon(Icon::Server, 18.0).text_color(FG_MUTED))
-                        .child(text(h.label()).text_size(px(TEXT_BASE)).number_of_lines(1).flex_1())
+                        .child(text(h.label()).text_size(tx(TEXT_BASE)).number_of_lines(1).flex_1())
                         .child(icon(Icon::ChevronRight, 16.0).text_color(FG_FAINT)),
                 );
             }
-            view().mt(px(S6)).gap(px(S2)).child(section_label(t("Paired before"))).child(c).into_element()
+            view().mt(sp(S6)).gap(sp(S2)).child(section_label(t("Paired before"))).child(c).into_element()
         }))
     }))
 }
@@ -165,12 +165,12 @@ fn scan(back: impl Fn() + Clone + 'static) -> impl IntoElement {
                 .flex_row()
                 .items_center()
                 .h(px(56.0))
-                .px(px(S2))
+                .px(sp(S2))
                 .child(icon_btn(Icon::ChevronLeft, Sz::Md, t("Back"), back))
-                .child(text(t("Scan QR code")).text_size(px(TEXT_LG)).font_weight(FontWeight(600))),
+                .child(text(t("Scan QR code")).text_size(tx(TEXT_LG)).font_weight(FontWeight(600))),
         )
         .child(
-            view().flex_1().px(px(S6)).pb(px(S6)).child(dynamic(move || {
+            view().flex_1().px(sp(S6)).pb(sp(S6)).child(dynamic(move || {
                 let denied = state.with(|s| *s == ScanState::Denied);
                 Some(untracked(move || {
                     if denied {
@@ -204,9 +204,9 @@ fn scan(back: impl Fn() + Clone + 'static) -> impl IntoElement {
                                         ScanState::Failed(e) => e,
                                         _ => t("Point the camera at the QR code in Sophon on your computer").to_owned(),
                                     })
-                                    .mt(px(S6))
-                                    .px(px(S6))
-                                    .text_size(px(TEXT_BASE))
+                                    .mt(sp(S6))
+                                    .px(sp(S6))
+                                    .text_size(tx(TEXT_BASE))
                                     .text_color(rgb(0xffffff))
                                     .text_center(),
                                 ),
@@ -242,15 +242,15 @@ fn frame() -> impl IntoElement {
 /// Android's way to scan: with the phone's camera app, or by pasting.
 fn camera_app_card() -> impl IntoElement {
     view()
-        .mt(px(S6))
-        .p(px(S6))
+        .mt(sp(S6))
+        .p(sp(S6))
         .rounded(px(R_XL))
         .bg(SURFACE2)
-        .gap(px(S4))
-        .child(text(t("Scan with your phone's camera")).text_size(px(TEXT_BASE)).font_weight(FontWeight(600)))
+        .gap(sp(S4))
+        .child(text(t("Scan with your phone's camera")).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)))
         .child(
             text(t("Sophon can't open the camera on Android yet. Scan the QR code in Sophon on your computer with your phone's camera app and open the link it finds, or copy the pairing link there and paste it here."))
-                .text_size(px(TEXT_BASE))
+                .text_size(tx(TEXT_BASE))
                 .line_height(px(20.0))
                 .text_color(FG_MUTED),
         )
@@ -261,15 +261,15 @@ fn camera_app_card() -> impl IntoElement {
 
 fn permission_card() -> impl IntoElement {
     view()
-        .mt(px(S6))
-        .p(px(S6))
+        .mt(sp(S6))
+        .p(sp(S6))
         .rounded(px(R_XL))
         .bg(SURFACE2)
-        .gap(px(S4))
-        .child(text(t("Camera permission")).text_size(px(TEXT_BASE)).font_weight(FontWeight(600)))
+        .gap(sp(S4))
+        .child(text(t("Camera permission")).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)))
         .child(
             text(t("Allow camera access to scan the pairing QR code from your computer."))
-                .text_size(px(TEXT_BASE))
+                .text_size(tx(TEXT_BASE))
                 .line_height(px(20.0))
                 .text_color(FG_MUTED),
         )

@@ -33,7 +33,7 @@ pub(crate) fn new_workspace(compact: bool) -> impl IntoElement {
     view()
         .flex_1()
         .when(compact, |v| {
-            v.child(view().flex_row().h(px(48.0)).px(px(S3)).items_center().child(icon_btn(
+            v.child(view().flex_row().h(px(48.0)).px(sp(S3)).items_center().child(icon_btn(
                 Icon::ArrowLeft,
                 Sz::Sm,
                 t("Back"),
@@ -41,22 +41,22 @@ pub(crate) fn new_workspace(compact: bool) -> impl IntoElement {
             )))
         })
         .child(
-            view().flex_1().justify_center().px(px(S8)).pb(px(S8 * 2.0)).child(
+            view().flex_1().justify_center().px(sp(S8)).pb(px(S8 * 2.0)).child(
                 // One column for everything: the title, the
                 // pickers, the composer and what is under it share edges.
                 view()
                     .w_full()
                     .max_w(px(NEW_WORKSPACE_WIDTH))
                     .self_center()
-                    .gap(px(S3))
+                    .gap(sp(S3))
                     .child(
                         // The title, and beside it the other way to begin:
                         // a session started outside Sophon.
                         view()
                             .flex_row()
                             .items_center()
-                            .pb(px(S2))
-                            .child(text(t("What should we work on?")).text_size(px(TEXT_XL)).font_weight(FontWeight(450)).px(px(S2)).flex_1())
+                            .pb(sp(S2))
+                            .child(text(t("What should we work on?")).text_size(tx(TEXT_XL)).font_weight(FontWeight(450)).px(sp(S2)).flex_1())
                             .child(btn(t("Import sessions"), Variant::Ghost, Sz::Sm, Some(Icon::Download), || {
                                 store::search_sessions("");
                                 store::open_modal(store::Modal::ImportSession)
@@ -67,19 +67,19 @@ pub(crate) fn new_workspace(compact: bool) -> impl IntoElement {
                             .flex_row()
                             .flex_wrap()
                             .items_center()
-                            .gap(px(S2))
+                            .gap(sp(S2))
                             .child(project_picker(project_label))
                             .child(when(move || form.with(|f| f.worktree), move || base_branch_picker(form)))
                             .child(when(move || form.with(|f| f.worktree), move || {
                                 field()
                                     .w(px(200.0))
-                                    .h(px(CONTROL_SM + 2.0))
+                                    .h(sp(CONTROL_SM + 2.0))
                                     .rounded(px(R_FULL))
                                     .value(move || form.with(|f| f.branch_name.clone()))
                                     .on_change(|v: &str| store::edit_form(|f| f.branch_name = v.to_owned()))
                                     .placeholder(t("New branch (optional)"))
                                     .font_family(mono_font)
-                                    .text_size(px(TEXT_SM))
+                                    .text_size(tx(TEXT_SM))
                             }))
                             .child(view().flex_1())
                             .child(when(is_git, move || {
@@ -100,8 +100,8 @@ pub(crate) fn new_workspace(compact: bool) -> impl IntoElement {
                         view()
                             .flex_row()
                             .items_center()
-                            .gap(px(S3))
-                            .pt(px(S1))
+                            .gap(sp(S3))
+                            .pt(sp(S1))
                             .child(view().flex_1().min_w(px(0.0)).child(composer::hint(move || {
                                 form.with(|f| {
                                     f.error.clone().map(|e| (e, true)).or_else(|| {
@@ -128,12 +128,12 @@ fn project_picker(label: Memo<String>) -> impl IntoElement {
             .flex_row()
             .items_center()
             .gap(px(6.0))
-            .h(px(CONTROL_SM + 2.0))
-            .px(px(S2))
+            .h(sp(CONTROL_SM + 2.0))
+            .px(sp(S2))
             .rounded(px(R_FULL))
             .hover(|s| s.bg(highlight()))
             .child(icon(Icon::Folder, 15.0).text_color(FG_MUTED))
-            .child(text(move || label.get()).text_size(px(TEXT_BASE)).number_of_lines(1))
+            .child(text(move || label.get()).text_size(tx(TEXT_BASE)).number_of_lines(1))
             .child(icon(Icon::ChevronDown, 14.0).text_color(FG_FAINT)),
     )
     .child(dynamic(move || {

@@ -27,17 +27,17 @@ pub(crate) fn usage_page(compact: bool) -> impl IntoElement {
             .w_full()
             .max_w(px(CONTENT_MAX_WIDTH + 80.0))
             .self_center()
-            .px(px(S6))
-            .py(px(S8))
-            .gap(px(S6))
+            .px(sp(S6))
+            .py(sp(S8))
+            .gap(sp(S6))
             .child(
                 view()
                     .flex_row()
                     .items_center()
-                    .gap(px(S2))
+                    .gap(sp(S2))
                     .when(compact, |v| v.child(icon_btn(Icon::ArrowLeft, Sz::Sm, t("Back"), store::go_home)))
-                    .child(text(t("Usage")).text_size(px(TEXT_2XL)).font_weight(FontWeight(500)).flex_1())
-                    .child(dynamic(move || busy.get().then(|| untracked(|| text(t("Reading session logs…")).text_size(px(TEXT_SM)).text_color(FG_MUTED)))))
+                    .child(text(t("Usage")).text_size(tx(TEXT_2XL)).font_weight(FontWeight(500)).flex_1())
+                    .child(dynamic(move || busy.get().then(|| untracked(|| text(t("Reading session logs…")).text_size(tx(TEXT_SM)).text_color(FG_MUTED)))))
                     .child(icon_btn(Icon::RotateCw, Sz::Md, t("Refresh"), store::refresh_usage)),
             )
             .child(history_section(range))
@@ -48,7 +48,7 @@ pub(crate) fn usage_page(compact: bool) -> impl IntoElement {
 /// Both halves without a page around them, for the phone's tab.
 pub(crate) fn usage_sections() -> View {
     let range = signal(Range::Week);
-    view().gap(px(S6)).child(history_section(range)).child(limits_section())
+    view().gap(sp(S6)).child(history_section(range)).child(limits_section())
 }
 
 /// The session-log half: the range switch, totals, the days and the models.
@@ -57,15 +57,15 @@ fn history_section(range: Signal<Range>) -> View {
     // The phone's numbers are the computer's own, so nothing to explain.
     let remote = computed(|| !MOBILE && !store::on_this_mac());
     view()
-        .gap(px(S4))
+        .gap(sp(S4))
         .child(
             // On the phone the title and the switch do not fit one line.
             view()
                 .when(!MOBILE, |v| v.flex_row().items_center())
-                .gap(px(S3))
+                .gap(sp(S3))
                 .child(
                     text(if MOBILE { t("The computer's sessions") } else { t("This computer's sessions") })
-                        .text_size(px(TEXT_LG))
+                        .text_size(tx(TEXT_LG))
                         .font_weight(FontWeight(500))
                         .when(!MOBILE, |v| v.flex_1()),
                 )
@@ -81,11 +81,11 @@ fn history_section(range: Signal<Range>) -> View {
                     view()
                         .flex_row()
                         .items_center()
-                        .gap(px(S2))
+                        .gap(sp(S2))
                         .child(icon(Icon::Info, 14.0).text_color(FG_MUTED))
                         .child(
                             text(t("Connected to another computer: these numbers cover the sessions on this one only. The limits below come from the connected host"))
-                                .text_size(px(TEXT_SM))
+                                .text_size(tx(TEXT_SM))
                                 .text_color(FG_MUTED)
                                 .flex_1(),
                         )
@@ -102,13 +102,13 @@ fn history_section(range: Signal<Range>) -> View {
                 Some(report) => {
                     let stats = report.range(r).clone();
                     view()
-                        .gap(px(S4))
+                        .gap(sp(S4))
                         .child(totals(&stats.totals))
                         .when(r != Range::Today, |v| v.child(days_chart(&stats, report.last_day)))
                         .child(models_table(&stats))
                         .child(
                             text(t("Cost is an estimate at API list prices, not your subscription bill. Models without a known price are left out of it"))
-                                .text_size(px(TEXT_XS))
+                                .text_size(tx(TEXT_XS))
                                 .text_color(FG_FAINT),
                         )
                         .into_element()
@@ -118,22 +118,22 @@ fn history_section(range: Signal<Range>) -> View {
 }
 
 fn muted(s: &str) -> nsh_core::element::Text {
-    text(s.to_owned()).text_size(px(TEXT_BASE)).text_color(FG_MUTED)
+    text(s.to_owned()).text_size(tx(TEXT_BASE)).text_color(FG_MUTED)
 }
 
 fn tile(label: &str, value: String, note: Option<String>) -> View {
     view()
         .flex_1()
         .min_w(px(120.0))
-        .p(px(S3))
+        .p(sp(S3))
         .gap(px(2.0))
         .rounded(px(R_XL))
         .border_1()
         .border_color(BORDER)
         .bg(SURFACE0)
-        .child(text(label.to_owned()).text_size(px(TEXT_XS)).text_color(FG_MUTED).number_of_lines(1))
-        .child(text(value).text_size(px(TEXT_XL)).font_weight(FontWeight(500)).font_family(mono_font).number_of_lines(1))
-        .when_some(note, |v, n| v.child(text(n).text_size(px(TEXT_XS)).text_color(FG_FAINT).number_of_lines(2)))
+        .child(text(label.to_owned()).text_size(tx(TEXT_XS)).text_color(FG_MUTED).number_of_lines(1))
+        .child(text(value).text_size(tx(TEXT_XL)).font_weight(FontWeight(500)).font_family(mono_font).number_of_lines(1))
+        .when_some(note, |v, n| v.child(text(n).text_size(tx(TEXT_XS)).text_color(FG_FAINT).number_of_lines(2)))
 }
 
 fn hit_rate(t: &usage::Tokens) -> String {
@@ -146,7 +146,7 @@ fn totals(tot: &Totals) -> View {
     view()
         .flex_row()
         .flex_wrap()
-        .gap(px(S2))
+        .gap(sp(S2))
         .child(tile(t("Est. cost"), usage::dollars(tot.cost), unpriced))
         .child(tile(t("Input"), usage::compact(k.input), None))
         .child(tile(t("Output"), usage::compact(k.output), None))
@@ -170,7 +170,7 @@ fn days_chart(stats: &Stats, last_day: i64) -> View {
                 .flex_1()
                 .h_full()
                 .justify_end()
-                .tooltip(glass_strong(view()).px(px(S2)).py(px(S1)).rounded(px(R_LG)).child(text(format!("{} · {label}", usage::day_label(last_day - n + 1 + i as i64))).text_size(px(TEXT_XS))))
+                .tooltip(glass_strong(view()).px(sp(S2)).py(sp(S1)).rounded(px(R_LG)).child(text(format!("{} · {label}", usage::day_label(last_day - n + 1 + i as i64))).text_size(tx(TEXT_XS))))
                 .child(
                     view()
                         .w_full()
@@ -183,11 +183,11 @@ fn days_chart(stats: &Stats, last_day: i64) -> View {
     }
     let axis = view()
         .flex_row()
-        .child(text(usage::day_label(last_day - n + 1)).text_size(px(TEXT_XS)).text_color(FG_FAINT).flex_1())
-        .child(text(t("Today")).text_size(px(TEXT_XS)).text_color(FG_FAINT));
+        .child(text(usage::day_label(last_day - n + 1)).text_size(tx(TEXT_XS)).text_color(FG_FAINT).flex_1())
+        .child(text(t("Today")).text_size(tx(TEXT_XS)).text_color(FG_FAINT));
     card()
-        .p(px(S4))
-        .gap(px(S2))
+        .p(sp(S4))
+        .gap(sp(S2))
         .child(section_label(if by_cost { t("Estimated cost per day") } else { t("Tokens per day") }))
         .child(bars)
         .child(axis)
@@ -199,14 +199,14 @@ fn num_cell(s: String, strong: bool) -> nsh_core::element::Text {
     text(s)
         .w(px(NUM_W))
         .text_right()
-        .text_size(px(TEXT_SM))
+        .text_size(tx(TEXT_SM))
         .font_family(mono_font)
         .text_color(if strong { FG } else { FG_MUTED })
         .number_of_lines(1)
 }
 
 fn head_cell(s: &str) -> nsh_core::element::Text {
-    text(s.to_owned()).w(px(NUM_W)).text_right().text_size(px(TEXT_XS)).text_color(FG_FAINT).number_of_lines(1)
+    text(s.to_owned()).w(px(NUM_W)).text_right().text_size(tx(TEXT_XS)).text_color(FG_FAINT).number_of_lines(1)
 }
 
 fn models_table(stats: &Stats) -> View {
@@ -224,9 +224,9 @@ fn models_table(stats: &Stats) -> View {
                 view()
                     .flex_row()
                     .items_center()
-                    .gap(px(S3))
-                    .px(px(S4))
-                    .py(px(S3))
+                    .gap(sp(S3))
+                    .px(sp(S4))
+                    .py(sp(S3))
                     .when(i > 0, |v| v.border_t_1().border_color(BORDER))
                     .child(icon(if m.source == usage::Source::Claude { Icon::Claude } else { Icon::Codex }, 16.0).text_color(FG_MUTED))
                     .child(
@@ -234,15 +234,15 @@ fn models_table(stats: &Stats) -> View {
                             .flex_1()
                             .min_w(px(0.0))
                             .gap(px(2.0))
-                            .child(text(m.model.clone()).text_size(px(TEXT_SM)).font_family(mono_font).number_of_lines(1))
+                            .child(text(m.model.clone()).text_size(tx(TEXT_SM)).font_family(mono_font).number_of_lines(1))
                             .child(
                                 text(tf("{} in · {} out · {} cached", &[&usage::compact(k.input), &usage::compact(k.output), &hit_rate(&k)]))
-                                    .text_size(px(TEXT_XS))
+                                    .text_size(tx(TEXT_XS))
                                     .text_color(FG_FAINT)
                                     .number_of_lines(1),
                             ),
                     )
-                    .child(text(cost).text_size(px(TEXT_SM)).font_family(mono_font).text_color(if m.priced { FG } else { FG_MUTED })),
+                    .child(text(cost).text_size(tx(TEXT_SM)).font_family(mono_font).text_color(if m.priced { FG } else { FG_MUTED })),
             );
         }
         return c;
@@ -251,12 +251,12 @@ fn models_table(stats: &Stats) -> View {
         view()
             .flex_row()
             .items_center()
-            .gap(px(S2))
-            .px(px(S4))
-            .py(px(S2))
+            .gap(sp(S2))
+            .px(sp(S4))
+            .py(sp(S2))
             .border_b_1()
             .border_color(BORDER)
-            .child(text(t("Model")).text_size(px(TEXT_XS)).text_color(FG_FAINT).flex_1())
+            .child(text(t("Model")).text_size(tx(TEXT_XS)).text_color(FG_FAINT).flex_1())
             .child(head_cell(t("Input")))
             .child(head_cell(t("Output")))
             .child(head_cell(t("Cache read")))
@@ -271,9 +271,9 @@ fn models_table(stats: &Stats) -> View {
             view()
                 .flex_row()
                 .items_center()
-                .gap(px(S2))
-                .px(px(S4))
-                .py(px(S2))
+                .gap(sp(S2))
+                .px(sp(S4))
+                .py(sp(S2))
                 .border_t_1()
                 .border_color(BORDER)
                 .child(
@@ -282,9 +282,9 @@ fn models_table(stats: &Stats) -> View {
                         .min_w(px(0.0))
                         .flex_row()
                         .items_center()
-                        .gap(px(S2))
+                        .gap(sp(S2))
                         .child(icon(if m.source == usage::Source::Claude { Icon::Claude } else { Icon::Codex }, 14.0).text_color(FG_MUTED))
-                        .child(text(m.model.clone()).text_size(px(TEXT_SM)).font_family(mono_font).number_of_lines(1).flex_shrink(1.0)),
+                        .child(text(m.model.clone()).text_size(tx(TEXT_SM)).font_family(mono_font).number_of_lines(1).flex_shrink(1.0)),
                 )
                 .child(num_cell(usage::compact(k.input), false))
                 .child(num_cell(usage::compact(k.output), false))
@@ -311,8 +311,8 @@ fn limits_section() -> View {
     });
     let history = computed(store::limit_history);
     view()
-        .gap(px(S4))
-        .child(text(t("Plan limits")).text_size(px(TEXT_LG)).font_weight(FontWeight(500)))
+        .gap(sp(S4))
+        .child(text(t("Plan limits")).text_size(tx(TEXT_LG)).font_weight(FontWeight(500)))
         .child(dynamic(move || {
             let d = data.get();
             let h = history.get();
@@ -320,7 +320,7 @@ fn limits_section() -> View {
                 None => muted(t("Loading…")).into_element(),
                 Some(list) if list.is_empty() => muted(t("No usage reported by your providers")).into_element(),
                 Some(list) => {
-                    let mut col = view().flex_row().flex_wrap().gap(px(S4));
+                    let mut col = view().flex_row().flex_wrap().gap(sp(S4));
                     for p in list {
                         col = col.child(provider_card(&p, &h));
                     }
@@ -331,16 +331,16 @@ fn limits_section() -> View {
 }
 
 fn provider_card(p: &ProviderUsage, history: &limits::History) -> View {
-    let mut c = card().flex_1().min_w(px(300.0)).p(px(S4)).gap(px(S4)).child(
+    let mut c = card().flex_1().min_w(px(300.0)).p(sp(S4)).gap(sp(S4)).child(
         view()
             .flex_row()
             .items_center()
-            .gap(px(S2))
-            .child(text(p.name.clone()).text_size(px(TEXT_BASE)).font_weight(FontWeight(500)))
-            .child(text(p.plan.clone().unwrap_or_default()).text_size(px(TEXT_SM)).text_color(FG_MUTED)),
+            .gap(sp(S2))
+            .child(text(p.name.clone()).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)))
+            .child(text(p.plan.clone().unwrap_or_default()).text_size(tx(TEXT_SM)).text_color(FG_MUTED)),
     );
     if let Some(e) = p.error.clone() {
-        c = c.child(text(e).text_size(px(TEXT_SM)).text_color(DANGER));
+        c = c.child(text(e).text_size(tx(TEXT_SM)).text_color(DANGER));
     }
     for w in &p.windows {
         let points = history.windows.get(&store::limit_key(p, w)).map(Vec::as_slice).unwrap_or_default();
@@ -362,8 +362,8 @@ fn window_row(w: &UsageWindow, points: &[limits::Point]) -> View {
         .child(
             view()
                 .flex_row()
-                .child(text(w.label.clone()).text_size(px(TEXT_SM)).flex_1())
-                .child(text(format!("{used:.0}%")).text_size(px(TEXT_SM)).font_family(mono_font).text_color(FG_MUTED)),
+                .child(text(w.label.clone()).text_size(tx(TEXT_SM)).flex_1())
+                .child(text(format!("{used:.0}%")).text_size(tx(TEXT_SM)).font_family(mono_font).text_color(FG_MUTED)),
         )
         .child(
             view()
@@ -375,14 +375,14 @@ fn window_row(w: &UsageWindow, points: &[limits::Point]) -> View {
     if current.len() >= 2 {
         v = v.child(trend(current, resets, length, tone));
     }
-    let mut foot = view().flex_row().gap(px(S2));
+    let mut foot = view().flex_row().gap(sp(S2));
     if let Some(r) = resets {
-        foot = foot.child(text(tf("Resets {}", &[&usage::time_label(r, &local_offset)])).text_size(px(TEXT_XS)).text_color(FG_FAINT).flex_1());
+        foot = foot.child(text(tf("Resets {}", &[&usage::time_label(r, &local_offset)])).text_size(tx(TEXT_XS)).text_color(FG_FAINT).flex_1());
     }
     if let Some(out) = runs_out {
         foot = foot.child(
             text(tf("At this pace, used up around {}", &[&usage::time_label(out, &local_offset)]))
-                .text_size(px(TEXT_XS))
+                .text_size(tx(TEXT_XS))
                 .font_weight(FontWeight(500))
                 .text_color(WARNING),
         );

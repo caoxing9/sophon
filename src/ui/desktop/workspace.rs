@@ -89,18 +89,18 @@ fn header(compact: bool, explorer_shown: Memo<bool>) -> impl IntoElement {
     view()
         .flex_row()
         .items_center()
-        .gap(px(S2))
+        .gap(sp(S2))
         .h(move || Length::from(px(if inline { bar.get().top.0.max(40.0) } else { 48.0 })))
         .mt(move || Length::from(px(if inline { -bar.get().top.0 } else { 0.0 })))
         .pl(move || {
             Length::from(px(if inline && store::sidebar_hidden() && bar.get().top.0 > 0.0 { bar.get().left.0 + 40.0 } else { S4 }))
         })
-        .pr(px(S3))
+        .pr(sp(S3))
         .window_drag(true)
         .when(compact, |v| v.child(icon_btn(Icon::ArrowLeft, Sz::Sm, t("Back"), store::go_home)))
         .child(
             text(move || ws.with(|w| w.as_ref().map(|w| w.name.clone()).unwrap_or_default()))
-                .text_size(px(TEXT_BASE))
+                .text_size(tx(TEXT_BASE))
                 .font_weight(FontWeight(500))
                 .number_of_lines(1)
                 .flex_shrink(1.0),
@@ -143,10 +143,10 @@ fn tab_strip() -> impl IntoElement {
     view()
         .flex_row()
         .items_center()
-        .gap(px(S1))
+        .gap(sp(S1))
         .h(px(40.0))
-        .pl(px(S4))
-        .pr(px(S3))
+        .pl(sp(S4))
+        .pr(sp(S3))
         .border_b_1()
         .border_color(tint(BORDER, 0.6))
         .child(each(
@@ -163,7 +163,7 @@ fn tab_strip() -> impl IntoElement {
             Some(untracked(move || {
                 tab_shell(true, || {})
                     .child(icon(Icon::GitCommitHorizontal, 14.0).text_color(FG_MUTED))
-                    .child(text(format!("{} {}", sha.get(..7).unwrap_or(&sha), path.rsplit('/').next().unwrap_or(&path))).text_size(px(TEXT_SM)).number_of_lines(1))
+                    .child(text(format!("{} {}", sha.get(..7).unwrap_or(&sha), path.rsplit('/').next().unwrap_or(&path))).text_size(tx(TEXT_SM)).number_of_lines(1))
                     .child(close_button(t("Close commit diff"), || {
                         if let Some(w) = store::current_workspace() {
                             store::open_workspace(&w.id);
@@ -178,7 +178,7 @@ fn tab_strip() -> impl IntoElement {
                 let back = parent.clone();
                 tab_shell(true, || {})
                     .child(icon(Icon::Bot, 14.0).text_color(FG_MUTED))
-                    .child(text(title).text_size(px(TEXT_SM)).text_color(FG).number_of_lines(1))
+                    .child(text(title).text_size(tx(TEXT_SM)).text_color(FG).number_of_lines(1))
                     .child(close_button(t("Close sub-agent"), move || store::open_tab(Tab::Agent(back.clone()))))
             }))
         }))
@@ -188,7 +188,7 @@ fn tab_strip() -> impl IntoElement {
                 let label = path.as_deref().map(|p| p.rsplit('/').next().unwrap_or(p).to_owned()).unwrap_or_else(|| t("All changes").into());
                 tab_shell(true, || {})
                     .child(icon(Icon::FileDiff, 14.0).text_color(FG_MUTED))
-                    .child(text(label).text_size(px(TEXT_SM)).text_color(FG).number_of_lines(1))
+                    .child(text(label).text_size(tx(TEXT_SM)).text_color(FG).number_of_lines(1))
                     .child(
                         button()
                             .on_press(|| {
@@ -214,25 +214,25 @@ fn tab_strip() -> impl IntoElement {
                 let plus = button()
                     .on_press(|| store::open_tab(Tab::Draft))
                     .accessibility_label(t("New chat"))
-                    .w(px(CONTROL_SM))
-                    .h(px(CONTROL_SM))
+                    .w(sp(CONTROL_SM))
+                    .h(sp(CONTROL_SM))
                     .items_center()
                     .justify_center()
                     .rounded(px(R_FULL))
                     .hover(|s| s.bg(highlight()))
                     .child(icon(Icon::Plus, 16.0).text_color(FG_MUTED));
-                let mut row = view().flex_row().items_center().gap(px(S1)).ml(px(2.0));
+                let mut row = view().flex_row().items_center().gap(sp(S1)).ml(px(2.0));
                 if draft {
                     row = row.child(
                         tab_shell(true, || store::open_tab(Tab::Draft))
                             .child(icon(Icon::SquarePen, 14.0).text_color(FG_MUTED))
-                            .child(text(t("New chat")).text_size(px(TEXT_SM)).text_color(FG)),
+                            .child(text(t("New chat")).text_size(tx(TEXT_SM)).text_color(FG)),
                     );
                 }
                 row.child(plus).into_element()
             }))
         }))
-        .child(view().flex_1().min_w(px(S4)))
+        .child(view().flex_1().min_w(sp(S4)))
         // The open agent's state and actions, at the strip's end rather
         // than on a bar of their own.
         .child(when(|| matches!(store::tab(), Tab::Agent(_)), agent::agent_tools))
@@ -286,7 +286,7 @@ fn file_tab(path: String) -> impl IntoElement {
             tab_shell(on, move || store::open_tab(Tab::File(open.clone())))
                 .child(icon(Icon::FileText, 14.0).text_color(FG_MUTED))
                 // A long name ends in an ellipsis inside the tab.
-                .child(text(label).text_size(px(TEXT_SM)).text_color(if on { FG } else { FG_MUTED }).number_of_lines(1).flex_shrink(1.0).min_w(px(0.0)))
+                .child(text(label).text_size(tx(TEXT_SM)).text_color(if on { FG } else { FG_MUTED }).number_of_lines(1).flex_shrink(1.0).min_w(px(0.0)))
                 .child(when(dirty, || view().w(px(6.0)).h(px(6.0)).rounded(px(R_FULL)).bg(FG_MUTED)))
                 .child(close_button(t("Close file"), move || store::close_file(&close)))
         }))
@@ -317,7 +317,7 @@ fn agent_tab(id: String) -> impl IntoElement {
                 }))
                 .child(
                     text(move || agent.with(|a| a.as_ref().map(|a| a.title.clone()).unwrap_or_default()))
-                        .text_size(px(TEXT_SM))
+                        .text_size(tx(TEXT_SM))
                         .text_color(if on { FG } else { FG_MUTED })
                         .number_of_lines(1)
                         .flex_shrink(1.0)
@@ -342,14 +342,14 @@ pub(crate) fn scripts_menu() -> impl IntoElement {
                     .flex_row()
                     .items_center()
                     .gap(px(6.0))
-                    .h(px(CONTROL_SM))
-                    .px(px(S3))
+                    .h(sp(CONTROL_SM))
+                    .px(sp(S3))
                     .rounded(px(R_FULL))
                     .border_1()
                     .border_color(BORDER_STRONG)
                     .hover(|s| s.bg(highlight()))
                     .child(icon(Icon::Play, 13.0).text_color(if running > 0 { SUCCESS } else { FG_MUTED }))
-                    .child(text(format!("{}{}", t("Scripts"), if running > 0 { format!(" · {running}") } else { String::new() })).text_size(px(TEXT_SM)).font_weight(FontWeight(500))),
+                    .child(text(format!("{}{}", t("Scripts"), if running > 0 { format!(" · {running}") } else { String::new() })).text_size(tx(TEXT_SM)).font_weight(FontWeight(500))),
             )
             .align(nsh_core::overlay::Align::End)
             .child(dynamic(move || {

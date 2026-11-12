@@ -22,17 +22,17 @@ pub(crate) fn history(compact: bool) -> impl IntoElement {
                 .w_full()
                 .max_w(px(820.0))
                 .self_center()
-                .px(px(S6))
-                .pt(px(S8))
-                .pb(px(S4))
-                .gap(px(S4))
+                .px(sp(S6))
+                .pt(sp(S8))
+                .pb(sp(S4))
+                .gap(sp(S4))
                 .child(
                     view()
                         .flex_row()
                         .items_center()
-                        .gap(px(S2))
+                        .gap(sp(S2))
                         .when(compact, |v| v.child(icon_btn(Icon::ArrowLeft, Sz::Sm, t("Back"), store::go_home)))
-                        .child(text(t("History")).text_size(px(TEXT_2XL)).font_weight(FontWeight(500))),
+                        .child(text(t("History")).text_size(tx(TEXT_2XL)).font_weight(FontWeight(500))),
                 )
                 .child(
                     field()
@@ -48,13 +48,13 @@ pub(crate) fn history(compact: bool) -> impl IntoElement {
             let (_, agents, loaded) = state.get();
             Some(untracked(move || {
                 if !loaded {
-                    return view().p(px(S8)).items_center().child(text(t("Loading…")).text_color(FG_MUTED)).into_element();
+                    return view().p(sp(S8)).items_center().child(text(t("Loading…")).text_color(FG_MUTED)).into_element();
                 }
                 if agents.is_empty() {
                     return view()
-                        .p(px(S8))
+                        .p(sp(S8))
                         .items_center()
-                        .child(text(t("No sessions yet")).text_size(px(TEXT_BASE)).text_color(FG_MUTED))
+                        .child(text(t("No sessions yet")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED))
                         .into_element();
                 }
                 let count = agents.len();
@@ -64,7 +64,7 @@ pub(crate) fn history(compact: bool) -> impl IntoElement {
                 })
                 .keys(move || state.with(|(_, a, _)| a.iter().map(|a| a.id.clone()).collect::<Vec<_>>()))
                 .estimated_item_size(px(60.0))
-                .content_padding_bottom(px(S8))
+                .content_padding_bottom(sp(S8))
                 .flex_1()
                 .into_element()
             }))
@@ -73,7 +73,7 @@ pub(crate) fn history(compact: bool) -> impl IntoElement {
 
 fn session_row(agent: Memo<Option<Agent>>) -> impl IntoElement {
     let label = move |f: fn(&Agent) -> String| move || agent.with(|a| a.as_ref().map(f).unwrap_or_default());
-    view().w_full().max_w(px(820.0)).self_center().px(px(S4)).child(
+    view().w_full().max_w(px(820.0)).self_center().px(sp(S4)).child(
         button()
             .on_press(move || {
                 if let Some(a) = agent.get_untracked() {
@@ -82,9 +82,9 @@ fn session_row(agent: Memo<Option<Agent>>) -> impl IntoElement {
             })
             .flex_row()
             .items_center()
-            .gap(px(S3))
-            .px(px(S3))
-            .py(px(S2))
+            .gap(sp(S3))
+            .px(sp(S3))
+            .py(sp(S2))
             .rounded(px(R_LG))
             .hover(|s| s.bg(highlight()))
             .child(status_dot(move || {
@@ -94,13 +94,13 @@ fn session_row(agent: Memo<Option<Agent>>) -> impl IntoElement {
                 view()
                     .flex_1()
                     .gap(px(2.0))
-                    .child(text(label(|a| a.title.clone())).text_size(px(TEXT_BASE)).number_of_lines(1))
+                    .child(text(label(|a| a.title.clone())).text_size(tx(TEXT_BASE)).number_of_lines(1))
                     .child(
                         text(label(|a| {
                             let date = a.updated_at.get(..10).unwrap_or_default();
                             format!("{} · {} · {date}", a.provider, crate::daemon::model::folder_name(&a.cwd))
                         }))
-                        .text_size(px(TEXT_SM))
+                        .text_size(tx(TEXT_SM))
                         .text_color(FG_MUTED)
                         .number_of_lines(1),
                     ),

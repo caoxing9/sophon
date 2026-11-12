@@ -84,7 +84,7 @@ pub(crate) fn fallback(path: String, glyph: Icon, why: String) -> AnyElement {
     let down = path.clone();
     let mut actions = view()
         .flex_row()
-        .gap(px(S2))
+        .gap(sp(S2))
         .child(btn(t("Download"), Variant::Primary, Sz::Md, Some(Icon::Download), move || store::download_file(&down)));
     if !MOBILE {
         actions = actions.child(btn(t("Open in its app"), Variant::Secondary, Sz::Md, None, move || open_in_app(path.clone())));
@@ -93,10 +93,10 @@ pub(crate) fn fallback(path: String, glyph: Icon, why: String) -> AnyElement {
         .flex_1()
         .items_center()
         .justify_center()
-        .gap(px(S3))
-        .p(px(S6))
+        .gap(sp(S3))
+        .p(sp(S6))
         .child(icon(glyph, 40.0).text_color(FG_FAINT))
-        .child(text(why).text_size(px(TEXT_BASE)).text_color(FG_MUTED).text_center())
+        .child(text(why).text_size(tx(TEXT_BASE)).text_color(FG_MUTED).text_center())
         .child(actions)
         .into_element()
 }

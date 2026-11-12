@@ -111,9 +111,9 @@ pub(crate) fn top_bar(title: impl IntoElement, actions: impl IntoElement) -> Vie
         view()
             .flex_row()
             .items_center()
-            .gap(px(S2))
+            .gap(sp(S2))
             .h(px(60.0))
-            .px(px(S3))
+            .px(sp(S3))
             .child(glass_button(Icon::ChevronLeft, crate::i18n::t("Back"), back))
             .child(view().flex_1().min_w(px(0.0)).items_center().child(title))
             .child(actions),

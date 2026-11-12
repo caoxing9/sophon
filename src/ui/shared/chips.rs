@@ -118,7 +118,7 @@ impl NodeView for AttachmentView {
             .active(|s| s.bg(tint(ACCENT, 0.16)))
             .bind_opacity(&fade)
             .child(lead)
-            .child(text(chip_name(&name)).text_size(px(TEXT_SM)).line_height(px(16.0)).text_color(FG).number_of_lines(1))
+            .child(text(chip_name(&name)).text_size(tx(TEXT_SM)).line_height(px(16.0)).text_color(FG).number_of_lines(1))
             .into_element()
     }
 }
@@ -149,7 +149,7 @@ impl NodeView for MentionView {
             .bg(move || if selected.get() { tint(ACCENT, 0.18) } else { tint(ACCENT, 0.06) })
             .label(path)
             .child(icon(if dir { Icon::Folder } else { Icon::FileText }, 12.0).text_color(ACCENT))
-            .child(text(chip_name(&tail)).text_size(px(TEXT_SM)).line_height(px(16.0)).font_family(mono_font).text_color(ACCENT).number_of_lines(1))
+            .child(text(chip_name(&tail)).text_size(tx(TEXT_SM)).line_height(px(16.0)).font_family(mono_font).text_color(ACCENT).number_of_lines(1))
             .into_element()
     }
 }
@@ -282,13 +282,13 @@ fn image_preview(id: &str, name: String) -> impl IntoElement {
                     .flex_1()
                     .items_center()
                     .justify_center()
-                    .gap(px(S3))
+                    .gap(sp(S3))
                     .px(px(if MOBILE { S4 } else { 48.0 }))
                     .pt_safe_area_plus(px(if MOBILE { S4 } else { 48.0 }))
                     .pb_safe_area_plus(px(if MOBILE { S4 } else { 32.0 }))
                     .bind_scale(&grow)
                     .when_some(uri, |v, uri| v.child(image_el(uri).flex_1().w_full().object_fit(ResizeMode::Contain)))
-                    .child(text(name).text_size(px(TEXT_SM)).text_color(AdaptiveColor::rgb(0xffffff, 0xffffff)).number_of_lines(1)),
+                    .child(text(name).text_size(tx(TEXT_SM)).text_color(AdaptiveColor::rgb(0xffffff, 0xffffff)).number_of_lines(1)),
             ),
     )
 }
@@ -302,9 +302,9 @@ fn file_card(composer: String, file: store::PendingFile) -> impl IntoElement {
     let row = |label: &'static str, value: String| {
         view()
             .flex_row()
-            .gap(px(S3))
-            .child(text(t(label)).text_size(px(TEXT_BASE)).text_color(FG_MUTED).w(px(64.0)))
-            .child(text(value).text_size(px(TEXT_BASE)).text_color(FG).flex_1().number_of_lines(2).selectable(true))
+            .gap(sp(S3))
+            .child(text(t(label)).text_size(tx(TEXT_BASE)).text_color(FG_MUTED).w(px(64.0)))
+            .child(text(value).text_size(tx(TEXT_BASE)).text_color(FG).flex_1().number_of_lines(2).selectable(true))
     };
     let id = file.id.clone();
     dialog().animation(ModalAnimation::Fade).on_cancel(close_preview).flex_1().child(
@@ -317,15 +317,15 @@ fn file_card(composer: String, file: store::PendingFile) -> impl IntoElement {
                 glass_strong(view())
                     .w(px(360.0))
                     .max_w(relative(0.92))
-                    .p(px(S6))
-                    .gap(px(S4))
+                    .p(sp(S6))
+                    .gap(sp(S4))
                     .rounded(px(22.0))
                     .bind_scale(&grow)
                     .child(
                         view()
                             .flex_row()
                             .items_center()
-                            .gap(px(S3))
+                            .gap(sp(S3))
                             .child(
                                 view()
                                     .w(px(36.0))
@@ -336,18 +336,18 @@ fn file_card(composer: String, file: store::PendingFile) -> impl IntoElement {
                                     .justify_center()
                                     .child(icon(Icon::FileText, 18.0).text_color(ACCENT)),
                             )
-                            .child(text(file.name.clone()).text_size(px(TEXT_LG)).font_weight(FontWeight(500)).flex_1().number_of_lines(2)),
+                            .child(text(file.name.clone()).text_size(tx(TEXT_LG)).font_weight(FontWeight(500)).flex_1().number_of_lines(2)),
                     )
                     .child(
                         view()
-                            .gap(px(S2))
+                            .gap(sp(S2))
                             .child(row("Type", if file.mime.is_empty() { t("Unknown").into() } else { file.mime.clone() }))
                             .child(row("Size", format_size(file.size)))
                             .child(row("Status", String::new()).child(dynamic(move || {
                                 let up = uploading.get();
                                 Some(untracked(move || {
                                     text(if up { t("Uploading…") } else { t("Ready to send") })
-                                        .text_size(px(TEXT_BASE))
+                                        .text_size(tx(TEXT_BASE))
                                         .text_color(if up { FG_MUTED } else { SUCCESS })
                                 }))
                             }))),
@@ -356,7 +356,7 @@ fn file_card(composer: String, file: store::PendingFile) -> impl IntoElement {
                         view()
                             .flex_row()
                             .justify_end()
-                            .gap(px(S2))
+                            .gap(sp(S2))
                             .child(btn(t("Remove file"), Variant::Secondary, Sz::Md, Some(Icon::Trash2), move || {
                                 close_preview();
                                 remove(&composer, &id);

@@ -2309,6 +2309,8 @@ fn save_prefs() {
         "language": crate::i18n::lang_untracked().as_str(),
         "fontFamily": global::<Fonts>().with_untracked(|f| f.ui.clone()),
         "monoFontFamily": global::<Fonts>().with_untracked(|f| f.mono.clone()),
+        "fontSize": global::<Look>().with_untracked(|l| l.font_size),
+        "compact": global::<Look>().with_untracked(|l| l.compact),
         "appearance": match global::<Theme>().with_untracked(|t| t.0) {
             nsh_core::platform::Appearance::Light => "light",
             nsh_core::platform::Appearance::Dark => "dark",
@@ -2352,6 +2354,10 @@ pub(crate) fn load_prefs() {
     let my_space = v.get("mySpaceName").and_then(serde_json::Value::as_str).map(str::to_owned).filter(|n| !n.trim().is_empty());
     let font = |k: &str| v.get(k).and_then(serde_json::Value::as_str).and_then(font_name);
     global::<Fonts>().set(Fonts { ui: font("fontFamily"), mono: font("monoFontFamily") });
+    apply_look(Look {
+        font_size: v.get("fontSize").and_then(serde_json::Value::as_f64).map_or(DEFAULT_FONT_SIZE, font_size_of),
+        compact: v.get("compact").and_then(serde_json::Value::as_bool).unwrap_or(false),
+    });
     global::<Settings>().update(|s| {
         s.send_behavior = behavior;
         s.keep_awake = keep_awake;
@@ -2415,6 +2421,63 @@ pub(crate) fn appearance() -> nsh_core::platform::Appearance {
 struct Fonts {
     ui: Option<String>,
     mono: Option<String>,
+}
+
+/// The interface's text size and density: the base text size in points
+/// (`fontSize`, 14 unless set, from 11 to 20) and whether rows and gaps
+/// are tighter (`compact`).
+#[derive(Clone, Copy, PartialEq)]
+struct Look {
+    font_size: f32,
+    compact: bool,
+}
+
+impl Default for Look {
+    fn default() -> Self {
+        Look { font_size: DEFAULT_FONT_SIZE, compact: false }
+    }
+}
+
+pub(crate) const DEFAULT_FONT_SIZE: f32 = 14.0;
+/// How much of the usual spacing and control heights compact mode keeps.
+const COMPACT: f32 = 0.82;
+
+thread_local! {
+    /// (text, spacing) factors for `kit::tx` and `kit::sp`, which run for
+    /// every view made: kept beside the global, not read through it.
+    static SCALE: std::cell::Cell<(f32, f32)> = const { std::cell::Cell::new((1.0, 1.0)) };
+}
+
+/// The factors text sizes and spacing are multiplied by.
+pub(crate) fn ui_scale() -> (f32, f32) {
+    SCALE.get()
+}
+
+fn apply_look(look: Look) {
+    SCALE.set((look.font_size / DEFAULT_FONT_SIZE, if look.compact { COMPACT } else { 1.0 }));
+    global::<Look>().set(look);
+}
+
+/// (base text size, compact), tracked: a change mounts the UI again.
+pub(crate) fn look() -> (f32, bool) {
+    global::<Look>().with(|l| (l.font_size, l.compact))
+}
+
+/// A text size as set: within what the layout holds, in half points.
+pub(crate) fn font_size_of(points: f64) -> f32 {
+    ((points.clamp(11.0, 20.0) * 2.0).round() / 2.0) as f32
+}
+
+pub(crate) fn set_font_size(points: f32) {
+    let look = global::<Look>().with_untracked(|l| *l);
+    apply_look(Look { font_size: font_size_of(f64::from(points)), ..look });
+    save_prefs();
+}
+
+pub(crate) fn set_compact(compact: bool) {
+    let look = global::<Look>().with_untracked(|l| *l);
+    apply_look(Look { compact, ..look });
+    save_prefs();
 }
 
 /// A font setting as typed: the first family of a comma list, without
@@ -5044,6 +5107,14 @@ mod model_rule_tests {
         let own: Vec<std::path::PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
         assert!(own.iter().all(|d| dirs.contains(d)), "the app's own PATH is kept");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_text_size_stays_within_what_the_layout_holds() {
+        assert_eq!(crate::store::font_size_of(14.0), 14.0);
+        assert_eq!(crate::store::font_size_of(15.3), 15.5);
+        assert_eq!(crate::store::font_size_of(4.0), 11.0);
+        assert_eq!(crate::store::font_size_of(40.0), 20.0);
     }
 
     #[test]

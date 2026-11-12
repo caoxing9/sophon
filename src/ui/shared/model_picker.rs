@@ -180,8 +180,8 @@ pub(crate) fn model_picker(live: bool, current_name: Memo<String>) -> impl IntoE
                 .flex_row()
                 .items_center()
                 .gap(px(6.0))
-                .h(px(CONTROL_SM))
-                .px(px(S2))
+                .h(sp(CONTROL_SM))
+                .px(sp(S2))
                 .min_w(px(0.0))
                 .flex_shrink(1.0)
                 .rounded(px(R_MD))
@@ -195,7 +195,7 @@ pub(crate) fn model_picker(live: bool, current_name: Memo<String>) -> impl IntoE
                 }))
                 .child(
                     text(move || current_name.get())
-                        .text_size(px(TEXT_SM))
+                        .text_size(tx(TEXT_SM))
                         .font_weight(FontWeight(500))
                         .text_color(tint(FG, 0.8))
                         .number_of_lines(1)
@@ -211,7 +211,7 @@ pub(crate) fn model_picker(live: bool, current_name: Memo<String>) -> impl IntoE
                         let tone = move || if open.get() { color(FG) } else { color(FG_MUTED) };
                         let mut v = view().flex_row().items_center().gap(px(4.0)).flex_shrink_0();
                         if let Some(t) = thinking {
-                            v = v.child(text(t).text_size(px(TEXT_SM)).font_weight(FontWeight(500)).text_color(tone).group_hover(|s| s.text_color(FG)));
+                            v = v.child(text(t).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(tone).group_hover(|s| s.text_color(FG)));
                         }
                         if fast {
                             v = v.child(icon(Icon::Zap, 12.0).text_color(tone).group_hover(|s| s.text_color(FG)));
@@ -265,11 +265,11 @@ fn panel(live: bool, open: Signal<bool>) -> impl IntoElement {
 
 /// The search: an underline that takes the accent while it has the keys.
 fn search(query: Signal<String>) -> impl IntoElement {
-    view().px(px(S3)).pt(px(10.0)).child(
+    view().px(sp(S3)).pt(px(10.0)).child(
         view()
             .flex_row()
             .items_center()
-            .gap(px(S1))
+            .gap(sp(S1))
             .pb(px(6.0))
             .border_b_1()
             .border_color(divider())
@@ -283,7 +283,7 @@ fn search(query: Signal<String>) -> impl IntoElement {
                     .auto_focus(true)
                     .flex_1()
                     .h(px(26.0))
-                    .text_size(px(TEXT_BASE))
+                    .text_size(tx(TEXT_BASE))
                     .text_color(FG)
                     .caret_color(|| color(ACCENT)),
             ),
@@ -349,8 +349,8 @@ fn rail(providers: Memo<Vec<Provider>>, tab: Signal<Tab>) -> impl IntoElement {
         Some(untracked(move || {
             let family = |p: &Provider| crate::daemon::agents::family(&p.id, cfg.as_ref());
             let mut col = view()
-                .p(px(S1))
-                .gap(px(S1))
+                .p(sp(S1))
+                .gap(sp(S1))
                 .child(button(Tab::Favorites, icon(Icon::StarFilled, 20.0).text_color(FG).into_element(), t("Favorites").into(), false, None))
                 .child(view().h(px(1.0)).bg(divider()));
             for p in &list {
@@ -405,7 +405,7 @@ fn list(live: bool, open: Signal<bool>, providers: Memo<Vec<Provider>>, tab: Sig
         let c = store::controls(live);
         let show_older = older_open.get();
         Some(untracked(move || {
-            let mut body = view().pl(px(S2)).pr(px(1.0)).py(px(6.0)).gap(px(2.0));
+            let mut body = view().pl(sp(S2)).pr(px(1.0)).py(px(6.0)).gap(px(2.0));
             // Another agent, in an open conversation: picking continues there.
             if let Tab::Agent(id) = &tab {
                 if needle.is_empty() {
@@ -419,10 +419,10 @@ fn list(live: bool, open: Signal<bool>, providers: Memo<Vec<Provider>>, tab: Sig
                         if live && p.id != c.provider {
                             body = body.child(
                                 text(tf("Continues in {}: a new agent, with this conversation", &[&p.label]))
-                                    .text_size(px(TEXT_XS))
+                                    .text_size(tx(TEXT_XS))
                                     .text_color(FG_MUTED)
-                                    .px(px(S2))
-                                    .py(px(S1)),
+                                    .px(sp(S2))
+                                    .py(sp(S1)),
                             );
                         }
                     }
@@ -504,14 +504,14 @@ fn list(live: bool, open: Signal<bool>, providers: Memo<Vec<Provider>>, tab: Sig
                     gateway_heading = true;
                     body = body.child(
                         view()
-                            .px(px(S2))
-                            .pt(px(S3))
-                            .pb(px(S1))
+                            .px(sp(S2))
+                            .pt(sp(S3))
+                            .pb(sp(S1))
                             .gap(px(2.0))
-                            .child(text(t("Through Magpie")).text_size(px(TEXT_XS)).font_weight(FontWeight(500)).text_color(FG_FAINT))
+                            .child(text(t("Through Magpie")).text_size(tx(TEXT_XS)).font_weight(FontWeight(500)).text_color(FG_FAINT))
                             .child(
                                 text(t("Still this agent's harness; the requests go to another provider"))
-                                    .text_size(px(TEXT_XS))
+                                    .text_size(tx(TEXT_XS))
                                     .text_color(FG_FAINT),
                             ),
                     );
@@ -533,13 +533,13 @@ fn list(live: bool, open: Signal<bool>, providers: Memo<Vec<Provider>>, tab: Sig
                         .flex_row()
                         .items_center()
                         .h(px(32.0))
-                        .px(px(S2))
+                        .px(sp(S2))
                         .rounded(px(R_SM))
                         .group()
                         .hover(|s| s.bg(row_hover()))
                         .child(
                             text(if show_older { t("Show less") } else { t("Show more") })
-                                .text_size(px(TEXT_BASE))
+                                .text_size(tx(TEXT_BASE))
                                 .text_color(FG_MUTED)
                                 .group_hover(|s| s.text_color(FG)),
                         ),
@@ -560,7 +560,7 @@ fn row(live: bool, open: Signal<bool>, r: Row, selected: bool, show_agent: bool,
         .items_center()
         .gap(px(6.0))
         .min_h(px(32.0))
-        .pr(px(S2))
+        .pr(sp(S2))
         .rounded(px(R_SM))
         .group()
         .hover(|s| s.bg(row_hover()))
@@ -572,10 +572,10 @@ fn row(live: bool, open: Signal<bool>, r: Row, selected: bool, show_agent: bool,
                 .h(px(32.0))
                 .flex_row()
                 .items_center()
-                .gap(px(S2))
-                .pl(px(S2))
+                .gap(sp(S2))
+                .pl(sp(S2))
                 .child(mark(&r.provider, 16.0))
-                .child(text(r.name.clone()).text_size(px(TEXT_BASE)).text_color(FG).number_of_lines(1).flex_shrink(1.0).min_w(px(0.0)))
+                .child(text(r.name.clone()).text_size(tx(TEXT_BASE)).text_color(FG).number_of_lines(1).flex_shrink(1.0).min_w(px(0.0)))
                 .when(selected, |v| v.child(icon(Icon::Check, 14.0).text_color(FG_MUTED)))
                 .when(r.subscription, |v| {
                     v.child(
@@ -589,7 +589,7 @@ fn row(live: bool, open: Signal<bool>, r: Row, selected: bool, show_agent: bool,
                             .child(text(t("Subscription")).text_size(px(10.0)).text_color(WARNING)),
                     )
                 })
-                .when(show_agent, |v| v.child(text(r.agent.clone()).text_size(px(TEXT_XS)).text_color(tint(FG_MUTED, 0.7)).number_of_lines(1)))
+                .when(show_agent, |v| v.child(text(r.agent.clone()).text_size(tx(TEXT_XS)).text_color(tint(FG_MUTED, 0.7)).number_of_lines(1)))
                 .child(view().flex_1()),
         )
         .child(
@@ -615,7 +615,7 @@ fn row(live: bool, open: Signal<bool>, r: Row, selected: bool, show_agent: bool,
 
 /// A tooltip's bubble.
 fn tip(label: String) -> View {
-    glass_strong(view()).px(px(S2)).py(px(S1)).rounded(px(R_LG)).child(text(label).text_size(px(TEXT_XS)))
+    glass_strong(view()).px(sp(S2)).py(sp(S1)).rounded(px(R_LG)).child(text(label).text_size(tx(TEXT_XS)))
 }
 
 /// A shortcut's keycap (T3's `Kbd`).
@@ -628,7 +628,7 @@ fn keycap(label: &str) -> impl IntoElement {
         .items_center()
         .justify_center()
         .bg(tint(FG, 0.07))
-        .child(text(label.to_owned()).text_size(px(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG_MUTED))
+        .child(text(label.to_owned()).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG_MUTED))
 }
 
 /// A model picked: the panel stays open for its reasoning (T3's docked
@@ -657,9 +657,9 @@ fn reasoning(live: bool) -> impl IntoElement {
             let model = model_label(live);
             Some(untracked(move || {
                 let current = c.thinking.clone().or(default.clone()).or_else(|| opts.first().map(|o| o.id.clone()));
-                let mut body = view().px(px(S2)).pt(px(10.0)).pb(px(6.0)).gap(px(2.0));
+                let mut body = view().px(sp(S2)).pt(px(10.0)).pb(px(6.0)).gap(px(2.0));
                 if opts.is_empty() {
-                    body = body.child(view().h(px(32.0)).px(px(S2)).justify_center().child(text(t("No effort levels")).text_size(px(TEXT_BASE)).text_color(FG_MUTED)));
+                    body = body.child(view().h(px(32.0)).px(sp(S2)).justify_center().child(text(t("No effort levels")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED)));
                 }
                 for o in opts {
                     let on = current.as_deref() == Some(o.id.as_str());
@@ -669,16 +669,16 @@ fn reasoning(live: bool) -> impl IntoElement {
                         .on_press(move || store::set_control(live, Control::Thinking(id.clone())))
                         .flex_row()
                         .items_center()
-                        .gap(px(S2))
+                        .gap(sp(S2))
                         .h(px(32.0))
-                        .px(px(S2))
+                        .px(sp(S2))
                         .rounded(px(R_SM))
                         .hover(|s| s.bg(row_hover()))
-                        .child(text(o.label.clone()).text_size(px(TEXT_BASE)).text_color(FG).flex_1().number_of_lines(1));
+                        .child(text(o.label.clone()).text_size(tx(TEXT_BASE)).text_color(FG).flex_1().number_of_lines(1));
                     b = if on {
                         b.child(icon(Icon::Check, 14.0).text_color(FG))
                     } else if is_default {
-                        b.child(text(t("Default")).text_size(px(TEXT_SM)).text_color(tint(FG_MUTED, 0.7)))
+                        b.child(text(t("Default")).text_size(tx(TEXT_SM)).text_color(tint(FG_MUTED, 0.7)))
                     } else {
                         b
                     };
@@ -687,18 +687,18 @@ fn reasoning(live: bool) -> impl IntoElement {
                 view()
                     .flex_1()
                     .child(
-                        view().px(px(S3)).pt(px(10.0)).child(
+                        view().px(sp(S3)).pt(px(10.0)).child(
                             view()
                                 .flex_row()
                                 .items_center()
-                                .gap(px(S2))
+                                .gap(sp(S2))
                                 .h(px(33.0))
                                 .pb(px(6.0))
                                 .border_b_1()
                                 .border_color(divider())
-                                .child(text(t("Reasoning")).text_size(px(TEXT_BASE)).text_color(FG_MUTED))
+                                .child(text(t("Reasoning")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED))
                                 .child(view().flex_1())
-                                .child(text(model).text_size(px(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1).flex_shrink(1.0)),
+                                .child(text(model).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1).flex_shrink(1.0)),
                         ),
                     )
                     .child(scroll().flex_1().child(body))
@@ -737,9 +737,9 @@ fn footer(live: bool) -> impl IntoElement {
         .flex_row()
         .flex_wrap()
         .items_center()
-        .gap(px(S2))
-        .px(px(S3))
-        .py(px(S2))
+        .gap(sp(S2))
+        .px(sp(S3))
+        .py(sp(S2))
         .min_h(px(45.0))
         .border_t_1()
         .border_color(divider())
@@ -747,7 +747,7 @@ fn footer(live: bool) -> impl IntoElement {
         .child(dynamic(move || {
             let features = store::features(live);
             Some(untracked(move || {
-                let mut row = view().flex_row().flex_wrap().items_center().gap(px(S2));
+                let mut row = view().flex_row().flex_wrap().items_center().gap(sp(S2));
                 for f in features {
                     let id = f.id.clone();
                     row = row.child(match f.value.clone() {
@@ -789,7 +789,7 @@ fn segments(items: Vec<(String, Option<Icon>, bool, std::rc::Rc<dyn Fn()>)>) -> 
             .justify_center()
             .gap(px(4.0))
             .h(px(24.0))
-            .px(px(S2))
+            .px(sp(S2))
             .rounded(px(R_MD))
             .bg(if on { tint(FG, 0.10) } else { tint(FG, 0.0) })
             .group()
@@ -798,7 +798,7 @@ fn segments(items: Vec<(String, Option<Icon>, bool, std::rc::Rc<dyn Fn()>)>) -> 
         if let Some(g) = glyph {
             seg = seg.child(icon(g, 12.0).text_color(ink).group_hover(|s| s.text_color(FG)));
         }
-        seg = seg.child(text(label).text_size(px(TEXT_SM)).text_color(ink).group_hover(|s| s.text_color(FG)));
+        seg = seg.child(text(label).text_size(tx(TEXT_SM)).text_color(ink).group_hover(|s| s.text_color(FG)));
         group = group.child(seg);
     }
     group.into_element()
@@ -834,12 +834,12 @@ fn access_mode(live: bool) -> impl IntoElement {
                     .items_center()
                     .gap(px(6.0))
                     .h(px(28.0))
-                    .px(px(S2))
+                    .px(sp(S2))
                     .rounded(px(R_MD))
                     .group()
                     .hover(|s| s.bg(row_hover()))
                     .child(icon(mode_icon(&id), 14.0).text_color(FG_MUTED).group_hover(|s| s.text_color(FG)))
-                    .child(text(label).text_size(px(TEXT_SM)).text_color(FG_MUTED).group_hover(|s| s.text_color(FG)))
+                    .child(text(label).text_size(tx(TEXT_SM)).text_color(FG_MUTED).group_hover(|s| s.text_color(FG)))
                     .child(icon(Icon::ChevronUp, 12.0).text_color(FG_MUTED)),
             )
             .child(menu_heading(t("Mode")));
@@ -876,9 +876,9 @@ fn choose(live: bool, r: &Row) {
 fn note(title: String, detail: String) -> AnyElement {
     view()
         .flex_1()
-        .p(px(S4))
-        .gap(px(S1))
-        .child(text(title).text_size(px(TEXT_SM)).text_color(FG_MUTED))
-        .when(!detail.is_empty(), |v| v.child(text(detail).text_size(px(TEXT_XS)).text_color(FG_FAINT)))
+        .p(sp(S4))
+        .gap(sp(S1))
+        .child(text(title).text_size(tx(TEXT_SM)).text_color(FG_MUTED))
+        .when(!detail.is_empty(), |v| v.child(text(detail).text_size(tx(TEXT_XS)).text_color(FG_FAINT)))
         .into_element()
 }
