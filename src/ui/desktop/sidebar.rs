@@ -217,7 +217,7 @@ fn service_status() -> impl IntoElement {
             Conn::Down(_) => match (failed.get(), store::service_setup()) {
                 (Some(e), _) => tf("The service on this Mac did not start: {}", &[&e]),
                 // The first launch on a Mac with only Sophon.
-                (None, Some(step)) => format!("{step}\n{}", t("Once, on this Mac: about a minute, and 750 MB on disk")),
+                (None, Some(step)) => format!("{step}\n{}", t("Once, on this Mac: about a minute, and 400 MB on disk")),
                 (None, None) => t("Starting the service…").to_owned(),
             },
             Conn::Connected { .. } => t("No projects yet").to_owned(),

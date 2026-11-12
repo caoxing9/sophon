@@ -100,7 +100,7 @@ fn download(url: &str, path: &Path, total: u64, progress: &impl Fn(Step)) -> Res
 }
 
 /// Installs the service under `~/.sophon/service` (blocking: a download of
-/// some 50 MB and an `npm install`), telling `progress` how far it is. The
+/// some 50 MB and an `npm install`; about 400 MB once installed), telling `progress` how far it is. The
 /// command line to start it with.
 pub(crate) fn install(progress: impl Fn(Step)) -> Result<PathBuf, String> {
     let dir = dir();
@@ -150,9 +150,31 @@ pub(crate) fn install(progress: impl Fn(Step)) -> Result<PathBuf, String> {
     if !bin.join("paseo").is_file() {
         return Err("the service's package installed no command line".into());
     }
+    slim(&making);
     let _ = std::fs::remove_dir_all(&node);
     std::fs::rename(&making, &node).map_err(|e| format!("{}: {e}", node.display()))?;
     Ok(node.join("bin/paseo"))
+}
+
+/// Takes out of a fresh install what the service never runs, some 330 of
+/// its 730 MB: what Node ships for building things (its headers, npm), the
+/// copy of Claude Code the agent SDK carries (the service runs the user's
+/// own, which it is pointed at), and the speech library (Sophon listens
+/// and speaks with the system's).
+fn slim(node: &Path) {
+    for gone in ["include", "share", "lib/node_modules/npm", "lib/node_modules/corepack", "bin/npm", "bin/npx", "bin/corepack", "CHANGELOG.md", "README.md"] {
+        let path = node.join(gone);
+        let _ = if path.is_dir() && !path.is_symlink() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+    }
+    let modules = node.join("lib/node_modules/@getpaseo/cli/node_modules");
+    // Per platform: `claude-agent-sdk-darwin-arm64`, `sherpa-onnx-darwin-arm64`.
+    for (dir, prefix) in [(modules.join("@anthropic-ai"), "claude-agent-sdk-"), (modules.clone(), "sherpa-onnx-")] {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            if entry.file_name().to_string_lossy().starts_with(prefix) {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -169,7 +191,7 @@ mod tests {
 
     /// The whole install, for real: `SOPHON_DATA_DIR=<empty folder>
     /// cargo test --lib the_service_installs_live -- --ignored --nocapture`
-    /// (a download of some 50 MB; about 740 MB once installed).
+    /// (a download of some 50 MB; about 400 MB once installed).
     #[test]
     #[ignore]
     fn the_service_installs_live() {
@@ -185,5 +207,11 @@ mod tests {
         let version = String::from_utf8_lossy(&version.stdout).trim().to_owned();
         println!("installed: {} says {version}", installed.display());
         assert_eq!(version, SERVICE);
+        // Slimmed: none of what the service never runs.
+        let node = installed.parent().and_then(Path::parent).unwrap();
+        assert!(!node.join("include").exists() && !node.join("bin/npm").exists());
+        assert!(!node.join("lib/node_modules/@getpaseo/cli/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64").exists());
+        // The SDK itself (the JavaScript the service imports) stays.
+        assert!(node.join("lib/node_modules/@getpaseo/cli/node_modules/@anthropic-ai/claude-agent-sdk").is_dir());
     }
 }

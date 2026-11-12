@@ -165,7 +165,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Setting up the agent service…", "正在准备 Agent 服务…"),
     ("Setting up the agent service: downloading {}%", "正在准备 Agent 服务：下载中 {}%"),
     ("Setting up the agent service: installing…", "正在准备 Agent 服务：安装中…"),
-    ("Once, on this Mac: about a minute, and 750 MB on disk", "这台 Mac 只需一次：约一分钟，占用约 750 MB 磁盘"),
+    ("Once, on this Mac: about a minute, and 400 MB on disk", "这台 Mac 只需一次：约一分钟，占用约 400 MB 磁盘"),
     ("Sophon could not install its service: {}", "Sophon 没能安装好服务：{}"),
     ("Couldn't start the service: {}", "无法启动服务：{}"),
     ("Cannot reach the Sophon service", "无法连接 Sophon 服务"),
