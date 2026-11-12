@@ -124,6 +124,61 @@ pub(crate) fn latest(install: &Install) -> Result<String, String> {
     }
 }
 
+/// Whether Sophon can install `provider`'s CLI itself.
+pub(crate) fn installable(provider: &str) -> bool {
+    cfg!(target_os = "macos") && matches!(provider, "claude" | "codex")
+}
+
+/// Installs `provider`'s CLI for this user, with no package manager and no
+/// admin rights (blocking: a download), into `~/.local/bin`, where Sophon
+/// then finds it (`bundled_cli`):
+///
+/// - Claude Code: Anthropic's own installer (`claude.ai/install.sh`), as
+///   its documentation gives it.
+/// - Codex: the binary of OpenAI's latest release on GitHub.
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+pub(crate) fn install_cli(provider: &str) -> Result<(), String> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from).ok_or("no home folder")?;
+    install_cli_in(provider, &home)
+}
+
+/// [`install_cli`] for the user whose home is `home` (a test's own folder).
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+fn install_cli_in(provider: &str, home: &std::path::Path) -> Result<(), String> {
+    let bin = home.join(".local/bin");
+    let script = match provider {
+        "claude" => "curl -fsSL --retry 3 https://claude.ai/install.sh | bash".to_owned(),
+        "codex" => {
+            let arch = if cfg!(target_arch = "aarch64") { "aarch64" } else { "x86_64" };
+            // The archive holds the one binary, named after its target.
+            format!(
+                "set -e; T=$(mktemp -d); trap 'rm -rf \"$T\"' EXIT; \
+                 curl -fsSL --retry 3 -o \"$T/codex.tar.gz\" https://github.com/openai/codex/releases/latest/download/codex-{arch}-apple-darwin.tar.gz; \
+                 tar -xzf \"$T/codex.tar.gz\" -C \"$T\"; \
+                 F=$(find \"$T\" -type f -name 'codex*' ! -name '*.tar.gz' | head -n 1); [ -n \"$F\" ]; \
+                 mkdir -p \"{bin}\"; install -m 755 \"$F\" \"{bin}/codex\"",
+                bin = bin.display()
+            )
+        }
+        _ => return Err("Sophon does not install this agent".into()),
+    };
+    let out = std::process::Command::new("/bin/bash")
+        .args(["-c", &script])
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env("HOME", home)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        return Err(text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("failed").trim().to_owned());
+    }
+    if !bin.join(provider).exists() {
+        return Err(format!("the installer left no {provider} in {}", bin.display()));
+    }
+    Ok(())
+}
+
 /// Runs `install`'s update (blocking); its last line of output on failure.
 #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 pub(crate) fn run_update(install: &Install, binary: &str) -> Result<(), String> {
@@ -145,6 +200,26 @@ pub(crate) fn run_update(install: &Install, binary: &str) -> Result<(), String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Both installers for real, into a folder of the test's own (downloads
+    /// of some hundreds of MB): `cargo test --lib the_clis_install_live --
+    /// --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn the_clis_install_live() {
+        let home = std::env::temp_dir().join(format!("sophon-install-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        for provider in ["codex", "claude"] {
+            install_cli_in(provider, &home).unwrap_or_else(|e| panic!("{provider}: {e}"));
+            let bin = home.join(".local/bin").join(provider);
+            let out = std::process::Command::new(&bin).arg("--version").env("HOME", &home).output().expect("it runs");
+            let said = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+            println!("{provider}: {} says {said}", bin.display());
+            assert!(version_of(&said).is_some(), "{provider} said: {said}");
+        }
+        let _ = std::fs::remove_dir_all(&home);
+    }
 
     #[test]
     fn an_install_is_told_by_where_the_binary_lives() {

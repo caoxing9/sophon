@@ -3252,6 +3252,71 @@ pub(crate) fn update_agent(path: &str) {
 #[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
 pub(crate) fn update_agent(_path: &str) {}
 
+/// An agent's CLI being installed by Sophon (`agent_update::install_cli`),
+/// by provider: under way, or why it failed.
+#[derive(Clone, Default, PartialEq)]
+pub(crate) struct AgentInstall {
+    pub(crate) running: bool,
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Clone, Default)]
+struct AgentInstalls(HashMap<String, AgentInstall>);
+
+pub(crate) fn agent_install(provider: &str) -> Option<AgentInstall> {
+    global::<AgentInstalls>().with(|i| i.0.get(provider).cloned())
+}
+
+/// Installs `provider`'s CLI on this Mac, then asks the providers again:
+/// the service is pointed at what was installed.
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+pub(crate) fn install_agent(provider: &str) {
+    if !on_this_mac() || agent_install(provider).is_some_and(|i| i.running) {
+        return;
+    }
+    let id = provider.to_owned();
+    global::<AgentInstalls>().update(|i| {
+        i.0.insert(id.clone(), AgentInstall { running: true, error: None });
+    });
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let which = id.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(crate::agent_update::install_cli(&which));
+    });
+    spawn_detached(async move {
+        let result = rx.recv().await.unwrap_or_else(|| Err("stopped".into()));
+        global::<AgentInstalls>().update(|i| {
+            i.0.insert(id.clone(), AgentInstall { running: false, error: result.as_ref().err().cloned() });
+        });
+        if result.is_ok() {
+            // Found again where it now is, even if it was looked for before.
+            BUNDLED_SENT.with_borrow_mut(|sent| sent.clear());
+            refresh_agents();
+        }
+    });
+}
+
+#[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
+pub(crate) fn install_agent(_provider: &str) {}
+
+/// Opens Terminal on `command` (an agent's own sign-in, which asks in the
+/// browser and waits there): a script of its own, so the window says what
+/// it runs and closes nothing of the user's.
+pub(crate) fn run_in_terminal(command: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let path = std::env::temp_dir().join("sophon-sign-in.command");
+        let script = format!("#!/bin/bash\nclear\necho '{}'\necho\n{}\necho\necho 'Done: you can close this window and go back to Sophon.'\n", command.replace('\'', ""), command);
+        if std::fs::write(&path, script).is_ok() {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700));
+            let _ = std::process::Command::new("/usr/bin/open").arg(&path).spawn();
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = command;
+}
+
 /// Asks the providers again, and their diagnostics.
 pub(crate) fn refresh_agents() {
     global::<Diagnostics>().update(|d| d.map.clear());

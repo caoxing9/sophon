@@ -141,7 +141,37 @@ fn agent_row(p: Provider, d: Option<Diagnostic>, u: Option<store::AgentUpdate>, 
         body = body.child(muted(t("Sign in on that computer:").to_owned())).child(command_box(cmd));
     }
 
+    // Not installed on this Mac (Sophon looked in the usual folders and
+    // the desktop apps): it can install the two it knows how to.
+    let install = store::agent_install(&p.id);
+    let installable = editable && store::on_this_mac() && on && p.status == "unavailable" && crate::agent_update::installable(&p.id);
+    if let Some(e) = install.as_ref().and_then(|i| i.error.clone()) {
+        body = body.child(text(tf("Could not install it: {}", &[&e])).text_size(px(TEXT_SM)).text_color(DANGER));
+    }
+    // Installed, and its own account not signed in (the desktop app's
+    // sign-in is not the CLI's): its sign-in, in Terminal.
+    let sign_in = (editable && store::on_this_mac() && !agents::created_by_sophon(cfg, &p.id))
+        .then(|| d.login.as_ref().filter(|l| !l.signed_in).and(d.path.clone()))
+        .flatten()
+        .filter(|_| p.id == "claude");
+
     let mut trailing = view().flex_row().items_center().gap(px(S2));
+    if installable {
+        let id = p.id.clone();
+        let running = install.as_ref().is_some_and(|i| i.running);
+        trailing = trailing.child(btn(
+            if running { t("Installing…") } else { t("Install") },
+            Variant::Primary,
+            Sz::Sm,
+            Some(Icon::Download),
+            move || store::install_agent(&id),
+        ));
+    }
+    if let Some(path) = sign_in {
+        trailing = trailing.child(btn(t("Sign in"), Variant::Primary, Sz::Sm, None, move || {
+            store::run_in_terminal(&format!("'{}' auth login", path.replace('\'', "")))
+        }));
+    }
     if editable
         && newer.is_some()
         && let (Some(u), Some(path)) = (&u, &d.path)
