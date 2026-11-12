@@ -393,6 +393,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("No image on the clipboard", "剪贴板里没有图片"),
     ("Could not read the pasted image", "无法读取粘贴的图片"),
     ("Could not read the pasted file", "无法读取粘贴的文件"),
+    ("Could not read the dropped file", "无法读取拖入的文件"),
     ("Import sessions", "导入会话"),
     ("Continue the Claude Code and Codex sessions you started outside Sophon. Each goes to the project of its folder", "继续你在 Sophon 之外开始的 Claude Code 和 Codex 会话，每个会话归到它所在目录的项目下"),
     ("{} sessions in {} folders", "{} 个会话，{} 个目录"),

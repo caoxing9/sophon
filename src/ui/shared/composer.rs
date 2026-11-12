@@ -205,16 +205,28 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
             f(k)
         }
     };
+    // Files dragged from Finder (or anywhere) attach where they are let go:
+    // the card says so while they are over it.
+    let over = signal(false);
     view()
         .w_full()
         .max_w(px(CONTENT_MAX_WIDTH))
         .self_center()
+        .on_file_drag_enter(move || over.set(true))
+        .on_file_drag_leave(move || over.set(false))
+        .on_file_drop(move |e: &nsh_core::element::FileDropEvent| {
+            over.set(false);
+            if let Some(key) = key.get_untracked() {
+                attach_uris(&key, &e.uris, false);
+            }
+        })
         .child(queue_track(live))
         .child(suggest_panel(target, doc))
         .child(chips::preview_layer(key))
         .child(glass_strong(view())
         .w_full()
         .rounded(px(24.0))
+        .border_color(move || if over.get() { ACCENT.into() } else { glass_edge() })
         .child(editor(doc, text_value, placeholder, TEXT_CONTENT, 220.0, changed).mx(px(S4)).mt(px(14.0)).mb(px(S1)))
         .child(
             view()
@@ -824,8 +836,18 @@ fn attach_pasted(key: &str, e: &RichEditorPastedFiles) {
         }
     }
     insert_images(key, images);
+    attach_uris(key, &e.uris, true);
+}
+
+/// Files by their `file:` addresses, pasted (copied in Finder) or dropped
+/// on the composer: read here and attached, images as images, the rest
+/// uploaded to the host (which may be another computer). Folders are left
+/// out. `pasted`: one that cannot be read may be on the clipboard itself.
+#[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
+fn attach_uris(key: &str, uris: &[String], pasted: bool) {
+    use base64::Engine;
     #[cfg(not(target_arch = "wasm32"))]
-    for uri in &e.uris {
+    for uri in uris {
         let Some(path) = uri.strip_prefix("file://") else { continue };
         let path = std::path::PathBuf::from(percent_decode(path));
         if path.is_dir() {
@@ -837,7 +859,7 @@ fn attach_pasted(key: &str, e: &RichEditorPastedFiles) {
             // A file inside another app's own folder (a picture copied in
             // WeChat) is not the app's to read: the picture itself is on
             // the clipboard beside its address.
-            Err(_) => match clipboard_image() {
+            Err(_) => match pasted.then(clipboard_image).flatten() {
                 Some((mime, data)) => {
                     insert_images(key, vec![crate::daemon::connection::ImageInput {
                         name,
@@ -847,7 +869,7 @@ fn attach_pasted(key: &str, e: &RichEditorPastedFiles) {
                     continue;
                 }
                 None => {
-                    store::notify(t("Could not read the pasted file").to_owned());
+                    store::notify(if pasted { t("Could not read the pasted file") } else { t("Could not read the dropped file") }.to_owned());
                     continue;
                 }
             },

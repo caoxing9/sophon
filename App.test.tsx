@@ -34,6 +34,16 @@ test("attaches a pasted screenshot as a chip in the text", async () => {
   expect(app.count("label:moon@2x.png")).toBe(1);
 });
 
+test("attaches a file dropped on the composer", async () => {
+  const app = await open(".", { width: 1100, height: 760, platform: "macos" });
+  await newWorkspace(app);
+  // As Finder drags it: the file's address, read where it is let go.
+  const here = import.meta.url.replace(/[^/]*$/, "").replace(/^[a-z]+:(\/\/)?/, "file://");
+  await app.dropFiles("id:composer", [`${here}assets/loader/moon@2x.png`]);
+  await app.waitFor("label:moon@2x.png");
+  expect(app.count("label:moon@2x.png")).toBe(1);
+});
+
 test("Backspace deletes a chip as one unit", async () => {
   const app = await open(".", { width: 1100, height: 760 });
   await newWorkspace(app);
