@@ -722,9 +722,15 @@ fn take_photo_into(key: String) {
     // come up over one that is leaving.
     #[cfg(target_os = "ios")]
     set_timeout(std::time::Duration::from_millis(350), move || {
+        // The camera's screen is UIKit's, on the main thread; the photo
+        // comes back to this one (the engine's), where the composer is.
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Option<Vec<u8>>>();
         crate::platform::ios_camera::take_photo(move |photo| {
+            let _ = tx.send(photo);
+        });
+        store::spawn_detached(async move {
             use base64::Engine;
-            let Some(bytes) = photo else { return };
+            let Some(Some(bytes)) = rx.recv().await else { return };
             let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
             insert_images(&key, vec![crate::daemon::connection::ImageInput {
                 name: format!("photo-{at}.jpg"),

@@ -52,6 +52,24 @@ unsafe impl Encode for CGRect {
     const ENCODING: Encoding = Encoding::Struct("CGRect", &[CGPoint::ENCODING, CGSize::ENCODING]);
 }
 
+unsafe extern "C" {
+    /// `dispatch_get_main_queue()` is this symbol's address.
+    static _dispatch_main_q: c_void;
+    fn dispatch_async_f(queue: *const c_void, context: *mut c_void, work: extern "C" fn(*mut c_void));
+}
+
+/// Runs `work` on the main thread, later.
+fn on_main(work: impl FnOnce() + Send + 'static) {
+    extern "C" fn run(context: *mut c_void) {
+        // SAFETY: the box `on_main` leaked for this one call.
+        let work = unsafe { Box::from_raw(context.cast::<Box<dyn FnOnce() + Send>>()) };
+        work();
+    }
+    let work: Box<Box<dyn FnOnce() + Send>> = Box::new(Box::new(work));
+    // SAFETY: the main queue; the context is the box above, taken back once.
+    unsafe { dispatch_async_f(&raw const _dispatch_main_q, Box::into_raw(work).cast(), run) };
+}
+
 #[link(name = "UIKit", kind = "framework")]
 unsafe extern "C" {
     static UIImagePickerControllerOriginalImage: &'static NSString;
@@ -61,7 +79,7 @@ unsafe extern "C" {
     fn UIImageJPEGRepresentation(image: *const AnyObject, quality: f64) -> *mut AnyObject;
 }
 
-type Done = Box<dyn FnOnce(Option<Vec<u8>>)>;
+type Done = Box<dyn FnOnce(Option<Vec<u8>>) + Send>;
 
 thread_local! {
     /// The camera screen that is up: its delegate (the picker does not
@@ -169,8 +187,15 @@ fn top_controller() -> Option<Retained<AnyObject>> {
 }
 
 /// Opens the camera; `done` hears the photo (a JPEG) or `None` when the
-/// user cancelled or no camera opened. On the main thread.
-pub(crate) fn take_photo(done: impl FnOnce(Option<Vec<u8>>) + 'static) {
+/// user cancelled or no camera opened. Called from any thread (the app's
+/// code runs on the engine's, UIKit only on the main one); `done` is
+/// called on the main thread.
+pub(crate) fn take_photo(done: impl FnOnce(Option<Vec<u8>>) + Send + 'static) {
+    on_main(move || present(Box::new(done)));
+}
+
+/// [`take_photo`], on the main thread.
+fn present(done: Done) {
     let Some(_mtm) = MainThreadMarker::new() else { return done(None) };
     if !available() || OPEN.with_borrow(Option::is_some) {
         return done(None);
@@ -184,7 +209,7 @@ pub(crate) fn take_photo(done: impl FnOnce(Option<Vec<u8>>) + 'static) {
         let delegate: Retained<Delegate> = msg_send![Delegate::alloc(), init];
         let _: () = msg_send![&*picker, setSourceType: SOURCE_CAMERA];
         let _: () = msg_send![&*picker, setDelegate: &*delegate];
-        OPEN.with_borrow_mut(|open| *open = Some((delegate, Box::new(done))));
+        OPEN.with_borrow_mut(|open| *open = Some((delegate, done)));
         let _: () = msg_send![&*top, presentViewController: &*picker, animated: true, completion: std::ptr::null::<c_void>()];
     }
 }
