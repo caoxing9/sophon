@@ -15,6 +15,8 @@ mod bundled_cli;
 mod cadence;
 pub mod daemon;
 mod fold;
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+mod follow;
 mod i18n;
 mod lan;
 mod platform;
@@ -101,6 +103,8 @@ pub fn App() -> impl IntoElement {
         store::start_bridge();
         store::start_spaces();
         store::watch_keep_awake();
+        #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+        follow::start();
         #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
         store::watch_limits_for_push();
         update::start();

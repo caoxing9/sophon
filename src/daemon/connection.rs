@@ -95,6 +95,8 @@ pub enum Command {
     /// Sessions, archived included, newest first; `search` filters them.
     History { search: String },
     /// Brings an archived agent back.
+    /// The service reads the agent's record again (`follow`).
+    Reload(String),
     Unarchive(String),
     /// Connects to another daemon: `None` is this machine's.
     SwitchHost(Option<RemoteHost>),
@@ -1843,6 +1845,12 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
         Command::ScheduleRuns(id) => {
             vec![request(pending, Pending::ScheduleRuns(id.clone()), json!({ "type": "schedule/logs", "scheduleId": id }))]
         }
+        // The same request, asked quietly: the record is read again.
+        Command::Reload(agent_id) => vec![request(
+            pending,
+            Pending::Optional,
+            json!({ "type": "refresh_agent_request", "agentId": agent_id }),
+        )],
         Command::Unarchive(agent_id) => vec![request(
             pending,
             Pending::Other("restore the agent"),

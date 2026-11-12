@@ -287,6 +287,9 @@ pub struct Agent {
     pub scheduled: bool,
     pub updated_at: String,
     pub pending: Vec<Permission>,
+    /// The session's id in the agent's own records (the service's
+    /// `persistence`), when it keeps one.
+    pub session_id: Option<String>,
 }
 
 impl Agent {
@@ -326,6 +329,7 @@ impl Agent {
             archived: v.get("archivedAt").is_some_and(|a| !a.is_null()),
             scheduled: v.pointer("/labels/paseo.schedule-id").is_some_and(|l| !l.is_null()),
             updated_at: str_of(v, "updatedAt").unwrap_or_default(),
+            session_id: v.pointer("/persistence/sessionId").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned),
             pending: v
                 .get("pendingPermissions")
                 .and_then(Value::as_array)
