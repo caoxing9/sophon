@@ -202,16 +202,23 @@ jobs:
       - name: Device build
         if: env.HAS_SIGNING == 'true'
         run: nsh package --target ios --icon assets/app-icon/icon-ios-1024.png --sign "$IDENTITY" --profile "$RUNNER_TEMP/app.mobileprovision"
+      # altool, not `nsh publish ios`: App Store Connect answers that one's
+      # upload with 409, "not a valid value for sourceFileChecksums". An
+      # upload that fails is reported and does not hold back the release.
       - name: TestFlight
         if: env.HAS_SIGNING == 'true' && env.HAS_ASC == 'true'
+        continue-on-error: true
         env:
-          NSH_APP_STORE_APP_ID: ${{ secrets.ASC_APP_ID }}
-          NSH_APP_STORE_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-          NSH_APP_STORE_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
         run: |
-          printf '%s' "$ASC_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
-          nsh publish ios --private-key "$RUNNER_TEMP/AuthKey.p8" .nsh/out/Sophon.ipa
+          export API_PRIVATE_KEYS_DIR="$RUNNER_TEMP/asc-keys"
+          mkdir -p "$API_PRIVATE_KEYS_DIR"
+          printf '%s' "$ASC_KEY_P8" > "$API_PRIVATE_KEYS_DIR/AuthKey_$ASC_KEY_ID.p8"
+          xcrun altool --upload-app -f .nsh/out/Sophon.ipa --type ios \
+            --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" \
+            || { echo "::error::The iOS build was not uploaded to TestFlight"; exit 1; }
       - uses: actions/upload-artifact@v4
         if: env.HAS_SIGNING == 'true'
         with:
