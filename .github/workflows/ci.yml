@@ -94,6 +94,30 @@ jobs:
           name: Sophon-macos
           path: dist/Sophon-macos.zip
 
+  # The Android app, as far as a pull request needs: that it packages, for
+  # the one ABI phones have (a release builds both).
+  android:
+    name: Package Android
+    needs: nsh
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          rev: ${{ needs.nsh.outputs.rev }}
+          cache-key: android
+          keep-target: true
+          targets: aarch64-linux-android
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: nsh package --target android --abi arm64-v8a --icon assets/app-icon/icon-ios-1024.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sophon-android
+          path: .nsh/out/*.apk
+
   relay:
     name: Relay
     runs-on: ubuntu-latest
