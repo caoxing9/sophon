@@ -25,7 +25,7 @@ APP="${1:?usage: $0 path/to/Sophon.app}"
 
 # The Node runtime, and the service's version: the one Sophon is built against.
 NODE=v22.23.5
-SERVICE=0.11.4
+SERVICE="${SOPHON_SERVICE_VERSION:-0.11.4}"
 case "$(uname -m)" in arm64) ARCH=arm64 ;; *) ARCH=x64 ;; esac
 
 BUILT="$ROOT/.nsh/service-$NODE-$SERVICE-$ARCH"
