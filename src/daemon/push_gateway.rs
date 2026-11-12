@@ -316,4 +316,46 @@ mod tests {
         serving.abort();
         *OUTBOX.lock().unwrap() = None;
     }
+
+    /// A push through a real gateway that has an APNs key, to a real
+    /// device token: `PUSH_GATEWAY=host:port PUSH_TOKEN=<hex> PUSH_ENV=development
+    /// cargo test --lib a_push_reaches_apple_live -- --ignored`. Apple
+    /// takes it (the device then shows it).
+    #[tokio::test]
+    #[ignore]
+    async fn a_push_reaches_apple_live() {
+        let gateway = std::env::var("PUSH_GATEWAY").expect("PUSH_GATEWAY");
+        let token = std::env::var("PUSH_TOKEN").expect("PUSH_TOKEN");
+        let env = std::env::var("PUSH_ENV").unwrap_or_else(|_| "development".into());
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        let (mut ws, _) = tokio_tungstenite::connect_async(push::gateway_url(&gateway, false, &format!("id={id}")).unwrap()).await.unwrap();
+        let Some(Ok(Message::Text(hello))) = ws.next().await else { panic!("no hello") };
+        let hello: Value = serde_json::from_str(hello.as_str()).unwrap();
+        assert_eq!(hello["apns"], true, "the gateway has an APNs key");
+        let key: [u8; 32] = B64.decode(hello["key"].as_str().unwrap()).unwrap().try_into().unwrap();
+        let wants = push::Wants { token, env, lang: "zh".into(), ..Default::default() };
+        let agent = crate::daemon::model::Agent {
+            id: "agent-test".into(),
+            title: "sophon · main".into(),
+            status: "running".into(),
+            pending: vec![crate::daemon::model::Permission { id: "perm-test".into(), title: "npm test".into(), ..Default::default() }],
+            ..Default::default()
+        };
+        let sealed = push::seal(&key, push::agent_push(&id, &agent, push::Reason::Permission, &wants).to_string().as_bytes());
+        ws.send(Message::Text(json!({ "type": "push", "ref": 1, "sealed": sealed }).to_string().into())).await.unwrap();
+        let answer = tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                if let Some(Ok(Message::Text(t))) = ws.next().await {
+                    let v: Value = serde_json::from_str(t.as_str()).unwrap();
+                    if v["type"] == "pushed" {
+                        return v;
+                    }
+                }
+            }
+        })
+        .await
+        .expect("the gateway answered");
+        println!("pushed: {answer}");
+        assert_eq!(answer["ok"], true, "{answer}");
+    }
 }
