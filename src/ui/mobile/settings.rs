@@ -31,6 +31,10 @@ pub(crate) fn settings() -> impl IntoElement {
                         false,
                     )),
                 ))
-                .child(section(t("Coding agents"), crate::ui::shared::agents::agents_card(false))),
+                .child(section(t("Coding agents"), crate::ui::shared::agents::agents_card(false)))
+                // The last card rests above the floating bar, as the other
+                // tabs' lists do: the page's own foot and the gap before
+                // this make up the rest of the bar's room.
+                .child(view().h(px(super::home::BAR_ROOM - S4 - S6))),
         ))
 }
