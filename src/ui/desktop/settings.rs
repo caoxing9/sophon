@@ -22,6 +22,7 @@ pub(crate) fn settings(compact: bool) -> impl IntoElement {
                 .child(section(t("Sending"), sending_card()))
                 .child(section(t("Storage"), storage_card()))
                 .child(section(t("Power"), keep_awake_card()))
+                .child(when(crate::update::can_check, || section(t("Updates"), updates_card())))
                 .child(section(
                     t("Host"),
                     host_card()
@@ -249,4 +250,32 @@ fn relay_row() -> impl IntoElement {
                     ),
             )
     })
+}
+
+/// The running version and a check for a newer one now: Sophon looks every
+/// hour by itself, which is a wait right after a release.
+fn updates_card() -> View {
+    use crate::update::{self, Phase};
+    let st = computed(update::state);
+    card().child(row(
+        move || SharedString::from(tf("Sophon {}", &[&st.with(|s| s.current.clone())])),
+        move || {
+            let s = st.get();
+            SharedString::from(match (&s.phase, &s.version) {
+                _ if s.checking => t("Checking…").to_owned(),
+                (Phase::Idle, _) => match &s.checked {
+                    Some(Ok(())) => t("This is the newest version").to_owned(),
+                    Some(Err(e)) => tf("Could not check: {}", &[e]),
+                    None => t("Sophon looks for a newer version every hour").to_owned(),
+                },
+                (Phase::Downloading(_), Some(v)) => tf("Downloading {}…", &[v]),
+                (Phase::Failed(e), _) => tf("The update failed: {}", &[e]),
+                (_, Some(v)) => tf("Version {} is available: the sidebar offers it", &[v]),
+                _ => String::new(),
+            })
+        },
+        btn(t("Check for updates"), Variant::Outline, Sz::Sm, Some(Icon::RotateCw), update::check_now)
+            .disabled(move || st.with(|s| s.checking || !matches!(s.phase, Phase::Idle))),
+        true,
+    ))
 }

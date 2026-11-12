@@ -22,7 +22,7 @@ use nsh_updater::install::Installation;
 use nsh_updater::{Available, Config, Download};
 
 /// How often a running app looks for a newer version.
-const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+const CHECK_EVERY: Duration = Duration::from_secs(60 * 60);
 
 /// Where an update stands, for the sidebar.
 #[derive(Clone, Default, PartialEq)]
@@ -58,6 +58,11 @@ pub(crate) struct UpdateState {
     /// Whether the app can replace itself here.
     pub(crate) can_install: bool,
     pub(crate) phase: Phase,
+    /// A check asked for by hand is under way.
+    pub(crate) checking: bool,
+    /// How the last check ended, when it found nothing newer (`Ok`) or
+    /// could not look (`Err`, why).
+    pub(crate) checked: Option<Result<(), String>>,
 }
 
 pub(crate) fn state() -> UpdateState {
@@ -67,6 +72,8 @@ pub(crate) fn state() -> UpdateState {
 #[cfg(not(target_arch = "wasm32"))]
 enum Msg {
     Found(Available, bool, Option<String>, Vec<(String, String)>),
+    /// A check ended with nothing newer, or could not look.
+    Checked(Result<(), String>),
     Progress(f32),
     Downloaded,
     Installing,
@@ -166,6 +173,9 @@ fn start_desktop() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Msg>();
     let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
     global::<Installer>().set(Installer(Some(std::sync::Arc::new(std::sync::Mutex::new(go_tx)))));
+    // A check asked for by hand ends the wait between checks.
+    let (now_tx, now_rx) = std::sync::mpsc::channel::<()>();
+    global::<Checker>().set(Checker(Some(std::sync::Arc::new(std::sync::Mutex::new(now_tx)))));
     let spawned = std::thread::Builder::new().name("sophon-update".into()).spawn(move || {
         let installation = Installation::current(&config.id, &bytes);
         if let Some(i) = &installation {
@@ -183,7 +193,7 @@ fn start_desktop() {
                     let _ = tx.send(Msg::Found(update.clone(), installable, page.clone(), changes));
                     let Some(installation) = installation.as_ref().filter(|_| installable) else {
                         // Only a page to open: look again later.
-                        std::thread::sleep(CHECK_EVERY);
+                        let _ = now_rx.recv_timeout(CHECK_EVERY);
                         continue;
                     };
                     // Fetched quietly, so the update is one restart away
@@ -213,10 +223,17 @@ fn start_desktop() {
                     });
                     continue;
                 }
-                Ok(None) => {}
-                Err(e) => log::info!("update check: {e}"),
+                Ok(None) => {
+                    let _ = tx.send(Msg::Checked(Ok(())));
+                }
+                Err(e) => {
+                    log::info!("update check: {e}");
+                    let _ = tx.send(Msg::Checked(Err(e)));
+                }
             }
-            std::thread::sleep(CHECK_EVERY);
+            let _ = now_rx.recv_timeout(CHECK_EVERY);
+            // Several presses are one check.
+            while now_rx.try_recv().is_ok() {}
         }
     });
     if let Err(e) = spawned {
@@ -234,6 +251,12 @@ fn start_desktop() {
                     s.url = page.or(Some(a.url));
                     s.can_install = can_install;
                     s.phase = Phase::Available;
+                    s.checking = false;
+                    s.checked = None;
+                }),
+                Msg::Checked(result) => s.update(|s| {
+                    s.checking = false;
+                    s.checked = Some(result);
                 }),
                 Msg::Progress(p) => s.update(|s| s.phase = Phase::Downloading(p)),
                 Msg::Downloaded => s.update(|s| s.phase = Phase::Ready),
@@ -243,6 +266,32 @@ fn start_desktop() {
             }
         }
     });
+}
+
+/// The updater's thread, to wake for a check now.
+#[derive(Clone, Default)]
+struct Checker(Option<std::sync::Arc<std::sync::Mutex<std::sync::mpsc::Sender<()>>>>);
+
+/// Whether this build looks for updates (a packaged desktop app).
+pub(crate) fn can_check() -> bool {
+    global::<Checker>().with(|c| c.0.is_some())
+}
+
+/// Looks for a newer version now, rather than at the next of the hourly
+/// checks. An update already found, downloading or ready
+/// stays as it is: the sidebar offers it.
+pub(crate) fn check_now() {
+    if state().checking || !matches!(state().phase, Phase::Idle) {
+        return;
+    }
+    let Some(tx) = global::<Checker>().with_untracked(|c| c.0.clone()) else { return };
+    global::<UpdateState>().update(|s| {
+        s.checking = true;
+        s.checked = None;
+    });
+    if let Ok(tx) = tx.lock() {
+        let _ = tx.send(());
+    }
 }
 
 #[derive(Clone, Default)]
