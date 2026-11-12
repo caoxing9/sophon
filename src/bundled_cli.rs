@@ -52,7 +52,7 @@ fn version_key(name: &str) -> Vec<u64> {
 /// The folders a CLI installed on its own goes to that a login shell's
 /// `PATH` may lack: the installers' own (`~/.local/bin`, `~/.claude/local`),
 /// Homebrew's, and the package managers' global ones.
-fn install_dirs(home: &Path) -> Vec<PathBuf> {
+pub(crate) fn install_dirs(home: &Path) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = [".local/bin", ".claude/local", ".npm-global/bin", ".bun/bin", ".volta/bin", "Library/pnpm", ".local/share/pnpm", ".yarn/bin"]
         .iter()
         .map(|d| home.join(d))

@@ -908,6 +908,11 @@ impl Default for LocalService {
     }
 }
 
+/// Whether someone set the switch themselves: an "off" that is only an
+/// earlier version's default does not hold.
+#[derive(Clone, Default, PartialEq)]
+struct LocalServiceChosen(bool);
+
 /// Whether this Mac runs agents of its own.
 pub(crate) fn local_service() -> bool {
     !crate::ui::kit::MOBILE && settings().local_service.0
@@ -916,6 +921,7 @@ pub(crate) fn local_service() -> bool {
 /// Turns this Mac's own service on or off: off, it goes to the first other
 /// computer saved; on, back to its own.
 pub(crate) fn set_local_service(on: bool) {
+    global::<LocalServiceChosen>().set(LocalServiceChosen(true));
     edit_settings(|s| s.local_service = LocalService(on));
     if on {
         if current_host().is_some_and(|h| crate::spaces::home_of(&h.url).is_none()) {
@@ -2277,6 +2283,7 @@ fn save_prefs() {
             SendBehavior::Queue => "queue",
         },
         "localService": s.local_service.0,
+        "localServiceChosen": global::<LocalServiceChosen>().with_untracked(|c| c.0),
         "mySpaceName": s.my_space_name,
         "push": s.push.0,
         "pushHide": s.push_hide,
@@ -2311,13 +2318,9 @@ fn save_prefs() {
 
 /// Restores what `save_prefs` wrote.
 pub(crate) fn load_prefs() {
-    let Some(text) = crate::daemon::read_file("settings.json") else {
-        #[cfg(not(target_arch = "wasm32"))]
-        if !crate::ui::kit::MOBILE && service_cli().is_none() {
-            global::<Settings>().update(|s| s.local_service = LocalService(false));
-        }
-        return;
-    };
+    // (A Mac with no service of its own runs agents all the same: Sophon
+    // carries one. It used to start as one that only connects to others.)
+    let Some(text) = crate::daemon::read_file("settings.json") else { return };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return };
     let behavior = match v.get("sendBehavior").and_then(serde_json::Value::as_str) {
         Some("interrupt") => SendBehavior::Interrupt,
@@ -2329,8 +2332,19 @@ pub(crate) fn load_prefs() {
         Some("display") => KeepAwake::Display,
         _ => KeepAwake::On,
     };
-    // A Mac without Paseo starts as one that only connects to others.
-    let local = v.get("localService").and_then(serde_json::Value::as_bool).unwrap_or_else(|| cfg!(target_arch = "wasm32") || service_cli().is_some());
+    // Off only where someone chose so, or where this Mac follows other
+    // computers: an "off" saved by an earlier version for a Mac that had
+    // no service (and no one to connect to) was never a choice.
+    let chosen = v.get("localServiceChosen").and_then(serde_json::Value::as_bool).unwrap_or(false);
+    let follows_others = crate::daemon::read_file("hosts.json")
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|h| h.get("hosts").and_then(serde_json::Value::as_array).map(|l| !l.is_empty()))
+        .unwrap_or(false);
+    let local = match v.get("localService").and_then(serde_json::Value::as_bool) {
+        Some(false) if chosen || follows_others || service_cli().is_some() => false,
+        _ => true,
+    };
+    global::<LocalServiceChosen>().set(LocalServiceChosen(chosen));
     let my_space = v.get("mySpaceName").and_then(serde_json::Value::as_str).map(str::to_owned).filter(|n| !n.trim().is_empty());
     global::<Settings>().update(|s| {
         s.send_behavior = behavior;
@@ -2394,9 +2408,29 @@ pub(crate) fn set_appearance(appearance: nsh_core::platform::Appearance) {
     save_prefs();
 }
 
-/// The service's command line: on the PATH, or inside the desktop app that
-/// ships it.
+/// The service Sophon carries inside its own app bundle
+/// (`Sophon.app/Contents/Resources/service`, put there when the app is
+/// packaged: `scripts/bundle-service.sh`): a Node runtime and the service's
+/// package, so a Mac with only Sophon runs its agents. `SOPHON_SERVICE_DIR`
+/// names another copy (tests, a development build).
+#[cfg(not(target_arch = "wasm32"))]
+fn bundled_service_cli() -> Option<std::path::PathBuf> {
+    let dir = match std::env::var_os("SOPHON_SERVICE_DIR") {
+        Some(dir) => std::path::PathBuf::from(dir),
+        None => std::env::current_exe().ok()?.parent()?.parent()?.join("Resources/service"),
+    };
+    let cli = dir.join("node/bin/paseo");
+    cli.is_file().then_some(cli)
+}
+
+/// The service's command line: the one Sophon carries (the version it is
+/// built against), else one installed on this Mac: on the PATH, or inside
+/// the Paseo app.
 pub(crate) fn service_cli() -> Option<std::path::PathBuf> {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(cli) = bundled_service_cli() {
+        return Some(cli);
+    }
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
     let mut candidates: Vec<std::path::PathBuf> = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).map(|d| d.join("paseo")).collect())
@@ -2409,6 +2443,35 @@ pub(crate) fn service_cli() -> Option<std::path::PathBuf> {
         home.join("Applications/Paseo.app/Contents/Resources/bin/paseo"),
     ]);
     candidates.into_iter().find(|p| p.is_file())
+}
+
+/// The `PATH` to run the service's command line with. The app, opened
+/// from the Finder, has only the system's (`/usr/bin:/bin:…`): a service
+/// installed with npm is a script that starts `node`, which is not there
+/// ("env: node: No such file or directory"), and the service it starts
+/// looks for the agents on what it is given. So: the app's own, then the
+/// folder of the command line itself, then the usual folders for what is
+/// installed by hand, Homebrew or a Node version manager.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn service_path(cli: &std::path::Path) -> std::ffi::OsString {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
+    let mut dirs: Vec<std::path::PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    let mut add = |dir: std::path::PathBuf| {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    };
+    if let Some(dir) = cli.parent() {
+        add(dir.to_path_buf());
+    }
+    // Where the link points too: beside the real script is its `node`.
+    if let Some(dir) = std::fs::canonicalize(cli).ok().and_then(|p| p.parent().map(std::path::Path::to_path_buf)) {
+        add(dir);
+    }
+    for dir in crate::bundled_cli::install_dirs(&home) {
+        add(dir);
+    }
+    std::env::join_paths(dirs).unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default())
 }
 
 /// Whether this Mac's service comes with the desktop app (its updates come
@@ -2461,6 +2524,7 @@ pub(crate) fn start_service() {
         return;
     }
     let Some(cli) = service_cli() else {
+        // (A packaged Sophon carries its own; a development build may not.)
         global::<AutoStart>().update(|a| a.error = Some(t("The service is not installed on this Mac").into()));
         return;
     };
@@ -2473,11 +2537,17 @@ pub(crate) fn start_service() {
         if let Some(home) = home {
             args.extend(["--home".to_owned(), home.to_string_lossy().into_owned()]);
         }
-        let out = std::process::Command::new(&cli).args(&args).output();
+        let out = std::process::Command::new(&cli).args(&args).env("PATH", service_path(&cli)).output();
         let _ = tx.send(match out {
             Ok(o) if o.status.success() => Ok(()),
-            Ok(o) => Err(String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("").to_owned()),
-            Err(e) => Err(e.to_string()),
+            Ok(o) => {
+                // What it said last, on either stream; never nothing.
+                let said = |bytes: &[u8]| String::from_utf8_lossy(bytes).lines().rev().find(|l| !l.trim().is_empty()).map(|l| l.trim().to_owned());
+                let why = said(&o.stderr).or_else(|| said(&o.stdout)).unwrap_or_else(|| format!("{} ended with {}", cli.display(), o.status));
+                log::warn!("starting the service failed: {why}");
+                Err(why)
+            }
+            Err(e) => Err(format!("{}: {e}", cli.display())),
         });
     });
     spawn(async move {
@@ -4835,6 +4905,27 @@ pub(crate) fn close_current() {
 #[cfg(test)]
 mod model_rule_tests {
     use super::forbidden_model;
+
+    #[test]
+    fn the_service_s_command_line_runs_with_its_own_folder_on_the_path() {
+        // As npm installs it: a link in one folder to a script in another,
+        // whose `node` sits beside the link.
+        let dir = std::env::temp_dir().join(format!("sophon-service-path-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (bin, lib) = (dir.join("node/bin"), dir.join("node/lib/paseo"));
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::write(lib.join("cli.js"), "").unwrap();
+        std::os::unix::fs::symlink(lib.join("cli.js"), bin.join("paseo")).unwrap();
+        let path = crate::store::service_path(&bin.join("paseo"));
+        let dirs: Vec<std::path::PathBuf> = std::env::split_paths(&path).collect();
+        assert!(dirs.contains(&bin), "the folder of the command line");
+        assert!(dirs.contains(&std::fs::canonicalize(&lib).unwrap()), "the folder it links to");
+        // What the app had comes first, unchanged.
+        let own: Vec<std::path::PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+        assert_eq!(&dirs[..own.len()], &own[..]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_claude_model_through_a_subscription_is_refused() {
