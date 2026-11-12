@@ -149,7 +149,7 @@ impl NodeView for MentionView {
             .bg(move || if selected.get() { tint(ACCENT, 0.18) } else { tint(ACCENT, 0.06) })
             .label(path)
             .child(icon(if dir { Icon::Folder } else { Icon::FileText }, 12.0).text_color(ACCENT))
-            .child(text(chip_name(&tail)).text_size(px(TEXT_SM)).line_height(px(16.0)).font_family(|| MONO).text_color(ACCENT).number_of_lines(1))
+            .child(text(chip_name(&tail)).text_size(px(TEXT_SM)).line_height(px(16.0)).font_family(mono_font).text_color(ACCENT).number_of_lines(1))
             .into_element()
     }
 }

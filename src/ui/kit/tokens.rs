@@ -97,7 +97,15 @@ pub(crate) const CONTROL_SM: f32 = if MOBILE { 32.0 } else { 28.0 };
 pub(crate) const CONTENT_MAX_WIDTH: f32 = 820.0;
 pub(crate) const SIDEBAR_WIDTH: f32 = 272.0;
 
+/// The code font, unless the settings name another (`mono_font`).
 pub(crate) const MONO: &str = "Menlo";
+
+/// The font of code, terminals and numbers: the one the settings name
+/// (`monoFontFamily`), else Menlo. Read as each view is made: a change
+/// mounts the UI again.
+pub(crate) fn mono_font() -> nsh_core::prelude::SharedString {
+    crate::store::fonts_untracked().1.unwrap_or_else(|| MONO.to_owned()).into()
+}
 
 /// Workspace label colors, by name.
 pub(crate) fn label_tone(name: &str) -> AdaptiveColor {

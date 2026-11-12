@@ -180,7 +180,7 @@ fn content(path: String) -> AnyElement {
                             text(shown)
                                 .text_size(px(TEXT_SM))
                                 .line_height(px(19.0))
-                                .font_family(|| MONO)
+                                .font_family(mono_font)
                                 .text_color(FG)
                                 .selectable(true),
                         )

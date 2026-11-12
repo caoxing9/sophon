@@ -688,7 +688,7 @@ fn tool_row(item: Memo<Option<Item>>) -> impl IntoElement {
         .child(
             text(move || tool.with(|(.., s)| s.clone()))
                 .text_size(px(TEXT_CODE))
-                .font_family(|| MONO)
+                .font_family(mono_font)
                 .text_color(FG_MUTED)
                 .number_of_lines(1)
                 .flex_1(),
@@ -840,7 +840,7 @@ fn tool_card(p: Permission) -> View {
                 view().px(px(S3)).py(px(S2)).rounded(px(R_LG)).bg(SURFACE2).child(
                     text(p.description.clone())
                         .text_size(px(TEXT_CODE))
-                        .font_family(|| MONO)
+                        .font_family(mono_font)
                         .line_height(px(18.0))
                         .number_of_lines(8)
                         .text_color(FG)
@@ -1073,7 +1073,7 @@ pub(crate) fn tracks() -> View {
                         .gap(px(S2))
                         .h(px(30.0))
                         .child(status_dot(|| Status::Running))
-                        .child(text(w.label.clone()).text_size(px(TEXT_CODE)).font_family(|| MONO).number_of_lines(1).flex_1());
+                        .child(text(w.label.clone()).text_size(px(TEXT_CODE)).font_family(mono_font).number_of_lines(1).flex_1());
                     if let Some(token) = w.stop_token.clone() {
                         let item = w.id.clone();
                         row = row.child(btn(t("Stop"), Variant::Outline, Sz::Sm, None, move || {
@@ -1156,7 +1156,7 @@ fn static_row(item: Item) -> AnyElement {
             .h(px(30.0))
             .child(icon(tool_icon(&kind, &name), 15.0).text_color(FG_MUTED))
             .child(text(name).text_size(px(TEXT_BASE)).font_weight(FontWeight(500)))
-            .child(text(summary).text_size(px(TEXT_CODE)).font_family(|| MONO).text_color(FG_MUTED).number_of_lines(1).flex_1())
+            .child(text(summary).text_size(px(TEXT_CODE)).font_family(mono_font).text_color(FG_MUTED).number_of_lines(1).flex_1())
             .into_element(),
         Item::Reasoning { text: t } => text(t).text_size(px(13.0)).italic().number_of_lines(3).text_color(FG_MUTED).into_element(),
         Item::Error { message } => text(message).text_size(px(TEXT_BASE)).text_color(DANGER).into_element(),

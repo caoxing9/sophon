@@ -155,7 +155,7 @@ fn runs_list(runs: Vec<ScheduleRun>) -> View {
             .items_center()
             .gap(px(S2))
             .h(px(CONTROL_SM))
-            .child(text(local_time(&run.started, true)).text_size(px(TEXT_SM)).text_color(FG).font_family(|| MONO))
+            .child(text(local_time(&run.started, true)).text_size(px(TEXT_SM)).text_color(FG).font_family(mono_font))
             .child(badge(label, tone));
         if let Some(took) = took(&run) {
             line = line.child(text(took).text_size(px(TEXT_SM)).text_color(FG_MUTED));

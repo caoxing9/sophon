@@ -118,7 +118,7 @@ fn folders(browse: Memo<store::Browse>) -> impl IntoElement {
                         text(move || browse.with(|b| b.cwd.clone()))
                             .flex_1()
                             .text_size(px(TEXT_SM))
-                            .font_family(|| MONO)
+                            .font_family(mono_font)
                             .text_color(FG_MUTED)
                             .number_of_lines(1),
                     ),

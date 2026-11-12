@@ -39,6 +39,47 @@ pub(crate) fn appearance_card() -> View {
             ),
             false,
         ))
+        .child(row(
+            t("Interface font"),
+            t("Any font installed on this device"),
+            font_field(false, "SF Pro"),
+            false,
+        ))
+        .child(row(
+            t("Code font"),
+            t("For code, terminals and numbers"),
+            font_field(true, "JetBrains Mono"),
+            false,
+        ))
+        // The same two, by hand: `fontFamily` and `monoFontFamily` in the
+        // settings file, read when Sophon starts.
+        .when(!MOBILE && cfg!(target_os = "macos"), |card| {
+            card.child(row(
+                t("Settings file"),
+                t("fontFamily and monoFontFamily can be set there too; Sophon reads it when it starts"),
+                btn(t("Open settings.json"), Variant::Outline, Sz::Sm, None, store::open_settings_file),
+                false,
+            ))
+        })
+}
+
+/// The font in use, or the default's name: pressed, the installed fonts
+/// to pick from.
+fn font_field(mono: bool, _example: &'static str) -> impl IntoElement {
+    btn(
+        move || -> SharedString {
+            let (ui, code) = store::fonts();
+            match if mono { code } else { ui } {
+                Some(name) => name.into(),
+                None if mono => "Menlo".into(),
+                None => t("System font").into(),
+            }
+        },
+        Variant::Outline,
+        Sz::Sm,
+        Some(Icon::ChevronsUpDown),
+        move || store::open_modal(store::Modal::Fonts { mono }),
+    )
 }
 
 /// What Return does while an agent runs.
@@ -184,7 +225,7 @@ pub(crate) fn host_card() -> View {
                 _ => "—".into(),
             }))
             .text_size(px(TEXT_BASE))
-            .font_family(|| MONO)
+            .font_family(mono_font)
             .text_color(FG_MUTED),
             false,
         ))

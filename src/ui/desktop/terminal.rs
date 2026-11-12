@@ -37,7 +37,7 @@ pub(crate) fn terminal_pane(id: String) -> impl IntoElement {
         terminal()
             .component_ref(&term)
             .accessibility_label(t("Terminal"))
-            .font_family(SharedString::from(MONO))
+            .font_family(mono_font())
             .font_size(13.0)
             .line_height(18.0)
             .scrollback(5000)
