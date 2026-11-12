@@ -403,6 +403,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Could not read the pasted file", "无法读取粘贴的文件"),
     ("Take Photo", "拍照"),
     ("Could not read the dropped file", "无法读取拖入的文件"),
+    ("Open a conversation to attach files to", "先打开一个对话，再把文件拖进来"),
     ("Import sessions", "导入会话"),
     ("Continue the Claude Code and Codex sessions you started outside Sophon. Each goes to the project of its folder", "继续你在 Sophon 之外开始的 Claude Code 和 Codex 会话，每个会话归到它所在目录的项目下"),
     ("{} sessions in {} folders", "{} 个会话，{} 个目录"),

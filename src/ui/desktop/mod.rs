@@ -54,7 +54,18 @@ pub(crate) fn shell() -> impl IntoElement {
     });
     // The safe area keeps content clear of the status bar, the Dynamic
     // Island and the home indicator; the ambient light still fills them.
-    view().flex_1().p_safe_area().text_color(FG).child(ambient()).child(modals::modal_layer()).child(dynamic(move || {
+    view()
+        .flex_1()
+        .p_safe_area()
+        .text_color(FG)
+        // Files dragged from Finder: the whole window takes them, for the
+        // composer on screen.
+        .on_file_drag_enter(|| crate::ui::shared::composer::dragging_over(true))
+        .on_file_drag_leave(|| crate::ui::shared::composer::dragging_over(false))
+        .on_file_drop(|e: &nsh_core::element::FileDropEvent| crate::ui::shared::composer::dropped(&e.uris))
+        .child(ambient())
+        .child(modals::modal_layer())
+        .child(dynamic(move || {
         let layout = layout.get();
         Some(untracked(move || match layout {
             Layout::Split => {

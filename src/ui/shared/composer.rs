@@ -210,21 +210,14 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
             f(k)
         }
     };
-    // Files dragged from Finder (or anywhere) attach where they are let go:
-    // the card says so while they are over it.
-    let over = signal(false);
+    // Files dragged from Finder attach wherever in the window they are let
+    // go (`dropped`, on the window's root): the card says so while they
+    // are over the window.
+    let over = computed(|| global::<Dropping>().with(|d| d.0));
     view()
         .w_full()
         .max_w(px(CONTENT_MAX_WIDTH))
         .self_center()
-        .on_file_drag_enter(move || over.set(true))
-        .on_file_drag_leave(move || over.set(false))
-        .on_file_drop(move |e: &nsh_core::element::FileDropEvent| {
-            over.set(false);
-            if let Some(key) = key.get_untracked() {
-                attach_uris(&key, &e.uris, false);
-            }
-        })
         .child(queue_track(live))
         .child(suggest_panel(target, doc))
         .child(chips::preview_layer(key))
@@ -870,6 +863,30 @@ fn attach_pasted(key: &str, e: &RichEditorPastedFiles) {
     }
     insert_images(key, images);
     attach_uris(key, &e.uris, true);
+}
+
+/// Files are being dragged over the window.
+#[derive(Clone, Default, PartialEq)]
+struct Dropping(bool);
+
+/// Files are over the window (`true`), or left it.
+pub(crate) fn dragging_over(over: bool) {
+    global::<Dropping>().set(Dropping(over));
+}
+
+/// Files let go anywhere in the window: attached to the composer on screen
+/// (the open conversation's, or the new conversation's).
+pub(crate) fn dropped(uris: &[String]) {
+    dragging_over(false);
+    let key = match (store::screen(), store::tab()) {
+        (store::Screen::Workspace(_), store::Tab::Agent(id)) => Some(format!("agent:{id}")),
+        (store::Screen::Workspace(_), store::Tab::Draft) | (store::Screen::NewWorkspace, _) => Some("form".to_owned()),
+        _ => None,
+    };
+    match key.filter(|k| composer_doc::existing(k).is_some()) {
+        Some(key) => attach_uris(&key, uris, false),
+        None => store::notify(t("Open a conversation to attach files to").to_owned()),
+    }
 }
 
 /// Files by their `file:` addresses, pasted (copied in Finder) or dropped
