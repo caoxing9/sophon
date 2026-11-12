@@ -160,6 +160,9 @@ fn host_body() -> View {
                         ),
                 ),
         )
+        // That it opens a list to switch from: a row is otherwise a place
+        // to go, and this one is not.
+        .child(icon(Icon::ChevronsUpDown, 14.0).text_color(FG_FAINT))
 }
 
 fn nav_item(
