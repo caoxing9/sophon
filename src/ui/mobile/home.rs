@@ -41,8 +41,10 @@ impl HomeTab {
 }
 
 /// Room the floating bar and the new button take at the foot of the lists:
-/// each tab's content scrolls under the bar and comes to rest clear of it.
-pub(super) const BAR_ROOM: f32 = 112.0;
+/// each tab's content scrolls under the bar and comes to rest clear of it,
+/// with air between them (the bar's top is some 100 points up from the
+/// foot of a phone with a home indicator; at 112 the last card touched it).
+pub(super) const BAR_ROOM: f32 = 132.0;
 
 pub(crate) fn home() -> impl IntoElement {
     let tab = signal(HomeTab::Chats);
