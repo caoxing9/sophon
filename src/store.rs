@@ -2318,8 +2318,8 @@ fn save_prefs() {
 
 /// Restores what `save_prefs` wrote.
 pub(crate) fn load_prefs() {
-    // (A Mac with no service yet runs its own all the same: Sophon installs
-    // one. It used to start as one that only connects to others.)
+    // (A Mac with no service of its own runs agents all the same: Sophon
+    // carries one. It used to start as one that only connects to others.)
     let Some(text) = crate::daemon::read_file("settings.json") else { return };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return };
     let behavior = match v.get("sendBehavior").and_then(serde_json::Value::as_str) {
@@ -2408,14 +2408,28 @@ pub(crate) fn set_appearance(appearance: nsh_core::platform::Appearance) {
     save_prefs();
 }
 
-/// The service's command line: on the PATH, or inside the desktop app that
-/// ships it.
+/// The service Sophon carries inside its own app bundle
+/// (`Sophon.app/Contents/Resources/service`, put there when the app is
+/// packaged: `scripts/bundle-service.sh`): a Node runtime and the service's
+/// package, so a Mac with only Sophon runs its agents. `SOPHON_SERVICE_DIR`
+/// names another copy (tests, a development build).
+#[cfg(not(target_arch = "wasm32"))]
+fn bundled_service_cli() -> Option<std::path::PathBuf> {
+    let dir = match std::env::var_os("SOPHON_SERVICE_DIR") {
+        Some(dir) => std::path::PathBuf::from(dir),
+        None => std::env::current_exe().ok()?.parent()?.parent()?.join("Resources/service"),
+    };
+    let cli = dir.join("node/bin/paseo");
+    cli.is_file().then_some(cli)
+}
+
+/// The service's command line: the one Sophon carries (the version it is
+/// built against), else one installed on this Mac: on the PATH, or inside
+/// the Paseo app.
 pub(crate) fn service_cli() -> Option<std::path::PathBuf> {
-    // For trying the first launch on a Mac that has a service already:
-    // only the one Sophon installs counts.
-    #[cfg(target_os = "macos")]
-    if std::env::var_os("SOPHON_OWN_SERVICE_ONLY").is_some() {
-        return crate::service_install::cli();
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(cli) = bundled_service_cli() {
+        return Some(cli);
     }
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
     let mut candidates: Vec<std::path::PathBuf> = std::env::var_os("PATH")
@@ -2428,9 +2442,6 @@ pub(crate) fn service_cli() -> Option<std::path::PathBuf> {
         "/Applications/Paseo.app/Contents/Resources/bin/paseo".into(),
         home.join("Applications/Paseo.app/Contents/Resources/bin/paseo"),
     ]);
-    // Last, the one Sophon installed itself for a Mac that had none.
-    #[cfg(target_os = "macos")]
-    candidates.extend(crate::service_install::cli());
     candidates.into_iter().find(|p| p.is_file())
 }
 
@@ -2506,66 +2517,6 @@ fn auto_start_service() {
     start_service();
 }
 
-/// How far Sophon's own install of the service is, while one runs.
-#[derive(Clone, Default, PartialEq)]
-struct ServiceSetup(Option<String>);
-
-/// What the install of the service is doing now, to show; `None` when
-/// none runs.
-pub(crate) fn service_setup() -> Option<String> {
-    global::<ServiceSetup>().with(|s| s.0.clone())
-}
-
-/// Installs the service for this Mac (`crate::service_install`), saying
-/// how far it is, then starts it.
-fn install_service() {
-    #[cfg(target_os = "macos")]
-    {
-        use crate::service_install::Step;
-        if global::<ServiceSetup>().with_untracked(|s| s.0.is_some()) {
-            return;
-        }
-        global::<AutoStart>().update(|a| a.error = None);
-        global::<ServiceSetup>().set(ServiceSetup(Some(t("Setting up the agent service…").into())));
-        enum Said {
-            Step(Step),
-            Done(Result<(), String>),
-        }
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Said>();
-        std::thread::spawn(move || {
-            let steps = tx.clone();
-            let result = crate::service_install::install(move |step| {
-                let _ = steps.send(Said::Step(step));
-            });
-            let _ = tx.send(Said::Done(result.map(|_| ())));
-        });
-        spawn(async move {
-            while let Some(said) = rx.recv().await {
-                match said {
-                    Said::Step(Step::Downloading(p)) => {
-                        let percent = format!("{:.0}", p * 100.0);
-                        global::<ServiceSetup>().set(ServiceSetup(Some(tf("Setting up the agent service: downloading {}%", &[&percent]))));
-                    }
-                    Said::Step(Step::Installing) => global::<ServiceSetup>().set(ServiceSetup(Some(t("Setting up the agent service: installing…").into()))),
-                    Said::Done(result) => {
-                        global::<ServiceSetup>().set(ServiceSetup(None));
-                        match result {
-                            Ok(()) => start_service(),
-                            Err(e) => {
-                                log::warn!("installing the service failed: {e}");
-                                global::<AutoStart>().update(|a| a.error = Some(tf("Sophon could not install its service: {}", &[&e])));
-                            }
-                        }
-                        break;
-                    }
-                }
-            }
-        });
-    }
-    #[cfg(not(target_os = "macos"))]
-    global::<AutoStart>().update(|a| a.error = Some(t("The service is not installed on this Mac").into()));
-}
-
 /// Starts the agent service on this Mac; the connection, which retries on
 /// its own, picks it up.
 pub(crate) fn start_service() {
@@ -2573,8 +2524,8 @@ pub(crate) fn start_service() {
         return;
     }
     let Some(cli) = service_cli() else {
-        // A Mac with only Sophon: it brings its own service.
-        install_service();
+        // (A packaged Sophon carries its own; a development build may not.)
+        global::<AutoStart>().update(|a| a.error = Some(t("The service is not installed on this Mac").into()));
         return;
     };
     global::<AutoStart>().update(|a| a.error = None);

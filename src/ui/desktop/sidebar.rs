@@ -148,10 +148,7 @@ fn host_body() -> View {
                                     Conn::Starting | Conn::Connecting(_) => match name { Some(n) => tf("Connecting to {}…", &[&n]), None => t("Connecting…").to_owned() },
                                     Conn::Connected { hostname, .. } => name.unwrap_or(if hostname.is_empty() { t("This Mac").into() } else { hostname }),
                                     // This Mac's service is being started, not offline.
-                                    Conn::Down(_) if store::current_host().is_none() && store::service_start_error().is_none() => match store::service_setup() {
-                                        Some(_) => t("Setting up…").to_owned(),
-                                        None => t("Starting the service…").to_owned(),
-                                    },
+                                    Conn::Down(_) if store::current_host().is_none() && store::service_start_error().is_none() => t("Starting the service…").to_owned(),
                                     Conn::Down(_) => tf("{} offline", &[&name.unwrap_or_else(|| t("This Mac").into())]),
                                 }
                             })
@@ -214,11 +211,9 @@ fn service_status() -> impl IntoElement {
     view().flex_1().px(px(S4)).pt(px(S4)).gap(px(S3)).items_start().child(
         text(move || match conn.get() {
             Conn::Down(_) if !store::on_this_mac() => String::new(),
-            Conn::Down(_) => match (failed.get(), store::service_setup()) {
-                (Some(e), _) => tf("The service on this Mac did not start: {}", &[&e]),
-                // The first launch on a Mac with only Sophon.
-                (None, Some(step)) => format!("{step}\n{}", t("Once, on this Mac: about a minute, and 400 MB on disk")),
-                (None, None) => t("Starting the service…").to_owned(),
+            Conn::Down(_) => match failed.get() {
+                Some(e) => tf("The service on this Mac did not start: {}", &[&e]),
+                None => t("Starting the service…").to_owned(),
             },
             Conn::Connected { .. } => t("No projects yet").to_owned(),
             _ => String::new(),

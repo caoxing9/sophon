@@ -74,6 +74,16 @@ jobs:
         run: scripts/set-version.sh "${{ inputs.version || github.ref_name }}"
       - name: Package
         run: nsh package --target macos
+      # The agent service goes inside the app (a Node runtime and Paseo's
+      # daemon): a Mac with only Sophon runs its agents. The archive nsh
+      # wrote is from before: written again, ad hoc signed as nsh leaves
+      # the app (signing below writes it once more).
+      - name: The service, inside the app
+        run: |
+          scripts/bundle-service.sh .nsh/out/Sophon.app
+          codesign --force --deep --sign - .nsh/out/Sophon.app
+          V=$(scripts/version.sh)
+          COPYFILE_DISABLE=1 tar -czf ".nsh/out/Sophon-$V-macos-${{ matrix.arch }}.tar.gz" -C .nsh/out Sophon.app
       # Developer ID signing and notarization: set MACOS_CERT_P12 (base64
       # .p12 of a Developer ID Application certificate), MACOS_CERT_PASSWORD
       # and the App Store Connect key (ASC_ISSUER_ID, ASC_KEY_ID, ASC_KEY_P8).
@@ -99,6 +109,8 @@ jobs:
           [ -n "$IDENTITY" ] || { echo "no Developer ID Application identity in MACOS_CERT_P12" >&2; exit 1; }
 
           APP=.nsh/out/Sophon.app
+          # The service's own binaries first: --deep does not reach Resources.
+          scripts/sign-service.sh "$APP" "$IDENTITY"
           codesign --force --deep --options runtime --timestamp --sign "$IDENTITY" "$APP"
           codesign --verify --deep --strict --verbose=2 "$APP"
 

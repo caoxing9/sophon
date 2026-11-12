@@ -88,6 +88,8 @@ jobs:
           cache-key: macos
           keep-target: true
       - run: nsh package --target macos -o dist/macos
+      # With the agent service inside, as a release has it.
+      - run: scripts/bundle-service.sh dist/macos/Sophon.app
       - run: ditto -c -k --keepParent dist/macos/Sophon.app dist/Sophon-macos.zip
       - uses: actions/upload-artifact@v4
         with:
