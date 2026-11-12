@@ -300,6 +300,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("No matching models", "没有匹配的模型"),
     ("{} is not available", "{} 不可用"),
     ("{} runs from its desktop app: it is not installed on its own", "{} 没有单独安装，改用桌面 App 自带的那份"),
+    ("{} was not on the service's PATH: Sophon found it and pointed the service at it", "服务的 PATH 里找不到 {}：Sophon 已找到它并让服务改用这个位置"),
     ("Not installed on this computer, or it can't start", "这台电脑上没有安装，或者无法启动"),
     ("Continues in {}: a new agent, with this conversation", "将在 {} 中继续：新建智能体，带上这段对话"),
     ("Too large to preview here", "文件太大，无法在这里预览"),

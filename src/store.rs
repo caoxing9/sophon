@@ -2978,7 +2978,12 @@ fn use_bundled_clis() {
         }
         log::info!("{id}: its command follows the desktop app's CLI");
         if patch["providers"][id]["command"][0].as_str().is_some_and(|c| c.starts_with('/')) {
-            notify(tf("{} runs from its desktop app: it is not installed on its own", &[&p.label]));
+            let bin = std::path::PathBuf::from(patch["providers"][id]["command"][0].as_str().unwrap_or_default());
+            if crate::bundled_cli::in_an_app(id, &bin) {
+                notify(tf("{} runs from its desktop app: it is not installed on its own", &[&p.label]));
+            } else {
+                notify(tf("{} was not on the service's PATH: Sophon found it and pointed the service at it", &[&p.label]));
+            }
         }
         patch_providers(patch);
     }

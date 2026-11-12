@@ -3358,13 +3358,13 @@ mod tests {
                 tokio::time::timeout(Duration::from_secs(60), wait).await.ok()
             }
             for id in ["claude", "codex"] {
-                let bin = crate::bundled_cli::find(id).expect("the desktop app's CLI");
+                let bin = crate::bundled_cli::find(id).expect("a CLI the service does not find");
                 cmd_tx.send(Command::RefreshProviders).unwrap();
                 assert!(status(id, "unavailable", &mut ev_rx).await.is_some(), "{id} was not unavailable to begin with");
                 cmd_tx.send(Command::PatchProviders(crate::bundled_cli::use_patch(id, &bin))).unwrap();
                 cmd_tx.send(Command::RefreshProviders).unwrap();
                 let models = status(id, "ready", &mut ev_rx).await.expect("never became ready");
-                println!("{id} ready on its app's CLI, {models} models");
+                println!("{id} ready on {}, {models} models", bin.display());
                 assert!(models > 0);
             }
         });
