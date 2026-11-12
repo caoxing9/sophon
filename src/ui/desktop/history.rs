@@ -48,7 +48,7 @@ pub(crate) fn history(compact: bool) -> impl IntoElement {
             let (_, agents, loaded) = state.get();
             Some(untracked(move || {
                 if !loaded {
-                    return view().p(sp(S8)).items_center().child(text(t("Loading…")).text_color(FG_MUTED)).into_element();
+                    return loading().into_element();
                 }
                 if agents.is_empty() {
                     return view()

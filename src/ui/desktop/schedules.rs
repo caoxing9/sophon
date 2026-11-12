@@ -31,7 +31,7 @@ pub(crate) fn schedules(compact: bool) -> impl IntoElement {
             .child(dynamic(move || {
                 let items = list.get();
                 Some(untracked(move || match items.clone() {
-                    None => text(t("Loading…")).text_color(FG_MUTED).into_element(),
+                    None => loading().into_element(),
                     Some(items) if items.is_empty() => view()
                         .items_center()
                         .gap(sp(S2))

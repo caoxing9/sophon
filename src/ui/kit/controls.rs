@@ -517,6 +517,12 @@ pub(crate) fn loader(label: Option<&'static str>) -> View {
         .when_some(label, |v, l| v.child(text(crate::i18n::t(l)).text_size(tx(TEXT_SM)).text_color(FG_MUTED)))
 }
 
+/// [`loader`] in the middle of the room a list will take once it is here:
+/// what a sheet or a page shows while it waits for its rows.
+pub(crate) fn loading() -> View {
+    view().w_full().min_h(px(180.0)).items_center().justify_center().child(loader(Some("Loading…")))
+}
+
 /// The inline form of [`loader`], for work in progress in a list (an agent
 /// thinking): a small running mark beside a line.
 pub(crate) fn working(label: impl IntoReactive<SharedString>) -> View {

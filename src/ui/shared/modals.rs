@@ -790,7 +790,7 @@ fn import_session() -> View {
                 .placeholder(t("Search sessions"))
                 .auto_focus(true),
         )
-        .child(
+        .child(when(move || shown.with(|l| !l.is_empty()), move || {
             // Everything that shows, in one tick.
             nsh_base::button()
                 .on_press(move || {
@@ -809,14 +809,14 @@ fn import_session() -> View {
                     })
                     .text_size(tx(TEXT_SM))
                     .text_color(FG_MUTED),
-                ),
-        )
+                )
+        }))
         .child(scroll().max_h(px(400.0)).child(dynamic(move || {
             let loaded = list.with(Option::is_some);
             let sessions = shown.get();
             Some(untracked(move || {
                 if !loaded {
-                    return text(t("Loading…")).text_color(FG_MUTED).into_element();
+                    return loading().into_element();
                 }
                 if sessions.is_empty() {
                     return text(t("No sessions found")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED).into_element();
@@ -974,7 +974,7 @@ fn project_settings(name: String) -> View {
             let loaded = cfg.with(|c| c.text.is_some());
             Some(untracked(move || {
                 if !loaded {
-                    return text(t("Loading…")).text_color(FG_MUTED).into_element();
+                    return loading().into_element();
                 }
                 view()
                     .h(px(360.0))
@@ -1291,7 +1291,7 @@ fn pair_device() -> View {
             let st = p.get();
             Some(untracked(move || {
                 if !st.loaded {
-                    return text(t("Loading…")).text_color(FG_MUTED).into_element();
+                    return loading().into_element();
                 }
                 if let Some(e) = st.error.clone() {
                     return text(e).text_size(tx(TEXT_SM)).text_color(DANGER).into_element();
