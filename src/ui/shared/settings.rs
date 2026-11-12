@@ -41,13 +41,13 @@ pub(crate) fn appearance_card() -> View {
         ))
         .child(row(
             t("Interface font"),
-            t("A font installed on this device, by its name. Empty: the system's"),
+            t("Any font installed on this device"),
             font_field(false, "SF Pro"),
             false,
         ))
         .child(row(
             t("Code font"),
-            t("For code, terminals and numbers. Empty: Menlo"),
+            t("For code, terminals and numbers"),
             font_field(true, "JetBrains Mono"),
             false,
         ))
@@ -63,29 +63,23 @@ pub(crate) fn appearance_card() -> View {
         })
 }
 
-/// A font's name, typed: set when Return is pressed or the field is left
-/// (each letter typed would mount the UI again).
-fn font_field(mono: bool, example: &'static str) -> impl IntoElement {
-    let current = move || {
-        let (ui, code) = store::fonts_untracked();
-        if mono { code } else { ui }.unwrap_or_default()
-    };
-    let typed = signal(current());
-    let apply = move || {
-        let value = typed.get_untracked();
-        if store::font_name(&value) != store::font_name(&current()) {
-            store::set_font(mono, &value);
-        }
-    };
-    field()
-        .w(px(200.0))
-        .h(px(CONTROL_SM + 4.0))
-        .value(move || typed.get())
-        .on_change(move |v: &str| typed.set(v.to_owned()))
-        .on_submit(move |_: &str| apply())
-        .on_blur(move || apply())
-        .placeholder(example)
-        .text_size(px(TEXT_SM))
+/// The font in use, or the default's name: pressed, the installed fonts
+/// to pick from.
+fn font_field(mono: bool, _example: &'static str) -> impl IntoElement {
+    btn(
+        move || -> SharedString {
+            let (ui, code) = store::fonts();
+            match if mono { code } else { ui } {
+                Some(name) => name.into(),
+                None if mono => "Menlo".into(),
+                None => t("System font").into(),
+            }
+        },
+        Variant::Outline,
+        Sz::Sm,
+        Some(Icon::ChevronsUpDown),
+        move || store::open_modal(store::Modal::Fonts { mono }),
+    )
 }
 
 /// What Return does while an agent runs.

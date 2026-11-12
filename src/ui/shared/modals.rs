@@ -280,6 +280,7 @@ fn body(m: Modal) -> View {
         Modal::AddProject => add_project(),
         Modal::SwitchBranch => switch_branch(),
         Modal::ImportSession => import_session(),
+        Modal::Fonts { mono } => fonts(mono),
         Modal::AddAgentAccount => crate::ui::shared::agents::add_account(),
         Modal::AddAgentKey => crate::ui::shared::agents::add_api_key(),
         Modal::RemoveAgent { id, label } => crate::ui::shared::agents::remove_agent(id, label),
@@ -800,6 +801,68 @@ fn import_session() -> View {
                     }
                     col.into_element()
                 }
+            }))
+        })))
+        .child(actions(view()))
+}
+
+/// The fonts installed on this device, to pick the interface's or the
+/// code font from: each name in its own letters, a search over them, and
+/// the default first. A name that is not listed can still be typed.
+fn fonts(mono: bool) -> View {
+    let query = signal(String::new());
+    let current = if mono { store::fonts_untracked().1 } else { store::fonts_untracked().0 };
+    // For code, the fixed-width ones; all of them for the interface.
+    let all: Vec<String> = crate::platform::fonts::families().into_iter().filter(|f| !mono || f.fixed).map(|f| f.name).collect();
+    let pick = move |name: &str| {
+        store::set_font(mono, name);
+        store::close_modal();
+    };
+    let row = move |label: String, family: Option<String>, chosen: bool, value: String| {
+        let mut name = text(label).flex_1().min_w(px(0.0)).text_size(px(TEXT_BASE)).number_of_lines(1);
+        if let Some(family) = family {
+            name = name.font_family(SharedString::from(family));
+        }
+        nsh_base::button()
+            .on_press(move || pick(&value))
+            .flex_row()
+            .items_center()
+            .gap(px(S2))
+            .px(px(S3))
+            .h(px(34.0))
+            .rounded(px(R_LG))
+            .hover(|st| st.bg(highlight()))
+            .child(name)
+            .child(view().w(px(16.0)).child(when(move || chosen, || icon(Icon::Check, 14.0).text_color(ACCENT))))
+    };
+    sheet(if mono { t("Code font") } else { t("Interface font") })
+        .w(px(460.0))
+        .child(
+            field()
+                .value(move || query.get())
+                .on_change(move |v: &str| query.set(v.to_owned()))
+                .placeholder(t("Search fonts"))
+                .auto_focus(true),
+        )
+        .child(scroll().h(px(360.0)).child(dynamic(move || {
+            let needle = query.get().trim().to_lowercase();
+            let (all, current) = (all.clone(), current.clone());
+            Some(untracked(move || {
+                let mut col = view().gap(px(1.0));
+                if needle.is_empty() {
+                    let default = if mono { tf("Default ({})", &["Menlo"]) } else { t("Default (the system's font)").to_owned() };
+                    col = col.child(row(default, None, current.is_none(), String::new()));
+                }
+                let shown: Vec<&String> = all.iter().filter(|n| needle.is_empty() || n.to_lowercase().contains(&needle)).collect();
+                for name in &shown {
+                    col = col.child(row((*name).clone(), Some((*name).clone()), current.as_deref() == Some(name.as_str()), (*name).clone()));
+                }
+                // Not in the list (or no list on this system): as typed.
+                let typed = query.get_untracked().trim().to_owned();
+                if !typed.is_empty() && !all.iter().any(|n| n.to_lowercase() == needle) {
+                    col = col.child(row(tf("Use “{}”", &[&typed]), None, false, typed.clone()));
+                }
+                col
             }))
         })))
         .child(actions(view()))

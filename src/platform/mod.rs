@@ -1,5 +1,7 @@
 //! Native pieces of the app on each platform, beside what NSH provides.
 
+pub(crate) mod fonts;
+
 #[cfg(target_os = "android")]
 pub(crate) mod android;
 #[cfg(target_os = "ios")]

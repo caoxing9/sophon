@@ -804,6 +804,8 @@ pub(crate) enum SendBehavior {
 /// The open dialog, if any.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Modal {
+    /// Picks the interface's font, or the code font (`mono`).
+    Fonts { mono: bool },
     RenameWorkspace { id: String, name: String },
     RenameAgent { id: String, name: String },
     RenameHost { id: String, name: String },
