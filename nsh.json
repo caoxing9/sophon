@@ -1,7 +1,7 @@
 {
   "name": "Sophon",
   "id": "dev.sophon.app",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "build": 1,
   "icon": "assets/app-icon/icon-macos-1024.png",
   "rust": ".",
