@@ -16,10 +16,10 @@ LimitNOFILE=65536
 # The push gateway's own key (push.key): /var/lib/sophon-relay, kept across restarts.
 StateDirectory=sophon-relay
 StateDirectoryMode=0700
-# The app's APNs signing key, optional. The service runs as a user of its own
-# that cannot read root's files, so systemd hands it the .p8 as a credential;
-# without the file the credential is empty and pushes are answered NotConfigured.
-SetCredential=apns.p8:
+# The app's APNs signing key. The service runs as a user of its own that
+# cannot read root's files, so systemd hands it the .p8 as a credential. The
+# file has to be there (deploy.sh makes an empty one): while it is empty,
+# pushes are answered NotConfigured.
 LoadCredential=apns.p8:/etc/sophon-relay-apns.p8
 Environment=APNS_KEY_FILE=%d/apns.p8
 # APNS_KEY_ID, APNS_TEAM_ID and, if not dev.sophon.app, APNS_TOPIC.

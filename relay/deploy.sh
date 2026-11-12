@@ -28,6 +28,8 @@ scp "$@" dist/sophon-relay sophon-relay.service "$HOST":/tmp/
 ssh "$@" "$HOST" 'set -e
   sudo install -m 755 /tmp/sophon-relay /usr/local/bin/sophon-relay
   sudo install -m 644 /tmp/sophon-relay.service /etc/systemd/system/sophon-relay.service
+  # The unit loads the APNs key as a credential: empty until one is given.
+  [ -e /etc/sophon-relay-apns.p8 ] || sudo install -m 600 /dev/null /etc/sophon-relay-apns.p8
   sudo systemctl daemon-reload
   sudo systemctl enable --now sophon-relay
   sudo systemctl restart sophon-relay
