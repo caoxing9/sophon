@@ -770,6 +770,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Search models…", "搜索模型…"),
     ("Show less", "收起"),
     ("Show more", "显示更多"),
+    ("Show {} more", "再显示 {} 个"),
     ("Standard", "标准"),
     ("Allow it on “{}”. The code there must be the same as this one", "请在「{}」上允许，那里显示的确认码应与这里相同"),
     ("Allow only if the device shows the same code", "仅当对方设备显示相同的确认码时才允许"),

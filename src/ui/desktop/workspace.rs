@@ -116,9 +116,30 @@ fn header(compact: bool, explorer_shown: Memo<bool>) -> impl IntoElement {
         })
 }
 
-/// The tab strip: one tab per agent, then "+" for a new agent here.
+/// The tab strip, while there is something beside the conversation to
+/// switch to: files, a diff, a sub-agent. The conversations themselves are
+/// rows of the sidebar, not tabs; the one last open has a tab here to come
+/// back to.
 fn tabs() -> impl IntoElement {
-    let agents = computed(|| store::current_workspace().map(|w| store::workspace_agents(&w.id)).unwrap_or_default());
+    let shown = computed(|| !store::open_files().is_empty() || matches!(store::tab(), Tab::File(_) | Tab::Diff(_) | Tab::CommitDiff(..) | Tab::Subagent(..)));
+    view().child(when(move || shown.get(), tab_strip))
+}
+
+fn tab_strip() -> impl IntoElement {
+    // The conversation last open here: the tab that leads back to it.
+    let last = signal(None::<String>);
+    effect(move || {
+        if let Tab::Agent(id) = store::tab() {
+            last.set(Some(id));
+        } else if let Tab::Subagent(parent, _) = store::tab() {
+            last.set(Some(parent));
+        }
+    });
+    let agents = computed(move || {
+        let known = last.get().and_then(|id| store::agent(&id));
+        // None open yet in this window: the workspace's newest.
+        known.or_else(|| store::current_workspace().and_then(|w| store::workspace_agents(&w.id).pop())).into_iter().collect::<Vec<_>>()
+    });
     view()
         .flex_row()
         .items_center()
