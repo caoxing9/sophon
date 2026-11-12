@@ -3749,25 +3749,29 @@ fn deliver(agent_id: &str, text: &str, behavior: Option<&'static str>) {
 /// A system notification when an agent starts needing you while you look
 /// elsewhere; the press opens it.
 fn notify_attention(next: &Agent) {
+    use crate::daemon::push::{self, Reason};
     let before = agent(&next.id);
-    push_attention(before.as_ref(), next);
-    let needed = |a: &Agent| a.requires_attention || !a.pending.is_empty();
-    let finished = before.as_ref().is_some_and(|b| b.is_running()) && !next.is_running();
-    let newly = needed(next) && !before.as_ref().is_some_and(needed);
-    if !(newly || finished) || selected_id().as_deref() == Some(next.id.as_str()) && lifecycle_active() {
+    // What a schedule ran on its own, and a sub-agent's turns (its parent's
+    // business), ask for nobody's eyes.
+    if next.parent_id.is_some() || is_hidden_run(next) {
         return;
     }
-    let body = if !next.pending.is_empty() {
-        format!("Waiting for your approval: {}", next.pending[0].title)
-    } else if finished {
-        "Finished its turn".to_owned()
-    } else {
-        "Needs your attention".to_owned()
-    };
+    // Only what is new and unseen: an approval, or a result the service
+    // marks unread (`push::reason`); and not the agent on screen.
+    let Some(why) = push::reason(before.as_ref(), next) else { return };
+    if selected_id().as_deref() == Some(next.id.as_str()) && lifecycle_active() {
+        return;
+    }
+    push_attention(next, why);
     // The computer's push says it to this phone already.
     if cfg!(target_os = "ios") && push_served() {
         return;
     }
+    let body = match why {
+        Reason::Permission => format!("Waiting for your approval: {}", next.pending.first().map(|p| p.title.as_str()).unwrap_or_default()),
+        Reason::Finished => "Finished its turn".to_owned(),
+        Reason::Attention => "Needs your attention".to_owned(),
+    };
     let n = nsh_core::notifications::Notification::new(format!("agent:{}", next.id), next.title.clone(), body);
     let _ = show_notification(n);
 }
@@ -3874,17 +3878,12 @@ fn open_pressed_agent() {
 
 /// The paired phones that asked for push notifications hear the same
 /// (`docs/push.md`): the computer whose service this is tells them, so
-/// only it, and not while the agent is on screen here. A sub-agent's turns
-/// are its parent's business.
-fn push_attention(before: Option<&Agent>, next: &Agent) {
-    #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+/// only it.
+fn push_attention(next: &Agent, why: crate::daemon::push::Reason) {
+    #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
     {
         use crate::daemon::{push, push_gateway};
-        if !is_desktop() || !on_this_mac() || next.parent_id.is_some() {
-            return;
-        }
-        let Some(why) = push::reason(before, next) else { return };
-        if selected_id().as_deref() == Some(next.id.as_str()) && lifecycle_active() {
+        if !is_desktop() || !on_this_mac() {
             return;
         }
         let Some(record) = push_gateway::record() else { return };
@@ -3893,8 +3892,8 @@ fn push_attention(before: Option<&Agent>, next: &Agent) {
             push_gateway::send(push::agent_push(&record.id, next, why, &wants));
         }
     }
-    #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
-    let _ = (before, next);
+    #[cfg(any(target_arch = "wasm32", target_os = "ios", target_os = "android"))]
+    let _ = (next, why);
 }
 
 /// The mark each plan limit was last seen at (`push::limit_mark`), by its
