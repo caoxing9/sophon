@@ -29,7 +29,9 @@ test("attaches a pasted screenshot as a chip in the text", async () => {
   expect(app.texts().some((t) => t.endsWith("What should the agent do?"))).toBe(true);
   // The composer is a rich editor: its native input sits inside it.
   await app.paste("id:composer", { files: ["assets/loader/moon@2x.png"] });
-  // The chip, named as the file, inline in the composer's text.
+  // The chip, named as the file, inline in the composer's text: it may
+  // come a frame after the paste, and a slow machine (CI) shows that.
+  await app.waitFor("label:moon@2x.png");
   expect(app.texts()).toContain("moon@2x.png");
   expect(app.count("label:moon@2x.png")).toBe(1);
 });
@@ -38,6 +40,7 @@ test("Backspace deletes a chip as one unit", async () => {
   const app = await open(".", { width: 1100, height: 760 });
   await newWorkspace(app);
   await app.paste("id:composer", { files: ["assets/loader/moon@2x.png"] });
+  await app.waitFor("label:moon@2x.png");
   expect(app.count("label:moon@2x.png")).toBe(1);
   await app.keyboard.press("backspace");
   expect(app.count("label:moon@2x.png")).toBe(0);
