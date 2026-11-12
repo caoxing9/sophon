@@ -18,8 +18,10 @@ env:
   CARGO_PROFILE_DEV_DEBUG: "0"
 
 # One job sets up the nsh CLI (built only when the NSH pin moves, cached
-# otherwise); the checks, the UI tests and the macOS package then run side by
-# side, as nothing among them waits on another. The relay builds apart.
+# otherwise); the checks and the UI tests then run side by side, as nothing
+# among them waits on another. The relay builds apart. Packaging is the
+# release's work, after a merge: here the two package jobs run only when
+# the workflow is started by hand, to try a package before merging.
 jobs:
   nsh:
     name: nsh CLI
@@ -79,6 +81,7 @@ jobs:
   macos:
     name: Package macOS
     needs: nsh
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
@@ -96,11 +99,11 @@ jobs:
           name: Sophon-macos
           path: dist/Sophon-macos.zip
 
-  # The Android app, as far as a pull request needs: that it packages, for
-  # the one ABI phones have (a release builds both).
+  # The Android app for the one ABI phones have (a release builds both).
   android:
     name: Package Android
     needs: nsh
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
