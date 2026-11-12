@@ -2683,6 +2683,86 @@ pub(crate) fn start_service() {
     });
 }
 
+/// The version of the service Sophon carries: its package's.
+#[cfg(not(target_arch = "wasm32"))]
+fn bundled_service_version() -> Option<String> {
+    static VERSION: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    VERSION
+        .get_or_init(|| {
+            let package = bundled_service_cli()?.parent()?.parent()?.join("lib/node_modules/@getpaseo/cli/package.json");
+            let package: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(package).ok()?).ok()?;
+            package["version"].as_str().map(str::to_owned)
+        })
+        .clone()
+}
+
+/// Whether version `a` is newer than `b` (`0.15.4` and `0.11.4`: their
+/// numbers, compared in turn; what follows a `-` or `+` is left out).
+fn newer_version(a: &str, b: &str) -> bool {
+    let numbers = |v: &str| -> Vec<u64> {
+        v.trim().trim_start_matches('v').split(['-', '+']).next().unwrap_or("").split('.').map(|n| n.parse().unwrap_or(0)).collect()
+    };
+    numbers(a) > numbers(b)
+}
+
+/// The running service was replaced with the one Sophon carries, this run.
+#[derive(Clone, Copy, Default)]
+struct ServiceUpdated(bool);
+
+/// This Mac's service keeps running when Sophon is updated, so after an
+/// update that carries a newer one the old still answers. Once nothing of
+/// it runs an agent it is stopped and the carried one started (a restart
+/// asked of the service would keep the old one's supervisor). Looked at
+/// whenever the agents' states are heard, once done a run; terminals open
+/// in the old service end with it.
+fn update_running_service() {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if crate::ui::kit::MOBILE || !on_this_mac() || global::<ServiceUpdated>().with_untracked(|u| u.0) {
+            return;
+        }
+        let Some(running) = global::<ConnState>().with_untracked(|c| match &c.0 {
+            Conn::Connected { version, .. } => Some(version.clone()),
+            _ => None,
+        }) else {
+            return;
+        };
+        let Some(carried) = bundled_service_version() else { return };
+        if running.trim().is_empty() || !newer_version(&carried, &running) {
+            return;
+        }
+        if global::<Agents>().with_untracked(|a| a.0.iter().any(|x| x.is_running())) {
+            return;
+        }
+        let Some(cli) = service_cli() else { return };
+        global::<ServiceUpdated>().set(ServiceUpdated(true));
+        // The start is this function's, after the stop: not the one a lost
+        // connection brings, which would race the stop.
+        global::<AutoStart>().update(|a| a.tried = true);
+        global::<Restarting>().set(Restarting(true));
+        log::info!("the running service is {running}, Sophon carries {carried}: replacing it");
+        notify(t("Updating the service…").into());
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+        let home = current_space_home();
+        std::thread::spawn(move || {
+            let mut args = vec!["daemon".to_owned(), "stop".to_owned()];
+            if let Some(home) = home {
+                args.extend(["--home".to_owned(), home.to_string_lossy().into_owned()]);
+            }
+            if let Err(e) = std::process::Command::new(&cli).args(&args).env("PATH", service_path(&cli)).output() {
+                log::warn!("stopping the older service failed: {e}");
+            }
+            let _ = tx.send(());
+        });
+        spawn(async move {
+            rx.recv().await;
+            // Started now; were it still up, the start says so and the
+            // connection goes on with it.
+            start_service();
+        });
+    }
+}
+
 /// Sets the UI's language and remembers it.
 pub(crate) fn set_language(lang: crate::i18n::Lang) {
     crate::i18n::set_lang(lang);
@@ -4647,6 +4727,7 @@ pub(crate) fn apply(event: Event) {
             global::<Agents>().update(|a| a.0 = list.into_iter().filter(|a| !a.archived).collect());
             // A pressed notification's agent, now that it is listed.
             open_pressed_agent();
+            update_running_service();
         }
         Event::AgentUpsert(agent) => {
             let archived = agent.archived;
@@ -4659,6 +4740,7 @@ pub(crate) fn apply(event: Event) {
                     a.0.push(agent);
                 }
             });
+            update_running_service();
             if archived && tab() == Tab::Agent(id) {
                 if let Screen::Workspace(ws) = screen() {
                     open_workspace(&ws);
@@ -5197,4 +5279,21 @@ pub(crate) fn load_local_models() {
         }
     }
     global::<LocalModels>().set(LocalModels(map));
+}
+
+#[cfg(test)]
+mod service_version_tests {
+    use super::newer_version;
+
+    #[test]
+    fn versions_compare_by_their_numbers() {
+        assert!(newer_version("0.15.4", "0.11.4"));
+        assert!(newer_version("0.15.10", "0.15.4"));
+        assert!(newer_version("1.0.0", "0.99.9"));
+        assert!(!newer_version("0.15.4", "0.15.4"));
+        assert!(!newer_version("0.11.4", "0.15.4"));
+        // A build's suffix is not a number of the version.
+        assert!(!newer_version("0.15.4-beta.1", "0.15.4"));
+        assert!(newer_version("v0.15.5", "0.15.4"));
+    }
 }
