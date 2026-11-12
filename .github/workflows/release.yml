@@ -195,6 +195,10 @@ jobs:
           security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
           echo "$PROFILE" | base64 --decode > "$RUNNER_TEMP/app.mobileprovision"
           echo "IDENTITY=$(security find-identity -v -p codesigning "$KC" | sed -n 's/.*"\(Apple Distribution[^"]*\)".*/\1/p' | head -n1)" >> "$GITHUB_ENV"
+      # What App Store Connect asks of an upload and `nsh package` leaves out.
+      - name: Xcode and SDK in Info.plist
+        if: env.HAS_SIGNING == 'true'
+        run: scripts/ios-build-info.sh
       - name: Device build
         if: env.HAS_SIGNING == 'true'
         run: nsh package --target ios --icon assets/app-icon/icon-ios-1024.png --sign "$IDENTITY" --profile "$RUNNER_TEMP/app.mobileprovision"

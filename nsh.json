@@ -21,6 +21,9 @@
       "LSSupportsOpeningDocumentsInPlace": true,
       "NSBonjourServices": [
         "_sophon._tcp"
+      ],
+      "UIRequiredDeviceCapabilities": [
+        "arm64"
       ]
     }
   },
