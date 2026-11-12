@@ -261,7 +261,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           V=$(scripts/version.sh)
-          gh release create "v$V" dist/* --title "Sophon $V" --generate-notes || gh release upload "v$V" dist/* --clobber
+          # The tag names the commit that was built, not main as it is by
+          # now: a merge that landed during the build is not in this
+          # release, and the next one must still see it as new.
+          gh release create "v$V" dist/* --title "Sophon $V" --generate-notes --target "${{ github.sha }}" || gh release upload "v$V" dist/* --clobber
       - name: Homebrew cask
         run: |
           V=$(scripts/version.sh)

@@ -7,6 +7,7 @@
 # - Changes to documents, the cask or the workflows alone release nothing.
 # - The minor or major version (1.0.0, when it is time) goes up only by
 #   hand: Actions → Auto release → Run workflow.
+#   Run by hand it always releases, even when it finds nothing new.
 # - A version put on main by hand (`scripts/release.sh`) that has no tag
 #   yet is released as it is.
 #
@@ -64,6 +65,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           BUMP: ${{ inputs.bump || 'patch' }}
+          FORCED: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           set -eu
           V=$(scripts/version.sh)
@@ -82,7 +84,8 @@ jobs:
           # What changed since: the app itself, not its cask (written by
           # each release), documents or these workflows.
           CHANGED=$(git log --oneline "v$V..HEAD" -- . ':!Casks' ':!*.md' ':!docs' ':!.github' ':!scripts/release.sh' | wc -l | tr -d ' ')
-          if [ "$CHANGED" = 0 ]; then
+          # Run by hand, it releases all the same: someone asked for it.
+          if [ "$CHANGED" = 0 ] && [ "$FORCED" != true ]; then
             echo "nothing to release since v$V"
             exit 0
           fi
