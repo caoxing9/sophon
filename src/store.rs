@@ -3640,6 +3640,7 @@ fn deliver(agent_id: &str, text: &str, behavior: Option<&'static str>) {
 /// elsewhere; the press opens it.
 fn notify_attention(next: &Agent) {
     let before = agent(&next.id);
+    push_attention(before.as_ref(), next);
     let needed = |a: &Agent| a.requires_attention || !a.pending.is_empty();
     let finished = before.as_ref().is_some_and(|b| b.is_running()) && !next.is_running();
     let newly = needed(next) && !before.as_ref().is_some_and(needed);
@@ -3655,6 +3656,55 @@ fn notify_attention(next: &Agent) {
     };
     let n = nsh_core::notifications::Notification::new(format!("agent:{}", next.id), next.title.clone(), body);
     let _ = show_notification(n);
+}
+
+/// The paired phones that asked for push notifications hear the same
+/// (`docs/push.md`): the computer whose service this is tells them, so
+/// only it, and not while the agent is on screen here. A sub-agent's turns
+/// are its parent's business.
+fn push_attention(before: Option<&Agent>, next: &Agent) {
+    #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+    {
+        use crate::daemon::{push, push_gateway};
+        if !is_desktop() || !on_this_mac() || next.parent_id.is_some() {
+            return;
+        }
+        let Some(why) = push::reason(before, next) else { return };
+        if selected_id().as_deref() == Some(next.id.as_str()) && lifecycle_active() {
+            return;
+        }
+        let Some(record) = push_gateway::record() else { return };
+        let space = current_space_home().map(|h| h.to_string_lossy().into_owned());
+        for wants in record.wanting(space.as_deref()) {
+            push_gateway::send(push::agent_push(&record.id, next, why, &wants));
+        }
+    }
+    #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
+    let _ = (before, next);
+}
+
+/// An action a paired device pressed on a notification: the approval is
+/// answered, the reply sent, as from here.
+pub(crate) fn push_act(act: crate::daemon::push::Act) {
+    use crate::daemon::push::Act;
+    match act {
+        Act::Permission { agent: agent_id, permission, allow } => {
+            // Answered already, here or on another device: nothing to do.
+            if agent(&agent_id).is_some_and(|a| a.pending.iter().any(|p| p.id == permission)) {
+                global::<Agents>().update(|a| {
+                    if let Some(agent) = a.0.iter_mut().find(|a| a.id == agent_id) {
+                        agent.pending.retain(|p| p.id != permission);
+                    }
+                });
+                send(Command::Permit { agent_id, permission_id: permission, allow, action_id: None, updated_input: None });
+            }
+        }
+        Act::Reply { agent: agent_id, text } => {
+            if agent(&agent_id).is_some() {
+                deliver(&agent_id, text.trim(), None);
+            }
+        }
+    }
 }
 
 fn lifecycle_active() -> bool {
