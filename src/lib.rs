@@ -86,6 +86,11 @@ pub fn App() -> impl IntoElement {
     start_connection();
     store::load_hosts();
     store::load_local_models();
+    // The phone's notifications are its own (remote ones, with actions):
+    // their presses come from there, not through NSH.
+    #[cfg(target_os = "ios")]
+    store::start_push();
+    #[cfg(not(target_os = "ios"))]
     store::watch_notification_presses();
     store::watch_pairing_links();
     // The web's desktop idiom is still a page: no bridge, no updates.
@@ -97,6 +102,8 @@ pub fn App() -> impl IntoElement {
         update::start();
         update::preview();
     }
+    // (The phone asks in `start_push`, and for Apple's token after.)
+    #[cfg(not(target_os = "ios"))]
     let _ = request_notification_permission();
     view()
         .flex_1()

@@ -17,6 +17,7 @@ pub(crate) fn settings() -> impl IntoElement {
             view()
                 .child(section(t("Appearance"), appearance_card()))
                 .child(section(t("Sending"), sending_card()))
+                .child(section(t("Notifications"), notifications_card()))
                 .child(section(t("Storage"), storage_card()))
                 .child(section(
                     t("Computer"),
@@ -36,5 +37,31 @@ pub(crate) fn settings() -> impl IntoElement {
                 // tabs' lists do: the page's own foot and the gap before
                 // this make up the rest of the bar's room.
                 .child(view().h(px(super::home::BAR_ROOM - S4 - S6))),
+        ))
+}
+
+/// Push notifications from the computer in use: whether this phone wants
+/// them, and whether they say what they are about.
+fn notifications_card() -> View {
+    card()
+        .child(row(
+            t("Push notifications"),
+            // Said plainly when the computer cannot send any.
+            move || {
+                if store::push_served() || !store::settings().push.0 {
+                    t("When an agent waits for you or finishes; an Apple Watch shows them too")
+                } else {
+                    t("This computer sends none yet: it needs a relay server of its own with the push gateway")
+                }
+                .to_owned()
+            },
+            switch(|| store::settings().push.0, |on| store::set_push(on, store::settings().push_hide)),
+            true,
+        ))
+        .child(row(
+            t("Hide content"),
+            t("Notifications say only that something needs you, not what"),
+            switch(|| store::settings().push_hide, |hide| store::set_push(store::settings().push.0, hide)),
+            false,
         ))
 }

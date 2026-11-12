@@ -35,6 +35,11 @@ pub enum Command {
     /// Asks the host's Sophon for its session-log statistics (a phone has
     /// no logs of its own).
     HostUsage,
+    /// Tells the host's Sophon this device wants push notifications
+    /// (`docs/push.md`): its id, Apple's token for it (empty: no longer),
+    /// which of Apple's servers knows the token, its language, and
+    /// whether notifications hide what they are about.
+    PushRegister { device: String, token: String, env: String, lang: String, hide: bool },
     /// Uploads a file to the host for the next message; answered by
     /// [`Event::Uploaded`] with the same `id`.
     Upload { id: String, name: String, mime: String, bytes: Vec<u8> },
@@ -593,6 +598,9 @@ pub enum Event {
     HostUsage(Option<Value>),
     /// The pictures the host's Sophon kept for a message (`AskPictures`).
     Pictures { message_id: String, text: String, pictures: Vec<String> },
+    /// Where the host takes a notification's actions (`PushRegister`'s
+    /// answer): its gateway (empty: it has none) and its id there.
+    PushInfo { gateway: String, tls: bool, id: String },
     Commands { agent_id: String, list: Vec<SlashCommand> },
     Diff { cwd: String, files: Vec<DiffFile>, error: Option<String>, too_large: bool },
     Terminals { cwd: String, list: Vec<TerminalInfo> },
@@ -766,7 +774,7 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
                     }
                     // Asked while away: no answer, said so (no notice).
                     Some(Command::HostUsage) => { let _ = events.send(Event::HostUsage(None)); }
-                    Some(Command::AskPictures { .. }) => {}
+                    Some(Command::AskPictures { .. } | Command::PushRegister { .. }) => {}
                     // Just started: try now, then again soon.
                     Some(Command::Reconnect) => {
                         backoff = Duration::from_millis(250);
@@ -1073,6 +1081,13 @@ async fn session(
                 if let Command::Open(id) = &cmd {
                     *open_agent = Some(id.clone());
                 }
+                if let Command::PushRegister { device, token, env, lang, hide } = &cmd {
+                    // Only the host's Sophon (its bridge) keeps this.
+                    if connected && endpoint.bridge_token.is_some() {
+                        send(&mut tx, &json!({ "type": "sophon_push_register", "device": device, "token": token, "env": env, "lang": lang, "hide": hide })).await?;
+                    }
+                    continue;
+                }
                 if let Command::HostUsage = &cmd {
                     if connected && endpoint.bridge_token.is_some() {
                         send(&mut tx, &json!({ "type": "sophon_usage_request" })).await?;
@@ -1205,6 +1220,14 @@ async fn session(
                     Some("session") => {}
                     Some("sophon_usage") => {
                         if events.send(Event::HostUsage(msg.get("report").cloned())).is_err() {
+                            return Ok(Exit::UiGone);
+                        }
+                        continue;
+                    }
+                    Some("sophon_push_info") => {
+                        let field = |k| msg.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
+                        let info = Event::PushInfo { gateway: field("gateway"), tls: msg.get("tls").and_then(Value::as_bool).unwrap_or(false), id: field("id") };
+                        if events.send(info).is_err() {
                             return Ok(Exit::UiGone);
                         }
                         continue;
@@ -1437,7 +1460,7 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
     match cmd {
         Command::Open(id) => timeline_requests(&id, pending),
         // Sent by the session itself, with its binary frames.
-        Command::Upload { .. } | Command::Download { .. } | Command::Reconnect | Command::AskPictures { .. } | Command::HostUsage => vec![],
+        Command::Upload { .. } | Command::Download { .. } | Command::Reconnect | Command::AskPictures { .. } | Command::HostUsage | Command::PushRegister { .. } => vec![],
         Command::Send { agent_id, text, behavior, images, attachments, message_id } => {
             let mut msg = json!({
                 "type": "send_agent_message_request",

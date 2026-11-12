@@ -879,6 +879,22 @@ pub(crate) struct Settings {
     pub(crate) local_service: LocalService,
     /// What the first space on this Mac is called, when renamed.
     pub(crate) my_space_name: Option<String>,
+    /// The phone: push notifications from the computer it follows.
+    pub(crate) push: PushWanted,
+    /// The phone: notifications say only that something needs you.
+    pub(crate) push_hide: bool,
+    /// The phone's id at the computers it registers with, made once.
+    pub(crate) push_device: String,
+}
+
+/// Whether the phone wants push notifications (on unless set off).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PushWanted(pub(crate) bool);
+
+impl Default for PushWanted {
+    fn default() -> Self {
+        PushWanted(true)
+    }
 }
 
 /// Whether this Mac runs a service of its own (on unless set off; a Mac
@@ -2249,6 +2265,9 @@ fn save_prefs() {
         },
         "localService": s.local_service.0,
         "mySpaceName": s.my_space_name,
+        "push": s.push.0,
+        "pushHide": s.push_hide,
+        "pushDevice": s.push_device,
         "keepAwake": match s.keep_awake {
             KeepAwake::Off => "off",
             KeepAwake::On => "on",
@@ -2305,6 +2324,9 @@ pub(crate) fn load_prefs() {
         s.keep_awake = keep_awake;
         s.local_service = LocalService(local);
         s.my_space_name = my_space;
+        s.push = PushWanted(v.get("push").and_then(serde_json::Value::as_bool).unwrap_or(true));
+        s.push_hide = v.get("pushHide").and_then(serde_json::Value::as_bool).unwrap_or(false);
+        s.push_device = v.get("pushDevice").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned();
     });
     if let Some(h) = v.get("sidebarHidden").and_then(serde_json::Value::as_bool) {
         global::<SidebarHidden>().update(|s| s.0 = h);
@@ -3654,8 +3676,112 @@ fn notify_attention(next: &Agent) {
     } else {
         "Needs your attention".to_owned()
     };
+    // The computer's push says it to this phone already.
+    if cfg!(target_os = "ios") && push_served() {
+        return;
+    }
     let n = nsh_core::notifications::Notification::new(format!("agent:{}", next.id), next.title.clone(), body);
     let _ = show_notification(n);
+}
+
+/// What the phone knows of its push notifications: Apple's token for it
+/// (once Apple gave one), and whether the computer in use sends them (it
+/// has a gateway).
+#[derive(Clone, Default)]
+struct PushState {
+    token: Option<String>,
+    served: bool,
+}
+
+/// Whether the computer in use sends this phone push notifications now.
+pub(crate) fn push_served() -> bool {
+    global::<PushState>().with(|p| p.served && p.token.as_ref().is_some_and(|t| !t.is_empty())) && settings().push.0
+}
+
+/// Whether the phone wants push notifications, and whether they hide what
+/// they are about: told to the computer at once.
+pub(crate) fn set_push(on: bool, hide: bool) {
+    edit_settings(|s| {
+        s.push = PushWanted(on);
+        s.push_hide = hide;
+    });
+    push_register_now();
+}
+
+/// Tells the computer in use what this phone wants of push notifications
+/// (`docs/push.md`), once Apple gave the phone a token.
+fn push_register_now() {
+    let Some(token) = global::<PushState>().with_untracked(|p| p.token.clone()) else { return };
+    let mut s = global::<Settings>().with_untracked(Clone::clone);
+    if s.push_device.is_empty() {
+        s.push_device = uuid::Uuid::new_v4().simple().to_string();
+        let id = s.push_device.clone();
+        edit_settings(|s| s.push_device = id);
+    }
+    #[cfg(target_os = "ios")]
+    let env = crate::platform::ios_push::environment();
+    #[cfg(not(target_os = "ios"))]
+    let env = "production";
+    send(Command::PushRegister {
+        device: s.push_device,
+        token: if s.push.0 { token } else { String::new() },
+        env: env.to_owned(),
+        lang: if crate::i18n::is_zh() { "zh" } else { "en" }.to_owned(),
+        hide: s.push_hide,
+    });
+}
+
+/// The phone's push notifications (`platform::ios_push`): a press opens
+/// its agent, Apple's token goes to the computer, and the agent on screen
+/// is not notified about over itself.
+#[cfg(target_os = "ios")]
+pub(crate) fn start_push() {
+    use crate::platform::ios_push;
+    ios_push::install();
+    if let Some(mut presses) = ios_push::presses() {
+        spawn_detached(async move {
+            while let Some(id) = presses.recv().await {
+                if let Some(agent_id) = id.strip_prefix("agent:") {
+                    // The list may not be here yet (the press started the
+                    // app): kept until the agent is known.
+                    global::<PressedAgent>().update(|p| p.0 = Some(agent_id.to_owned()));
+                    open_pressed_agent();
+                }
+            }
+        });
+    }
+    if let Some(mut tokens) = ios_push::tokens() {
+        spawn_detached(async move {
+            while let Some(token) = tokens.recv().await {
+                global::<PushState>().update(|p| p.token = Some(token));
+                push_register_now();
+            }
+        });
+    }
+    // Apple's token once the user allows notifications (asked on the
+    // first launch).
+    spawn_detached(async move {
+        if request_notification_permission().await == nsh_core::notifications::NotificationPermission::Granted {
+            ios_push::register();
+        }
+    });
+    effect(|| {
+        let on = selected_id().filter(|_| lifecycle_active() && matches!(screen(), Screen::Workspace(_)));
+        ios_push::set_on_screen(on);
+    });
+}
+
+/// The agent of a pressed notification, until it can be opened.
+#[derive(Clone, Default)]
+struct PressedAgent(Option<String>);
+
+/// Opens the agent a notification's press named, once it is known here.
+fn open_pressed_agent() {
+    let Some(id) = global::<PressedAgent>().with_untracked(|p| p.0.clone()) else { return };
+    if let Some(a) = agent(&id) {
+        global::<PressedAgent>().update(|p| p.0 = None);
+        open_session(&a);
+    }
 }
 
 /// The paired phones that asked for push notifications hear the same
@@ -3712,6 +3838,7 @@ fn lifecycle_active() -> bool {
 }
 
 /// Opens the agent a pressed notification names.
+#[cfg_attr(target_os = "ios", allow(dead_code))]
 pub(crate) fn watch_notification_presses() {
     spawn(async move {
         loop {
@@ -4076,6 +4203,10 @@ pub(crate) fn apply(event: Event) {
             }
         }),
         Event::Connected { hostname, version } => {
+            // This computer may send no push notifications: it says when
+            // asked, and is asked each time the phone reaches one.
+            global::<PushState>().update(|p| p.served = false);
+            push_register_now();
             // A saved host with no name of its own takes the computer's.
             if !hostname.trim().is_empty() {
                 if let Some(h) = current_host().filter(|h| !h.named()) {
@@ -4179,7 +4310,9 @@ pub(crate) fn apply(event: Event) {
             f.error = Some(error);
         }),
         Event::AgentsReset(list) => {
-            global::<Agents>().update(|a| a.0 = list.into_iter().filter(|a| !a.archived).collect())
+            global::<Agents>().update(|a| a.0 = list.into_iter().filter(|a| !a.archived).collect());
+            // A pressed notification's agent, now that it is listed.
+            open_pressed_agent();
         }
         Event::AgentUpsert(agent) => {
             let archived = agent.archived;
@@ -4450,6 +4583,16 @@ pub(crate) fn apply(event: Event) {
             *p = Pairing { loaded: true, qr_svg: link.as_deref().and_then(qr_svg), sophon_url: link, url, relay_enabled, error };
         }),
         Event::Labels(list) => global::<LabelCatalog>().update(|l| l.0 = list),
+        Event::PushInfo { gateway, tls, id } => {
+            global::<PushState>().update(|p| p.served = !gateway.is_empty() && !id.is_empty());
+            // What a pressed action needs, kept for a launch with no screen.
+            #[cfg(target_os = "ios")]
+            if let Some((_, key, token)) = current_host().and_then(|h| crate::daemon::relay::PairingLink::parse(&h.url)).and_then(|l| l.lan) {
+                crate::platform::ios_push::remember_host(&id, &gateway, tls, &key, &token);
+            }
+            #[cfg(not(target_os = "ios"))]
+            let _ = tls;
+        }
         Event::HostUsage(report) => global::<LocalUsage>().update(|u| {
             u.loading = false;
             if let Some(report) = report.as_ref().and_then(crate::usage::Report::from_json) {
