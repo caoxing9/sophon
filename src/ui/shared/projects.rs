@@ -176,6 +176,9 @@ fn section_row(item: Memo<Option<Row>>) -> impl IntoElement {
     }))
 }
 
+/// How far the pointer goes before a press on a project's header is a drag.
+const DRAG_SLOP: f32 = 5.0;
+
 fn project_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
     let project = computed(move || match item.get() {
         Some(Row::Project(p)) => Some(p),
@@ -241,7 +244,15 @@ fn project_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
         );
     let header = if actions && !MOBILE {
         header
-            .claim_touches(TouchClaim::on_move().ask(|r: &ClaimRequest| r.claim()))
+            // A drag once the pointer has gone some way: a press moves a
+            // point or two between down and up, and claimed at the first
+            // of them it was a drag of nothing, and no press (the folder
+            // did not open).
+            .claim_touches(TouchClaim::on_move().ask(|r: &ClaimRequest| {
+                if r.event.gesture.delta.y.0.abs() >= DRAG_SLOP {
+                    r.claim();
+                }
+            }))
             .on_responder_grant(move |_: &ResponderEvent| dragging.set(true))
             .on_responder_move(move |e: &ResponderEvent| drag.set(e.gesture.delta.y.0))
             .on_responder_release(move |e: &ResponderEvent| {
