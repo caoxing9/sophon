@@ -158,6 +158,11 @@ fn project_picker(label: Memo<String>) -> impl IntoElement {
             }
             list.child(menu_divider())
                 .child(menu_row(t("Choose folder…"), Some(Icon::FolderOpen), None, false, || {
+                    // Another computer's folders are browsed: the system's
+                    // dialog shows this Mac's.
+                    if !store::on_this_mac() {
+                        return store::open_modal(store::Modal::ChooseFolder);
+                    }
                     store::spawn_detached(async move {
                         if let Ok(Some(paths)) = pick_paths(OpenDialog::folders().title(t("Choose a project folder"))).await
                             && let Some(path) = paths.into_iter().next()

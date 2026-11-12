@@ -821,6 +821,8 @@ pub(crate) enum Modal {
     NewSchedule,
     EditSchedule(crate::daemon::connection::Schedule),
     AddProject,
+    /// Another computer's folder, for the new conversation.
+    ChooseFolder,
     RenameProject { id: String, name: String },
     SwitchBranch,
     ToolDetail { name: String, kind: String, detail: serde_json::Value, error: Option<String> },
