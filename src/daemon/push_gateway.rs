@@ -275,4 +275,45 @@ mod tests {
         serving.abort();
         *OUTBOX.lock().unwrap() = None;
     }
+
+    /// Against a real `sophon-relay` (its `/push`), with no APNs key:
+    /// `PUSH_GATEWAY=127.0.0.1:port cargo test --lib live -- --ignored`.
+    /// The computer's socket and a device's action meet through it.
+    #[tokio::test]
+    #[ignore]
+    async fn the_computer_and_a_device_meet_at_the_gateway_live() {
+        let gateway = std::env::var("PUSH_GATEWAY").expect("PUSH_GATEWAY: a relay to test against");
+        let (bridge_secret, bridge_public) = crate::daemon::relay::generate_key();
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        let (tx, mut rx) = mpsc::unbounded_channel::<Value>();
+        *OUTBOX.lock().unwrap() = Some(Outbox { tx, record: Record { id: id.clone(), ..Default::default() } });
+        let (acts_tx, mut acts) = mpsc::unbounded_channel::<Act>();
+        let (ws, _) = tokio_tungstenite::connect_async(push::gateway_url(&gateway, false, &format!("id={id}")).unwrap()).await.unwrap();
+        let endpoint = gateway.clone();
+        let serving = tokio::spawn(async move {
+            serve_computer(ws, &endpoint, &mut rx, &move || Some(bridge_secret), &|| vec!["tok".to_owned()], &move |act| {
+                let _ = acts_tx.send(act);
+            })
+            .await
+        });
+        // The gateway's hello was taken: its key is kept.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(record().unwrap().gateways.len(), 1, "the gateway said its key");
+
+        // A device's action reaches the computer and is acknowledged.
+        let act = Act::Reply { agent: "a1".into(), text: "run the tests".into() };
+        deliver(&gateway, false, &id, &bridge_public, "tok", &act).await.expect("the computer took the action");
+        assert_eq!(tokio::time::timeout(Duration::from_secs(5), acts.recv()).await.unwrap(), Some(act.clone()));
+        // A stranger's is refused, with the computer's reason.
+        assert_eq!(deliver(&gateway, false, &id, &bridge_public, "other", &act).await, Err("not a paired device".to_owned()));
+        // No computer by that id: the gateway says it is away.
+        assert_eq!(deliver(&gateway, false, &uuid::Uuid::new_v4().simple().to_string(), &bridge_public, "tok", &act).await, Err("Offline".to_owned()));
+        // A push is sealed in a way the gateway opens: with no APNs key it
+        // answers NotConfigured (logged), and the socket stays.
+        send(json!({ "token": "ab12", "env": "development", "title": "t", "body": "b", "category": "FINISHED" }));
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(!serving.is_finished(), "the socket stayed after a push");
+        serving.abort();
+        *OUTBOX.lock().unwrap() = None;
+    }
 }
