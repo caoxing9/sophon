@@ -262,11 +262,15 @@ jobs:
           key: target-android-${{ runner.os }}-${{ steps.nshrev.outputs.month }}-${{ steps.nshrev.outputs.rev }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             target-android-${{ runner.os }}-${{ steps.nshrev.outputs.month }}-${{ steps.nshrev.outputs.rev }}-
-      - name: The nsh CLI cache
+      # With NSH's Android runtime, built in its checkout (half an hour
+      # from nothing): CI's cache of the same, else the CLI's alone.
+      - name: The nsh CLI and Android runtime cache
         uses: actions/cache@v4
         with:
           path: ~/.cache/sophon-nsh
-          key: nsh-cli-${{ runner.os }}-${{ steps.nshrev.outputs.rev }}
+          key: nsh-android-${{ runner.os }}-${{ steps.nshrev.outputs.rev }}
+          restore-keys: |
+            nsh-cli-${{ runner.os }}-${{ steps.nshrev.outputs.rev }}
       - name: The nsh CLI (the commit Cargo.toml pins)
         run: echo "$(scripts/install-nsh.sh)" >> "$GITHUB_PATH"
       # The build number is the version code: it has to go up with each.

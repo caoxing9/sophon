@@ -108,6 +108,13 @@ jobs:
           cache-key: android
           keep-target: true
           targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android
+      # NSH builds its Android runtime (QuickJS and all, for every ABI) in
+      # its own checkout: half an hour from nothing, seconds once it is
+      # there. Kept with the checkout, per NSH revision.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/sophon-nsh
+          key: nsh-android-${{ runner.os }}-${{ needs.nsh.outputs.rev }}
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
