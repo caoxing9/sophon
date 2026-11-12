@@ -20,6 +20,8 @@ mod lan;
 mod platform;
 mod prompt_link;
 mod sent_pictures;
+#[cfg(target_os = "macos")]
+mod service_install;
 mod spaces;
 mod store;
 mod models;

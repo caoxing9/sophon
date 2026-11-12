@@ -908,6 +908,11 @@ impl Default for LocalService {
     }
 }
 
+/// Whether someone set the switch themselves: an "off" that is only an
+/// earlier version's default does not hold.
+#[derive(Clone, Default, PartialEq)]
+struct LocalServiceChosen(bool);
+
 /// Whether this Mac runs agents of its own.
 pub(crate) fn local_service() -> bool {
     !crate::ui::kit::MOBILE && settings().local_service.0
@@ -916,6 +921,7 @@ pub(crate) fn local_service() -> bool {
 /// Turns this Mac's own service on or off: off, it goes to the first other
 /// computer saved; on, back to its own.
 pub(crate) fn set_local_service(on: bool) {
+    global::<LocalServiceChosen>().set(LocalServiceChosen(true));
     edit_settings(|s| s.local_service = LocalService(on));
     if on {
         if current_host().is_some_and(|h| crate::spaces::home_of(&h.url).is_none()) {
@@ -2277,6 +2283,7 @@ fn save_prefs() {
             SendBehavior::Queue => "queue",
         },
         "localService": s.local_service.0,
+        "localServiceChosen": global::<LocalServiceChosen>().with_untracked(|c| c.0),
         "mySpaceName": s.my_space_name,
         "push": s.push.0,
         "pushHide": s.push_hide,
@@ -2311,13 +2318,9 @@ fn save_prefs() {
 
 /// Restores what `save_prefs` wrote.
 pub(crate) fn load_prefs() {
-    let Some(text) = crate::daemon::read_file("settings.json") else {
-        #[cfg(not(target_arch = "wasm32"))]
-        if !crate::ui::kit::MOBILE && service_cli().is_none() {
-            global::<Settings>().update(|s| s.local_service = LocalService(false));
-        }
-        return;
-    };
+    // (A Mac with no service yet runs its own all the same: Sophon installs
+    // one. It used to start as one that only connects to others.)
+    let Some(text) = crate::daemon::read_file("settings.json") else { return };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return };
     let behavior = match v.get("sendBehavior").and_then(serde_json::Value::as_str) {
         Some("interrupt") => SendBehavior::Interrupt,
@@ -2329,8 +2332,19 @@ pub(crate) fn load_prefs() {
         Some("display") => KeepAwake::Display,
         _ => KeepAwake::On,
     };
-    // A Mac without Paseo starts as one that only connects to others.
-    let local = v.get("localService").and_then(serde_json::Value::as_bool).unwrap_or_else(|| cfg!(target_arch = "wasm32") || service_cli().is_some());
+    // Off only where someone chose so, or where this Mac follows other
+    // computers: an "off" saved by an earlier version for a Mac that had
+    // no service (and no one to connect to) was never a choice.
+    let chosen = v.get("localServiceChosen").and_then(serde_json::Value::as_bool).unwrap_or(false);
+    let follows_others = crate::daemon::read_file("hosts.json")
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|h| h.get("hosts").and_then(serde_json::Value::as_array).map(|l| !l.is_empty()))
+        .unwrap_or(false);
+    let local = match v.get("localService").and_then(serde_json::Value::as_bool) {
+        Some(false) if chosen || follows_others || service_cli().is_some() => false,
+        _ => true,
+    };
+    global::<LocalServiceChosen>().set(LocalServiceChosen(chosen));
     let my_space = v.get("mySpaceName").and_then(serde_json::Value::as_str).map(str::to_owned).filter(|n| !n.trim().is_empty());
     global::<Settings>().update(|s| {
         s.send_behavior = behavior;
@@ -2397,6 +2411,12 @@ pub(crate) fn set_appearance(appearance: nsh_core::platform::Appearance) {
 /// The service's command line: on the PATH, or inside the desktop app that
 /// ships it.
 pub(crate) fn service_cli() -> Option<std::path::PathBuf> {
+    // For trying the first launch on a Mac that has a service already:
+    // only the one Sophon installs counts.
+    #[cfg(target_os = "macos")]
+    if std::env::var_os("SOPHON_OWN_SERVICE_ONLY").is_some() {
+        return crate::service_install::cli();
+    }
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
     let mut candidates: Vec<std::path::PathBuf> = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).map(|d| d.join("paseo")).collect())
@@ -2408,6 +2428,9 @@ pub(crate) fn service_cli() -> Option<std::path::PathBuf> {
         "/Applications/Paseo.app/Contents/Resources/bin/paseo".into(),
         home.join("Applications/Paseo.app/Contents/Resources/bin/paseo"),
     ]);
+    // Last, the one Sophon installed itself for a Mac that had none.
+    #[cfg(target_os = "macos")]
+    candidates.extend(crate::service_install::cli());
     candidates.into_iter().find(|p| p.is_file())
 }
 
@@ -2483,6 +2506,66 @@ fn auto_start_service() {
     start_service();
 }
 
+/// How far Sophon's own install of the service is, while one runs.
+#[derive(Clone, Default, PartialEq)]
+struct ServiceSetup(Option<String>);
+
+/// What the install of the service is doing now, to show; `None` when
+/// none runs.
+pub(crate) fn service_setup() -> Option<String> {
+    global::<ServiceSetup>().with(|s| s.0.clone())
+}
+
+/// Installs the service for this Mac (`crate::service_install`), saying
+/// how far it is, then starts it.
+fn install_service() {
+    #[cfg(target_os = "macos")]
+    {
+        use crate::service_install::Step;
+        if global::<ServiceSetup>().with_untracked(|s| s.0.is_some()) {
+            return;
+        }
+        global::<AutoStart>().update(|a| a.error = None);
+        global::<ServiceSetup>().set(ServiceSetup(Some(t("Setting up the agent service…").into())));
+        enum Said {
+            Step(Step),
+            Done(Result<(), String>),
+        }
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Said>();
+        std::thread::spawn(move || {
+            let steps = tx.clone();
+            let result = crate::service_install::install(move |step| {
+                let _ = steps.send(Said::Step(step));
+            });
+            let _ = tx.send(Said::Done(result.map(|_| ())));
+        });
+        spawn(async move {
+            while let Some(said) = rx.recv().await {
+                match said {
+                    Said::Step(Step::Downloading(p)) => {
+                        let percent = format!("{:.0}", p * 100.0);
+                        global::<ServiceSetup>().set(ServiceSetup(Some(tf("Setting up the agent service: downloading {}%", &[&percent]))));
+                    }
+                    Said::Step(Step::Installing) => global::<ServiceSetup>().set(ServiceSetup(Some(t("Setting up the agent service: installing…").into()))),
+                    Said::Done(result) => {
+                        global::<ServiceSetup>().set(ServiceSetup(None));
+                        match result {
+                            Ok(()) => start_service(),
+                            Err(e) => {
+                                log::warn!("installing the service failed: {e}");
+                                global::<AutoStart>().update(|a| a.error = Some(tf("Sophon could not install its service: {}", &[&e])));
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    global::<AutoStart>().update(|a| a.error = Some(t("The service is not installed on this Mac").into()));
+}
+
 /// Starts the agent service on this Mac; the connection, which retries on
 /// its own, picks it up.
 pub(crate) fn start_service() {
@@ -2490,7 +2573,8 @@ pub(crate) fn start_service() {
         return;
     }
     let Some(cli) = service_cli() else {
-        global::<AutoStart>().update(|a| a.error = Some(t("The service is not installed on this Mac").into()));
+        // A Mac with only Sophon: it brings its own service.
+        install_service();
         return;
     };
     global::<AutoStart>().update(|a| a.error = None);
