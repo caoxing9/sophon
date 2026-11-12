@@ -279,6 +279,9 @@ pub struct Agent {
     /// `initializing` | `idle` | `running` | `error` | `closed`, or a newer value.
     pub status: String,
     pub requires_attention: bool,
+    /// Why it does, as the service says: `finished` | `permission` |
+    /// `needs_input` | `error`.
+    pub attention_reason: Option<String>,
     pub archived: bool,
     /// Started by a schedule's run (the service labels it `paseo.schedule-id`).
     pub scheduled: bool,
@@ -319,6 +322,7 @@ impl Agent {
             cwd,
             status: str_of(v, "status").unwrap_or_else(|| "idle".into()),
             requires_attention: v.get("requiresAttention").and_then(Value::as_bool).unwrap_or(false),
+            attention_reason: str_of(v, "attentionReason"),
             archived: v.get("archivedAt").is_some_and(|a| !a.is_null()),
             scheduled: v.pointer("/labels/paseo.schedule-id").is_some_and(|l| !l.is_null()),
             updated_at: str_of(v, "updatedAt").unwrap_or_default(),
