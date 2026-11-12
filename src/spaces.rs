@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 /// A saved host's address for the space in `home`.
 // Spaces are made on a Mac only.
-#[cfg_attr(any(target_os = "ios", target_arch = "wasm32"), allow(dead_code))]
+#[cfg_attr(any(target_os = "ios", target_os = "android", target_arch = "wasm32"), allow(dead_code))]
 pub(crate) fn url_of(home: &Path) -> String {
     format!("space:{}", home.display())
 }
@@ -19,7 +19,7 @@ pub(crate) fn home_of(url: &str) -> Option<PathBuf> {
     url.strip_prefix("space:").map(PathBuf::from)
 }
 
-#[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 mod imp {
     use std::path::{Path, PathBuf};
 
@@ -149,12 +149,12 @@ mod imp {
     }
 }
 
-#[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 pub(crate) use imp::*;
 
 // A phone or a page has no spaces of its own: the settings that list them
 // are a Mac's.
-#[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+#[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
 mod none {
     use std::path::{Path, PathBuf};
 
@@ -171,7 +171,7 @@ mod none {
     }
 }
 
-#[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+#[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
 pub(crate) use none::*;
 
 #[cfg(test)]

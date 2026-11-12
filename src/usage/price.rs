@@ -88,7 +88,7 @@ pub(crate) fn parse_list(text: &str) -> std::collections::HashMap<String, Price>
 }
 
 /// The file the fetched prices are kept in: `{ "at": <secs>, "prices": { id: [input, output, write, read] } }`.
-#[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 fn kept() -> std::path::PathBuf {
     crate::daemon::data_dir().join("model-prices.json")
 }
@@ -97,7 +97,7 @@ fn kept() -> std::path::PathBuf {
 /// when that is a day old. Called where the logs are summed, off the UI's
 /// thread. The first fetch is waited for (the sums need it); a later one
 /// is not, and serves the next sums.
-#[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 pub(crate) fn refresh() {
     if cfg!(test) {
         return;

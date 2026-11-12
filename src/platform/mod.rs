@@ -1,5 +1,9 @@
 //! Native pieces of the app on each platform, beside what NSH provides.
 
+#[cfg(target_os = "android")]
+pub(crate) mod android;
+#[cfg(target_os = "ios")]
+pub(crate) mod ios_camera;
 #[cfg(target_os = "ios")]
 pub(crate) mod ios_scanner;
 #[cfg(any(target_os = "macos", target_os = "ios"))]

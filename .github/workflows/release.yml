@@ -1,5 +1,5 @@
-# Builds Sophon for macOS (Apple silicon) and, with the signing secrets, iOS,
-# publishes a GitHub Release with the update manifest the app checks
+# Builds Sophon for macOS (Apple silicon), Android (an APK) and, with the
+# signing secrets, iOS, publishes a GitHub Release with the update manifest the app checks
 # (`latest.json`), updates the Homebrew cask, and, when the App Store
 # secrets are set, uploads the iOS build to TestFlight.
 #
@@ -226,8 +226,79 @@ jobs:
           if-no-files-found: ignore
           path: .nsh/out/*.ipa
 
+  # The Android app: an APK on the GitHub Release, to install directly.
+  # Signed with the release key when ANDROID_KEYSTORE (base64 of the
+  # keystore), ANDROID_KEYSTORE_PASSWORD and ANDROID_KEY_ALIAS are set: an
+  # update installs over the last only with the same key. Without them it
+  # is the debug key, which differs from machine to machine. A failure
+  # here does not hold back the Mac and iPhone releases.
+  android:
+    runs-on: macos-26
+    continue-on-error: true
+    env:
+      HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android
+          cache-targets: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: NSH revision
+        id: nshrev
+        run: |
+          echo "rev=$(sed -n 's/^nsh-core = .*rev = \"\([0-9a-f]*\)\".*/\1/p' Cargo.toml | head -n 1)" >> "$GITHUB_OUTPUT"
+          echo "month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+      - name: The target directory
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: target-android-${{ runner.os }}-${{ steps.nshrev.outputs.month }}-${{ steps.nshrev.outputs.rev }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            target-android-${{ runner.os }}-${{ steps.nshrev.outputs.month }}-${{ steps.nshrev.outputs.rev }}-
+      # With NSH's Android runtime, built in its checkout (half an hour
+      # from nothing): CI's cache of the same, else the CLI's alone.
+      - name: The nsh CLI and Android runtime cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/sophon-nsh
+          key: nsh-android-${{ runner.os }}-${{ steps.nshrev.outputs.rev }}
+          restore-keys: |
+            nsh-cli-${{ runner.os }}-${{ steps.nshrev.outputs.rev }}
+      - name: The nsh CLI (the commit Cargo.toml pins)
+        run: echo "$(scripts/install-nsh.sh)" >> "$GITHUB_PATH"
+      # The build number is the version code: it has to go up with each.
+      - name: Version
+        run: scripts/set-version.sh "${{ inputs.version || github.ref_name }}" "${{ github.run_number }}"
+      - name: Package
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          NSH_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ "$HAS_KEYSTORE" = true ]; then
+            echo "$KEYSTORE" | base64 --decode > "$RUNNER_TEMP/release.jks"
+            scripts/android-package.sh --keystore "$RUNNER_TEMP/release.jks" --key-alias "$KEY_ALIAS"
+          else
+            scripts/android-package.sh
+          fi
+          V=$(scripts/version.sh)
+          mv .nsh/out/Sophon.apk ".nsh/out/Sophon-$V-android.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: .nsh/out/*.apk
+
   release:
-    needs: [macos, ios]
+    needs: [macos, ios, android]
+    # Android may have failed: the release goes out without its APK.
+    if: ${{ !cancelled() && needs.macos.result == 'success' && needs.ios.result == 'success' }}
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4

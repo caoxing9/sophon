@@ -36,7 +36,11 @@ pub(crate) fn device_name() -> String {
     {
         if crate::ui::kit::MOBILE { "iPhone".into() } else { "iPad".into() }
     }
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    #[cfg(target_os = "android")]
+    {
+        crate::platform::android::model().unwrap_or_else(|| "Android".into())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
     {
         "Sophon".into()
     }

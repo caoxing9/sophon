@@ -9,6 +9,9 @@ pub fn data_dir() -> std::path::PathBuf {
     if let Some(dir) = std::env::var_os("SOPHON_DATA_DIR") {
         return dir.into();
     }
+    // Android names no home: the app's files directory is made it.
+    #[cfg(target_os = "android")]
+    crate::platform::android::init();
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_else(|| ".".into());
     // On iOS HOME is the app's container, whose root a device's sandbox
     // does not let the app write (the simulator does): Application Support

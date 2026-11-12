@@ -29,11 +29,16 @@ nsh-ui = { path = "crates/nsh-ui" }
 nsh-updater = { git = "https://github.com/caoxing9/nsh", rev = "3921ccc2cf9f6475a20ba7cd1d36e655457ab5e3" }
 env_logger = "0.11"
 tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net", "fs"] }
-tokio-tungstenite = { version = "0.28", features = ["native-tls"] }
+tokio-tungstenite = "0.28"
 if-addrs = "0.13"
 # Local days for the usage page's sums (already in the tree through nsh-base).
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 iana-time-zone = "0.1.65"
+
+# TLS is the system's, except on Android, which has none to link: there it
+# is the rustls NSH already builds tokio-tungstenite with.
+[target.'cfg(not(any(target_arch = "wasm32", target_os = "android")))'.dependencies]
+tokio-tungstenite = { version = "0.28", features = ["native-tls"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "=0.2.129"
