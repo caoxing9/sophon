@@ -4318,15 +4318,26 @@ pub(crate) fn archive_agent(id: &str) {
     send(Command::Archive(id.to_owned()));
 }
 
+/// The sessions to import: the answers to the search numbered `seq`, as
+/// they come (one from each agent), newest first; `None` until the first.
 #[derive(Clone, Default)]
-struct Recent(Option<Vec<crate::daemon::connection::RecentSession>>);
-
-pub(crate) fn recent_sessions() -> Option<Vec<crate::daemon::connection::RecentSession>> {
-    global::<Recent>().with(|r| r.0.clone())
+struct Recent {
+    seq: u64,
+    list: Option<Vec<crate::daemon::connection::RecentSession>>,
 }
 
+pub(crate) fn recent_sessions() -> Option<Vec<crate::daemon::connection::RecentSession>> {
+    global::<Recent>().with(|r| r.list.clone())
+}
+
+/// Looks for sessions to import, each agent's apart: the service's one
+/// list is the newest of all agents together, where the agent used less
+/// (Codex beside a busy Claude Code) had no place.
 pub(crate) fn search_sessions(query: &str) {
-    send(Command::RecentSessions { query: query.to_owned() });
+    let seq = global::<Recent>().with_untracked(|r| r.seq) + 1;
+    global::<Recent>().set(Recent { seq, list: None });
+    let providers = providers().into_iter().filter(|p| p.status != "unavailable").map(|p| p.id).collect();
+    send(Command::RecentSessions { query: query.to_owned(), providers, seq });
 }
 
 /// The sessions being imported together, one after another (each import
@@ -5035,7 +5046,19 @@ pub(crate) fn apply(event: Event) {
                 x.map.insert(provider, d);
             });
         }
-        Event::RecentSessions(list) => global::<Recent>().update(|r| r.0 = Some(list)),
+        Event::RecentSessions { seq, list } => global::<Recent>().update(|r| {
+            // An answer to an earlier search (the query has changed since).
+            if seq != r.seq {
+                return;
+            }
+            let all = r.list.get_or_insert_with(Vec::new);
+            for s in list {
+                if !all.iter().any(|x| x.provider == s.provider && x.handle == s.handle) {
+                    all.push(s);
+                }
+            }
+            all.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+        }),
         Event::Rewound { agent, error } => match error {
             Some(e) => notify(tf("Rewind failed: {}", &[&e])),
             None => {
