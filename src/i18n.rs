@@ -318,6 +318,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Remote host", "远程主机"),
     ("Rename this host…", "重命名此主机…"),
     ("Rename host", "重命名主机"),
+    ("Rename this computer", "重命名这台电脑"),
     ("Continue in another agent", "在其他智能体中继续"),
     ("A new agent, with this conversation", "新建智能体，带上这段对话"),
     ("Download…", "下载…"),

@@ -21,7 +21,19 @@ pub(crate) fn settings() -> impl IntoElement {
                 .child(section(t("Storage"), storage_card()))
                 .child(section(
                     t("Computer"),
-                    host_card().child(row(
+                    host_card()
+                        .child(row(
+                            t("Name"),
+                            || store::current_host().map(|h| h.label()).unwrap_or_default(),
+                            btn(t("Rename"), Variant::Outline, Sz::Sm, Some(Icon::Pencil), || {
+                                if let Some(h) = store::current_host() {
+                                    let name = h.label();
+                                    store::open_modal(store::Modal::RenameHost { id: h.id, name });
+                                }
+                            }),
+                            false,
+                        ))
+                        .child(row(
                         t("Forget this computer"),
                         t("Pair it again from its QR code"),
                         btn(t("Forget"), Variant::Outline, Sz::Sm, Some(Icon::Trash2), || {
