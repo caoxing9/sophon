@@ -66,7 +66,7 @@ mod imp {
 
     fn paseo(args: &[&str]) -> Result<String, String> {
         let cli = crate::store::service_cli().ok_or("The service is not installed on this Mac")?;
-        let out = std::process::Command::new(cli).args(args).output().map_err(|e| e.to_string())?;
+        let out = std::process::Command::new(&cli).args(args).env("PATH", crate::store::service_path(&cli)).output().map_err(|e| e.to_string())?;
         if out.status.success() {
             Ok(String::from_utf8_lossy(&out.stdout).into_owned())
         } else {

@@ -2411,6 +2411,35 @@ pub(crate) fn service_cli() -> Option<std::path::PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
+/// The `PATH` to run the service's command line with. The app, opened
+/// from the Finder, has only the system's (`/usr/bin:/bin:…`): a service
+/// installed with npm is a script that starts `node`, which is not there
+/// ("env: node: No such file or directory"), and the service it starts
+/// looks for the agents on what it is given. So: the app's own, then the
+/// folder of the command line itself, then the usual folders for what is
+/// installed by hand, Homebrew or a Node version manager.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn service_path(cli: &std::path::Path) -> std::ffi::OsString {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
+    let mut dirs: Vec<std::path::PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    let mut add = |dir: std::path::PathBuf| {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    };
+    if let Some(dir) = cli.parent() {
+        add(dir.to_path_buf());
+    }
+    // Where the link points too: beside the real script is its `node`.
+    if let Some(dir) = std::fs::canonicalize(cli).ok().and_then(|p| p.parent().map(std::path::Path::to_path_buf)) {
+        add(dir);
+    }
+    for dir in crate::bundled_cli::install_dirs(&home) {
+        add(dir);
+    }
+    std::env::join_paths(dirs).unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default())
+}
+
 /// Whether this Mac's service comes with the desktop app (its updates come
 /// with the app's) rather than from npm, whose package the service can
 /// update itself.
@@ -2473,11 +2502,17 @@ pub(crate) fn start_service() {
         if let Some(home) = home {
             args.extend(["--home".to_owned(), home.to_string_lossy().into_owned()]);
         }
-        let out = std::process::Command::new(&cli).args(&args).output();
+        let out = std::process::Command::new(&cli).args(&args).env("PATH", service_path(&cli)).output();
         let _ = tx.send(match out {
             Ok(o) if o.status.success() => Ok(()),
-            Ok(o) => Err(String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("").to_owned()),
-            Err(e) => Err(e.to_string()),
+            Ok(o) => {
+                // What it said last, on either stream; never nothing.
+                let said = |bytes: &[u8]| String::from_utf8_lossy(bytes).lines().rev().find(|l| !l.trim().is_empty()).map(|l| l.trim().to_owned());
+                let why = said(&o.stderr).or_else(|| said(&o.stdout)).unwrap_or_else(|| format!("{} ended with {}", cli.display(), o.status));
+                log::warn!("starting the service failed: {why}");
+                Err(why)
+            }
+            Err(e) => Err(format!("{}: {e}", cli.display())),
         });
     });
     spawn(async move {
@@ -4835,6 +4870,27 @@ pub(crate) fn close_current() {
 #[cfg(test)]
 mod model_rule_tests {
     use super::forbidden_model;
+
+    #[test]
+    fn the_service_s_command_line_runs_with_its_own_folder_on_the_path() {
+        // As npm installs it: a link in one folder to a script in another,
+        // whose `node` sits beside the link.
+        let dir = std::env::temp_dir().join(format!("sophon-service-path-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (bin, lib) = (dir.join("node/bin"), dir.join("node/lib/paseo"));
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::write(lib.join("cli.js"), "").unwrap();
+        std::os::unix::fs::symlink(lib.join("cli.js"), bin.join("paseo")).unwrap();
+        let path = crate::store::service_path(&bin.join("paseo"));
+        let dirs: Vec<std::path::PathBuf> = std::env::split_paths(&path).collect();
+        assert!(dirs.contains(&bin), "the folder of the command line");
+        assert!(dirs.contains(&std::fs::canonicalize(&lib).unwrap()), "the folder it links to");
+        // What the app had comes first, unchanged.
+        let own: Vec<std::path::PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+        assert_eq!(&dirs[..own.len()], &own[..]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_claude_model_through_a_subscription_is_refused() {
