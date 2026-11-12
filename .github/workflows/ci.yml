@@ -55,13 +55,16 @@ jobs:
         with:
           rev: ${{ needs.nsh.outputs.rev }}
           cache-key: check
-          targets: aarch64-apple-ios
+          targets: aarch64-apple-ios, aarch64-linux-android
       - name: Check
         run: nsh check
       # The phone's build, as far as it shows in a pull request: that it
       # compiles. Packaging it for the Simulator took a job of its own.
       - name: Check for iOS
         run: cargo check --lib --locked --target aarch64-apple-ios
+      # And Android's, the same way, with the runner's NDK.
+      - name: Check for Android
+        run: scripts/android-check.sh
       - name: Rust tests
         run: cargo test --locked
 
