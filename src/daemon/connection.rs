@@ -3334,6 +3334,44 @@ mod tests {
 
     #[test]
     #[ignore]
+    fn an_agent_runs_from_its_desktop_app_live() {
+        // A service of its own with no `claude` or `codex` on its PATH,
+        // never the user's: PASEO_LISTEN names it. Each goes from
+        // unavailable to ready on the CLI its desktop app carries.
+        let listen = std::env::var("PASEO_LISTEN").expect("PASEO_LISTEN: a test service");
+        assert!(!listen.ends_with(":6767"), "not the user's own service");
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let (ev_tx, mut ev_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+            tokio::spawn(run(ev_tx, cmd_rx));
+            async fn status(id: &str, want: &str, ev_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Event>) -> Option<usize> {
+                let wait = async {
+                    loop {
+                        if let Some(Event::Providers(list)) = ev_rx.recv().await {
+                            if let Some(p) = list.iter().find(|p| p.id == id && p.status == want) {
+                                return p.models.len();
+                            }
+                        }
+                    }
+                };
+                tokio::time::timeout(Duration::from_secs(60), wait).await.ok()
+            }
+            for id in ["claude", "codex"] {
+                let bin = crate::bundled_cli::find(id).expect("the desktop app's CLI");
+                cmd_tx.send(Command::RefreshProviders).unwrap();
+                assert!(status(id, "unavailable", &mut ev_rx).await.is_some(), "{id} was not unavailable to begin with");
+                cmd_tx.send(Command::PatchProviders(crate::bundled_cli::use_patch(id, &bin))).unwrap();
+                cmd_tx.send(Command::RefreshProviders).unwrap();
+                let models = status(id, "ready", &mut ev_rx).await.expect("never became ready");
+                println!("{id} ready on its app's CLI, {models} models");
+                assert!(models > 0);
+            }
+        });
+    }
+
+    #[test]
+    #[ignore]
     fn agent_enable_toggle_live() {
         // The local daemon: `pi` (off here) on, then off again.
         use super::super::agents::enable_patch;
