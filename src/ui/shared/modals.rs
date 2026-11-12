@@ -278,6 +278,13 @@ fn body(m: Modal) -> View {
         Modal::NewSchedule => schedule_form(None),
         Modal::EditSchedule(s) => schedule_form(Some(s)),
         Modal::AddProject => add_project(),
+        Modal::ChooseFolder => sheet(t("Choose a project folder")).w(px(520.0)).child(host_folders("Use “{}”", |path| {
+            store::edit_form(|f| {
+                f.path = path;
+                f.worktree = false;
+            });
+            store::close_modal();
+        })),
         Modal::SwitchBranch => switch_branch(),
         Modal::ImportSession => import_session(),
         Modal::Fonts { mono } => fonts(mono),
@@ -585,10 +592,19 @@ fn add_project() -> View {
         Clone,
     }
     let mode = signal(Mode::Open);
-    let parent = signal(std::env::var("HOME").unwrap_or_default());
+    // Folders are the connected computer's: this Mac's through the system's
+    // dialog, another's browsed here (the dialog would show this Mac's
+    // folders, which that computer does not have).
+    let local = store::on_this_mac();
+    let parent = signal(if local { std::env::var("HOME").unwrap_or_default() } else { store::host_home() });
+    // Another computer's folder for "where it goes" is being chosen.
+    let choosing = signal(false);
     let name = signal(String::new());
     let repo = signal(String::new());
     let pick_parent = move || {
+        if !local {
+            return choosing.set(true);
+        }
         store::spawn_detached(async move {
             let dialog = nsh_core::file_dialog::OpenDialog::folders().title(t("Choose where it goes"));
             if let Ok(Some(paths)) = pick_paths(dialog).await
@@ -607,7 +623,19 @@ fn add_project() -> View {
         ))
         .child(dynamic(move || {
             let m = mode.get();
+            let choosing_now = choosing.get();
             Some(untracked(move || match m {
+                _ if choosing_now => host_folders("Use “{}”", move |path| {
+                    parent.set(path);
+                    choosing.set(false);
+                }),
+                Mode::Open if !local => view()
+                    .gap(sp(S3))
+                    .child(text(t("Pick a folder on the connected computer; Sophon lists it with your projects")).text_size(tx(TEXT_SM)).text_color(FG_MUTED))
+                    .child(host_folders("Add “{}”", |path| {
+                        store::add_project(&path);
+                        store::close_modal();
+                    })),
                 Mode::Open => view()
                     .gap(sp(S3))
                     .child(text(t("Pick a folder on this computer; Sophon lists it with your projects")).text_size(tx(TEXT_SM)).text_color(FG_MUTED))
@@ -649,6 +677,74 @@ fn add_project() -> View {
                     )),
             }))
         }))
+}
+
+/// The folders of the connected computer when it is not this Mac, browsed
+/// from its home folder: a press goes into one, the arrow goes up, and the
+/// button takes the folder shown (`confirm` names it: "Add “{}”").
+fn host_folders(confirm: &'static str, on_pick: impl Fn(String) + 'static) -> View {
+    store::browse(&store::host_home());
+    let browse = computed(store::browse_state);
+    let name = computed(move || browse.with(|b| b.cwd.trim_end_matches('/').rsplit('/').next().filter(|n| !n.is_empty()).unwrap_or("/").to_owned()));
+    view()
+        .gap(sp(S3))
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap(sp(S2))
+                .child(icon_btn(Icon::ArrowUp, Sz::Sm, t("Up"), move || {
+                    let cwd = browse.with_untracked(|b| b.cwd.clone());
+                    let parent = cwd.trim_end_matches('/').rsplit_once('/').map(|(p, _)| p).filter(|p| !p.is_empty()).unwrap_or("/").to_owned();
+                    store::browse(&parent);
+                }))
+                .child(text(move || browse.with(|b| b.cwd.clone())).text_size(tx(TEXT_SM)).font_family(mono_font).text_color(FG_MUTED).number_of_lines(1).flex_1()),
+        )
+        .child(scroll().h(px(280.0)).rounded(px(R_LG)).border_1().border_color(tint(BORDER, 0.6)).child(dynamic(move || {
+            let b = browse.get();
+            Some(untracked(move || {
+                if let Some(e) = b.error.clone() {
+                    return text(e).p(sp(S4)).text_size(tx(TEXT_SM)).text_color(DANGER).into_element();
+                }
+                if !b.loaded {
+                    return view().pt(sp(S8)).items_center().child(loader(None)).into_element();
+                }
+                if b.folders.is_empty() {
+                    return text(t("No folders here")).p(sp(S4)).text_size(tx(TEXT_SM)).text_color(FG_MUTED).into_element();
+                }
+                let mut rows = view().p(sp(S1));
+                for path in b.folders.clone() {
+                    let label = path.trim_end_matches('/').rsplit('/').next().unwrap_or(&path).to_owned();
+                    rows = rows.child(
+                        nsh_base::button()
+                            .on_press(move || store::browse(&path))
+                            .flex_row()
+                            .items_center()
+                            .gap(sp(S2))
+                            .h(px(32.0))
+                            .px(sp(S2))
+                            .rounded(px(R_MD))
+                            .hover(|s| s.bg(highlight()))
+                            .child(icon(Icon::Folder, 15.0).text_color(FG_FAINT))
+                            .child(text(label).text_size(tx(TEXT_SM)).number_of_lines(1).flex_1())
+                            .child(icon(Icon::ChevronRight, 14.0).text_color(FG_FAINT)),
+                    );
+                }
+                rows.into_element()
+            }))
+        })))
+        .child(actions(btn(
+            move || SharedString::from(tf(confirm, &[&name.get()])),
+            Variant::Primary,
+            Sz::Md,
+            Some(Icon::FolderPlus),
+            move || {
+                let cwd = browse.with_untracked(|b| b.cwd.clone());
+                if cwd.len() > 1 {
+                    on_pick(cwd);
+                }
+            },
+        )))
 }
 
 fn location_row(parent: Signal<String>, pick: impl Fn() + 'static) -> View {
