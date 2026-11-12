@@ -2501,22 +2501,29 @@ pub(crate) fn service_cli() -> Option<std::path::PathBuf> {
 /// installed with npm is a script that starts `node`, which is not there
 /// ("env: node: No such file or directory"), and the service it starts
 /// looks for the agents on what it is given. So: the app's own, then the
-/// folder of the command line itself, then the usual folders for what is
-/// installed by hand, Homebrew or a Node version manager.
+/// folder of the command line itself first (its own `node` runs it), then
+/// the app's own PATH, then the usual folders for what is installed by
+/// hand, Homebrew or a Node version manager.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn service_path(cli: &std::path::Path) -> std::ffi::OsString {
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
-    let mut dirs: Vec<std::path::PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
     let mut add = |dir: std::path::PathBuf| {
         if !dirs.contains(&dir) {
             dirs.push(dir);
         }
     };
+    // The command line's own folder first: the `node` beside it is the one
+    // it was installed with (the one Sophon carries, for its own service),
+    // not whichever a shell's PATH happens to have first.
     if let Some(dir) = cli.parent() {
         add(dir.to_path_buf());
     }
-    // Where the link points too: beside the real script is its `node`.
+    // Where the link points too.
     if let Some(dir) = std::fs::canonicalize(cli).ok().and_then(|p| p.parent().map(std::path::Path::to_path_buf)) {
+        add(dir);
+    }
+    for dir in std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).unwrap_or_default() {
         add(dir);
     }
     for dir in crate::bundled_cli::install_dirs(&home) {
@@ -4966,9 +4973,11 @@ mod model_rule_tests {
         let dirs: Vec<std::path::PathBuf> = std::env::split_paths(&path).collect();
         assert!(dirs.contains(&bin), "the folder of the command line");
         assert!(dirs.contains(&std::fs::canonicalize(&lib).unwrap()), "the folder it links to");
-        // What the app had comes first, unchanged.
+        // Its own folder before anything the app's PATH has: its `node`
+        // is the one that runs it.
+        assert_eq!(dirs.first(), Some(&bin));
         let own: Vec<std::path::PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
-        assert_eq!(&dirs[..own.len()], &own[..]);
+        assert!(own.iter().all(|d| dirs.contains(d)), "the app's own PATH is kept");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
