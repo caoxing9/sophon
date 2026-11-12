@@ -11,6 +11,7 @@ mod agent_pictures;
 mod agent_update;
 #[cfg(target_os = "macos")]
 mod awake;
+mod bundled_cli;
 mod cadence;
 pub mod daemon;
 mod fold;

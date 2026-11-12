@@ -2942,6 +2942,48 @@ pub(crate) fn patch_providers(patch: serde_json::Value) {
     send(Command::PatchProviders(patch));
 }
 
+thread_local! {
+    /// The command patches sent for the apps' CLIs, by host and provider:
+    /// each is sent once, so an agent that stays unavailable on the app's
+    /// CLI is not patched over and over.
+    static BUNDLED_SENT: RefCell<std::collections::HashSet<String>> = RefCell::new(std::collections::HashSet::new());
+}
+
+/// Claude Code and Codex not installed for the service, on this Mac, run
+/// from the CLI their desktop app carries ([`crate::bundled_cli`]); a
+/// command already there follows the app's updates.
+fn use_bundled_clis() {
+    if !on_this_mac() {
+        return;
+    }
+    let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else { return };
+    let list = global::<Providers>().with_untracked(|p| p.0.clone());
+    let config = global::<DaemonConfig>().with_untracked(|c| c.0.clone());
+    let host = current_host().map(|h| h.url).unwrap_or_default();
+    for id in ["claude", "codex"] {
+        let Some(p) = list.iter().find(|p| p.id == id) else { continue };
+        let unavailable = p.enabled && p.status == "unavailable";
+        if config.is_none() {
+            // The config says whether the command is someone's own: ask
+            // for it first, and come back with it.
+            if unavailable && crate::bundled_cli::find(id).is_some() {
+                send(Command::GetConfig);
+                return;
+            }
+            continue;
+        }
+        let Some(patch) = crate::bundled_cli::patch_for(id, unavailable, config.as_ref(), &home) else { continue };
+        if !BUNDLED_SENT.with_borrow_mut(|sent| sent.insert(format!("{host} {patch}"))) {
+            continue;
+        }
+        log::info!("{id}: its command follows the desktop app's CLI");
+        if patch["providers"][id]["command"][0].as_str().is_some_and(|c| c.starts_with('/')) {
+            notify(tf("{} runs from its desktop app: it is not installed on its own", &[&p.label]));
+        }
+        patch_providers(patch);
+    }
+}
+
 /// What the Agents section reads: the host's config and the diagnostics.
 pub(crate) fn load_agents() {
     send(Command::GetConfig);
@@ -4045,6 +4087,7 @@ pub(crate) fn apply(event: Event) {
                 }
             }
             global::<Providers>().update(|p| p.0 = list);
+            use_bundled_clis();
             if first {
                 // The first providers fill the form's defaults; what is
                 // written in it (a prompt link's text) stays.
@@ -4367,7 +4410,10 @@ pub(crate) fn apply(event: Event) {
             record_limits(&list);
             global::<UsageState>().update(|u| u.0 = Some(list));
         }
-        Event::DaemonConfig(cfg) => global::<DaemonConfig>().update(|c| c.0 = Some(cfg)),
+        Event::DaemonConfig(cfg) => {
+            global::<DaemonConfig>().update(|c| c.0 = Some(cfg));
+            use_bundled_clis();
+        }
         Event::Diagnostic { provider, text } => {
             let d = crate::daemon::agents::parse_diagnostic(&text);
             if let Some(path) = d.path.clone().filter(|_| d.version.is_some()) {
