@@ -259,7 +259,7 @@ fn changes_view() -> View {
                     })
                 })
                 .text_size(px(TEXT_SM))
-                .font_family(|| MONO)
+                .font_family(mono_font)
                 .text_color(FG_MUTED)),
         )
         .child(dynamic(move || {
@@ -404,7 +404,7 @@ fn file_row(file: Memo<Option<DiffFile>>) -> impl IntoElement {
             .w(px(12.0))
             .text_size(px(TEXT_XS))
             .font_weight(FontWeight(600))
-            .font_family(|| MONO)
+            .font_family(mono_font)
             .text_color(move || {
                 file.with(|f| match f {
                     Some(f) if f.is_new => SUCCESS,
@@ -430,13 +430,13 @@ fn file_row(file: Memo<Option<DiffFile>>) -> impl IntoElement {
         .child(
             text(move || file.with(|f| f.as_ref().map(|f| format!("+{}", f.additions)).unwrap_or_default()))
                 .text_size(px(TEXT_XS))
-                .font_family(|| MONO)
+                .font_family(mono_font)
                 .text_color(SUCCESS),
         )
         .child(
             text(move || file.with(|f| f.as_ref().map(|f| format!("−{}", f.deletions)).unwrap_or_default()))
                 .text_size(px(TEXT_XS))
-                .font_family(|| MONO)
+                .font_family(mono_font)
                 .text_color(DANGER),
         )
 }
@@ -525,8 +525,8 @@ pub(crate) fn diff_pane(path: Option<String>) -> impl IntoElement {
             view()
                 .flex_row()
                 .gap(px(6.0))
-                .child(text(move || format!("+{}", stats.get().0)).text_size(px(TEXT_SM)).font_family(|| MONO).text_color(SUCCESS))
-                .child(text(move || format!("\u{2212}{}", stats.get().1)).text_size(px(TEXT_SM)).font_family(|| MONO).text_color(DANGER)),
+                .child(text(move || format!("+{}", stats.get().0)).text_size(px(TEXT_SM)).font_family(mono_font).text_color(SUCCESS))
+                .child(text(move || format!("\u{2212}{}", stats.get().1)).text_size(px(TEXT_SM)).font_family(mono_font).text_color(DANGER)),
         )
         .child(dynamic(move || {
             (!one_sided.get()).then(|| untracked(move || {
@@ -776,8 +776,8 @@ fn commits_view() -> View {
                                 .rounded(px(R_MD))
                                 .hover(|s| s.bg(highlight()))
                                 .child(text(split_path(&path).0).text_size(px(TEXT_SM)).number_of_lines(1).flex_1())
-                                .child(text(format!("+{add}")).text_size(px(TEXT_XS)).font_family(|| MONO).text_color(SUCCESS))
-                                .child(text(format!("−{del}")).text_size(px(TEXT_XS)).font_family(|| MONO).text_color(DANGER)),
+                                .child(text(format!("+{add}")).text_size(px(TEXT_XS)).font_family(mono_font).text_color(SUCCESS))
+                                .child(text(format!("−{del}")).text_size(px(TEXT_XS)).font_family(mono_font).text_color(DANGER)),
                         );
                     }
                     col = col.child(
@@ -794,7 +794,7 @@ fn commits_view() -> View {
                                     .flex_row()
                                     .items_center()
                                     .gap(px(6.0))
-                                    .child(text(c.short.clone()).text_size(px(TEXT_XS)).font_family(|| MONO).text_color(FG_MUTED))
+                                    .child(text(c.short.clone()).text_size(px(TEXT_XS)).font_family(mono_font).text_color(FG_MUTED))
                                     .child(
                                         text(format!("{} · {}", c.author, c.date.get(..10).unwrap_or_default()))
                                             .text_size(px(TEXT_XS))
@@ -830,7 +830,7 @@ pub(crate) fn commit_diff_pane(sha: String, path: String) -> impl IntoElement {
                 .border_b_1()
                 .border_color(BORDER)
                 .child(icon(Icon::GitCommitHorizontal, 15.0).text_color(FG_MUTED))
-                .child(text(title).text_size(px(TEXT_BASE)).font_family(|| MONO).number_of_lines(1).flex_1()),
+                .child(text(title).text_size(px(TEXT_BASE)).font_family(mono_font).number_of_lines(1).flex_1()),
         )
         .child(dynamic(move || {
             let d = data.get();

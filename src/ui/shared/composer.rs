@@ -507,7 +507,7 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
                         .rounded(px(R_LG))
                         .hover(|s| s.bg(highlight()))
                         .child(icon(glyph, 15.0).text_color(FG_MUTED))
-                        .child(text(label).text_size(px(TEXT_BASE)).font_family(|| MONO).text_color(FG).flex_shrink_0())
+                        .child(text(label).text_size(px(TEXT_BASE)).font_family(mono_font).text_color(FG).flex_shrink_0())
                         .child(text(detail).text_size(px(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1).flex_1()),
                 );
             }
@@ -777,7 +777,7 @@ pub(crate) fn context_meter() -> impl IntoElement {
                         view().h_full().w(relative((pct.min(100) as f32) / 100.0)).rounded(px(R_FULL)).bg(tone),
                     ),
                 )
-                .child(text(label).text_size(px(TEXT_XS)).font_family(|| MONO).text_color(tone))
+                .child(text(label).text_size(px(TEXT_XS)).font_family(mono_font).text_color(tone))
         }))
     }))
 }

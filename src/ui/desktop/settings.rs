@@ -232,7 +232,7 @@ fn relay_row() -> impl IntoElement {
                             .value(move || value.get())
                             .on_change(move |v: &str| value.set(v.to_owned()))
                             .placeholder("relay.paseo.sh")
-                            .font_family(|| MONO)
+                            .font_family(mono_font)
                             .text_size(px(TEXT_SM)),
                     )
                     .child(

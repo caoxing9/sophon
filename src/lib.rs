@@ -113,10 +113,19 @@ pub fn App() -> impl IntoElement {
         .flex_1()
         .bg(move || theme().background)
         .text_color(move || theme().foreground)
-        // A language change mounts the UI again, in the new language.
+        // A language change mounts the UI again, in the new language; a
+        // font change too, in the new fonts (the interface's is set here
+        // and inherited; the code font is read as each view is made).
         .child(dynamic(|| {
             let _ = i18n::lang();
-            Some(untracked(|| ui::shell().into_element()))
+            let (font, _) = store::fonts();
+            Some(untracked(move || {
+                let shell = view().flex_1().child(ui::shell());
+                match font.clone() {
+                    Some(family) => shell.font_family(SharedString::from(family)).into_element(),
+                    None => shell.into_element(),
+                }
+            }))
         }))
 }
 

@@ -72,7 +72,7 @@ pub(crate) fn new_workspace(compact: bool) -> impl IntoElement {
                                     .value(move || form.with(|f| f.branch_name.clone()))
                                     .on_change(|v: &str| store::edit_form(|f| f.branch_name = v.to_owned()))
                                     .placeholder(t("New branch (optional)"))
-                                    .font_family(|| MONO)
+                                    .font_family(mono_font)
                                     .text_size(px(TEXT_SM))
                             }))
                             .child(view().flex_1())

@@ -39,6 +39,53 @@ pub(crate) fn appearance_card() -> View {
             ),
             false,
         ))
+        .child(row(
+            t("Interface font"),
+            t("A font installed on this device, by its name. Empty: the system's"),
+            font_field(false, "SF Pro"),
+            false,
+        ))
+        .child(row(
+            t("Code font"),
+            t("For code, terminals and numbers. Empty: Menlo"),
+            font_field(true, "JetBrains Mono"),
+            false,
+        ))
+        // The same two, by hand: `fontFamily` and `monoFontFamily` in the
+        // settings file, read when Sophon starts.
+        .when(!MOBILE && cfg!(target_os = "macos"), |card| {
+            card.child(row(
+                t("Settings file"),
+                t("fontFamily and monoFontFamily can be set there too; Sophon reads it when it starts"),
+                btn(t("Open settings.json"), Variant::Outline, Sz::Sm, None, store::open_settings_file),
+                false,
+            ))
+        })
+}
+
+/// A font's name, typed: set when Return is pressed or the field is left
+/// (each letter typed would mount the UI again).
+fn font_field(mono: bool, example: &'static str) -> impl IntoElement {
+    let current = move || {
+        let (ui, code) = store::fonts_untracked();
+        if mono { code } else { ui }.unwrap_or_default()
+    };
+    let typed = signal(current());
+    let apply = move || {
+        let value = typed.get_untracked();
+        if store::font_name(&value) != store::font_name(&current()) {
+            store::set_font(mono, &value);
+        }
+    };
+    field()
+        .w(px(200.0))
+        .h(px(CONTROL_SM + 4.0))
+        .value(move || typed.get())
+        .on_change(move |v: &str| typed.set(v.to_owned()))
+        .on_submit(move |_: &str| apply())
+        .on_blur(move || apply())
+        .placeholder(example)
+        .text_size(px(TEXT_SM))
 }
 
 /// What Return does while an agent runs.
@@ -184,7 +231,7 @@ pub(crate) fn host_card() -> View {
                 _ => "—".into(),
             }))
             .text_size(px(TEXT_BASE))
-            .font_family(|| MONO)
+            .font_family(mono_font)
             .text_color(FG_MUTED),
             false,
         ))

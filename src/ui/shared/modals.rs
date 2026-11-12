@@ -564,7 +564,7 @@ fn schedule_form(existing: Option<crate::daemon::connection::Schedule>) -> View 
                     field()
                         .value(move || custom.get())
                         .on_change(move |v: &str| custom.set(v.to_owned()))
-                        .font_family(|| MONO)
+                        .font_family(mono_font)
                         .placeholder(t("Cron expression, e.g. 0 9 * * 1-5")),
                 ),
             }))
@@ -656,7 +656,7 @@ fn location_row(parent: Signal<String>, pick: impl Fn() + 'static) -> View {
         .items_center()
         .gap(px(S2))
         .child(icon(Icon::Folder, 15.0).text_color(FG_MUTED))
-        .child(text(move || parent.get()).text_size(px(TEXT_SM)).font_family(|| MONO).text_color(FG_MUTED).number_of_lines(1).flex_1())
+        .child(text(move || parent.get()).text_size(px(TEXT_SM)).font_family(mono_font).text_color(FG_MUTED).number_of_lines(1).flex_1())
         .child(btn(t("Change…"), Variant::Outline, Sz::Sm, None, pick))
 }
 
@@ -694,7 +694,7 @@ fn switch_branch() -> View {
                             .rounded(px(R_LG))
                             .hover(|s| s.bg(highlight()))
                             .child(icon(Icon::GitBranch, 14.0).text_color(FG_MUTED))
-                            .child(text(b).text_size(px(TEXT_BASE)).font_family(|| MONO).number_of_lines(1)),
+                            .child(text(b).text_size(px(TEXT_BASE)).font_family(mono_font).number_of_lines(1)),
                     );
                 }
                 col
@@ -949,7 +949,7 @@ fn add_host() -> View {
                         .value(move || url.get())
                         .on_change(move |v: &str| url.set(v.to_owned()))
                         .placeholder(t("Address (192.168.1.20:6767) or a pairing link"))
-                        .font_family(|| MONO),
+                        .font_family(mono_font),
                 )
                 .child(btn(t("Paste"), Variant::Secondary, Sz::Md, Some(Icon::Copy), move || {
                     spawn(async move {
@@ -989,7 +989,7 @@ fn pairing_code(code: &str) -> View {
         .py(px(S3))
         .rounded(px(R_LG))
         .bg(SURFACE2)
-        .child(text(code.to_owned()).text_size(px(32.0)).font_weight(FontWeight(500)).font_family(|| MONO))
+        .child(text(code.to_owned()).text_size(px(32.0)).font_weight(FontWeight(500)).font_family(mono_font))
 }
 
 /// This Mac: a phone nearby asks to pair, into one of its spaces.

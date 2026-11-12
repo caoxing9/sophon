@@ -193,7 +193,7 @@ fn update_line(u: &store::AgentUpdate, newer: Option<&str>) -> Option<View> {
     if let Some(e) = &u.error {
         let row = row.child(text(tf("Update failed: {}", &[e])).text_size(px(TEXT_SM)).text_color(DANGER));
         return Some(match &u.install {
-            Some(i) => row.child(muted(tf("Run it yourself: {}", &[&crate::agent_update::command_line(i)])).font_family(|| MONO)),
+            Some(i) => row.child(muted(tf("Run it yourself: {}", &[&crate::agent_update::command_line(i)])).font_family(mono_font)),
             None => row,
         });
     }
@@ -260,7 +260,7 @@ fn command_box(cmd: String) -> View {
         .bg(SURFACE2)
         .border_1()
         .border_color(BORDER)
-        .child(text(cmd).flex_1().min_w(px(0.0)).font_family(|| MONO).text_size(px(TEXT_SM)))
+        .child(text(cmd).flex_1().min_w(px(0.0)).font_family(mono_font).text_size(px(TEXT_SM)))
         .child(icon_btn(Icon::Copy, Sz::Sm, t("Copy"), move || {
             set_clipboard(copy.clone());
             store::notify(t("Command copied").into());
@@ -332,7 +332,7 @@ pub(crate) fn add_account() -> View {
                         .value(move || dir.get())
                         .on_change(move |v: &str| dir.set(v.to_owned()))
                         .placeholder(move || base.get().default_dir(&slug()))
-                        .font_family(|| MONO),
+                        .font_family(mono_font),
                 )
                 .child(hint(move || match target.get() {
                     Some(d) => tf("Its config folder on that computer: {}", &[&d]),
@@ -415,14 +415,14 @@ pub(crate) fn add_api_key() -> View {
                                     Base::Claude => t("Anthropic-compatible endpoint, e.g. https://example.com/anthropic"),
                                     Base::Codex => t("OpenAI Responses endpoint, e.g. https://example.com/v1"),
                                 })
-                                .font_family(|| MONO),
+                                .font_family(mono_font),
                         )
                         .child(
                             field()
                                 .value(move || models.get())
                                 .on_change(move |v: &str| models.set(v.to_owned()))
                                 .placeholder(t("Model ids, the default first, e.g. model-a, model-b"))
-                                .font_family(|| MONO),
+                                .font_family(mono_font),
                         )
                         .into_element()
                 } else {
@@ -430,7 +430,7 @@ pub(crate) fn add_api_key() -> View {
                     let line = p
                         .map(|p| format!("{} · {}", p.base_url, p.models.iter().map(|(_, l)| *l).collect::<Vec<_>>().join(", ")))
                         .unwrap_or_default();
-                    hint(line).font_family(|| MONO).into_element()
+                    hint(line).font_family(mono_font).into_element()
                 }
             }))
         }))

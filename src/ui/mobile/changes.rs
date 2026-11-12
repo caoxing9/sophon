@@ -132,7 +132,7 @@ fn file_row(file: Memo<Option<DiffFile>>) -> impl IntoElement {
             .w(px(14.0))
             .text_size(px(TEXT_SM))
             .font_weight(FontWeight(600))
-            .font_family(|| MONO)
+            .font_family(mono_font)
             .text_color(move || {
                 file.with(|f| match f {
                     Some(f) if f.is_new => SUCCESS,
@@ -157,7 +157,7 @@ fn file_row(file: Memo<Option<DiffFile>>) -> impl IntoElement {
         .child(
             text(move || file.with(|f| f.as_ref().map(|f| format!("+{} −{}", f.additions, f.deletions)).unwrap_or_default()))
                 .text_size(px(TEXT_SM))
-                .font_family(|| MONO)
+                .font_family(mono_font)
                 .text_color(FG_MUTED),
         )
         .child(icon(Icon::ChevronRight, 16.0).text_color(FG_FAINT))

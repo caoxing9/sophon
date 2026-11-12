@@ -2305,6 +2305,8 @@ fn save_prefs() {
         "collapsedProjects": global::<Collapsed>().with_untracked(|c| c.0.clone()),
         "favoriteModels": global::<FavoriteModels>().with_untracked(|f| f.0.clone()),
         "language": crate::i18n::lang_untracked().as_str(),
+        "fontFamily": global::<Fonts>().with_untracked(|f| f.ui.clone()),
+        "monoFontFamily": global::<Fonts>().with_untracked(|f| f.mono.clone()),
         "appearance": match global::<Theme>().with_untracked(|t| t.0) {
             nsh_core::platform::Appearance::Light => "light",
             nsh_core::platform::Appearance::Dark => "dark",
@@ -2346,6 +2348,8 @@ pub(crate) fn load_prefs() {
     };
     global::<LocalServiceChosen>().set(LocalServiceChosen(chosen));
     let my_space = v.get("mySpaceName").and_then(serde_json::Value::as_str).map(str::to_owned).filter(|n| !n.trim().is_empty());
+    let font = |k: &str| v.get(k).and_then(serde_json::Value::as_str).and_then(font_name);
+    global::<Fonts>().set(Fonts { ui: font("fontFamily"), mono: font("monoFontFamily") });
     global::<Settings>().update(|s| {
         s.send_behavior = behavior;
         s.keep_awake = keep_awake;
@@ -2399,6 +2403,51 @@ struct Theme(nsh_core::platform::Appearance);
 /// Light, dark, or the system's appearance.
 pub(crate) fn appearance() -> nsh_core::platform::Appearance {
     global::<Theme>().with(|t| t.0)
+}
+
+/// The fonts the user chose, by family name: the interface's, and the one
+/// for code. `None`: the system's, and Menlo. In `settings.json` as
+/// `fontFamily` and `monoFontFamily`, as an editor's settings have them;
+/// a list (`"SF Mono, Menlo"`) is read as its first name.
+#[derive(Clone, Default, PartialEq)]
+struct Fonts {
+    ui: Option<String>,
+    mono: Option<String>,
+}
+
+/// A font setting as typed: the first family of a comma list, without
+/// quotes; nothing when empty.
+pub(crate) fn font_name(typed: &str) -> Option<String> {
+    let first = typed.split(',').next().unwrap_or_default().trim().trim_matches(|c| c == '"' || c == '\'').trim();
+    (!first.is_empty()).then(|| first.to_owned())
+}
+
+/// (interface, code), for the UI to mount with: tracked, so a change
+/// mounts it again.
+pub(crate) fn fonts() -> (Option<String>, Option<String>) {
+    global::<Fonts>().with(|f| (f.ui.clone(), f.mono.clone()))
+}
+
+pub(crate) fn fonts_untracked() -> (Option<String>, Option<String>) {
+    global::<Fonts>().with_untracked(|f| (f.ui.clone(), f.mono.clone()))
+}
+
+/// Sets the interface's font (`mono`: the code font) and remembers it.
+pub(crate) fn set_font(mono: bool, typed: &str) {
+    let name = font_name(typed);
+    global::<Fonts>().update(|f| if mono { f.mono = name } else { f.ui = name });
+    save_prefs();
+}
+
+/// Opens `settings.json` in the text editor (written first, so it is
+/// there and current).
+pub(crate) fn open_settings_file() {
+    save_prefs();
+    #[cfg(target_os = "macos")]
+    {
+        let path = crate::daemon::data_dir().join("settings.json");
+        let _ = std::process::Command::new("/usr/bin/open").arg("-t").arg(path).spawn();
+    }
 }
 
 /// Shows the app in `appearance` and remembers it.
@@ -4925,6 +4974,15 @@ mod model_rule_tests {
         let own: Vec<std::path::PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
         assert_eq!(&dirs[..own.len()], &own[..]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_font_setting_is_its_first_family_name() {
+        assert_eq!(crate::store::font_name("JetBrains Mono").as_deref(), Some("JetBrains Mono"));
+        assert_eq!(crate::store::font_name(" 'Fira Code', Menlo, monospace ").as_deref(), Some("Fira Code"));
+        assert_eq!(crate::store::font_name("\"LXGW WenKai\"").as_deref(), Some("LXGW WenKai"));
+        assert_eq!(crate::store::font_name("  "), None);
+        assert_eq!(crate::store::font_name(""), None);
     }
 
     #[test]

@@ -90,7 +90,7 @@ pub(crate) fn tool_body(kind: &str, detail: &Value, error: Option<&str>) -> View
                         view()
                             .gap(px(1.0))
                             .child(text(title).text_size(px(TEXT_SM)).text_color(FG).number_of_lines(1))
-                            .child(text(url).text_size(px(TEXT_XS)).font_family(|| MONO).text_color(FG_MUTED).number_of_lines(1)),
+                            .child(text(url).text_size(px(TEXT_XS)).font_family(mono_font).text_color(FG_MUTED).number_of_lines(1)),
                     );
                 }
                 body = body.child(label(t("Results"))).child(list);
@@ -174,7 +174,7 @@ fn path_row(glyph: Icon, path: String) -> impl IntoElement {
         .gap(px(6.0))
         .min_w(px(0.0))
         .child(icon(glyph, 14.0).text_color(FG_MUTED))
-        .child(text(path).text_size(px(TEXT_CODE)).font_family(|| MONO).text_color(FG).selectable(true).flex_1())
+        .child(text(path).text_size(px(TEXT_CODE)).font_family(mono_font).text_color(FG).selectable(true).flex_1())
 }
 
 /// Monospaced text on a soft panel, scrolling past `max_h`.
@@ -185,7 +185,7 @@ fn code(s: String, max_h: f32) -> impl IntoElement {
             .py(px(S2))
             .text_size(px(TEXT_CODE))
             .line_height(px(18.0))
-            .font_family(|| MONO)
+            .font_family(mono_font)
             .text_color(FG)
             .selectable(true),
     )
@@ -216,7 +216,7 @@ fn diff_block(lines: Vec<String>) -> impl IntoElement {
                 .bg(bg)
                 .text_size(px(TEXT_CODE))
                 .line_height(px(18.0))
-                .font_family(|| MONO)
+                .font_family(mono_font)
                 .text_color(fg)
                 .selectable(true),
         );

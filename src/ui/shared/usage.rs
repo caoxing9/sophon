@@ -132,7 +132,7 @@ fn tile(label: &str, value: String, note: Option<String>) -> View {
         .border_color(BORDER)
         .bg(SURFACE0)
         .child(text(label.to_owned()).text_size(px(TEXT_XS)).text_color(FG_MUTED).number_of_lines(1))
-        .child(text(value).text_size(px(TEXT_XL)).font_weight(FontWeight(500)).font_family(|| MONO).number_of_lines(1))
+        .child(text(value).text_size(px(TEXT_XL)).font_weight(FontWeight(500)).font_family(mono_font).number_of_lines(1))
         .when_some(note, |v, n| v.child(text(n).text_size(px(TEXT_XS)).text_color(FG_FAINT).number_of_lines(2)))
 }
 
@@ -200,7 +200,7 @@ fn num_cell(s: String, strong: bool) -> nsh_core::element::Text {
         .w(px(NUM_W))
         .text_right()
         .text_size(px(TEXT_SM))
-        .font_family(|| MONO)
+        .font_family(mono_font)
         .text_color(if strong { FG } else { FG_MUTED })
         .number_of_lines(1)
 }
@@ -234,7 +234,7 @@ fn models_table(stats: &Stats) -> View {
                             .flex_1()
                             .min_w(px(0.0))
                             .gap(px(2.0))
-                            .child(text(m.model.clone()).text_size(px(TEXT_SM)).font_family(|| MONO).number_of_lines(1))
+                            .child(text(m.model.clone()).text_size(px(TEXT_SM)).font_family(mono_font).number_of_lines(1))
                             .child(
                                 text(tf("{} in · {} out · {} cached", &[&usage::compact(k.input), &usage::compact(k.output), &hit_rate(&k)]))
                                     .text_size(px(TEXT_XS))
@@ -242,7 +242,7 @@ fn models_table(stats: &Stats) -> View {
                                     .number_of_lines(1),
                             ),
                     )
-                    .child(text(cost).text_size(px(TEXT_SM)).font_family(|| MONO).text_color(if m.priced { FG } else { FG_MUTED })),
+                    .child(text(cost).text_size(px(TEXT_SM)).font_family(mono_font).text_color(if m.priced { FG } else { FG_MUTED })),
             );
         }
         return c;
@@ -284,7 +284,7 @@ fn models_table(stats: &Stats) -> View {
                         .items_center()
                         .gap(px(S2))
                         .child(icon(if m.source == usage::Source::Claude { Icon::Claude } else { Icon::Codex }, 14.0).text_color(FG_MUTED))
-                        .child(text(m.model.clone()).text_size(px(TEXT_SM)).font_family(|| MONO).number_of_lines(1).flex_shrink(1.0)),
+                        .child(text(m.model.clone()).text_size(px(TEXT_SM)).font_family(mono_font).number_of_lines(1).flex_shrink(1.0)),
                 )
                 .child(num_cell(usage::compact(k.input), false))
                 .child(num_cell(usage::compact(k.output), false))
@@ -363,7 +363,7 @@ fn window_row(w: &UsageWindow, points: &[limits::Point]) -> View {
             view()
                 .flex_row()
                 .child(text(w.label.clone()).text_size(px(TEXT_SM)).flex_1())
-                .child(text(format!("{used:.0}%")).text_size(px(TEXT_SM)).font_family(|| MONO).text_color(FG_MUTED)),
+                .child(text(format!("{used:.0}%")).text_size(px(TEXT_SM)).font_family(mono_font).text_color(FG_MUTED)),
         )
         .child(
             view()

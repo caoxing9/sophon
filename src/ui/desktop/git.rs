@@ -21,7 +21,7 @@ pub(crate) fn git_controls() -> impl IntoElement {
                 return None;
             }
             Some(untracked(move || {
-                text(format!("↑{} ↓{}", st.ahead, st.behind)).text_size(px(TEXT_SM)).font_family(|| MONO).text_color(FG_MUTED)
+                text(format!("↑{} ↓{}", st.ahead, st.behind)).text_size(px(TEXT_SM)).font_family(mono_font).text_color(FG_MUTED)
             }))
         }))
         .child(dynamic(move || {

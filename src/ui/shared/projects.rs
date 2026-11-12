@@ -249,7 +249,7 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
                 })
             })
             .text_size(px(TEXT_XS))
-            .font_family(|| MONO)
+            .font_family(mono_font)
             .text_color(FG_FAINT),
         );
 

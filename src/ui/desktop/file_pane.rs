@@ -30,7 +30,7 @@ pub(crate) fn file_pane(path: String) -> impl IntoElement {
                 .border_b_1()
                 .border_color(BORDER)
                 .child(icon(Icon::FileText, 15.0).text_color(FG_MUTED))
-                .child(text(path.clone()).text_size(px(TEXT_BASE)).font_family(|| MONO).number_of_lines(1).flex_1())
+                .child(text(path.clone()).text_size(px(TEXT_BASE)).font_family(mono_font).number_of_lines(1).flex_1())
                 .child(when(move || file.with(|f| f.as_ref().is_some_and(|f| f.dirty())), || {
                     text(t("Unsaved")).text_size(px(TEXT_SM)).text_color(FG_MUTED)
                 }))
