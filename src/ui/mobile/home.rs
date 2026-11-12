@@ -152,9 +152,14 @@ fn round_button(glyph: Icon, label: &'static str, on_press: impl Fn() + 'static)
 /// the computers and pairing another.
 fn host_chip() -> impl IntoElement {
     let conn = computed(store::conn);
-    let name = computed(move || match conn.get() {
-        Conn::Connected { hostname, .. } if !hostname.is_empty() => hostname,
-        _ => store::current_host().map(|h| h.label()).unwrap_or_default(),
+    // The name given to it here (Rename) before the one the computer
+    // gives itself: two spaces of one Mac both say "MacBook Pro".
+    let name = computed(move || {
+        let host = store::current_host();
+        match conn.get() {
+            Conn::Connected { hostname, .. } if !hostname.is_empty() && !host.as_ref().is_some_and(|h| h.named()) => hostname,
+            _ => host.map(|h| h.label()).unwrap_or_default(),
+        }
     });
     button()
         .on_press(move || {
@@ -173,6 +178,10 @@ fn host_chip() -> impl IntoElement {
                 })
                 .collect();
             items.push(SheetItem::new(t("Pair another computer"), || store::switch_host(None)).icon(Icon::Plus));
+            if let Some(h) = store::current_host() {
+                let label = h.label();
+                items.push(SheetItem::new(t("Rename this computer"), move || store::open_modal(store::Modal::RenameHost { id: h.id.clone(), name: label.clone() })).icon(Icon::Pencil));
+            }
             if let Some(id) = current {
                 items.push(SheetItem::destructive(t("Forget this computer"), move || store::remove_host(&id)).icon(Icon::Trash2));
             }

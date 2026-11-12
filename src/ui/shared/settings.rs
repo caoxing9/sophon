@@ -226,7 +226,8 @@ pub(crate) fn host_card() -> View {
     card()
         .child(row(
             field(|c| match c {
-                Conn::Connected { hostname, .. } => hostname.clone(),
+                // The name given to it here, when it has one.
+                Conn::Connected { hostname, .. } => store::current_host().filter(|h| h.named()).map(|h| h.label()).unwrap_or_else(|| hostname.clone()),
                 Conn::Down(_) => t("Offline").into(),
                 _ => t("Connecting…").into(),
             }),
