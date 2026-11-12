@@ -8,12 +8,12 @@
 
 // Without `scan`, only the limits half is used; the rest stays for the
 // tests and the desktop.
-#![cfg_attr(any(target_os = "ios", target_arch = "wasm32"), allow(dead_code))]
+#![cfg_attr(any(target_os = "ios", target_os = "android", target_arch = "wasm32"), allow(dead_code))]
 
 pub(crate) mod limits;
 pub(crate) mod parse;
 pub(crate) mod price;
-#[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 pub(crate) mod scan;
 
 use std::collections::HashMap;

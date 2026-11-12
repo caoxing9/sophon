@@ -97,7 +97,7 @@ fn history_section(range: Signal<Range>) -> View {
             let r = range.get();
             Some(untracked(move || match report {
                 None if loading => muted(t("Reading session logs…")).into_element(),
-                None if cfg!(any(target_os = "ios", target_arch = "wasm32")) => muted(t("Session statistics come from Sophon on the computer: pair with it there (not with the service alone) to see them")).into_element(),
+                None if cfg!(any(target_os = "ios", target_os = "android", target_arch = "wasm32")) => muted(t("Session statistics come from Sophon on the computer: pair with it there (not with the service alone) to see them")).into_element(),
                 None => muted(t("No session logs found")).into_element(),
                 Some(report) => {
                     let stats = report.range(r).clone();

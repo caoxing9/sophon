@@ -19,7 +19,7 @@
 
 // The phone reads no local lists yet (a remote host's come through the
 // service later): its parsers wait for that.
-#![cfg_attr(any(target_os = "ios", target_arch = "wasm32"), allow(dead_code))]
+#![cfg_attr(any(target_os = "ios", target_os = "android", target_arch = "wasm32"), allow(dead_code))]
 
 use serde_json::Value;
 
@@ -186,7 +186,7 @@ fn with_configured(configured: Vec<LocalModel>, catalog: Option<Vec<LocalModel>>
 }
 
 /// The models of `provider` on this computer, when it keeps a list.
-#[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 pub(crate) fn read_local(provider: &str) -> Option<Vec<LocalModel>> {
     let home = || std::env::var_os("HOME").map(std::path::PathBuf::from);
     match provider {
@@ -218,7 +218,7 @@ pub(crate) fn read_local(provider: &str) -> Option<Vec<LocalModel>> {
     }
 }
 
-#[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+#[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
 pub(crate) fn read_local(_provider: &str) -> Option<Vec<LocalModel>> {
     None
 }

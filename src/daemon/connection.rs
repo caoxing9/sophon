@@ -1090,7 +1090,7 @@ async fn session(
                     }
                     // Straight to the service on this computer: the agents'
                     // records are here to read.
-                    #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+                    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
                     if endpoint.relay.is_none() && ["127.0.0.1", "localhost", "[::1]"].iter().any(|h| endpoint.url.contains(h)) {
                         let (events, message_id, text, cwd) = (events.clone(), message_id.clone(), text.clone(), cwd.clone());
                         std::thread::spawn(move || {

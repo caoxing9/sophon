@@ -4,7 +4,7 @@
 //! host's are only reported.
 
 // The phone updates nothing: only reading is left there.
-#![cfg_attr(any(target_os = "ios", target_arch = "wasm32"), allow(dead_code))]
+#![cfg_attr(any(target_os = "ios", target_os = "android", target_arch = "wasm32"), allow(dead_code))]
 
 /// How an agent's CLI was installed.
 #[derive(Clone, Debug, PartialEq)]
@@ -93,7 +93,7 @@ fn tool(name: &str) -> String {
 /// The newest version `install` would bring (blocking: a network or brew
 /// call). Homebrew's own, which can trail npm's, since that is what its
 /// update gets.
-#[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 pub(crate) fn latest(install: &Install) -> Result<String, String> {
     let run = |program: &str, args: &[&str]| -> Result<String, String> {
         let out = std::process::Command::new(program).args(args).output().map_err(|e| e.to_string())?;
@@ -125,7 +125,7 @@ pub(crate) fn latest(install: &Install) -> Result<String, String> {
 }
 
 /// Runs `install`'s update (blocking); its last line of output on failure.
-#[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 pub(crate) fn run_update(install: &Install, binary: &str) -> Result<(), String> {
     let (program, args) = update_command(install, binary);
     let out = std::process::Command::new(&program)
@@ -179,7 +179,7 @@ mod tests {
 
 /// This computer's claude and codex: how each was installed and its newest
 /// version. Reads only; nothing is updated.
-#[cfg(all(test, not(any(target_os = "ios", target_arch = "wasm32"))))]
+#[cfg(all(test, not(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))))]
 #[test]
 #[ignore]
 fn latest_live() {

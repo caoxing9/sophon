@@ -1068,6 +1068,10 @@ fn pair_nearby() -> View {
 /// The computers on this network: one paired already connects at once,
 /// another asks to pair. Searches when shown.
 pub(crate) fn nearby_list() -> View {
+    // Android finds no computers yet (Bonjour is Apple's): no empty list.
+    if cfg!(target_os = "android") {
+        return view();
+    }
     crate::lan::scan();
     view().gap(px(S2)).child(dynamic(|| {
         let list = crate::lan::nearby();

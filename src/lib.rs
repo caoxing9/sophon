@@ -6,7 +6,7 @@
 use nsh_base::theme;
 use nsh_core::{element::{AssetFile, AssetKind}, prelude::*};
 
-#[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 mod agent_pictures;
 mod agent_update;
 #[cfg(target_os = "macos")]
@@ -41,6 +41,8 @@ unsafe extern "Rust" fn __getrandom_v03_custom(dest: *mut u8, len: usize) -> Res
 /// The app's UI set (`nsh.json` `"rust"`).
 #[native_module("sophon/native")]
 fn native(registry: &mut Registry) {
+    #[cfg(target_os = "android")]
+    platform::android::init();
     registry.register::<App>();
     // Only the mark's layers ship: `assets!()` would ship the whole
     // directory, the app icon's sources included.
