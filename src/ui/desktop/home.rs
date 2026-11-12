@@ -1,7 +1,9 @@
 //! The main surface with no workspace open. Launching, or switching host,
 //! opens the workspace open last (`store::restore_last_open`); until that
-//! was looked for this stays empty. After it, the mark and one way forward:
-//! an empty surface reads as something broken.
+//! was looked for this stays empty. After it, with nothing to open, the new
+//! conversation is what this surface is for: it opens by itself, no press
+//! asked for. Not connected (the workspaces never came), the mark and the
+//! one way forward: an empty surface reads as something broken.
 
 use crate::i18n::t;
 use nsh_core::prelude::*;
@@ -12,6 +14,13 @@ use crate::ui::kit::*;
 pub(crate) fn home() -> impl IntoElement {
     // With no workspaces (none yet, or not connected) there is none to wait for.
     let settled = computed(|| store::last_open_restored() || store::workspaces().is_empty());
+    // Once the workspaces are known and none was opened: the new
+    // conversation, in place of a button that leads to it.
+    effect(|| {
+        if store::last_open_restored() && store::screen() == store::Screen::Home {
+            store::open_new_workspace(None);
+        }
+    });
     view().flex_1().items_center().justify_center().pb(sp(S8)).child(when(settled, || {
         view()
             .items_center()
