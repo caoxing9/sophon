@@ -8,8 +8,8 @@ publish = false
 members = ["crates/nsh-ui"]
 
 [dependencies]
-nsh-core = { git = "https://github.com/caoxing9/nsh", rev = "a04c7cf9e3d2705863df497ff123ee509e5d4faf" }
-nsh-base = { git = "https://github.com/caoxing9/nsh", rev = "a04c7cf9e3d2705863df497ff123ee509e5d4faf" }
+nsh-core = { git = "https://github.com/caoxing9/nsh", rev = "51056da5b19d5ce868b0b7f6c9459e4578b8ebc7" }
+nsh-base = { git = "https://github.com/caoxing9/nsh", rev = "51056da5b19d5ce868b0b7f6c9459e4578b8ebc7" }
 log = "0.4"
 serde_json = "1"
 tokio = { version = "1", default-features = false, features = ["sync", "macros"] }
@@ -26,7 +26,7 @@ nsh-ui = { path = "crates/nsh-ui" }
 # Natively the connection runs on a thread of its own with tokio; in a
 # browser on the page's WebSocket (`daemon::rt`).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-nsh-updater = { git = "https://github.com/caoxing9/nsh", rev = "a04c7cf9e3d2705863df497ff123ee509e5d4faf" }
+nsh-updater = { git = "https://github.com/caoxing9/nsh", rev = "51056da5b19d5ce868b0b7f6c9459e4578b8ebc7" }
 env_logger = "0.11"
 tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net", "fs"] }
 tokio-tungstenite = "0.28"
@@ -49,20 +49,20 @@ getrandom03 = { package = "getrandom", version = "0.3" }
 uuid = { version = "1", features = ["v4", "rng-getrandom"] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
-nsh-platform-ios = { git = "https://github.com/caoxing9/nsh", rev = "a04c7cf9e3d2705863df497ff123ee509e5d4faf", default-features = false }
+nsh-platform-ios = { git = "https://github.com/caoxing9/nsh", rev = "51056da5b19d5ce868b0b7f6c9459e4578b8ebc7", default-features = false }
 objc2 = "0.6.5"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSString", "NSObject"] }
 objc2-ui-kit = { version = "0.3.2", default-features = false, features = ["std", "objc2-quartz-core", "UIView", "UIResponder"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-nsh-platform-linux = { git = "https://github.com/caoxing9/nsh", rev = "a04c7cf9e3d2705863df497ff123ee509e5d4faf", default-features = false }
+nsh-platform-linux = { git = "https://github.com/caoxing9/nsh", rev = "51056da5b19d5ce868b0b7f6c9459e4578b8ebc7", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-nsh-platform-macos = { git = "https://github.com/caoxing9/nsh", rev = "a04c7cf9e3d2705863df497ff123ee509e5d4faf", default-features = false }
+nsh-platform-macos = { git = "https://github.com/caoxing9/nsh", rev = "51056da5b19d5ce868b0b7f6c9459e4578b8ebc7", default-features = false }
 # The pasteboard's image, for a copied file the app may not read (already in the tree through nsh-platform-macos).
 objc2 = "0.6.5"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSData"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-nsh-platform-windows = { git = "https://github.com/caoxing9/nsh", rev = "a04c7cf9e3d2705863df497ff123ee509e5d4faf", default-features = false }
+nsh-platform-windows = { git = "https://github.com/caoxing9/nsh", rev = "51056da5b19d5ce868b0b7f6c9459e4578b8ebc7", default-features = false }

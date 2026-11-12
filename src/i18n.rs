@@ -547,7 +547,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("No usage reported by your providers", "服务商没有报告用量"),
     ("Setup and teardown scripts, services and other project settings, saved in the project", "初始化与清理脚本、服务和其他项目设置，保存在项目中"),
     // Pairing and hosts
-    ("Scan with your iPhone's camera and open it in Sophon. On the same Wi-Fi it connects directly; anywhere else through the encrypted relay. Both are end to end encrypted", "用 iPhone 相机扫描并在 Sophon 中打开。同一 Wi-Fi 下直接连接，其他网络通过中转连接，均为端到端加密"),
+    ("Scan with your phone's camera and open it in Sophon. On the same Wi-Fi it connects directly; anywhere else through the encrypted relay. Both are end to end encrypted", "用手机相机扫描并在 Sophon 中打开。同一 Wi-Fi 下直接连接，其他网络通过中转连接，均为端到端加密"),
     ("Anywhere · relay", "任何网络 · 中转"),
     ("Copy link", "复制链接"),
     ("Copy relay link", "复制中转链接"),

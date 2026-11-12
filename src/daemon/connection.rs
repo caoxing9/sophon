@@ -128,7 +128,10 @@ pub enum Command {
     /// What the provider's binary, version and login are.
     ProviderDiagnostic(String),
     RestartDaemon,
-    RecentSessions { query: String },
+    /// The sessions to import: asked of each of `providers` apart (one
+    /// list of all would be the newest of them together, and an agent
+    /// used less would not be in it), all tagged `seq`.
+    RecentSessions { query: String, providers: Vec<String>, seq: u64 },
     ImportSession { provider: String, handle: String, cwd: String },
     Script { workspace: String, name: String, start: bool },
     Rewind { agent: String, message_id: String, mode: &'static str },
@@ -623,7 +626,8 @@ pub enum Event {
     Commits { cwd: String, commits: Vec<Commit>, error: Option<String> },
     Subagents { parent: String, list: Vec<Subagent> },
     Rewound { agent: String, error: Option<String> },
-    RecentSessions(Vec<RecentSession>),
+    /// Some of the sessions asked for with `seq` (one agent's).
+    RecentSessions { seq: u64, list: Vec<RecentSession> },
     DaemonConfig(Value),
     /// A provider's diagnostic text.
     Diagnostic { provider: String, text: String },
@@ -959,6 +963,8 @@ enum Pending {
     Pairing,
     /// A feature an older daemon may not have: failures stay quiet.
     Optional,
+    /// The sessions to import, asked with this number.
+    Recent(u64),
     /// A providers config patch: the list is refreshed once it is saved.
     ProviderConfig,
     /// Step 1 of `CreateAgent`: the workspace; step 2 starts the agent.
@@ -1688,12 +1694,18 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
             Pending::Other("restart the daemon"),
             json!({ "type": "restart_server_request", "reason": "Restarted from Sophon" }),
         )],
-        Command::RecentSessions { query } => {
-            let mut msg = json!({ "type": "fetch_recent_provider_sessions_request", "limit": 200 });
-            if !query.trim().is_empty() {
-                msg["query"] = json!(query.trim());
-            }
-            vec![request(pending, Pending::Optional, msg)]
+        Command::RecentSessions { query, providers, seq } => {
+            let ask = |pending: &mut HashMap<String, Pending>, provider: Option<&str>| {
+                let mut msg = json!({ "type": "fetch_recent_provider_sessions_request", "limit": 200 });
+                if !query.trim().is_empty() {
+                    msg["query"] = json!(query.trim());
+                }
+                if let Some(provider) = provider {
+                    msg["providers"] = json!([provider]);
+                }
+                request(pending, Pending::Recent(seq), msg)
+            };
+            if providers.is_empty() { vec![ask(pending, None)] } else { providers.iter().map(|p| ask(pending, Some(p))).collect() }
         }
         Command::ImportSession { provider, handle, cwd } => vec![request(
             pending,
@@ -2028,6 +2040,8 @@ fn handle(
                     return vec![];
                 }
                 Some(Pending::Optional) => return vec![],
+                // An agent with no sessions to list: none of its own.
+                Some(Pending::Recent(seq)) => return vec![Event::RecentSessions { seq, list: vec![] }],
                 // The page showed the change already: show the config as it is.
                 Some(Pending::ProviderConfig) => {
                     follow_ups.push(request(pending, Pending::Optional, json!({ "type": "get_daemon_config_request" })));
@@ -2065,7 +2079,7 @@ fn handle(
                 Some(Pending::Pairing) => {
                     return vec![Event::PairingOffer { url: None, relay_enabled: false, error: Some(error.to_owned()) }];
                 }
-                Some(Pending::Optional) => "load",
+                Some(Pending::Optional | Pending::Recent(_)) => "load",
                 Some(Pending::Git(action)) => return vec![Event::GitDone { cwd: String::new(), action, error: Some(error.to_owned()), url: None }],
                 Some(Pending::Write(_)) => "save the file",
                 Some(Pending::Suggest(_)) => "search files",
@@ -2476,8 +2490,11 @@ fn handle(
             }
         }
         "fetch_recent_provider_sessions_response" => {
-            request_id.and_then(|id| pending.remove(id));
-            vec![Event::RecentSessions(list_of(payload, "entries", |e| {
+            let seq = match request_id.and_then(|id| pending.remove(id)) {
+                Some(Pending::Recent(seq)) => seq,
+                _ => 0,
+            };
+            let list = list_of(payload, "entries", |e| {
                 let s = |k: &str| e.get(k).and_then(Value::as_str).map(str::to_owned);
                 Some(RecentSession {
                     provider: s("providerId")?,
@@ -2487,7 +2504,8 @@ fn handle(
                     title: s("title").or_else(|| s("lastPromptPreview")).or_else(|| s("firstPromptPreview")).unwrap_or_else(|| "Untitled session".into()),
                     last_activity: s("lastActivityAt").unwrap_or_default(),
                 })
-            }))]
+            });
+            vec![Event::RecentSessions { seq, list }]
         }
         "agent.rewind.response" => {
             request_id.and_then(|id| pending.remove(id));

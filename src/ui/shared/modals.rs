@@ -1378,7 +1378,7 @@ fn pair_device() -> View {
     sheet(t("Pair a device"))
         .w(px(480.0))
         .child(
-            text(t("Scan with your iPhone's camera and open it in Sophon. On the same Wi-Fi it connects directly; anywhere else through the encrypted relay. Both are end to end encrypted"))
+            text(t("Scan with your phone's camera and open it in Sophon. On the same Wi-Fi it connects directly; anywhere else through the encrypted relay. Both are end to end encrypted"))
                 .text_size(tx(TEXT_SM))
                 .line_height(px(18.0))
                 .text_color(FG_MUTED),
