@@ -4061,11 +4061,6 @@ pub(crate) fn search_sessions(query: &str) {
     send(Command::RecentSessions { query: query.to_owned() });
 }
 
-pub(crate) fn import_session(s: &crate::daemon::connection::RecentSession) {
-    send(Command::ImportSession { provider: s.provider.clone(), handle: s.handle.clone(), cwd: s.cwd.clone() });
-    notify(t("Importing session…").into());
-}
-
 /// The sessions being imported together, one after another (each import
 /// loads a conversation on the host: all at once would start them all at
 /// once).
