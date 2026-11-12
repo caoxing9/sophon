@@ -16,7 +16,18 @@
 //! small buffer. This is the behavior of the default Cloudflare relay
 //! (`packages/relay/src/cloudflare-adapter.ts`), on a plain socket server.
 //!
+//! On the same port, `/push` is the push gateway (`push.rs`, the protocol in
+//! `docs/push.md`): a computer sends it notifications sealed to the gateway's
+//! key, and it sends them to Apple (APNs) for the paired iPhones. It keeps
+//! its own key in `$RELAY_STATE_DIR/push.key` (default
+//! `/var/lib/sophon-relay`, made on the first start) and needs the app's APNs
+//! signing key: `APNS_KEY_FILE` (the `.p8`), `APNS_KEY_ID`, `APNS_TEAM_ID`,
+//! `APNS_TOPIC` (default `dev.sophon.app`). Without them the relay works as
+//! before and the gateway answers every push `NotConfigured`.
+//!
 //! Usage: `sophon-relay [ADDR]` (default `0.0.0.0:8443`; `RELAY_ADDR` too).
+
+mod push;
 
 use std::{
     collections::HashMap,
@@ -106,6 +117,19 @@ struct Wanted {
     role: Role,
 }
 
+/// The two services of the port.
+enum Route {
+    Relay(Wanted),
+    Push(push::Wanted),
+}
+
+fn route(uri: &str) -> Result<Route, &'static str> {
+    match uri.split_once('?').map_or(uri, |(path, _)| path) {
+        "/push" => push::parse(uri).map(Route::Push),
+        _ => parse(uri).map(Route::Relay),
+    }
+}
+
 fn parse(uri: &str) -> Result<Wanted, &'static str> {
     let (path, query) = uri.split_once('?').unwrap_or((uri, ""));
     if path != "/ws" {
@@ -142,11 +166,12 @@ fn parse(uri: &str) -> Result<Wanted, &'static str> {
     Ok(Wanted { server_id, role })
 }
 
-async fn serve(stream: TcpStream, state: Shared) {
+async fn serve(stream: TcpStream, state: Shared, gateway: Arc<push::Gateway>) {
     let peer = stream.peer_addr().ok();
-    let mut wanted: Result<Wanted, &'static str> = Err("Expected WebSocket upgrade");
-    let accepted = tokio_tungstenite::accept_hdr_async(stream, |req: &Request, resp: Response| {
-        wanted = parse(&req.uri().to_string());
+    let mut wanted: Result<Route, &'static str> = Err("Expected WebSocket upgrade");
+    let config = push::socket_config(&stream).await;
+    let callback = |req: &Request, resp: Response| {
+        wanted = route(&req.uri().to_string());
         match &wanted {
             Ok(_) => Ok(resp),
             Err(e) => {
@@ -155,9 +180,14 @@ async fn serve(stream: TcpStream, state: Shared) {
                 Err(r)
             }
         }
-    })
-    .await;
-    let (Ok(ws), Ok(Wanted { server_id, role })) = (accepted, wanted) else { return };
+    };
+    let accepted = tokio_tungstenite::accept_hdr_async_with_config(stream, callback, config).await;
+    let Ok(ws) = accepted else { return };
+    let Wanted { server_id, role } = match wanted {
+        Ok(Route::Relay(wanted)) => wanted,
+        Ok(Route::Push(wanted)) => return push::serve(ws, wanted, gateway).await,
+        Err(_) => return,
+    };
     log::info!("{role:?} of {server_id} connected from {peer:?}");
 
     let (mut sink, mut stream) = ws.split();
@@ -342,16 +372,21 @@ async fn main() {
         }
     };
     log::info!("sophon-relay listening on {addr}");
-    let state = Shared::default();
+    let gateway = Arc::new(push::Gateway::from_env());
+    tokio::select! {
+        _ = listen(listener, Shared::default(), gateway) => {}
+        _ = tokio::signal::ctrl_c() => {}
+    }
+}
+
+async fn listen(listener: TcpListener, state: Shared, gateway: Arc<push::Gateway>) {
     loop {
-        tokio::select! {
-            accepted = listener.accept() => {
-                if let Ok((stream, _)) = accepted {
-                    let _ = stream.set_nodelay(true);
-                    tokio::spawn(serve(stream, state.clone()));
-                }
-            }
-            _ = tokio::signal::ctrl_c() => break,
+        if let Ok((stream, _)) = listener.accept().await {
+            let _ = stream.set_nodelay(true);
+            tokio::spawn(serve(stream, state.clone(), gateway.clone()));
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

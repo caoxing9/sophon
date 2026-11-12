@@ -9,13 +9,17 @@ description = "A relay for Sophon: forwards end-to-end encrypted sessions betwee
 [workspace]
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "macros", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "macros", "signal", "io-util"] }
 tokio-tungstenite = "0.28"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 serde_json = "1"
 rand = "0.9"
 log = "0.4"
 env_logger = "0.11"
+crypto_box = { version = "0.9", features = ["std"] }
+base64 = "0.22"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2"] }
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "pkcs8", "pem", "std"] }
 
 [profile.release]
 lto = true

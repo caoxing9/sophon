@@ -78,6 +78,9 @@ pub enum BridgeEvent {
     PairEnded { id: u64 },
     Connected { conn: u64, device: String },
     Disconnected { conn: u64 },
+    /// A paired device pressed an action of a push notification
+    /// (`docs/push.md`), checked already.
+    Act(super::push::Act),
 }
 
 /// A device connected now.
@@ -372,6 +375,7 @@ pub fn start() -> Option<(BridgeInfo, mpsc::UnboundedReceiver<BridgeEvent>)> {
                 let Ok(listener) = TcpListener::from_std(std_listener) else { return };
                 log::info!("LAN bridge listening on port {port}");
                 tokio::spawn(relay_loop());
+                tokio::spawn(super::push_gateway::computer_loop(|| with(|s| s.private), good_tokens, |act| emit(BridgeEvent::Act(act))));
                 loop {
                     let Ok((stream, peer)) = listener.accept().await else { continue };
                     tokio::spawn(async move {
@@ -403,6 +407,39 @@ fn authorize(token: &str, said: &str) -> Option<(String, Option<String>, Option<
         s.devices.iter().find(|d| d.token == token).map(|d| (d.name.clone(), Some(d.id.clone()), d.space.clone()))
     })
     .flatten()
+}
+
+/// Every pairing token good now: the QR's, the spaces' and the devices'.
+fn good_tokens() -> Vec<String> {
+    with(|s| std::iter::once(s.token.clone()).chain(s.space_tokens.iter().map(|(_, t)| t.clone())).chain(s.devices.iter().map(|d| d.token.clone())).collect()).unwrap_or_default()
+}
+
+/// A device's `sophon_push_register` (`docs/push.md`): it is put on, or
+/// taken off, the list of those that want notifications. The answer names
+/// the gateway and this computer there, for the device's actions; with no
+/// gateway of its own (Paseo's relay) it says so with an empty one.
+fn push_register(v: &Value, pairing: &str, space: Option<&str>) -> Value {
+    use super::{push::Wants, push_gateway};
+    let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
+    let device = s("device");
+    let wants = Wants {
+        token: s("token"),
+        env: if s("env") == "development" { "development" } else { "production" }.to_owned(),
+        lang: s("lang"),
+        hide: v.get("hide").and_then(Value::as_bool).unwrap_or(false),
+        pairing: pairing.to_owned(),
+        space: space.map(str::to_owned),
+    };
+    let good = good_tokens();
+    if !device.is_empty() {
+        push_gateway::update_record(|r| {
+            let registered = r.register(&device, wants);
+            // Devices forgotten since go, too.
+            r.keep_only(&good) || registered
+        });
+    }
+    let (gateway, tls) = push_gateway::target().unwrap_or_default();
+    json!({ "type": "sophon_push_info", "gateway": gateway, "tls": tls, "id": push_gateway::record().map(|r| r.id).unwrap_or_default() })
 }
 
 /// Holds the bridge's place at the relay: a control socket the relay tells
@@ -516,11 +553,9 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(phone: WebSocketStream<S>, rel
         }
     };
     let said = first.get("device").and_then(Value::as_str).filter(|d| !d.trim().is_empty()).unwrap_or("Unknown device").to_owned();
+    let pairing = first.get("token").and_then(Value::as_str).unwrap_or_default().to_owned();
     let (device, device_id, space) = match first.get("type").and_then(Value::as_str) {
-        Some("sophon_bridge_auth" | "victor_bridge_auth") => {
-            let token = first.get("token").and_then(Value::as_str).unwrap_or_default();
-            authorize(token, &said).ok_or("wrong pairing token")?
-        }
+        Some("sophon_bridge_auth" | "victor_bridge_auth") => authorize(&pairing, &said).ok_or("wrong pairing token")?,
         Some("sophon_pair_request") => {
             let reply = pair(&said, &seal, &mut prx).await;
             let sealed = seal.seal(Message::Text(reply.to_string()))?;
@@ -540,7 +575,7 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(phone: WebSocketStream<S>, rel
     })
     .ok_or("no bridge")?;
     emit(BridgeEvent::Connected { conn, device });
-    let result = forward(&mut ptx, &mut prx, &mut seal, &mut unseal, &cut, space.as_deref()).await;
+    let result = forward(&mut ptx, &mut prx, &mut seal, &mut unseal, &cut, space.as_deref(), &pairing).await;
     with(|s| s.conns.remove(&conn));
     emit(BridgeEvent::Disconnected { conn });
     result
@@ -607,6 +642,7 @@ async fn forward<S: AsyncRead + AsyncWrite + Unpin>(
     unseal: &mut relay::Receiver,
     cut: &Notify,
     space: Option<&str>,
+    pairing: &str,
 ) -> Result<(), String> {
     // 3. The space's service, and frames both ways.
     let endpoint = match space {
@@ -656,7 +692,7 @@ async fn forward<S: AsyncRead + AsyncWrite + Unpin>(
                 // to a device that asks: one that did not send them, or
                 // has forgotten them.
                 if let Message::Text(t) = &plain
-                    && (t.as_str().contains("\"images\"") || t.as_str().contains("sophon_pictures_request") || t.as_str().contains("sophon_usage_request"))
+                    && (t.as_str().contains("\"images\"") || t.as_str().contains("sophon_pictures_request") || t.as_str().contains("sophon_usage_request") || t.as_str().contains("sophon_push_register"))
                     && let Ok(v) = serde_json::from_str::<Value>(t.as_str())
                 {
                     // This computer's session-log statistics, for a phone
@@ -671,6 +707,14 @@ async fn forward<S: AsyncRead + AsyncWrite + Unpin>(
                         });
                         #[cfg(any(target_os = "ios", target_os = "android"))]
                         let _ = own_tx.send(json!({ "type": "sophon_usage" }).to_string());
+                        continue;
+                    }
+                    // The device wants push notifications (or no longer):
+                    // kept, and it is told where its actions go.
+                    if v.get("type").and_then(Value::as_str) == Some("sophon_push_register") {
+                        let info = push_register(&v, pairing, space);
+                        let sealed = seal.seal(Message::Text(info.to_string()))?;
+                        ptx.send(to_ws(sealed)).await.map_err(|e| e.to_string())?;
                         continue;
                     }
                     if v.get("type").and_then(Value::as_str) == Some("sophon_pictures_request") {
