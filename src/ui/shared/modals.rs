@@ -703,21 +703,82 @@ fn switch_branch() -> View {
         .child(actions(view()))
 }
 
+/// A checkbox's mark: filled with the accent when on.
+fn check_mark(on: impl Fn() -> bool + 'static) -> View {
+    let on = computed(on);
+    view()
+        .w(px(16.0))
+        .h(px(16.0))
+        .flex_shrink_0()
+        .rounded(px(5.0))
+        .border_1()
+        .border_color(move || if on.get() { ACCENT.into() } else { tint(FG, 0.28) })
+        .bg(move || if on.get() { ACCENT.into() } else { tint(FG, 0.0) })
+        .items_center()
+        .justify_center()
+        .child(when(move || on.get(), || icon(Icon::Check, 11.0).text_color(ACCENT_FG)))
+}
+
+/// The sessions started outside Sophon, to pick from: by agent (all,
+/// Claude, Codex), then by folder; ticked one by one, a folder at a time,
+/// or all that show, and imported together.
 fn import_session() -> View {
     use crate::daemon::connection::RecentSession;
+    use std::collections::HashSet;
+    let key = |s: &RecentSession| format!("{}:{}", s.provider, s.handle);
     let query = signal(String::new());
     let list = computed(store::recent_sessions);
-    let import_all = move |sessions: Vec<RecentSession>| {
-        store::import_sessions(sessions);
-        store::close_modal();
+    // Which agent's sessions show: all of them, or one's.
+    let agent = signal(None::<String>);
+    let picked = signal(HashSet::<String>::new());
+    let shown = computed(move || {
+        let only = agent.get();
+        list.get().unwrap_or_default().into_iter().filter(|s| only.as_ref().is_none_or(|a| &s.provider == a)).collect::<Vec<_>>()
+    });
+    // The agents that have sessions, for the filter: (id, label, count).
+    let agents = computed(move || {
+        let mut found: Vec<(String, String, usize)> = Vec::new();
+        for s in list.get().unwrap_or_default() {
+            match found.iter_mut().find(|(id, _, _)| *id == s.provider) {
+                Some(f) => f.2 += 1,
+                None => found.push((s.provider.clone(), s.provider_label.clone(), 1)),
+            }
+        }
+        found
+    });
+    let chosen = computed(move || shown.with(|l| l.iter().filter(|s| picked.with(|p| p.contains(&key(s)))).cloned().collect::<Vec<_>>()));
+    let all_on = computed(move || shown.with(|l| !l.is_empty() && l.iter().all(|s| picked.with(|p| p.contains(&key(s))))));
+    let set = move |sessions: &[RecentSession], on: bool| {
+        picked.update(|p| {
+            for s in sessions {
+                if on {
+                    p.insert(key(s));
+                } else {
+                    p.remove(&key(s));
+                }
+            }
+        })
     };
     sheet(t("Import sessions"))
-        .w(px(620.0))
+        .w(px(640.0))
         .child(
             text(t("Continue the Claude Code and Codex sessions you started outside Sophon. Each goes to the project of its folder"))
                 .text_size(px(TEXT_SM))
                 .text_color(FG_MUTED),
         )
+        // Which agent's: shown once there is more than one to choose from.
+        .child(dynamic(move || {
+            let found = agents.get();
+            if found.len() < 2 {
+                return None;
+            }
+            Some(untracked(move || {
+                let total: usize = found.iter().map(|f| f.2).sum();
+                let mut options: Vec<(Option<String>, SharedString)> = vec![(None, format!("{} {total}", t("All")).into())];
+                options.extend(found.iter().map(|(id, label, n)| (Some(id.clone()), format!("{label} {n}").into())));
+                view().flex_row().child(segmented(options, move || agent.get(), move |a| agent.set(a)))
+            }))
+        }))
         .child(
             field()
                 .value(move || query.get())
@@ -728,81 +789,117 @@ fn import_session() -> View {
                 .placeholder(t("Search sessions"))
                 .auto_focus(true),
         )
-        .child(scroll().max_h(px(420.0)).child(dynamic(move || {
-            let sessions = list.get();
-            Some(untracked(move || match sessions.clone() {
-                None => text(t("Loading…")).text_color(FG_MUTED).into_element(),
-                Some(s) if s.is_empty() => text(t("No sessions found")).text_size(px(TEXT_BASE)).text_color(FG_MUTED).into_element(),
-                Some(s) => {
-                    // By folder, the folder of the latest session first.
-                    let mut folders: Vec<(String, Vec<RecentSession>)> = Vec::new();
-                    for sess in &s {
-                        match folders.iter_mut().find(|(cwd, _)| *cwd == sess.cwd) {
-                            Some((_, of)) => of.push(sess.clone()),
-                            None => folders.push((sess.cwd.clone(), vec![sess.clone()])),
-                        }
+        .child(
+            // Everything that shows, in one tick.
+            nsh_base::button()
+                .on_press(move || {
+                    let on = !all_on.get_untracked();
+                    set(&shown.get_untracked(), on);
+                })
+                .flex_row()
+                .items_center()
+                .gap(px(S2))
+                .px(px(S2))
+                .child(check_mark(move || all_on.get()))
+                .child(
+                    text(move || {
+                        let (sessions, folders) = shown.with(|l| (l.len(), l.iter().map(|s| s.cwd.as_str()).collect::<HashSet<_>>().len()));
+                        tf("Select all: {} sessions in {} folders", &[&sessions.to_string(), &folders.to_string()])
+                    })
+                    .text_size(px(TEXT_SM))
+                    .text_color(FG_MUTED),
+                ),
+        )
+        .child(scroll().max_h(px(400.0)).child(dynamic(move || {
+            let loaded = list.with(Option::is_some);
+            let sessions = shown.get();
+            Some(untracked(move || {
+                if !loaded {
+                    return text(t("Loading…")).text_color(FG_MUTED).into_element();
+                }
+                if sessions.is_empty() {
+                    return text(t("No sessions found")).text_size(px(TEXT_BASE)).text_color(FG_MUTED).into_element();
+                }
+                // By folder, the folder of the latest session first.
+                let mut folders: Vec<(String, Vec<RecentSession>)> = Vec::new();
+                for sess in &sessions {
+                    match folders.iter_mut().find(|(cwd, _)| *cwd == sess.cwd) {
+                        Some((_, of)) => of.push(sess.clone()),
+                        None => folders.push((sess.cwd.clone(), vec![sess.clone()])),
                     }
-                    let everything = s.clone();
-                    let mut col = view().gap(px(S3)).child(
-                        view()
+                }
+                let mut col = view().gap(px(S3));
+                for (cwd, of) in folders {
+                    let (mine, mine2) = (of.clone(), of.clone());
+                    let folder_on = computed(move || mine.iter().all(|s| picked.with(|p| p.contains(&key(s)))));
+                    let mut group = view().gap(px(2.0)).child(
+                        nsh_base::button()
+                            .on_press(move || {
+                                let on = !folder_on.get_untracked();
+                                set(&mine2, on);
+                            })
                             .flex_row()
                             .items_center()
-                            .justify_between()
-                            .child(
-                                text(tf("{} sessions in {} folders", &[&s.len().to_string(), &folders.len().to_string()]))
-                                    .text_size(px(TEXT_SM))
-                                    .text_color(FG_MUTED),
-                            )
-                            .child(btn(t("Import all"), Variant::Primary, Sz::Sm, None, move || import_all(everything.clone()))),
+                            .gap(px(S2))
+                            .px(px(S2))
+                            .py(px(4.0))
+                            .rounded(px(R_LG))
+                            .hover(|st| st.bg(highlight()))
+                            .child(check_mark(move || folder_on.get()))
+                            .child(icon(Icon::Folder, 14.0).text_color(FG_MUTED))
+                            .child(text(crate::daemon::model::folder_name(&cwd)).text_size(px(TEXT_BASE)).font_weight(FontWeight(600)).number_of_lines(1))
+                            .child(text(cwd.clone()).flex_1().min_w(px(0.0)).text_size(px(TEXT_XS)).text_color(FG_FAINT).number_of_lines(1))
+                            .child(text(of.len().to_string()).text_size(px(TEXT_SM)).text_color(FG_MUTED)),
                     );
-                    for (cwd, of) in folders {
-                        let all = of.clone();
-                        let mut group = view().gap(px(2.0)).child(
-                            view()
+                    for sess in of {
+                        let id = key(&sess);
+                        let id2 = id.clone();
+                        group = group.child(
+                            nsh_base::button()
+                                .on_press(move || {
+                                    picked.update(|p| {
+                                        if !p.remove(&id) {
+                                            p.insert(id.clone());
+                                        }
+                                    })
+                                })
                                 .flex_row()
                                 .items_center()
                                 .gap(px(S2))
+                                .ml(px(24.0))
                                 .px(px(S2))
-                                .child(icon(Icon::Folder, 14.0).text_color(FG_MUTED))
-                                .child(text(crate::daemon::model::folder_name(&cwd)).text_size(px(TEXT_BASE)).font_weight(FontWeight(600)).number_of_lines(1))
-                                .child(text(cwd.clone()).flex_1().min_w(px(0.0)).text_size(px(TEXT_XS)).text_color(FG_FAINT).number_of_lines(1))
-                                .child(btn(
-                                    tf("Import {}", &[&of.len().to_string()]),
-                                    Variant::Secondary,
-                                    Sz::Sm,
-                                    None,
-                                    move || import_all(all.clone()),
-                                )),
+                                .py(px(5.0))
+                                .rounded(px(R_LG))
+                                .hover(|st| st.bg(highlight()))
+                                .child(check_mark(move || picked.with(|p| p.contains(&id2))))
+                                .child(crate::ui::shared::model_picker::mark(&sess.provider, 14.0))
+                                .child(text(sess.title.clone()).flex_1().min_w(px(0.0)).text_size(px(TEXT_BASE)).number_of_lines(1))
+                                .child(text(sess.last_activity.get(..10).unwrap_or_default().to_owned()).text_size(px(TEXT_SM)).text_color(FG_MUTED)),
                         );
-                        for sess in of {
-                            let pick = sess.clone();
-                            group = group.child(
-                                nsh_base::button()
-                                    .on_press(move || {
-                                        store::import_session(&pick);
-                                        store::close_modal();
-                                    })
-                                    .gap(px(2.0))
-                                    .ml(px(22.0))
-                                    .px(px(S2))
-                                    .py(px(5.0))
-                                    .rounded(px(R_LG))
-                                    .hover(|st| st.bg(highlight()))
-                                    .child(text(sess.title.clone()).text_size(px(TEXT_BASE)).number_of_lines(1))
-                                    .child(
-                                        text(format!("{} · {}", sess.provider_label, sess.last_activity.get(..10).unwrap_or_default()))
-                                            .text_size(px(TEXT_SM))
-                                            .text_color(FG_MUTED),
-                                    ),
-                            );
-                        }
-                        col = col.child(group);
                     }
-                    col.into_element()
+                    col = col.child(group);
                 }
+                col.into_element()
             }))
         })))
-        .child(actions(view()))
+        .child(actions(btn(
+            move || -> SharedString {
+                match chosen.with(Vec::len) {
+                    0 => t("Import").into(),
+                    n => tf("Import {}", &[&n.to_string()]).into(),
+                }
+            },
+            Variant::Primary,
+            Sz::Md,
+            None,
+            move || {
+                let sessions = chosen.get_untracked();
+                if !sessions.is_empty() {
+                    store::import_sessions(sessions);
+                    store::close_modal();
+                }
+            },
+        )))
 }
 
 fn project_settings(name: String) -> View {

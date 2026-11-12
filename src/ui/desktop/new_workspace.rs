@@ -50,11 +50,17 @@ pub(crate) fn new_workspace(compact: bool) -> impl IntoElement {
                     .self_center()
                     .gap(px(S3))
                     .child(
-                        text(t("What should we work on?"))
-                            .text_size(px(TEXT_XL))
-                            .font_weight(FontWeight(450))
-                            .px(px(S2))
-                            .pb(px(S2)),
+                        // The title, and beside it the other way to begin:
+                        // a session started outside Sophon.
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .pb(px(S2))
+                            .child(text(t("What should we work on?")).text_size(px(TEXT_XL)).font_weight(FontWeight(450)).px(px(S2)).flex_1())
+                            .child(btn(t("Import sessions"), Variant::Ghost, Sz::Sm, Some(Icon::Download), || {
+                                store::search_sessions("");
+                                store::open_modal(store::Modal::ImportSession)
+                            })),
                     )
                     .child(
                         view()
@@ -96,10 +102,6 @@ pub(crate) fn new_workspace(compact: bool) -> impl IntoElement {
                             .items_center()
                             .gap(px(S3))
                             .pt(px(S1))
-                            .child(btn(t("Import session"), Variant::Outline, Sz::Sm, Some(Icon::Upload), || {
-                                store::search_sessions("");
-                                store::open_modal(store::Modal::ImportSession)
-                            }))
                             .child(view().flex_1().min_w(px(0.0)).child(composer::hint(move || {
                                 form.with(|f| {
                                     f.error.clone().map(|e| (e, true)).or_else(|| {
