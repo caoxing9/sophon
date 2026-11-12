@@ -24,7 +24,8 @@
       ],
       "UIRequiredDeviceCapabilities": [
         "arm64"
-      ]
+      ],
+      "ITSAppUsesNonExemptEncryption": false
     }
   },
   "macos": {
