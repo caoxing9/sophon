@@ -35,12 +35,12 @@ pub(crate) fn agent_pane(bar: bool) -> impl IntoElement {
                 .child(when(store::timeline_syncing, || {
                     view()
                         .absolute()
-                        .top(px(S2))
+                        .top(sp(S2))
                         .left(px(0.0))
                         .right(px(0.0))
                         .items_center()
                         .pointer_events(nsh_core::PointerEvents::BoxNone)
-                        .child(glass_strong(view()).rounded(px(R_FULL)).pl(px(S1)).pr(px(S3)).py(px(2.0)).child(working(t("Syncing…"))))
+                        .child(glass_strong(view()).rounded(px(R_FULL)).pl(sp(S1)).pr(sp(S3)).py(px(2.0)).child(working(t("Syncing…"))))
                 }))
                 // The desktop's find panel floats over the conversation.
                 .when(!MOBILE, |v| v.child(timeline::find_bar())),
@@ -59,7 +59,7 @@ pub(crate) fn agent_pane(bar: bool) -> impl IntoElement {
 
 /// A thin bar over the conversation: the agent's provider and actions.
 fn agent_bar(agent: Memo<Option<crate::daemon::Agent>>) -> impl IntoElement {
-    view().flex_row().items_center().h(px(36.0)).px(px(S6)).child(view().flex_1()).child(agent_tools_of(agent))
+    view().flex_row().items_center().h(px(36.0)).px(sp(S6)).child(view().flex_1()).child(agent_tools_of(agent))
 }
 
 /// The open agent's state and actions in a row: its provider and status,
@@ -83,11 +83,11 @@ fn agent_tools_of(agent: Memo<Option<crate::daemon::Agent>>) -> impl IntoElement
     view()
         .flex_row()
         .items_center()
-        .gap(px(S2))
+        .gap(sp(S2))
         .min_w(px(0.0))
-        .child(text(move || label.get()).text_size(px(TEXT_SM)).text_color(FG_FAINT).number_of_lines(1).flex_shrink(1.0))
+        .child(text(move || label.get()).text_size(tx(TEXT_SM)).text_color(FG_FAINT).number_of_lines(1).flex_shrink(1.0))
         .child(composer::context_meter())
-        .child(view().w(px(S1)))
+        .child(view().w(sp(S1)))
         // The phone's outline; the desktop has the rail beside the
         // conversation (`timeline::turn_rail`).
         .when(MOBILE, |v| v.child(dropup_or_down_outline()))
@@ -162,33 +162,33 @@ pub(crate) fn draft_pane() -> AnyElement {
                     .flex_1()
                     .items_center()
                     .justify_center()
-                    .gap(px(S3))
+                    .gap(sp(S3))
                     .child(mark(48.0, Lift::Flat))
                     .child(
                         text(line)
-                            .px(px(S8))
-                            .text_size(px(TEXT_SM))
+                            .px(sp(S8))
+                            .text_size(tx(TEXT_SM))
                             .text_color(move || if form.with(|f| f.error.is_some()) { DANGER } else { FG_MUTED })
                             .text_center()
                             .number_of_lines(2),
                     ),
             )
-            .child(view().px(px(S2)).pb(px(S2)).child(composer::composer(Target::Form, t("What should the agent do?"))))
+            .child(view().px(sp(S2)).pb(sp(S2)).child(composer::composer(Target::Form, t("What should the agent do?"))))
             .into_element();
     }
     view()
         .flex_1()
         .justify_center()
         .px(px(if MOBILE { S3 } else { S6 }))
-        .pb(px(S8))
-        .gap(px(S3))
+        .pb(sp(S8))
+        .gap(sp(S3))
         .child(
             view()
                 .w_full()
                 .max_w(px(CONTENT_MAX_WIDTH))
                 .self_center()
-                .px(px(S2))
-                .child(text(t("New agent")).text_size(px(TEXT_2XL)).font_weight(FontWeight(500))),
+                .px(sp(S2))
+                .child(text(t("New agent")).text_size(tx(TEXT_2XL)).font_weight(FontWeight(500))),
         )
         .child(composer::composer(Target::Form, t("What should the agent do?")))
         .child(composer::hint(move || {
@@ -211,8 +211,8 @@ pub(crate) fn draft_pane() -> AnyElement {
 pub(crate) fn dropup_or_down_outline() -> impl IntoElement {
     dropdown(
         view()
-            .w(px(CONTROL_SM))
-            .h(px(CONTROL_SM))
+            .w(sp(CONTROL_SM))
+            .h(sp(CONTROL_SM))
             .items_center()
             .justify_center()
             .rounded(px(R_FULL))
@@ -263,7 +263,7 @@ fn context_bar() -> impl IntoElement {
             .child(icon(glyph, 14.0).text_color(FG_MUTED))
             .child(
                 text(move || label.get())
-                    .text_size(px(TEXT_SM))
+                    .text_size(tx(TEXT_SM))
                     .text_color(FG_MUTED)
                     .number_of_lines(1)
                     .flex_shrink(1.0)
@@ -274,15 +274,15 @@ fn context_bar() -> impl IntoElement {
     view()
         .flex_row()
         .items_center()
-        .gap(px(S3))
+        .gap(sp(S3))
         .h(px(34.0))
         // As wide as the composer under it.
         .w_full()
         .max_w(px(CONTENT_MAX_WIDTH))
         .self_center()
-        .mb(px(S2))
-        .pl(px(S3))
-        .pr(px(S1))
+        .mb(sp(S2))
+        .pl(sp(S3))
+        .pr(sp(S1))
         .rounded(px(R_LG))
         .bg(tint(SURFACE1, 0.7))
         .border_1()
@@ -298,7 +298,7 @@ fn context_bar() -> impl IntoElement {
                 view()
                     .flex_row()
                     .items_center()
-                    .gap(px(S3))
+                    .gap(sp(S3))
                     .min_w(px(0.0))
                     .flex_shrink(1.0)
                     .child(divider())
@@ -323,12 +323,12 @@ fn context_bar() -> impl IntoElement {
                         .items_center()
                         .gap(px(6.0))
                         .h(px(24.0))
-                        .px(px(S2))
+                        .px(sp(S2))
                         .rounded(px(R_MD))
                         .bg(tint(SUCCESS, 0.08))
                         .hover(|s| s.bg(tint(SUCCESS, 0.14)))
-                        .child(text(format!("+{add}")).text_size(px(TEXT_SM)).font_family(|| MONO).text_color(SUCCESS))
-                        .child(text(format!("−{del}")).text_size(px(TEXT_SM)).font_family(|| MONO).text_color(DANGER))
+                        .child(text(format!("+{add}")).text_size(tx(TEXT_SM)).font_family(mono_font).text_color(SUCCESS))
+                        .child(text(format!("−{del}")).text_size(tx(TEXT_SM)).font_family(mono_font).text_color(DANGER))
                         .into_element()
                 })
             })

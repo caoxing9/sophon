@@ -100,13 +100,13 @@ pub(crate) fn icon_btn(glyph: Icon, size: Sz, label: &'static str, on_press: imp
 /// A single-line text field on the muted fill.
 pub(crate) fn field() -> InputElement {
     input()
-        .h(px(CONTROL_MD + 4.0))
-        .px(px(S3))
+        .h(sp(CONTROL_MD + 4.0))
+        .px(sp(S3))
         .rounded(px(R_LG))
         .bg(SURFACE2)
         .border_1()
         .border_color(BORDER)
-        .text_size(px(TEXT_BASE))
+        .text_size(tx(TEXT_BASE))
         .text_color(FG)
         .caret_color(|| color(ACCENT))
         .selection_color(|| color(tint(ACCENT, 0.3)))
@@ -163,15 +163,15 @@ pub(crate) fn segmented<T: Clone + PartialEq + 'static>(
                     });
                     pick(value.clone())
                 })
-                .h(px(CONTROL_SM - 2.0))
-                .px(px(S3))
+                .h(sp(CONTROL_SM - 2.0))
+                .px(sp(S3))
                 .items_center()
                 .justify_center()
                 .rounded(px(R_FULL))
                 .hover(|s| s.opacity(0.85))
                 .child(
                     text(label)
-                        .text_size(px(TEXT_SM))
+                        .text_size(tx(TEXT_SM))
                         .font_weight(FontWeight(500))
                         .text_color(move || if is_on.get() { FG } else { FG_MUTED })
                         .transition_colors(),
@@ -204,8 +204,8 @@ pub(crate) fn chip(
         .flex_row()
         .items_center()
         .gap(px(6.0))
-        .h(px(CONTROL_MD))
-        .px(px(S3))
+        .h(sp(CONTROL_MD))
+        .px(sp(S3))
         .rounded(px(R_FULL))
         .border_1()
         .border_color(move || if selected.get() { ACCENT } else { BORDER })
@@ -216,7 +216,7 @@ pub(crate) fn chip(
     if let Some(lead) = lead {
         b = b.child(icon(lead, 15.0).text_color(move || if selected.get() { ACCENT } else { FG_MUTED }));
     }
-    b.child(text(label).text_size(px(TEXT_BASE)).text_color(FG).number_of_lines(1))
+    b.child(text(label).text_size(tx(TEXT_BASE)).text_color(FG).number_of_lines(1))
 }
 
 /// The status of an agent or workspace, as one color family.
@@ -283,10 +283,10 @@ pub(crate) fn badge(label: impl IntoReactive<SharedString>, color: AdaptiveColor
         .flex_row()
         .items_center()
         .h(px(20.0))
-        .px(px(S2))
+        .px(sp(S2))
         .rounded(px(R_FULL))
         .bg(tint(color, 0.12))
-        .child(text(label).text_size(px(TEXT_XS)).font_weight(FontWeight(500)).text_color(color))
+        .child(text(label).text_size(tx(TEXT_XS)).font_weight(FontWeight(500)).text_color(color))
 }
 
 /// A bordered card grouping related rows.
@@ -296,7 +296,7 @@ pub(crate) fn card() -> View {
 
 /// The label above a stack of rows or a form field.
 pub(crate) fn section_label(label: impl IntoReactive<SharedString>) -> nsh_core::element::Text {
-    text(label).text_size(px(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG_MUTED)
+    text(label).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG_MUTED)
 }
 
 /// A one-point hairline.
@@ -314,7 +314,7 @@ pub(crate) fn kbd(label: &'static str) -> View {
         .rounded(px(R_SM))
         .border_1()
         .border_color(BORDER)
-        .child(text(label).text_size(px(TEXT_XS)).text_color(FG_MUTED))
+        .child(text(label).text_size(tx(TEXT_XS)).text_color(FG_MUTED))
 }
 
 /// An on / off switch: 34 × 20, the accent when on.
@@ -512,9 +512,15 @@ pub(crate) fn mark(size: f32, lift: Lift) -> View {
 pub(crate) fn loader(label: Option<&'static str>) -> View {
     view()
         .items_center()
-        .gap(px(S3))
+        .gap(sp(S3))
         .child(eclipse(44.0))
-        .when_some(label, |v, l| v.child(text(crate::i18n::t(l)).text_size(px(TEXT_SM)).text_color(FG_MUTED)))
+        .when_some(label, |v, l| v.child(text(crate::i18n::t(l)).text_size(tx(TEXT_SM)).text_color(FG_MUTED)))
+}
+
+/// [`loader`] in the middle of the room a list will take once it is here:
+/// what a sheet or a page shows while it waits for its rows.
+pub(crate) fn loading() -> View {
+    view().w_full().min_h(px(180.0)).items_center().justify_center().child(loader(Some("Loading…")))
 }
 
 /// The inline form of [`loader`], for work in progress in a list (an agent
@@ -525,5 +531,5 @@ pub(crate) fn working(label: impl IntoReactive<SharedString>) -> View {
         .items_center()
         .gap(px(6.0))
         .child(eclipse(24.0))
-        .child(text(label).text_size(px(TEXT_SM)).text_color(FG_MUTED))
+        .child(text(label).text_size(tx(TEXT_SM)).text_color(FG_MUTED))
 }

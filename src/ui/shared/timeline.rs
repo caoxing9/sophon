@@ -75,7 +75,7 @@ pub(crate) fn timeline() -> impl IntoElement {
                 .estimated_item_size(px(80.0))
                 .initial_scroll_index(count.saturating_sub(1))
                 .follow_end(px(40.0))
-                .content_padding_top(px(S4))
+                .content_padding_top(sp(S4))
                 // The phone's composer floats over the end; the desktop's
                 // sits below the list.
                 .content_padding_bottom(px(if MOBILE { 200.0 } else { S4 }))
@@ -87,7 +87,7 @@ pub(crate) fn timeline() -> impl IntoElement {
                 // Earlier pages load by themselves as the start nears: a
                 // small loader says so while one is on its way, no button.
                 .child(when(store::loading_older, || {
-                    view().absolute().top(px(S2)).left(px(0.0)).right(px(0.0)).items_center().child(eclipse(24.0))
+                    view().absolute().top(sp(S2)).left(px(0.0)).right(px(0.0)).items_center().child(eclipse(24.0))
                 }))
                 .when(!MOBILE, |v| v.child(turn_rail()))
                 .into_element()
@@ -104,7 +104,7 @@ fn turn_rail() -> impl IntoElement {
         .absolute()
         .top(px(0.0))
         .bottom(px(0.0))
-        .left(px(S1))
+        .left(sp(S1))
         .justify_center()
         .pointer_events(PointerEvents::BoxNone)
         .child(dynamic(move || {
@@ -126,14 +126,14 @@ fn turn_rail() -> impl IntoElement {
                         .left(px(30.0))
                         .top(px(-14.0))
                         .w(px(320.0))
-                        .p(px(S3))
-                        .gap(px(S1))
+                        .p(sp(S3))
+                        .gap(sp(S1))
                         .rounded(px(R_XL))
                         .shadow_lg()
                         .pointer_events(PointerEvents::None)
-                        .child(text(message).text_size(px(TEXT_BASE)).font_weight(FontWeight(600)).text_color(FG).number_of_lines(1))
+                        .child(text(message).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).text_color(FG).number_of_lines(1))
                         .when(!reply.is_empty(), |v| {
-                            v.child(text(reply).text_size(px(TEXT_SM)).line_height(px(18.0)).text_color(FG_MUTED).number_of_lines(3))
+                            v.child(text(reply).text_size(tx(TEXT_SM)).line_height(px(18.0)).text_color(FG_MUTED).number_of_lines(3))
                         })
                         .opacity(move || if over.get() == Some(row) { 1.0_f32 } else { 0.0 })
                         .transition_opacity();
@@ -209,7 +209,7 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
         }
     });
     view()
-        .px(px(S6))
+        .px(sp(S6))
         .py(px(6.0))
         .w_full()
         .max_w(px(CONTENT_MAX_WIDTH + 2.0 * S6))
@@ -261,13 +261,13 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                     .options(move || MarkdownOptions { streaming: streaming.get(), ..MarkdownOptions::default() })
                     .selectable(true)
                     .gap_3()
-                    .text_size(px(TEXT_CONTENT))
+                    .text_size(tx(TEXT_CONTENT))
                     .line_height(px(24.0))
                     .text_color(FG)
                     .into_element(),
                 RowKind::Reasoning => view()
                     .flex_row()
-                    .gap(px(S2))
+                    .gap(sp(S2))
                     .child(icon(Icon::Brain, 15.0).text_color(FG_FAINT).mt(px(2.0)))
                     .child(
                         text(move || text_of().trim().to_owned())
@@ -286,22 +286,22 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                 RowKind::Todo => todo_card(item).into_element(),
                 RowKind::Error => view()
                     .flex_row()
-                    .gap(px(S2))
-                    .px(px(S3))
-                    .py(px(S2))
+                    .gap(sp(S2))
+                    .px(sp(S3))
+                    .py(sp(S2))
                     .rounded(px(R_LG))
                     .bg(tint(DANGER, 0.08))
                     .child(icon(Icon::CircleAlert, 16.0).text_color(DANGER))
                     .child(
                         text(text_of)
-                            .text_size(px(TEXT_BASE))
+                            .text_size(tx(TEXT_BASE))
                             .text_color(DANGER)
                             .selectable(true)
                             .flex_1(),
                     )
                     .into_element(),
                 RowKind::Notice => text(text_of)
-                    .text_size(px(TEXT_SM))
+                    .text_size(tx(TEXT_SM))
                     .text_color(FG_FAINT)
                     .text_center()
                     .into_element(),
@@ -384,7 +384,7 @@ fn user_text(item: Memo<Option<Item>>, selectable: bool) -> impl IntoElement {
         });
         let f = store::find();
         Some(untracked(move || {
-            let mut line = text("").text_size(px(TEXT_CONTENT)).line_height(px(22.0)).text_color(FG).selectable(selectable);
+            let mut line = text("").text_size(tx(TEXT_CONTENT)).line_height(px(22.0)).text_color(FG).selectable(selectable);
             let mut pictures = images.into_iter();
             let needle = if f.open { f.query.trim().to_lowercase() } else { String::new() };
             for segment in segments(&body) {
@@ -437,7 +437,7 @@ fn sent_chip(name: String, thumb: Option<String>) -> View {
         None => chip.child(icon(if crate::ui::shared::composer_doc::is_image_name(&name) { Icon::Image } else { Icon::File }, 13.0).text_color(FG_MUTED)),
     };
     let chip_name = name.clone();
-    let chip = chip.child(text(crate::ui::shared::chips::chip_name(&name)).text_size(px(TEXT_SM)).text_color(FG).number_of_lines(1));
+    let chip = chip.child(text(crate::ui::shared::chips::chip_name(&name)).text_size(tx(TEXT_SM)).text_color(FG).number_of_lines(1));
     // A picture's chip opens it large (and shows it under the pointer).
     let chip = match thumb {
         Some(uri) => {
@@ -445,7 +445,7 @@ fn sent_chip(name: String, thumb: Option<String>) -> View {
             chip.hover(|s| s.border_color(ACCENT))
                 .on_press(move |_: &PressEvent| store::open_modal(store::Modal::Picture { name: open_name.clone(), uri: open_uri.clone() }))
                 .tooltip(
-                    glass_strong(view()).p(px(S1)).rounded(px(R_LG)).child(
+                    glass_strong(view()).p(sp(S1)).rounded(px(R_LG)).child(
                         image(SharedString::from(uri)).w(px(280.0)).h(px(280.0)).object_fit(nsh_core::ResizeMode::Contain).rounded(px(R_MD)),
                     ),
                 )
@@ -591,8 +591,8 @@ fn group_row(group: Memo<Option<Group>>) -> impl IntoElement {
         })
         .flex_row()
         .items_center()
-        .gap(px(S2))
-        .px(px(S2))
+        .gap(sp(S2))
+        .px(sp(S2))
         .h(px(30.0))
         .rounded(px(R_LG))
         .hover(|s| s.bg(highlight()))
@@ -604,7 +604,7 @@ fn group_row(group: Memo<Option<Group>>) -> impl IntoElement {
         )
         .child(
             text(move || summary.with(|s| s.describe()))
-                .text_size(px(TEXT_BASE))
+                .text_size(tx(TEXT_BASE))
                 .text_color(FG_MUTED)
                 .number_of_lines(1)
                 .flex_shrink(1.0),
@@ -613,7 +613,7 @@ fn group_row(group: Memo<Option<Group>>) -> impl IntoElement {
         .child(dynamic(move || {
             let failed = summary.with(|s| s.failures())?;
             Some(untracked(move || {
-                text(format!("· {failed}")).text_size(px(TEXT_BASE)).text_color(DANGER).flex_shrink_0().into_element()
+                text(format!("· {failed}")).text_size(tx(TEXT_BASE)).text_color(DANGER).flex_shrink_0().into_element()
             }))
         }))
         .child(view().flex_1())
@@ -669,8 +669,8 @@ fn tool_row(item: Memo<Option<Item>>) -> impl IntoElement {
         })
         .flex_row()
         .items_center()
-        .gap(px(S2))
-        .px(px(S2))
+        .gap(sp(S2))
+        .px(sp(S2))
         .h(px(30.0))
         .rounded(px(R_LG))
         .hover(|s| s.bg(highlight()))
@@ -680,15 +680,15 @@ fn tool_row(item: Memo<Option<Item>>) -> impl IntoElement {
         }))
         .child(
             text(move || tool.with(|(n, ..)| n.clone()))
-                .text_size(px(TEXT_BASE))
+                .text_size(tx(TEXT_BASE))
                 .font_weight(FontWeight(500))
                 .text_color(FG)
                 .flex_shrink_0(),
         )
         .child(
             text(move || tool.with(|(.., s)| s.clone()))
-                .text_size(px(TEXT_CODE))
-                .font_family(|| MONO)
+                .text_size(tx(TEXT_CODE))
+                .font_family(mono_font)
                 .text_color(FG_MUTED)
                 .number_of_lines(1)
                 .flex_1(),
@@ -728,9 +728,9 @@ fn tool_row(item: Memo<Option<Item>>) -> impl IntoElement {
             Some(untracked(move || {
                 view()
                     .pl(px(S2 + 15.0 + S2))
-                    .pr(px(S2))
-                    .pt(px(S1))
-                    .pb(px(S2))
+                    .pr(sp(S2))
+                    .pt(sp(S1))
+                    .pb(sp(S2))
                     .child(super::tool_detail::tool_body(&kind, &detail, error.as_deref()))
                     .into_element()
             }))
@@ -743,7 +743,7 @@ fn todo_card(item: Memo<Option<Item>>) -> impl IntoElement {
         Some(Item::Todo { lines }) => lines,
         _ => vec![],
     });
-    card().p(px(S3)).gap(px(6.0)).child(section_label(t("Tasks"))).child(dynamic(move || {
+    card().p(sp(S3)).gap(px(6.0)).child(section_label(t("Tasks"))).child(dynamic(move || {
         let lines = lines.get();
         Some(untracked(move || {
             let mut list = view().gap(px(6.0));
@@ -752,7 +752,7 @@ fn todo_card(item: Memo<Option<Item>>) -> impl IntoElement {
                     view()
                         .flex_row()
                         .items_center()
-                        .gap(px(S2))
+                        .gap(sp(S2))
                         .child(icon(if done { Icon::CircleCheck } else { Icon::CircleDot }, 15.0).text_color(if done {
                             SUCCESS
                         } else {
@@ -760,7 +760,7 @@ fn todo_card(item: Memo<Option<Item>>) -> impl IntoElement {
                         }))
                         .child(
                             text(t)
-                                .text_size(px(TEXT_BASE))
+                                .text_size(tx(TEXT_BASE))
                                 .text_color(if done { FG_MUTED } else { FG })
                                 .flex_1(),
                         ),
@@ -793,7 +793,7 @@ pub(crate) fn permissions() -> View {
 
 fn action_buttons(p: &Permission) -> View {
     let pid = p.id.clone();
-    let mut buttons = view().flex_row().gap(px(S2)).flex_wrap();
+    let mut buttons = view().flex_row().gap(sp(S2)).flex_wrap();
     if p.actions.is_empty() {
         let (a, d) = (pid.clone(), pid.clone());
         return buttons
@@ -823,24 +823,24 @@ fn card_title(glyph: Icon, tone: AdaptiveColor, title: String) -> View {
     view()
         .flex_row()
         .items_center()
-        .gap(px(S2))
+        .gap(sp(S2))
         .child(icon(glyph, 16.0).text_color(tone))
-        .child(text(title).text_size(px(TEXT_BASE)).font_weight(FontWeight(500)).flex_1())
+        .child(text(title).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)).flex_1())
 }
 
 fn tool_card(p: Permission) -> View {
     card()
-        .mb(px(S2))
-        .p(px(S4))
-        .gap(px(S3))
+        .mb(sp(S2))
+        .p(sp(S4))
+        .gap(sp(S3))
         .border_color(tint(DOT_WARNING, 0.5))
         .child(card_title(Icon::TriangleAlert, WARNING, p.title.clone()))
         .when(!p.description.is_empty(), |v| {
             v.child(
-                view().px(px(S3)).py(px(S2)).rounded(px(R_LG)).bg(SURFACE2).child(
+                view().px(sp(S3)).py(sp(S2)).rounded(px(R_LG)).bg(SURFACE2).child(
                     text(p.description.clone())
-                        .text_size(px(TEXT_CODE))
-                        .font_family(|| MONO)
+                        .text_size(tx(TEXT_CODE))
+                        .font_family(mono_font)
                         .line_height(px(18.0))
                         .number_of_lines(8)
                         .text_color(FG)
@@ -853,9 +853,9 @@ fn tool_card(p: Permission) -> View {
 
 fn plan_card(p: Permission, plan: String) -> View {
     card()
-        .mb(px(S2))
-        .p(px(S4))
-        .gap(px(S3))
+        .mb(sp(S2))
+        .p(sp(S4))
+        .gap(sp(S3))
         .child(card_title(Icon::ListTodo, ACCENT, t("Plan ready for review").into()))
         .child(
             scroll().max_h(px(320.0)).child(
@@ -863,7 +863,7 @@ fn plan_card(p: Permission, plan: String) -> View {
                     .markdown(move || Some(SharedString::from(plan.clone())))
                     .selectable(true)
                     .gap_2()
-                    .text_size(px(TEXT_BASE))
+                    .text_size(tx(TEXT_BASE))
                     .line_height(px(21.0))
                     .text_color(FG),
             ),
@@ -883,9 +883,9 @@ fn question_card(p: Permission, questions: Vec<Question>) -> View {
         (0..qs.len()).all(|i| !c[i].is_empty() || !o[i].trim().is_empty())
     });
 
-    let mut body = view().gap(px(S4));
+    let mut body = view().gap(sp(S4));
     for (i, q) in questions.iter().enumerate() {
-        let mut options = view().flex_row().flex_wrap().gap(px(S2));
+        let mut options = view().flex_row().flex_wrap().gap(sp(S2));
         for (label, detail) in q.options.clone() {
             let multi = q.multi;
             let (l1, l2) = (label.clone(), label.clone());
@@ -909,9 +909,9 @@ fn question_card(p: Permission, questions: Vec<Question>) -> View {
         }
         body = body.child(
             view()
-                .gap(px(S2))
+                .gap(sp(S2))
                 .child(section_label(q.header.clone()))
-                .child(text(q.question.clone()).text_size(px(TEXT_BASE)).line_height(px(20.0)))
+                .child(text(q.question.clone()).text_size(tx(TEXT_BASE)).line_height(px(20.0)))
                 .child(options)
                 .child(
                     field()
@@ -926,15 +926,15 @@ fn question_card(p: Permission, questions: Vec<Question>) -> View {
     let (submit_id, dismiss_id) = (p.id.clone(), p.id.clone());
     let headers: Vec<(String, bool)> = questions.iter().map(|q| (q.header.clone(), q.multi)).collect();
     card()
-        .mb(px(S2))
-        .p(px(S4))
-        .gap(px(S4))
+        .mb(sp(S2))
+        .p(sp(S4))
+        .gap(sp(S4))
         .child(card_title(Icon::CircleDot, ACCENT, p.title.clone()))
         .child(scroll().max_h(px(380.0)).child(body))
         .child(
             view()
                 .flex_row()
-                .gap(px(S2))
+                .gap(sp(S2))
                 .child(
                     btn(t("Submit"), Variant::Primary, Sz::Md, Some(Icon::Check), move || {
                         let (c, o) = (chosen.get_untracked(), other.get_untracked());
@@ -990,15 +990,15 @@ pub(crate) fn tracks() -> View {
             Some(untracked(move || {
                 let next = lines.iter().find(|(d, _)| !*d).map(|(_, t)| t.clone()).unwrap_or_default();
                 card()
-                    .mb(px(S2))
-                    .px(px(S3))
-                    .py(px(S2))
+                    .mb(sp(S2))
+                    .px(sp(S3))
+                    .py(sp(S2))
                     .flex_row()
                     .items_center()
-                    .gap(px(S2))
+                    .gap(sp(S2))
                     .child(icon(Icon::ListTodo, 15.0).text_color(ACCENT))
-                    .child(text(tf("Tasks {}/{}", &[&done.to_string(), &lines.len().to_string()])).text_size(px(TEXT_SM)).font_weight(FontWeight(500)))
-                    .child(text(next).text_size(px(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1).flex_1())
+                    .child(text(tf("Tasks {}/{}", &[&done.to_string(), &lines.len().to_string()])).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)))
+                    .child(text(next).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1).flex_1())
             }))
         }))
         .child(dynamic(move || {
@@ -1021,12 +1021,12 @@ pub(crate) fn tracks() -> View {
                 } else {
                     tf("Sub-agents · {}", &[&list.len().to_string()])
                 };
-                let mut c = card().mb(px(S2)).px(px(S3)).py(px(S2)).gap(px(2.0)).child(
+                let mut c = card().mb(sp(S2)).px(sp(S3)).py(sp(S2)).gap(px(2.0)).child(
                     nsh_base::button()
                         .on_press(move || subs_open.set(Some(!open)))
                         .flex_row()
                         .items_center()
-                        .gap(px(S1))
+                        .gap(sp(S1))
                         .child(icon(if open { Icon::ChevronDown } else { Icon::ChevronRight }, 13.0).text_color(FG_MUTED))
                         .child(section_label(label)),
                 );
@@ -1046,14 +1046,14 @@ pub(crate) fn tracks() -> View {
                             .on_press(move || store::open_tab(store::Tab::Subagent(parent.clone(), id.clone())))
                             .flex_row()
                             .items_center()
-                            .gap(px(S2))
+                            .gap(sp(S2))
                             .h(px(30.0))
-                            .px(px(S1))
+                            .px(sp(S1))
                             .rounded(px(R_LG))
                             .hover(|st| st.bg(highlight()))
                             .child(status_dot(move || status))
-                            .child(text(s.title.clone()).text_size(px(TEXT_BASE)).number_of_lines(1).flex_shrink(1.0))
-                            .child(text(s.subtitle.clone()).text_size(px(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1).flex_1()),
+                            .child(text(s.title.clone()).text_size(tx(TEXT_BASE)).number_of_lines(1).flex_shrink(1.0))
+                            .child(text(s.subtitle.clone()).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1).flex_1()),
                     );
                 }
                 c
@@ -1065,15 +1065,15 @@ pub(crate) fn tracks() -> View {
                 return None;
             }
             Some(untracked(move || {
-                let mut c = card().mb(px(S2)).px(px(S3)).py(px(S2)).gap(px(2.0)).child(section_label(t("Background")));
+                let mut c = card().mb(sp(S2)).px(sp(S3)).py(sp(S2)).gap(px(2.0)).child(section_label(t("Background")));
                 for w in list.clone() {
                     let mut row = view()
                         .flex_row()
                         .items_center()
-                        .gap(px(S2))
+                        .gap(sp(S2))
                         .h(px(30.0))
                         .child(status_dot(|| Status::Running))
-                        .child(text(w.label.clone()).text_size(px(TEXT_CODE)).font_family(|| MONO).number_of_lines(1).flex_1());
+                        .child(text(w.label.clone()).text_size(tx(TEXT_CODE)).font_family(mono_font).number_of_lines(1).flex_1());
                     if let Some(token) = w.stop_token.clone() {
                         let item = w.id.clone();
                         row = row.child(btn(t("Stop"), Variant::Outline, Sz::Sm, None, move || {
@@ -1102,21 +1102,21 @@ pub(crate) fn subagent_pane(parent: String, id: String) -> impl IntoElement {
             view()
                 .flex_row()
                 .items_center()
-                .gap(px(S2))
+                .gap(sp(S2))
                 .h(px(40.0))
-                .px(px(S6))
+                .px(sp(S6))
                 .border_b_1()
                 .border_color(BORDER)
                 .child(icon(Icon::Bot, 15.0).text_color(FG_MUTED))
-                .child(text(move || info.with(|i| i.as_ref().map(|i| i.title.clone()).unwrap_or_default())).text_size(px(TEXT_BASE)).number_of_lines(1).flex_1())
-                .child(text(move || info.with(|i| i.as_ref().map(|i| i.status.clone()).unwrap_or_default())).text_size(px(TEXT_SM)).text_color(FG_MUTED)),
+                .child(text(move || info.with(|i| i.as_ref().map(|i| i.title.clone()).unwrap_or_default())).text_size(tx(TEXT_BASE)).number_of_lines(1).flex_1())
+                .child(text(move || info.with(|i| i.as_ref().map(|i| i.status.clone()).unwrap_or_default())).text_size(tx(TEXT_SM)).text_color(FG_MUTED)),
         )
         .child(dynamic(move || {
             let list = items.get();
             Some(untracked(move || match list.clone() {
                 None => view().flex_1().items_center().justify_center().child(loader(None)).into_element(),
                 Some(list) => {
-                    let mut col = view().gap(px(S2)).px(px(S6)).py(px(S4)).w_full().max_w(px(CONTENT_MAX_WIDTH + 2.0 * S6)).self_center();
+                    let mut col = view().gap(sp(S2)).px(sp(S6)).py(sp(S4)).w_full().max_w(px(CONTENT_MAX_WIDTH + 2.0 * S6)).self_center();
                     for item in list {
                         col = col.child(static_row(item));
                     }
@@ -1144,25 +1144,25 @@ fn static_row(item: Item) -> AnyElement {
             .markdown(move || Some(SharedString::from(t.clone())))
             .selectable(true)
             .gap_3()
-            .text_size(px(TEXT_CONTENT))
+            .text_size(tx(TEXT_CONTENT))
             .line_height(px(24.0))
             .text_color(FG)
             .into_element(),
         Item::Tool { name, kind, summary, .. } => view()
             .flex_row()
             .items_center()
-            .gap(px(S2))
-            .px(px(S2))
+            .gap(sp(S2))
+            .px(sp(S2))
             .h(px(30.0))
             .child(icon(tool_icon(&kind, &name), 15.0).text_color(FG_MUTED))
-            .child(text(name).text_size(px(TEXT_BASE)).font_weight(FontWeight(500)))
-            .child(text(summary).text_size(px(TEXT_CODE)).font_family(|| MONO).text_color(FG_MUTED).number_of_lines(1).flex_1())
+            .child(text(name).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)))
+            .child(text(summary).text_size(tx(TEXT_CODE)).font_family(mono_font).text_color(FG_MUTED).number_of_lines(1).flex_1())
             .into_element(),
         Item::Reasoning { text: t } => text(t).text_size(px(13.0)).italic().number_of_lines(3).text_color(FG_MUTED).into_element(),
-        Item::Error { message } => text(message).text_size(px(TEXT_BASE)).text_color(DANGER).into_element(),
-        Item::Notice { message } => text(message).text_size(px(TEXT_SM)).text_color(FG_FAINT).into_element(),
+        Item::Error { message } => text(message).text_size(tx(TEXT_BASE)).text_color(DANGER).into_element(),
+        Item::Notice { message } => text(message).text_size(tx(TEXT_SM)).text_color(FG_FAINT).into_element(),
         Item::Todo { lines } => text(lines.iter().map(|(d, t)| format!("{} {t}", if *d { "☑" } else { "☐" })).collect::<Vec<_>>().join("\n"))
-            .text_size(px(TEXT_BASE))
+            .text_size(tx(TEXT_BASE))
             .into_element(),
     }
 }
@@ -1191,13 +1191,13 @@ pub(crate) fn find_bar() -> impl IntoElement {
         let panel = glass_strong(view())
             .flex_row()
             .items_center()
-            .gap(px(S1))
+            .gap(sp(S1))
             .h(px(40.0))
-            .pl(px(S3))
-            .pr(px(S1))
+            .pl(sp(S3))
+            .pr(sp(S1))
             .rounded(px(R_XL))
             .shadow_lg();
-        let panel = if MOBILE { panel.mx(px(S2)).mb(px(S2)) } else { panel.absolute().top(px(S2)).right(px(S6)).w(px(360.0)) };
+        let panel = if MOBILE { panel.mx(sp(S2)).mb(sp(S2)) } else { panel.absolute().top(sp(S2)).right(sp(S6)).w(px(360.0)) };
         panel
             .child(icon(Icon::Search, 15.0).text_color(FG_MUTED))
             .child(
@@ -1209,11 +1209,11 @@ pub(crate) fn find_bar() -> impl IntoElement {
                     .element_ref(&field)
                     .placeholder(t("Find in conversation"))
                     .auto_focus(true)
-                    .text_size(px(TEXT_BASE))
+                    .text_size(tx(TEXT_BASE))
                     .text_color(FG)
                     .caret_color(|| color(ACCENT))
                     .h(px(28.0))
-                    .ml(px(S1))
+                    .ml(sp(S1))
                     .flex_1()
                     .min_w(px(0.0)),
             )
@@ -1223,13 +1223,13 @@ pub(crate) fn find_bar() -> impl IntoElement {
                     (0, false) => String::new(),
                     (n, _) => format!("{} / {n}", cur.get().min(n - 1) + 1),
                 })
-                .text_size(px(TEXT_SM))
+                .text_size(tx(TEXT_SM))
                 .text_color(FG_MUTED)
                 .tabular_nums()
                 .number_of_lines(1)
                 .flex_shrink_0(),
             )
-            .child(view().w(px(1.0)).h(px(18.0)).mx(px(S1)).bg(BORDER))
+            .child(view().w(px(1.0)).h(px(18.0)).mx(sp(S1)).bg(BORDER))
             .child(icon_btn(Icon::ChevronUp, Sz::Sm, t("Previous match"), move || previous(false)))
             .child(icon_btn(Icon::ChevronDown, Sz::Sm, t("Next match"), move || next(true)))
             .child(icon_btn(Icon::X, Sz::Sm, t("Close find"), store::toggle_find))
@@ -1266,9 +1266,9 @@ fn thinking(running: Memo<bool>) -> impl IntoElement {
                 .max_w(px(CONTENT_MAX_WIDTH + 2.0 * S6))
                 .self_center()
                 // The rows' own inset, so the words line up with the text.
-                .px(px(S6))
-                .py(px(S3))
-                .child(text(label).text_size(px(TEXT_SM)).text_color(FG_MUTED).bind_opacity(&breath))
+                .px(sp(S6))
+                .py(sp(S3))
+                .child(text(label).text_size(tx(TEXT_SM)).text_color(FG_MUTED).bind_opacity(&breath))
                 .into_element()
         }))
     }))

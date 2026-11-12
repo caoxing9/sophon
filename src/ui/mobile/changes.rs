@@ -21,7 +21,7 @@ pub(crate) fn files_page() -> Screen {
         view()
             .flex_1()
             .child(top_bar(
-                text(t("Changes")).text_size(px(TEXT_BASE)).font_weight(FontWeight(600)),
+                text(t("Changes")).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)),
                 // All the workspace's files, changed or not.
                 super::glass_button(Icon::Folder, t("Browse files"), || push(Route::Files(".".into()))),
             ))
@@ -38,8 +38,8 @@ pub(crate) fn diff_page(path: String) -> Screen {
             .child(top_bar(
                 view()
                     .items_center()
-                    .child(text(name).text_size(px(TEXT_BASE)).font_weight(FontWeight(600)).number_of_lines(1))
-                    .child(text(dir).text_size(px(TEXT_XS)).text_color(FG_MUTED).number_of_lines(1)),
+                    .child(text(name).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).number_of_lines(1))
+                    .child(text(dir).text_size(tx(TEXT_XS)).text_color(FG_MUTED).number_of_lines(1)),
                 view().w(px(44.0)),
             ))
             .child(view().flex_1().px_safe_area().pb_safe_area().child(diff(path))),
@@ -61,9 +61,9 @@ fn files() -> impl IntoElement {
                     }
                 })
             })
-            .px(px(S4))
-            .py(px(S2))
-            .text_size(px(TEXT_SM))
+            .px(sp(S4))
+            .py(sp(S2))
+            .text_size(tx(TEXT_SM))
             .text_color(FG_MUTED),
         )
         .child(dynamic(move || {
@@ -72,10 +72,10 @@ fn files() -> impl IntoElement {
                 let note = |glyph: Icon, message: String| {
                     view()
                         .flex_row()
-                        .gap(px(S2))
-                        .p(px(S4))
+                        .gap(sp(S2))
+                        .p(sp(S4))
                         .child(icon(glyph, 16.0).text_color(FG_FAINT))
-                        .child(text(message).text_size(px(TEXT_BASE)).text_color(FG_MUTED).flex_1())
+                        .child(text(message).text_size(tx(TEXT_BASE)).text_color(FG_MUTED).flex_1())
                         .into_element()
                 };
                 if let Some(e) = error.clone() {
@@ -96,7 +96,7 @@ fn files() -> impl IntoElement {
                 )
                 .keys(move || changes.with(|c| c.files.iter().map(|f| f.path.clone()).collect::<Vec<_>>()))
                 .estimated_item_size(px(56.0))
-                .content_padding_bottom(px(S4))
+                .content_padding_bottom(sp(S4))
                 .flex_1()
                 .into_element()
             }))
@@ -116,9 +116,9 @@ fn file_row(file: Memo<Option<DiffFile>>) -> impl IntoElement {
         })
         .flex_row()
         .items_center()
-        .gap(px(S3))
+        .gap(sp(S3))
         .min_h(px(56.0))
-        .px(px(S4))
+        .px(sp(S4))
         .active(|s| s.bg(highlight()))
         .child(
             text(move || {
@@ -130,9 +130,9 @@ fn file_row(file: Memo<Option<DiffFile>>) -> impl IntoElement {
                 })
             })
             .w(px(14.0))
-            .text_size(px(TEXT_SM))
+            .text_size(tx(TEXT_SM))
             .font_weight(FontWeight(600))
-            .font_family(|| MONO)
+            .font_family(mono_font)
             .text_color(move || {
                 file.with(|f| match f {
                     Some(f) if f.is_new => SUCCESS,
@@ -146,18 +146,18 @@ fn file_row(file: Memo<Option<DiffFile>>) -> impl IntoElement {
                 .flex_1()
                 .min_w(px(0.0))
                 .gap(px(2.0))
-                .child(text(move || file.with(|f| f.as_ref().map(|f| split(f).0).unwrap_or_default())).text_size(px(TEXT_BASE)).number_of_lines(1))
+                .child(text(move || file.with(|f| f.as_ref().map(|f| split(f).0).unwrap_or_default())).text_size(tx(TEXT_BASE)).number_of_lines(1))
                 .child(
                     text(move || file.with(|f| f.as_ref().map(|f| split(f).1).unwrap_or_default()))
-                        .text_size(px(TEXT_SM))
+                        .text_size(tx(TEXT_SM))
                         .text_color(FG_FAINT)
                         .number_of_lines(1),
                 ),
         )
         .child(
             text(move || file.with(|f| f.as_ref().map(|f| format!("+{} −{}", f.additions, f.deletions)).unwrap_or_default()))
-                .text_size(px(TEXT_SM))
-                .font_family(|| MONO)
+                .text_size(tx(TEXT_SM))
+                .font_family(mono_font)
                 .text_color(FG_MUTED),
         )
         .child(icon(Icon::ChevronRight, 16.0).text_color(FG_FAINT))
@@ -178,13 +178,13 @@ fn diff(path: String) -> impl IntoElement {
                         .flex_1()
                         .items_center()
                         .justify_center()
-                        .child(text(t("No changes")).text_size(px(TEXT_BASE)).text_color(FG_MUTED))
+                        .child(text(t("No changes")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED))
                         .into_element();
                 }
                 let mut d = diff_view()
                     .patch(move || Some(SharedString::from(patch.get())))
                     .layout(|| DiffLayout::Unified)
-                    .text_size(px(TEXT_CODE))
+                    .text_size(tx(TEXT_CODE))
                     .flex_1();
                 if let Some(lang) = language.clone() {
                     d = d.language(SharedString::from(lang));

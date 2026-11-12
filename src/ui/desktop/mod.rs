@@ -54,7 +54,18 @@ pub(crate) fn shell() -> impl IntoElement {
     });
     // The safe area keeps content clear of the status bar, the Dynamic
     // Island and the home indicator; the ambient light still fills them.
-    view().flex_1().p_safe_area().text_color(FG).child(ambient()).child(modals::modal_layer()).child(dynamic(move || {
+    view()
+        .flex_1()
+        .p_safe_area()
+        .text_color(FG)
+        // Files dragged from Finder: the whole window takes them, for the
+        // composer on screen.
+        .on_file_drag_enter(|| crate::ui::shared::composer::dragging_over(true))
+        .on_file_drag_leave(|| crate::ui::shared::composer::dragging_over(false))
+        .on_file_drop(|e: &nsh_core::element::FileDropEvent| crate::ui::shared::composer::dropped(&e.uris))
+        .child(ambient())
+        .child(modals::modal_layer())
+        .child(dynamic(move || {
         let layout = layout.get();
         Some(untracked(move || match layout {
             Layout::Split => {
@@ -147,14 +158,14 @@ fn quit_hint() -> impl IntoElement {
         .pointer_events(PointerEvents::None)
         .child(
             glass_strong(view())
-                .px(px(S6))
-                .py(px(S4))
+                .px(sp(S6))
+                .py(sp(S4))
                 .rounded(px(R_LG + 4.0))
                 .opacity(move || if hint.get().is_some() { 1.0_f32 } else { 0.0 })
                 .transition_opacity()
                 .child(
                     crate::ui::kit::text(move || hint.get().map(t).unwrap_or_default())
-                        .text_size(px(TEXT_LG))
+                        .text_size(tx(TEXT_LG))
                         .font_weight(nsh_core::element::FontWeight(600))
                         .text_color(FG),
                 ),

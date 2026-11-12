@@ -106,7 +106,7 @@ fn desktop_picture(uri: String) -> AnyElement {
                 .child(
                     view()
                         .flex_1()
-                        .m(px(S4))
+                        .m(sp(S4))
                         .bind_translate_x(&x)
                         .bind_translate_y(&y)
                         .bind_scale(&scale)
@@ -195,8 +195,8 @@ pub(crate) fn modal_layer() -> impl IntoElement {
                                             .on_press(store::close_modal)
                                             .accessibility_label(t("Close"))
                                             .absolute()
-                                            .top(px(S4))
-                                            .right(px(S4))
+                                            .top(sp(S4))
+                                            .right(sp(S4))
                                             .w(px(30.0))
                                             .h(px(30.0))
                                             .rounded(px(R_FULL))
@@ -233,17 +233,17 @@ pub(crate) fn sheet(title: &str) -> View {
     glass_strong(view())
         .w(px(420.0))
         .max_w(relative(0.92))
-        .p(px(S6))
-        .gap(px(S4))
+        .p(sp(S6))
+        .gap(sp(S4))
         .rounded(px(22.0))
-        .child(text(title.to_owned()).text_size(px(TEXT_LG)).font_weight(FontWeight(500)))
+        .child(text(title.to_owned()).text_size(tx(TEXT_LG)).font_weight(FontWeight(500)))
 }
 
 pub(crate) fn actions(primary: impl IntoElement) -> View {
     view()
         .flex_row()
         .justify_end()
-        .gap(px(S2))
+        .gap(sp(S2))
         .child(btn(t("Cancel"), Variant::Secondary, Sz::Md, None, store::close_modal))
         .child(primary)
 }
@@ -265,7 +265,7 @@ fn body(m: Modal) -> View {
         Modal::RemoveSpace { id, name, folder } => sheet(t("Remove space"))
             .child(
                 text(tf("“{}” leaves Sophon and its service stops. Its projects and conversations stay in {}, to delete by hand or to bring back", &[&name, &folder]))
-                    .text_size(px(TEXT_BASE))
+                    .text_size(tx(TEXT_BASE))
                     .line_height(px(20.0))
                     .text_color(FG_MUTED),
             )
@@ -280,6 +280,7 @@ fn body(m: Modal) -> View {
         Modal::AddProject => add_project(),
         Modal::SwitchBranch => switch_branch(),
         Modal::ImportSession => import_session(),
+        Modal::Fonts { mono } => fonts(mono),
         Modal::AddAgentAccount => crate::ui::shared::agents::add_account(),
         Modal::AddAgentKey => crate::ui::shared::agents::add_api_key(),
         Modal::RemoveAgent { id, label } => crate::ui::shared::agents::remove_agent(id, label),
@@ -291,7 +292,7 @@ fn body(m: Modal) -> View {
         Modal::RevokeDevices => sheet(t("Unpair every device"))
             .child(
                 text(t("Every phone and computer paired with this Mac, by QR code or on the LAN, must pair again. Connected ones are cut off now"))
-                    .text_size(px(TEXT_BASE))
+                    .text_size(tx(TEXT_BASE))
                     .line_height(px(20.0))
                     .text_color(FG_MUTED),
             )
@@ -313,7 +314,7 @@ fn body(m: Modal) -> View {
         Modal::RestartDaemon => sheet(t("Restart service"))
             .child(
                 text(t("Running agents stop and resume when the service is back, if resume on startup is on. Terminals keep running"))
-                    .text_size(px(TEXT_BASE))
+                    .text_size(tx(TEXT_BASE))
                     .line_height(px(20.0))
                     .text_color(FG_MUTED),
             )
@@ -326,13 +327,13 @@ fn body(m: Modal) -> View {
         Modal::ToolDetail { name, kind, detail, error } => glass_strong(view())
             .w_full()
             .max_h(relative(0.8))
-            .px(px(S4))
-            .pt(px(S2))
-            .pb_safe_area_plus(px(S3))
-            .gap(px(S2))
+            .px(sp(S4))
+            .pt(sp(S2))
+            .pb_safe_area_plus(sp(S3))
+            .gap(sp(S2))
             .rounded_t(px(22.0))
             .child(view().items_center().child(view().w(px(36.0)).h(px(5.0)).rounded(px(R_FULL)).bg(tint(FG, 0.18))))
-            .child(text(name).text_size(px(TEXT_LG)).font_weight(FontWeight(600)).number_of_lines(1))
+            .child(text(name).text_size(tx(TEXT_LG)).font_weight(FontWeight(600)).number_of_lines(1))
             .child(scroll().flex_shrink(1.0).child(crate::ui::shared::tool_detail::tool_body(&kind, &detail, error.as_deref()))),
         Modal::Update => update_dialog(),
         Modal::RenameProject { id, name } => rename(t("Rename project"), name, move |v| store::rename_project(&id, v)),
@@ -341,7 +342,7 @@ fn body(m: Modal) -> View {
                 text(format!(
                     "“{name}” and its agents move to the archive. A worktree's files are removed from disk; commit or push anything you want to keep"
                 ))
-                .text_size(px(TEXT_BASE))
+                .text_size(tx(TEXT_BASE))
                 .line_height(px(20.0))
                 .text_color(FG_MUTED),
             )
@@ -387,7 +388,7 @@ fn commit() -> View {
             field()
                 .multiline(true)
                 .h(px(96.0))
-                .py(px(S2))
+                .py(sp(S2))
                 .value(move || message.get())
                 .on_change(move |v: &str| message.set(v.to_owned()))
                 .placeholder(t("Commit message (leave empty to generate one)"))
@@ -466,20 +467,20 @@ fn schedule_form(existing: Option<crate::daemon::connection::Schedule>) -> View 
         }
         store::close_modal();
     };
-    let mut projects = view().flex_row().flex_wrap().gap(px(S2));
+    let mut projects = view().flex_row().flex_wrap().gap(sp(S2));
     for p in store::projects().into_iter().filter(|p| !p.root_path.is_empty()) {
         let (a, b) = (p.root_path.clone(), p.root_path.clone());
         projects = projects.child(chip(p.name.clone(), Some(Icon::Folder), move || path.get() == a, move || path.set(b.clone())));
     }
     // A few characters beside a segmented control: as tall and as round as
     // it, so the row reads as one line of controls.
-    let short = |width: f32| field().w(px(width)).h(px(CONTROL_SM + 4.0)).rounded(px(R_FULL)).text_size(px(TEXT_SM)).text_center();
-    let lead = |label: &'static str| text(label).text_size(px(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG_MUTED);
+    let short = |width: f32| field().w(px(width)).h(sp(CONTROL_SM + 4.0)).rounded(px(R_FULL)).text_size(tx(TEXT_SM)).text_center();
+    let lead = |label: &'static str| text(label).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG_MUTED);
     let time_row = move || {
         view()
             .flex_row()
             .items_center()
-            .gap(px(S2))
+            .gap(sp(S2))
             .child(lead(t("At")))
             .child(short(76.0).value(move || time.get()).on_change(move |v: &str| time.set(v.to_owned())).placeholder("9:00"))
     };
@@ -503,7 +504,7 @@ fn schedule_form(existing: Option<crate::daemon::connection::Schedule>) -> View 
             field()
                 .multiline(true)
                 .h(px(96.0))
-                .py(px(S2))
+                .py(sp(S2))
                 .value(move || prompt.get())
                 .on_change(move |v: &str| prompt.set(v.to_owned()))
                 .placeholder(t("What should the agent do each time?")),
@@ -530,7 +531,7 @@ fn schedule_form(existing: Option<crate::daemon::connection::Schedule>) -> View 
                 Repeat::Every => view()
                     .flex_row()
                     .items_center()
-                    .gap(px(S2))
+                    .gap(sp(S2))
                     .child(lead(t("Every")))
                     .child(short(56.0).value(move || count.get()).on_change(move |v: &str| count.set(v.to_owned())).placeholder("1"))
                     .child(segmented(
@@ -541,7 +542,7 @@ fn schedule_form(existing: Option<crate::daemon::connection::Schedule>) -> View 
                 Repeat::Daily => time_row(),
                 Repeat::Weekly => {
                     let zh = crate::i18n::is_zh();
-                    let mut row = view().flex_row().flex_wrap().gap(px(S2));
+                    let mut row = view().flex_row().flex_wrap().gap(sp(S2));
                     // Monday first.
                     for d in [1u8, 2, 3, 4, 5, 6, 0] {
                         row = row.child(chip(
@@ -558,18 +559,18 @@ fn schedule_form(existing: Option<crate::daemon::connection::Schedule>) -> View 
                             },
                         ));
                     }
-                    view().gap(px(S3)).child(row).child(time_row())
+                    view().gap(sp(S3)).child(row).child(time_row())
                 }
                 Repeat::Custom => view().child(
                     field()
                         .value(move || custom.get())
                         .on_change(move |v: &str| custom.set(v.to_owned()))
-                        .font_family(|| MONO)
+                        .font_family(mono_font)
                         .placeholder(t("Cron expression, e.g. 0 9 * * 1-5")),
                 ),
             }))
         }))
-        .child(text(summary).text_size(px(TEXT_SM)).text_color(FG_MUTED))
+        .child(text(summary).text_size(tx(TEXT_SM)).text_color(FG_MUTED))
         .child(actions(
             btn(if is_edit { t("Save") } else { t("Create") }, Variant::Primary, Sz::Md, Some(Icon::CalendarClock), create)
                 .disabled(move || prompt.with(|p| p.trim().is_empty()) || (!no_folder && path.with(String::is_empty)) || expression.with(Option::is_none)),
@@ -608,8 +609,8 @@ fn add_project() -> View {
             let m = mode.get();
             Some(untracked(move || match m {
                 Mode::Open => view()
-                    .gap(px(S3))
-                    .child(text(t("Pick a folder on this computer; Sophon lists it with your projects")).text_size(px(TEXT_SM)).text_color(FG_MUTED))
+                    .gap(sp(S3))
+                    .child(text(t("Pick a folder on this computer; Sophon lists it with your projects")).text_size(tx(TEXT_SM)).text_color(FG_MUTED))
                     .child(actions(btn(t("Choose folder…"), Variant::Primary, Sz::Md, Some(Icon::FolderOpen), || {
                         store::spawn_detached(async move {
                             let dialog = nsh_core::file_dialog::OpenDialog::folders().title(t("Add a project folder"));
@@ -622,7 +623,7 @@ fn add_project() -> View {
                         });
                     }))),
                 Mode::Create => view()
-                    .gap(px(S3))
+                    .gap(sp(S3))
                     .child(location_row(parent, pick_parent))
                     .child(field().value(move || name.get()).on_change(move |v: &str| name.set(v.to_owned())).placeholder(t("Folder name")))
                     .child(actions(
@@ -633,7 +634,7 @@ fn add_project() -> View {
                         .disabled(move || name.with(|n| n.trim().is_empty())),
                     )),
                 Mode::Clone => view()
-                    .gap(px(S3))
+                    .gap(sp(S3))
                     .child(field().value(move || repo.get()).on_change(move |v: &str| repo.set(v.to_owned())).placeholder(t("owner/repository")))
                     .child(location_row(parent, pick_parent))
                     .child(actions(
@@ -654,9 +655,9 @@ fn location_row(parent: Signal<String>, pick: impl Fn() + 'static) -> View {
     view()
         .flex_row()
         .items_center()
-        .gap(px(S2))
+        .gap(sp(S2))
         .child(icon(Icon::Folder, 15.0).text_color(FG_MUTED))
-        .child(text(move || parent.get()).text_size(px(TEXT_SM)).font_family(|| MONO).text_color(FG_MUTED).number_of_lines(1).flex_1())
+        .child(text(move || parent.get()).text_size(tx(TEXT_SM)).font_family(mono_font).text_color(FG_MUTED).number_of_lines(1).flex_1())
         .child(btn(t("Change…"), Variant::Outline, Sz::Sm, None, pick))
 }
 
@@ -688,13 +689,13 @@ fn switch_branch() -> View {
                             })
                             .flex_row()
                             .items_center()
-                            .gap(px(S2))
-                            .h(px(CONTROL_MD))
-                            .px(px(S2))
+                            .gap(sp(S2))
+                            .h(sp(CONTROL_MD))
+                            .px(sp(S2))
                             .rounded(px(R_LG))
                             .hover(|s| s.bg(highlight()))
                             .child(icon(Icon::GitBranch, 14.0).text_color(FG_MUTED))
-                            .child(text(b).text_size(px(TEXT_BASE)).font_family(|| MONO).number_of_lines(1)),
+                            .child(text(b).text_size(tx(TEXT_BASE)).font_family(mono_font).number_of_lines(1)),
                     );
                 }
                 col
@@ -703,21 +704,82 @@ fn switch_branch() -> View {
         .child(actions(view()))
 }
 
+/// A checkbox's mark: filled with the accent when on.
+fn check_mark(on: impl Fn() -> bool + 'static) -> View {
+    let on = computed(on);
+    view()
+        .w(px(16.0))
+        .h(px(16.0))
+        .flex_shrink_0()
+        .rounded(px(5.0))
+        .border_1()
+        .border_color(move || if on.get() { ACCENT.into() } else { tint(FG, 0.28) })
+        .bg(move || if on.get() { ACCENT.into() } else { tint(FG, 0.0) })
+        .items_center()
+        .justify_center()
+        .child(when(move || on.get(), || icon(Icon::Check, 11.0).text_color(ACCENT_FG)))
+}
+
+/// The sessions started outside Sophon, to pick from: by agent (all,
+/// Claude, Codex), then by folder; ticked one by one, a folder at a time,
+/// or all that show, and imported together.
 fn import_session() -> View {
     use crate::daemon::connection::RecentSession;
+    use std::collections::HashSet;
+    let key = |s: &RecentSession| format!("{}:{}", s.provider, s.handle);
     let query = signal(String::new());
     let list = computed(store::recent_sessions);
-    let import_all = move |sessions: Vec<RecentSession>| {
-        store::import_sessions(sessions);
-        store::close_modal();
+    // Which agent's sessions show: all of them, or one's.
+    let agent = signal(None::<String>);
+    let picked = signal(HashSet::<String>::new());
+    let shown = computed(move || {
+        let only = agent.get();
+        list.get().unwrap_or_default().into_iter().filter(|s| only.as_ref().is_none_or(|a| &s.provider == a)).collect::<Vec<_>>()
+    });
+    // The agents that have sessions, for the filter: (id, label, count).
+    let agents = computed(move || {
+        let mut found: Vec<(String, String, usize)> = Vec::new();
+        for s in list.get().unwrap_or_default() {
+            match found.iter_mut().find(|(id, _, _)| *id == s.provider) {
+                Some(f) => f.2 += 1,
+                None => found.push((s.provider.clone(), s.provider_label.clone(), 1)),
+            }
+        }
+        found
+    });
+    let chosen = computed(move || shown.with(|l| l.iter().filter(|s| picked.with(|p| p.contains(&key(s)))).cloned().collect::<Vec<_>>()));
+    let all_on = computed(move || shown.with(|l| !l.is_empty() && l.iter().all(|s| picked.with(|p| p.contains(&key(s))))));
+    let set = move |sessions: &[RecentSession], on: bool| {
+        picked.update(|p| {
+            for s in sessions {
+                if on {
+                    p.insert(key(s));
+                } else {
+                    p.remove(&key(s));
+                }
+            }
+        })
     };
     sheet(t("Import sessions"))
-        .w(px(620.0))
+        .w(px(640.0))
         .child(
             text(t("Continue the Claude Code and Codex sessions you started outside Sophon. Each goes to the project of its folder"))
-                .text_size(px(TEXT_SM))
+                .text_size(tx(TEXT_SM))
                 .text_color(FG_MUTED),
         )
+        // Which agent's: shown once there is more than one to choose from.
+        .child(dynamic(move || {
+            let found = agents.get();
+            if found.len() < 2 {
+                return None;
+            }
+            Some(untracked(move || {
+                let total: usize = found.iter().map(|f| f.2).sum();
+                let mut options: Vec<(Option<String>, SharedString)> = vec![(None, format!("{} {total}", t("All")).into())];
+                options.extend(found.iter().map(|(id, label, n)| (Some(id.clone()), format!("{label} {n}").into())));
+                view().flex_row().child(segmented(options, move || agent.get(), move |a| agent.set(a)))
+            }))
+        }))
         .child(
             field()
                 .value(move || query.get())
@@ -728,78 +790,176 @@ fn import_session() -> View {
                 .placeholder(t("Search sessions"))
                 .auto_focus(true),
         )
-        .child(scroll().max_h(px(420.0)).child(dynamic(move || {
-            let sessions = list.get();
-            Some(untracked(move || match sessions.clone() {
-                None => text(t("Loading…")).text_color(FG_MUTED).into_element(),
-                Some(s) if s.is_empty() => text(t("No sessions found")).text_size(px(TEXT_BASE)).text_color(FG_MUTED).into_element(),
-                Some(s) => {
-                    // By folder, the folder of the latest session first.
-                    let mut folders: Vec<(String, Vec<RecentSession>)> = Vec::new();
-                    for sess in &s {
-                        match folders.iter_mut().find(|(cwd, _)| *cwd == sess.cwd) {
-                            Some((_, of)) => of.push(sess.clone()),
-                            None => folders.push((sess.cwd.clone(), vec![sess.clone()])),
-                        }
+        .child(when(move || shown.with(|l| !l.is_empty()), move || {
+            // Everything that shows, in one tick.
+            nsh_base::button()
+                .on_press(move || {
+                    let on = !all_on.get_untracked();
+                    set(&shown.get_untracked(), on);
+                })
+                .flex_row()
+                .items_center()
+                .gap(sp(S2))
+                .px(sp(S2))
+                .child(check_mark(move || all_on.get()))
+                .child(
+                    text(move || {
+                        let (sessions, folders) = shown.with(|l| (l.len(), l.iter().map(|s| s.cwd.as_str()).collect::<HashSet<_>>().len()));
+                        tf("Select all: {} sessions in {} folders", &[&sessions.to_string(), &folders.to_string()])
+                    })
+                    .text_size(tx(TEXT_SM))
+                    .text_color(FG_MUTED),
+                )
+        }))
+        .child(scroll().max_h(px(400.0)).child(dynamic(move || {
+            let loaded = list.with(Option::is_some);
+            let sessions = shown.get();
+            Some(untracked(move || {
+                if !loaded {
+                    return loading().into_element();
+                }
+                if sessions.is_empty() {
+                    return text(t("No sessions found")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED).into_element();
+                }
+                // By folder, the folder of the latest session first.
+                let mut folders: Vec<(String, Vec<RecentSession>)> = Vec::new();
+                for sess in &sessions {
+                    match folders.iter_mut().find(|(cwd, _)| *cwd == sess.cwd) {
+                        Some((_, of)) => of.push(sess.clone()),
+                        None => folders.push((sess.cwd.clone(), vec![sess.clone()])),
                     }
-                    let everything = s.clone();
-                    let mut col = view().gap(px(S3)).child(
-                        view()
+                }
+                let mut col = view().gap(sp(S3));
+                for (cwd, of) in folders {
+                    let (mine, mine2) = (of.clone(), of.clone());
+                    let folder_on = computed(move || mine.iter().all(|s| picked.with(|p| p.contains(&key(s)))));
+                    let mut group = view().gap(px(2.0)).child(
+                        nsh_base::button()
+                            .on_press(move || {
+                                let on = !folder_on.get_untracked();
+                                set(&mine2, on);
+                            })
                             .flex_row()
                             .items_center()
-                            .justify_between()
-                            .child(
-                                text(tf("{} sessions in {} folders", &[&s.len().to_string(), &folders.len().to_string()]))
-                                    .text_size(px(TEXT_SM))
-                                    .text_color(FG_MUTED),
-                            )
-                            .child(btn(t("Import all"), Variant::Primary, Sz::Sm, None, move || import_all(everything.clone()))),
+                            .gap(sp(S2))
+                            .px(sp(S2))
+                            .py(px(4.0))
+                            .rounded(px(R_LG))
+                            .hover(|st| st.bg(highlight()))
+                            .child(check_mark(move || folder_on.get()))
+                            .child(icon(Icon::Folder, 14.0).text_color(FG_MUTED))
+                            .child(text(crate::daemon::model::folder_name(&cwd)).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).number_of_lines(1))
+                            .child(text(cwd.clone()).flex_1().min_w(px(0.0)).text_size(tx(TEXT_XS)).text_color(FG_FAINT).number_of_lines(1))
+                            .child(text(of.len().to_string()).text_size(tx(TEXT_SM)).text_color(FG_MUTED)),
                     );
-                    for (cwd, of) in folders {
-                        let all = of.clone();
-                        let mut group = view().gap(px(2.0)).child(
-                            view()
+                    for sess in of {
+                        let id = key(&sess);
+                        let id2 = id.clone();
+                        group = group.child(
+                            nsh_base::button()
+                                .on_press(move || {
+                                    picked.update(|p| {
+                                        if !p.remove(&id) {
+                                            p.insert(id.clone());
+                                        }
+                                    })
+                                })
                                 .flex_row()
                                 .items_center()
-                                .gap(px(S2))
-                                .px(px(S2))
-                                .child(icon(Icon::Folder, 14.0).text_color(FG_MUTED))
-                                .child(text(crate::daemon::model::folder_name(&cwd)).text_size(px(TEXT_BASE)).font_weight(FontWeight(600)).number_of_lines(1))
-                                .child(text(cwd.clone()).flex_1().min_w(px(0.0)).text_size(px(TEXT_XS)).text_color(FG_FAINT).number_of_lines(1))
-                                .child(btn(
-                                    tf("Import {}", &[&of.len().to_string()]),
-                                    Variant::Secondary,
-                                    Sz::Sm,
-                                    None,
-                                    move || import_all(all.clone()),
-                                )),
+                                .gap(sp(S2))
+                                .ml(px(24.0))
+                                .px(sp(S2))
+                                .py(px(5.0))
+                                .rounded(px(R_LG))
+                                .hover(|st| st.bg(highlight()))
+                                .child(check_mark(move || picked.with(|p| p.contains(&id2))))
+                                .child(crate::ui::shared::model_picker::mark(&sess.provider, 14.0))
+                                .child(text(sess.title.clone()).flex_1().min_w(px(0.0)).text_size(tx(TEXT_BASE)).number_of_lines(1))
+                                .child(text(sess.last_activity.get(..10).unwrap_or_default().to_owned()).text_size(tx(TEXT_SM)).text_color(FG_MUTED)),
                         );
-                        for sess in of {
-                            let pick = sess.clone();
-                            group = group.child(
-                                nsh_base::button()
-                                    .on_press(move || {
-                                        store::import_session(&pick);
-                                        store::close_modal();
-                                    })
-                                    .gap(px(2.0))
-                                    .ml(px(22.0))
-                                    .px(px(S2))
-                                    .py(px(5.0))
-                                    .rounded(px(R_LG))
-                                    .hover(|st| st.bg(highlight()))
-                                    .child(text(sess.title.clone()).text_size(px(TEXT_BASE)).number_of_lines(1))
-                                    .child(
-                                        text(format!("{} · {}", sess.provider_label, sess.last_activity.get(..10).unwrap_or_default()))
-                                            .text_size(px(TEXT_SM))
-                                            .text_color(FG_MUTED),
-                                    ),
-                            );
-                        }
-                        col = col.child(group);
                     }
-                    col.into_element()
+                    col = col.child(group);
                 }
+                col.into_element()
+            }))
+        })))
+        .child(actions(btn(
+            move || -> SharedString {
+                match chosen.with(Vec::len) {
+                    0 => t("Import").into(),
+                    n => tf("Import {}", &[&n.to_string()]).into(),
+                }
+            },
+            Variant::Primary,
+            Sz::Md,
+            None,
+            move || {
+                let sessions = chosen.get_untracked();
+                if !sessions.is_empty() {
+                    store::import_sessions(sessions);
+                    store::close_modal();
+                }
+            },
+        )))
+}
+
+/// The fonts installed on this device, to pick the interface's or the
+/// code font from: each name in its own letters, a search over them, and
+/// the default first. A name that is not listed can still be typed.
+fn fonts(mono: bool) -> View {
+    let query = signal(String::new());
+    let current = if mono { store::fonts_untracked().1 } else { store::fonts_untracked().0 };
+    // For code, the fixed-width ones; all of them for the interface.
+    let all: Vec<String> = crate::platform::fonts::families().into_iter().filter(|f| !mono || f.fixed).map(|f| f.name).collect();
+    let pick = move |name: &str| {
+        store::set_font(mono, name);
+        store::close_modal();
+    };
+    let row = move |label: String, family: Option<String>, chosen: bool, value: String| {
+        let mut name = text(label).flex_1().min_w(px(0.0)).text_size(tx(TEXT_BASE)).number_of_lines(1);
+        if let Some(family) = family {
+            name = name.font_family(SharedString::from(family));
+        }
+        nsh_base::button()
+            .on_press(move || pick(&value))
+            .flex_row()
+            .items_center()
+            .gap(sp(S2))
+            .px(sp(S3))
+            .h(px(34.0))
+            .rounded(px(R_LG))
+            .hover(|st| st.bg(highlight()))
+            .child(name)
+            .child(view().w(px(16.0)).child(when(move || chosen, || icon(Icon::Check, 14.0).text_color(ACCENT))))
+    };
+    sheet(if mono { t("Code font") } else { t("Interface font") })
+        .w(px(460.0))
+        .child(
+            field()
+                .value(move || query.get())
+                .on_change(move |v: &str| query.set(v.to_owned()))
+                .placeholder(t("Search fonts"))
+                .auto_focus(true),
+        )
+        .child(scroll().h(px(360.0)).child(dynamic(move || {
+            let needle = query.get().trim().to_lowercase();
+            let (all, current) = (all.clone(), current.clone());
+            Some(untracked(move || {
+                let mut col = view().gap(px(1.0));
+                if needle.is_empty() {
+                    let default = if mono { tf("Default ({})", &["Menlo"]) } else { t("Default (the system's font)").to_owned() };
+                    col = col.child(row(default, None, current.is_none(), String::new()));
+                }
+                let shown: Vec<&String> = all.iter().filter(|n| needle.is_empty() || n.to_lowercase().contains(&needle)).collect();
+                for name in &shown {
+                    col = col.child(row((*name).clone(), Some((*name).clone()), current.as_deref() == Some(name.as_str()), (*name).clone()));
+                }
+                // Not in the list (or no list on this system): as typed.
+                let typed = query.get_untracked().trim().to_owned();
+                if !typed.is_empty() && !all.iter().any(|n| n.to_lowercase() == needle) {
+                    col = col.child(row(tf("Use “{}”", &[&typed]), None, false, typed.clone()));
+                }
+                col
             }))
         })))
         .child(actions(view()))
@@ -809,12 +969,12 @@ fn project_settings(name: String) -> View {
     let cfg = computed(store::project_config);
     sheet(&format!("{name} · paseo.json"))
         .w(px(680.0))
-        .child(text(t("Setup and teardown scripts, services and other project settings, saved in the project")).text_size(px(TEXT_SM)).text_color(FG_MUTED))
+        .child(text(t("Setup and teardown scripts, services and other project settings, saved in the project")).text_size(tx(TEXT_SM)).text_color(FG_MUTED))
         .child(dynamic(move || {
             let loaded = cfg.with(|c| c.text.is_some());
             Some(untracked(move || {
                 if !loaded {
-                    return text(t("Loading…")).text_color(FG_MUTED).into_element();
+                    return loading().into_element();
                 }
                 view()
                     .h(px(360.0))
@@ -827,7 +987,7 @@ fn project_settings(name: String) -> View {
                             .value(move || cfg.with(|c| c.text.clone().map(SharedString::from)))
                             .language("json")
                             .on_change(|v: &SharedString| store::edit_project_config(v))
-                            .text_size(px(TEXT_CODE))
+                            .text_size(tx(TEXT_CODE))
                             .flex_1(),
                     )
                     .into_element()
@@ -835,7 +995,7 @@ fn project_settings(name: String) -> View {
         }))
         .child(dynamic(move || {
             let e = cfg.with(|c| c.error.clone())?;
-            Some(untracked(move || text(e.clone()).text_size(px(TEXT_SM)).text_color(DANGER)))
+            Some(untracked(move || text(e.clone()).text_size(tx(TEXT_SM)).text_color(DANGER)))
         }))
         .child(actions(btn(t("Save"), Variant::Primary, Sz::Md, None, store::save_project_config)))
 }
@@ -869,9 +1029,9 @@ fn labels(workspace: String) -> View {
             let ws_id = workspace.clone();
             Some(untracked(move || {
                 if cat.is_empty() {
-                    return text(t("No labels yet; create one below")).text_size(px(TEXT_SM)).text_color(FG_MUTED).into_element();
+                    return text(t("No labels yet; create one below")).text_size(tx(TEXT_SM)).text_color(FG_MUTED).into_element();
                 }
-                let mut list = view().flex_row().flex_wrap().gap(px(S2));
+                let mut list = view().flex_row().flex_wrap().gap(sp(S2));
                 for (n, c) in cat.clone() {
                     let on = assigned.contains(&n);
                     let (id, n2, c2) = (ws_id.clone(), n.clone(), c.clone());
@@ -914,7 +1074,7 @@ fn create_space() -> View {
     sheet(t("New space"))
         .child(
             text(t("A space has its own projects, conversations and schedules on this Mac, for another person or another kind of work. Its agents can still open any folder here"))
-                .text_size(px(TEXT_SM))
+                .text_size(tx(TEXT_SM))
                 .line_height(px(18.0))
                 .text_color(FG_MUTED),
         )
@@ -933,7 +1093,7 @@ fn add_host() -> View {
         .child(nearby_list())
         .child(
             text(t("Paste a pairing link (Settings → Pair a device on the other machine) to connect from anywhere through the encrypted relay, or a LAN / Tailscale address, or a tunnel URL"))
-                .text_size(px(TEXT_SM))
+                .text_size(tx(TEXT_SM))
                 .line_height(px(18.0))
                 .text_color(FG_MUTED),
         )
@@ -942,14 +1102,14 @@ fn add_host() -> View {
             view()
                 .flex_row()
                 .items_center()
-                .gap(px(S2))
+                .gap(sp(S2))
                 .child(
                     field()
                         .flex_1()
                         .value(move || url.get())
                         .on_change(move |v: &str| url.set(v.to_owned()))
                         .placeholder(t("Address (192.168.1.20:6767) or a pairing link"))
-                        .font_family(|| MONO),
+                        .font_family(mono_font),
                 )
                 .child(btn(t("Paste"), Variant::Secondary, Sz::Md, Some(Icon::Copy), move || {
                     spawn(async move {
@@ -969,7 +1129,7 @@ fn add_host() -> View {
         )
         .child(
             text(t("On that machine, let the service listen beyond localhost (daemon.listen, e.g. 0.0.0.0:6767) and set a password first"))
-                .text_size(px(TEXT_XS))
+                .text_size(tx(TEXT_XS))
                 .text_color(FG_FAINT),
         )
         .child(actions(
@@ -985,11 +1145,11 @@ fn add_host() -> View {
 fn pairing_code(code: &str) -> View {
     view()
         .self_center()
-        .px(px(S6))
-        .py(px(S3))
+        .px(sp(S6))
+        .py(sp(S3))
         .rounded(px(R_LG))
         .bg(SURFACE2)
-        .child(text(code.to_owned()).text_size(px(32.0)).font_weight(FontWeight(500)).font_family(|| MONO))
+        .child(text(code.to_owned()).text_size(px(32.0)).font_weight(FontWeight(500)).font_family(mono_font))
 }
 
 /// This Mac: a phone nearby asks to pair, into one of its spaces.
@@ -998,18 +1158,18 @@ fn approve_pairing(device: String, code: String) -> View {
     sheet(t("Pairing request"))
         .child(
             text(tf("“{}” on this network asks to connect to this Mac. Allowed, it can use your agents here, from anywhere", &[&device]))
-                .text_size(px(TEXT_BASE))
+                .text_size(tx(TEXT_BASE))
                 .line_height(px(20.0))
                 .text_color(FG_MUTED),
         )
         .child(pairing_code(&code))
-        .child(text(t("Allow only if the device shows the same code")).text_size(px(TEXT_SM)).text_color(FG_MUTED).self_center())
+        .child(text(t("Allow only if the device shows the same code")).text_size(tx(TEXT_SM)).text_color(FG_MUTED).self_center())
         .child(space_choice(space))
         .child(
             view()
                 .flex_row()
                 .justify_end()
-                .gap(px(S2))
+                .gap(sp(S2))
                 .child(btn(t("Deny"), Variant::Secondary, Sz::Md, None, || crate::lan::answer_pairing(false, None)))
                 .child(btn(t("Allow"), Variant::Primary, Sz::Md, Some(Icon::Check), move || {
                     crate::lan::answer_pairing(true, space.get_untracked())
@@ -1026,8 +1186,8 @@ fn space_choice(space: Signal<Option<String>>) -> AnyElement {
     let mut options: Vec<(Option<String>, SharedString)> = vec![(None, t("My space").into())];
     options.extend(spaces.into_iter().map(|h| (Some(h.id.clone()), h.label().into())));
     view()
-        .gap(px(S2))
-        .child(text(t("Joins the space")).text_size(px(TEXT_SM)).text_color(FG_MUTED))
+        .gap(sp(S2))
+        .child(text(t("Joins the space")).text_size(tx(TEXT_SM)).text_color(FG_MUTED))
         .child(segmented(options, move || space.get(), move |v| space.set(v)))
         .into_element()
 }
@@ -1038,20 +1198,20 @@ fn pair_nearby() -> View {
     sheet(t("Pair with a computer")).child(dynamic(move || {
         let st = p.get();
         Some(untracked(move || {
-            let mut v = view().gap(px(S4));
+            let mut v = view().gap(sp(S4));
             if let Some(e) = &st.error {
-                v = v.child(text(e.clone()).text_size(px(TEXT_BASE)).text_color(DANGER));
+                v = v.child(text(e.clone()).text_size(tx(TEXT_BASE)).text_color(DANGER));
             } else if let Some(code) = &st.code {
                 v = v
                     .child(
                         text(tf("Allow it on “{}”. The code there must be the same as this one", &[&st.name]))
-                            .text_size(px(TEXT_BASE))
+                            .text_size(tx(TEXT_BASE))
                             .line_height(px(20.0))
                             .text_color(FG_MUTED),
                     )
                     .child(pairing_code(code));
             } else {
-                v = v.child(text(tf("Connecting to “{}”…", &[&st.name])).text_size(px(TEXT_BASE)).text_color(FG_MUTED));
+                v = v.child(text(tf("Connecting to “{}”…", &[&st.name])).text_size(tx(TEXT_BASE)).text_color(FG_MUTED));
             }
             v.child(view().flex_row().justify_end().child(btn(
                 if st.error.is_some() { t("Close") } else { t("Cancel") },
@@ -1073,7 +1233,7 @@ pub(crate) fn nearby_list() -> View {
         return view();
     }
     crate::lan::scan();
-    view().gap(px(S2)).child(dynamic(|| {
+    view().gap(sp(S2)).child(dynamic(|| {
         let list = crate::lan::nearby();
         let scanning = crate::lan::scanning();
         let scanned = crate::lan::scanned();
@@ -1081,17 +1241,17 @@ pub(crate) fn nearby_list() -> View {
             let head = view()
                 .flex_row()
                 .items_center()
-                .gap(px(S2))
-                .child(text(t("On this network")).text_size(px(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG_MUTED).flex_1())
+                .gap(sp(S2))
+                .child(text(t("On this network")).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG_MUTED).flex_1())
                 .child(if scanning {
-                    text(t("Searching…")).text_size(px(TEXT_SM)).text_color(FG_FAINT).into_element()
+                    text(t("Searching…")).text_size(tx(TEXT_SM)).text_color(FG_FAINT).into_element()
                 } else {
                     icon_btn(Icon::RotateCw, Sz::Sm, t("Search again"), crate::lan::scan).into_element()
                 });
             let mut c = card();
             if list.is_empty() {
                 let note = if scanned && !scanning { t("No computer running Sophon found on this network") } else { t("Searching…") };
-                c = c.child(view().px(px(S4)).py(px(S3)).child(text(note).text_size(px(TEXT_SM)).text_color(FG_MUTED)));
+                c = c.child(view().px(sp(S4)).py(sp(S3)).child(text(note).text_size(tx(TEXT_SM)).text_color(FG_MUTED)));
             }
             for (i, n) in list.into_iter().enumerate() {
                 let paired = n.host.is_some();
@@ -1101,18 +1261,18 @@ pub(crate) fn nearby_list() -> View {
                         .on_press(move || crate::lan::connect(n.clone()))
                         .flex_row()
                         .items_center()
-                        .gap(px(S3))
+                        .gap(sp(S3))
                         .h(px(52.0))
-                        .px(px(S4))
+                        .px(sp(S4))
                         .when(i > 0, |v| v.border_t_1().border_color(BORDER))
                         .active(|s| s.bg(highlight()))
                         .hover(|s| s.bg(highlight()))
                         .child(icon(Icon::Monitor, 18.0).text_color(FG_MUTED))
-                        .child(text(name).text_size(px(TEXT_BASE)).number_of_lines(1).flex_1())
-                        .child(text(if paired { t("Paired") } else { t("Pair") }).text_size(px(TEXT_SM)).text_color(if paired { FG_MUTED } else { ACCENT })),
+                        .child(text(name).text_size(tx(TEXT_BASE)).number_of_lines(1).flex_1())
+                        .child(text(if paired { t("Paired") } else { t("Pair") }).text_size(tx(TEXT_SM)).text_color(if paired { FG_MUTED } else { ACCENT })),
                 );
             }
-            view().gap(px(S2)).child(head).child(c).into_element()
+            view().gap(sp(S2)).child(head).child(c).into_element()
         }))
     }))
 }
@@ -1123,7 +1283,7 @@ fn pair_device() -> View {
         .w(px(480.0))
         .child(
             text(t("Scan with your iPhone's camera and open it in Sophon. On the same Wi-Fi it connects directly; anywhere else through the encrypted relay. Both are end to end encrypted"))
-                .text_size(px(TEXT_SM))
+                .text_size(tx(TEXT_SM))
                 .line_height(px(18.0))
                 .text_color(FG_MUTED),
         )
@@ -1131,26 +1291,26 @@ fn pair_device() -> View {
             let st = p.get();
             Some(untracked(move || {
                 if !st.loaded {
-                    return text(t("Loading…")).text_color(FG_MUTED).into_element();
+                    return loading().into_element();
                 }
                 if let Some(e) = st.error.clone() {
-                    return text(e).text_size(px(TEXT_SM)).text_color(DANGER).into_element();
+                    return text(e).text_size(tx(TEXT_SM)).text_color(DANGER).into_element();
                 }
                 let Some(link) = st.sophon_url.clone() else {
                     return text(t("Neither the LAN bridge nor the relay is available: turn on Remote relay in Settings"))
-                        .text_size(px(TEXT_SM))
+                        .text_size(tx(TEXT_SM))
                         .text_color(WARNING)
                         .into_element();
                 };
-                let mut v = view().gap(px(S3)).items_center();
+                let mut v = view().gap(sp(S3)).items_center();
                 if let Some(svg_text) = st.qr_svg.clone() {
                     v = v.child(
-                        view().p(px(S2)).rounded(px(R_XL)).bg(AdaptiveColor::rgb(0xffffff, 0xffffff)).child(
+                        view().p(sp(S2)).rounded(px(R_XL)).bg(AdaptiveColor::rgb(0xffffff, 0xffffff)).child(
                             svg(nsh_core::element::ImageSrc::svg_markup(&svg_text)).w(px(240.0)).h(px(240.0)),
                         ),
                     );
                 }
-                let mut ways = view().flex_row().flex_wrap().gap(px(S2)).justify_center();
+                let mut ways = view().flex_row().flex_wrap().gap(sp(S2)).justify_center();
                 if let Some(addr) = store::bridge_addr() {
                     ways = ways.child(badge(tf("Same Wi-Fi · {}", &[&addr]), SUCCESS));
                 }
@@ -1158,7 +1318,7 @@ fn pair_device() -> View {
                     ways = ways.child(badge(t("Anywhere · relay"), ACCENT));
                 }
                 let (sophon_link, daemon_link) = (link.clone(), st.url.clone());
-                let mut buttons = view().flex_row().gap(px(S2)).child(btn(t("Copy link"), Variant::Secondary, Sz::Md, Some(Icon::Copy), move || {
+                let mut buttons = view().flex_row().gap(sp(S2)).child(btn(t("Copy link"), Variant::Secondary, Sz::Md, Some(Icon::Copy), move || {
                     set_clipboard(sophon_link.clone());
                     store::notify(t("Pairing link copied").into());
                 }));
@@ -1184,7 +1344,7 @@ fn update_dialog() -> View {
     if changes.is_empty() {
         changes.push((version.clone(), st.notes.clone().unwrap_or_default()));
     }
-    let mut list = view().px(px(S6)).py(px(S4)).gap(px(S4));
+    let mut list = view().px(sp(S6)).py(sp(S4)).gap(sp(S4));
     for (i, (v, notes)) in changes.into_iter().enumerate() {
         if i > 0 {
             list = list.child(view().h(px(1.0)).bg(BORDER));
@@ -1192,14 +1352,14 @@ fn update_dialog() -> View {
         let notes = if notes.trim().is_empty() { t("No notes for this release").to_owned() } else { notes };
         list = list.child(
             view()
-                .gap(px(S2))
-                .child(text(format!("v{v}")).text_size(px(TEXT_LG)).font_weight(FontWeight(600)))
+                .gap(sp(S2))
+                .child(text(format!("v{v}")).text_size(tx(TEXT_LG)).font_weight(FontWeight(600)))
                 .child(
                     nsh_base::text_view()
                         .markdown(move || Some(SharedString::from(notes.clone())))
                         .selectable(true)
                         .gap_2()
-                        .text_size(px(TEXT_BASE))
+                        .text_size(tx(TEXT_BASE))
                         .line_height(px(22.0))
                         .text_color(FG),
                 ),
@@ -1232,14 +1392,14 @@ fn update_dialog() -> View {
             view()
                 .flex_row()
                 .items_baseline()
-                .gap(px(S3))
-                .px(px(S6))
-                .pt(px(S6))
-                .pb(px(S4))
+                .gap(sp(S3))
+                .px(sp(S6))
+                .pt(sp(S6))
+                .pb(sp(S4))
                 .border_b_1()
                 .border_color(BORDER)
-                .child(text(tf("Update to {}", &[&format!("v{version}")])).text_size(px(TEXT_LG)).font_weight(FontWeight(600)))
-                .child(text(tf("Changes since {}", &[&format!("v{}", st.current)])).text_size(px(TEXT_SM)).text_color(FG_MUTED).flex_1().number_of_lines(1)),
+                .child(text(tf("Update to {}", &[&format!("v{version}")])).text_size(tx(TEXT_LG)).font_weight(FontWeight(600)))
+                .child(text(tf("Changes since {}", &[&format!("v{}", st.current)])).text_size(tx(TEXT_SM)).text_color(FG_MUTED).flex_1().number_of_lines(1)),
         )
         .child(scroll().flex_shrink(1.0).child(list))
         .child(
@@ -1247,14 +1407,14 @@ fn update_dialog() -> View {
                 .flex_row()
                 .items_center()
                 .justify_end()
-                .gap(px(S2))
-                .px(px(S6))
-                .py(px(S4))
+                .gap(sp(S2))
+                .px(sp(S6))
+                .py(sp(S4))
                 .border_t_1()
                 .border_color(BORDER)
                 .child(dynamic(move || {
                     let e = failed.get()?;
-                    Some(untracked(move || text(e.clone()).text_size(px(TEXT_SM)).text_color(DANGER).flex_1().number_of_lines(2).into_element()))
+                    Some(untracked(move || text(e.clone()).text_size(tx(TEXT_SM)).text_color(DANGER).flex_1().number_of_lines(2).into_element()))
                 }))
                 .child(btn(t("Later"), Variant::Ghost, Sz::Md, None, store::close_modal))
                 .child(primary),

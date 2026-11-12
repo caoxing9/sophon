@@ -142,16 +142,16 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
             .child(
                 liquid_glass(view())
                     .rounded(px(24.0))
-                    .px(px(S3))
-                    .pt(px(S3))
-                    .pb(px(S2))
-                    .gap(px(S2))
-                    .child(editor(doc, text_value, placeholder, TEXT_LG, 160.0, changed).px(px(S1)))
+                    .px(sp(S3))
+                    .pt(sp(S3))
+                    .pb(sp(S2))
+                    .gap(sp(S2))
+                    .child(editor(doc, text_value, placeholder, TEXT_LG, 160.0, changed).px(sp(S1)))
                     .child(
                         view()
                             .flex_row()
                             .items_center()
-                            .gap(px(S2))
+                            .gap(sp(S2))
                             .child(
                                 nsh_base::button()
                                     .on_press(move || {
@@ -188,12 +188,12 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                                     .flex_row()
                                     .items_center()
                                     .gap(px(6.0))
-                                    .px(px(S1))
+                                    .px(sp(S1))
                                     .active(|s| s.opacity(0.6))
                                     .child(icon(Icon::Sparkles, 15.0).text_color(FG_MUTED))
                                     .child(
                                         text(move || settings.get())
-                                            .text_size(px(TEXT_BASE))
+                                            .text_size(tx(TEXT_BASE))
                                             .text_color(FG_MUTED)
                                             .number_of_lines(1)
                                             .flex_shrink(1.0),
@@ -210,21 +210,14 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
             f(k)
         }
     };
-    // Files dragged from Finder (or anywhere) attach where they are let go:
-    // the card says so while they are over it.
-    let over = signal(false);
+    // Files dragged from Finder attach wherever in the window they are let
+    // go (`dropped`, on the window's root): the card says so while they
+    // are over the window.
+    let over = computed(|| global::<Dropping>().with(|d| d.0));
     view()
         .w_full()
         .max_w(px(CONTENT_MAX_WIDTH))
         .self_center()
-        .on_file_drag_enter(move || over.set(true))
-        .on_file_drag_leave(move || over.set(false))
-        .on_file_drop(move |e: &nsh_core::element::FileDropEvent| {
-            over.set(false);
-            if let Some(key) = key.get_untracked() {
-                attach_uris(&key, &e.uris, false);
-            }
-        })
         .child(queue_track(live))
         .child(suggest_panel(target, doc))
         .child(chips::preview_layer(key))
@@ -232,14 +225,14 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         .w_full()
         .rounded(px(24.0))
         .border_color(move || if over.get() { ACCENT.into() } else { glass_edge() })
-        .child(editor(doc, text_value, placeholder, TEXT_CONTENT, 220.0, changed).mx(px(S4)).mt(px(14.0)).mb(px(S1)))
+        .child(editor(doc, text_value, placeholder, TEXT_CONTENT, 220.0, changed).mx(sp(S4)).mt(px(14.0)).mb(sp(S1)))
         .child(
             view()
                 .flex_row()
                 .items_center()
-                .gap(px(S2))
-                .px(px(S2))
-                .pb(px(S2))
+                .gap(sp(S2))
+                .px(sp(S2))
+                .pb(sp(S2))
                 .child(
                     // The controls give up width first (their labels shorten);
                     // the send / stop disc keeps its place in the corner.
@@ -253,8 +246,8 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                 .child(
                     dropup(
                         view()
-                            .w(px(CONTROL_SM))
-                            .h(px(CONTROL_SM))
+                            .w(sp(CONTROL_SM))
+                            .h(sp(CONTROL_SM))
                             .items_center()
                             .justify_center()
                             .rounded(px(R_FULL))
@@ -479,7 +472,7 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
             return None;
         }
         Some(untracked(move || {
-            let mut list = card().mb(px(S2)).p(px(S1)).bg(POPOVER).shadow_md();
+            let mut list = card().mb(sp(S2)).p(sp(S1)).bg(POPOVER).shadow_md();
             for (glyph, label, detail, insert, dir) in rows.clone() {
                 list = list.child(
                     button()
@@ -501,14 +494,14 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
                         })
                         .flex_row()
                         .items_center()
-                        .gap(px(S2))
-                        .h(px(CONTROL_MD))
-                        .px(px(S2))
+                        .gap(sp(S2))
+                        .h(sp(CONTROL_MD))
+                        .px(sp(S2))
                         .rounded(px(R_LG))
                         .hover(|s| s.bg(highlight()))
                         .child(icon(glyph, 15.0).text_color(FG_MUTED))
-                        .child(text(label).text_size(px(TEXT_BASE)).font_family(|| MONO).text_color(FG).flex_shrink_0())
-                        .child(text(detail).text_size(px(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1).flex_1()),
+                        .child(text(label).text_size(tx(TEXT_BASE)).font_family(mono_font).text_color(FG).flex_shrink_0())
+                        .child(text(detail).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1).flex_1()),
                 );
             }
             list
@@ -529,7 +522,7 @@ fn queue_track(live: bool) -> impl IntoElement {
         Some(untracked(move || {
             // Waiting after an Escape: said, with the key that takes them back.
             let held = store::selected_id().is_some_and(|id| store::queue_held(&id));
-            let mut track = card().mb(px(S2)).px(px(S3)).py(px(S2)).gap(px(S1)).child(section_label(if held {
+            let mut track = card().mb(sp(S2)).px(sp(S3)).py(sp(S2)).gap(sp(S1)).child(section_label(if held {
                 t("Queued · paused — Esc to edit, send to continue")
             } else {
                 t("Queued")
@@ -539,9 +532,9 @@ fn queue_track(live: bool) -> impl IntoElement {
                     view()
                         .flex_row()
                         .items_center()
-                        .gap(px(S2))
+                        .gap(sp(S2))
                         .child(icon(Icon::Inbox, 14.0).text_color(FG_FAINT))
-                        .child(text(msg).text_size(px(TEXT_BASE)).number_of_lines(1).flex_1())
+                        .child(text(msg).text_size(tx(TEXT_BASE)).number_of_lines(1).flex_1())
                         .child(icon_btn(Icon::X, Sz::Sm, t("Remove from queue"), move || {
                             if let Some(id) = store::selected_id() {
                                 store::unqueue(&id, i);
@@ -642,7 +635,7 @@ pub(crate) fn thinking_options(live: bool) -> Vec<crate::daemon::model::Opt> {
 /// A hint line under a composer (errors, where it starts).
 pub(crate) fn hint(message: impl Fn() -> Option<(String, bool)> + 'static) -> impl IntoElement {
     let message = computed(message);
-    view().w_full().max_w(px(CONTENT_MAX_WIDTH)).self_center().px(px(S2)).child(dynamic(move || {
+    view().w_full().max_w(px(CONTENT_MAX_WIDTH)).self_center().px(sp(S2)).child(dynamic(move || {
         let (m, error) = message.get()?;
         Some(untracked(move || {
             view()
@@ -656,7 +649,7 @@ pub(crate) fn hint(message: impl Fn() -> Option<(String, bool)> + 'static) -> im
                 }))
                 .child(
                     text(m.clone())
-                        .text_size(px(TEXT_SM))
+                        .text_size(tx(TEXT_SM))
                         .font_weight(FontWeight(400))
                         .text_color(if error { DANGER } else { FG_MUTED })
                         .selectable(true)
@@ -771,13 +764,13 @@ pub(crate) fn context_meter() -> impl IntoElement {
                 .flex_row()
                 .items_center()
                 .gap(px(6.0))
-                .px(px(S2))
+                .px(sp(S2))
                 .child(
                     view().w(px(28.0)).h(px(4.0)).rounded(px(R_FULL)).bg(SURFACE3).child(
                         view().h_full().w(relative((pct.min(100) as f32) / 100.0)).rounded(px(R_FULL)).bg(tone),
                     ),
                 )
-                .child(text(label).text_size(px(TEXT_XS)).font_family(|| MONO).text_color(tone))
+                .child(text(label).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(tone))
         }))
     }))
 }
@@ -838,8 +831,8 @@ fn mic_button(doc: Doc) -> impl IntoElement {
             });
         })
         .accessibility_label(t("Dictate"))
-        .w(px(CONTROL_SM))
-        .h(px(CONTROL_SM))
+        .w(sp(CONTROL_SM))
+        .h(sp(CONTROL_SM))
         .items_center()
         .justify_center()
         .rounded(px(R_FULL))
@@ -870,6 +863,30 @@ fn attach_pasted(key: &str, e: &RichEditorPastedFiles) {
     }
     insert_images(key, images);
     attach_uris(key, &e.uris, true);
+}
+
+/// Files are being dragged over the window.
+#[derive(Clone, Default, PartialEq)]
+struct Dropping(bool);
+
+/// Files are over the window (`true`), or left it.
+pub(crate) fn dragging_over(over: bool) {
+    global::<Dropping>().set(Dropping(over));
+}
+
+/// Files let go anywhere in the window: attached to the composer on screen
+/// (the open conversation's, or the new conversation's).
+pub(crate) fn dropped(uris: &[String]) {
+    dragging_over(false);
+    let key = match (store::screen(), store::tab()) {
+        (store::Screen::Workspace(_), store::Tab::Agent(id)) => Some(format!("agent:{id}")),
+        (store::Screen::Workspace(_), store::Tab::Draft) | (store::Screen::NewWorkspace, _) => Some("form".to_owned()),
+        _ => None,
+    };
+    match key.filter(|k| composer_doc::existing(k).is_some()) {
+        Some(key) => attach_uris(&key, uris, false),
+        None => store::notify(t("Open a conversation to attach files to").to_owned()),
+    }
 }
 
 /// Files by their `file:` addresses, pasted (copied in Finder) or dropped

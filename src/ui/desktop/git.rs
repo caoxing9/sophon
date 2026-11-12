@@ -14,14 +14,14 @@ pub(crate) fn git_controls() -> impl IntoElement {
     view()
         .flex_row()
         .items_center()
-        .gap(px(S2))
+        .gap(sp(S2))
         .child(dynamic(move || {
             let st = git.with(|g| g.status.clone()).filter(|s| s.is_git && s.has_remote)?;
             if st.ahead + st.behind == 0 {
                 return None;
             }
             Some(untracked(move || {
-                text(format!("↑{} ↓{}", st.ahead, st.behind)).text_size(px(TEXT_SM)).font_family(|| MONO).text_color(FG_MUTED)
+                text(format!("↑{} ↓{}", st.ahead, st.behind)).text_size(tx(TEXT_SM)).font_family(mono_font).text_color(FG_MUTED)
             }))
         }))
         .child(dynamic(move || {
@@ -60,7 +60,7 @@ fn pr_badge(pr: crate::daemon::connection::PullRequest) -> impl IntoElement {
         .items_center()
         .gap(px(6.0))
         .h(px(26.0))
-        .px(px(S2))
+        .px(sp(S2))
         .rounded(px(R_FULL))
         .bg(tint(tone, 0.1))
         .hover(|s| s.opacity(0.85))
@@ -70,13 +70,13 @@ fn pr_badge(pr: crate::daemon::connection::PullRequest) -> impl IntoElement {
                 Some(n) => format!("#{n} {state}"),
                 None => state.to_owned(),
             })
-            .text_size(px(TEXT_SM))
+            .text_size(tx(TEXT_SM))
             .font_weight(FontWeight(500))
             .text_color(tone),
         )
         .when_some(checks, |v, (c, label)| {
             v.child(view().w(px(1.0)).h(px(12.0)).bg(tint(tone, 0.3)))
-                .child(text(label).text_size(px(TEXT_SM)).text_color(c))
+                .child(text(label).text_size(tx(TEXT_SM)).text_color(c))
         })
 }
 

@@ -7,7 +7,7 @@ import { expect, open, test } from "nsh/test";
 // after the press that opens it, and a slow machine (CI) shows that.
 async function newWorkspace(app: Awaited<ReturnType<typeof open>>) {
   await app.press("New workspace >> nth=0");
-  await app.waitFor("text:Import session");
+  await app.waitFor("text:Import sessions");
 }
 
 test("shows the sidebar and its entry points", async () => {
@@ -19,7 +19,7 @@ test("shows the sidebar and its entry points", async () => {
 test("opens the new workspace screen", async () => {
   const app = await open(".", { width: 1100, height: 760 });
   await newWorkspace(app);
-  expect(app.texts()).toContain("Import session");
+  expect(app.texts()).toContain("Import sessions");
 });
 
 test("attaches a pasted screenshot as a chip in the text", async () => {

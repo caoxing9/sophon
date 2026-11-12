@@ -31,18 +31,18 @@ pub(crate) fn notice_bar() -> impl IntoElement {
                     view()
                         .flex_row()
                         .items_center()
-                        .gap(px(S2))
+                        .gap(sp(S2))
                         .max_w(px(560.0))
-                        .pl(px(S4))
-                        .pr(px(S1))
-                        .py(px(S1))
+                        .pl(sp(S4))
+                        .pr(sp(S1))
+                        .py(sp(S1))
                         .rounded(px(R_FULL))
                         .bg(FG)
                         .shadow_lg()
                         .child(icon(Icon::Info, 15.0).text_color(SURFACE0))
                         .child(
                             text(m.clone())
-                                .text_size(px(TEXT_SM))
+                                .text_size(tx(TEXT_SM))
                                 .text_color(SURFACE0)
                                 .number_of_lines(2)
                                 .flex_shrink(1.0),
@@ -51,13 +51,13 @@ pub(crate) fn notice_bar() -> impl IntoElement {
                             v.child(
                                 nsh_base::button()
                                     .on_press(store::run_notice_action)
-                                    .px(px(S3))
+                                    .px(sp(S3))
                                     .h(px(26.0))
                                     .rounded(px(R_FULL))
                                     .items_center()
                                     .justify_center()
                                     .bg(tint(SURFACE0, 0.18))
-                                    .child(text(t("Undo")).text_size(px(TEXT_SM)).font_weight(nsh_core::element::FontWeight(600)).text_color(SURFACE0)),
+                                    .child(text(t("Undo")).text_size(tx(TEXT_SM)).font_weight(nsh_core::element::FontWeight(600)).text_color(SURFACE0)),
                             )
                         })
                         .child(

@@ -14,16 +14,16 @@ pub(crate) fn schedules(compact: bool) -> impl IntoElement {
             .w_full()
             .max_w(px(820.0))
             .self_center()
-            .px(px(S6))
-            .py(px(S8))
-            .gap(px(S6))
+            .px(sp(S6))
+            .py(sp(S8))
+            .gap(sp(S6))
             .child(
                 view()
                     .flex_row()
                     .items_center()
-                    .gap(px(S2))
+                    .gap(sp(S2))
                     .when(compact, |v| v.child(icon_btn(Icon::ArrowLeft, Sz::Sm, t("Back"), store::go_home)))
-                    .child(text(t("Schedules")).text_size(px(TEXT_2XL)).font_weight(FontWeight(500)).flex_1())
+                    .child(text(t("Schedules")).text_size(tx(TEXT_2XL)).font_weight(FontWeight(500)).flex_1())
                     .child(btn(t("New schedule"), Variant::Primary, Sz::Md, Some(Icon::Plus), || {
                         store::open_modal(store::Modal::NewSchedule)
                     })),
@@ -31,13 +31,13 @@ pub(crate) fn schedules(compact: bool) -> impl IntoElement {
             .child(dynamic(move || {
                 let items = list.get();
                 Some(untracked(move || match items.clone() {
-                    None => text(t("Loading…")).text_color(FG_MUTED).into_element(),
+                    None => loading().into_element(),
                     Some(items) if items.is_empty() => view()
                         .items_center()
-                        .gap(px(S2))
-                        .py(px(S8))
+                        .gap(sp(S2))
+                        .py(sp(S8))
                         .child(icon(Icon::CalendarClock, 24.0).text_color(FG_FAINT))
-                        .child(text(t("No schedules yet")).text_size(px(TEXT_BASE)).text_color(FG_MUTED))
+                        .child(text(t("No schedules yet")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED))
                         .into_element(),
                     Some(items) => {
                         let mut c = card();
@@ -86,8 +86,8 @@ fn row(s: Schedule, first: bool) -> impl IntoElement {
     let head = view()
         .flex_row()
         .items_center()
-        .gap(px(S3))
-        .p(px(S4))
+        .gap(sp(S3))
+        .p(sp(S4))
         .child(icon(Icon::CalendarClock, 18.0).text_color(FG_MUTED))
         .child(
             view()
@@ -97,11 +97,11 @@ fn row(s: Schedule, first: bool) -> impl IntoElement {
                     view()
                         .flex_row()
                         .items_center()
-                        .gap(px(S2))
-                        .child(text(s.name.clone()).text_size(px(TEXT_BASE)).font_weight(FontWeight(500)))
+                        .gap(sp(S2))
+                        .child(text(s.name.clone()).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)))
                         .child(badge(label, tone)),
                 )
-                .child(text(s.prompt.clone()).text_size(px(TEXT_SM)).text_color(FG).number_of_lines(2))
+                .child(text(s.prompt.clone()).text_size(tx(TEXT_SM)).text_color(FG).number_of_lines(2))
                 .child(
                     text(format!(
                         "{} · {} · {} {} · {} {}",
@@ -112,7 +112,7 @@ fn row(s: Schedule, first: bool) -> impl IntoElement {
                         t("last"),
                         when_label(&s.last_run)
                     ))
-                    .text_size(px(TEXT_SM))
+                    .text_size(tx(TEXT_SM))
                     .text_color(FG_MUTED)
                     .number_of_lines(1),
                 ),
@@ -139,9 +139,9 @@ fn row(s: Schedule, first: bool) -> impl IntoElement {
 
 /// A schedule's runs under its row, newest first.
 fn runs_list(runs: Vec<ScheduleRun>) -> View {
-    let mut list = view().px(px(S4)).pb(px(S3)).pl(px(S4 + 18.0 + S3)).gap(px(2.0));
+    let mut list = view().px(sp(S4)).pb(sp(S3)).pl(px(S4 + 18.0 + S3)).gap(px(2.0));
     if runs.is_empty() {
-        return list.child(text(t("No runs yet")).text_size(px(TEXT_SM)).text_color(FG_MUTED));
+        return list.child(text(t("No runs yet")).text_size(tx(TEXT_SM)).text_color(FG_MUTED));
     }
     // The last twenty: the page is a list of schedules, not a log.
     for run in runs.into_iter().take(20) {
@@ -153,15 +153,15 @@ fn runs_list(runs: Vec<ScheduleRun>) -> View {
         let mut line = view()
             .flex_row()
             .items_center()
-            .gap(px(S2))
-            .h(px(CONTROL_SM))
-            .child(text(local_time(&run.started, true)).text_size(px(TEXT_SM)).text_color(FG).font_family(|| MONO))
+            .gap(sp(S2))
+            .h(sp(CONTROL_SM))
+            .child(text(local_time(&run.started, true)).text_size(tx(TEXT_SM)).text_color(FG).font_family(mono_font))
             .child(badge(label, tone));
         if let Some(took) = took(&run) {
-            line = line.child(text(took).text_size(px(TEXT_SM)).text_color(FG_MUTED));
+            line = line.child(text(took).text_size(tx(TEXT_SM)).text_color(FG_MUTED));
         }
         line = line.child(
-            text(run.error.clone().unwrap_or_default()).text_size(px(TEXT_SM)).text_color(DANGER).number_of_lines(1).flex_1(),
+            text(run.error.clone().unwrap_or_default()).text_size(tx(TEXT_SM)).text_color(DANGER).number_of_lines(1).flex_1(),
         );
         if let Some(agent) = run.agent_id.clone() {
             let workspace = run.workspace_id.clone();
@@ -173,7 +173,7 @@ fn runs_list(runs: Vec<ScheduleRun>) -> View {
         // What the agent answered: usually all there is to read of a run.
         if let Some(output) = run.output.clone() {
             list = list.child(
-                text(output).text_size(px(TEXT_SM)).line_height(px(18.0)).text_color(FG_MUTED).number_of_lines(3).pb(px(S2)),
+                text(output).text_size(tx(TEXT_SM)).line_height(px(18.0)).text_color(FG_MUTED).number_of_lines(3).pb(sp(S2)),
             );
         }
     }

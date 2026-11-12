@@ -24,7 +24,7 @@ fn popup(s: StyleRefinement) -> StyleRefinement {
         .rounded(px(14.0))
         .border_1()
         .border_color(glass_edge())
-        .p(px(S1))
+        .p(sp(S1))
         .min_w(px(220.0))
         .max_w(px(360.0))
         .shadow_lg()
@@ -70,20 +70,20 @@ pub(crate) fn menu_row(
 ) -> MenuItemElement {
     let label: SharedString = label.into();
     let mut body = view().flex_1().gap(px(1.0)).child(
-        text(label).text_size(px(TEXT_BASE)).text_color(FG).number_of_lines(1),
+        text(label).text_size(tx(TEXT_BASE)).text_color(FG).number_of_lines(1),
     );
     if let Some(detail) = detail.filter(|d| !d.is_empty()) {
-        body = body.child(text(detail).text_size(px(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1));
+        body = body.child(text(detail).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1));
     }
     let mut row = menu_item()
         .on_select(on_select)
         .flex_row()
         .items_center()
-        .gap(px(S2))
-        .min_h(px(CONTROL_MD))
+        .gap(sp(S2))
+        .min_h(sp(CONTROL_MD))
         // A hairline between rows that fill under the pointer.
         .my(px(1.0))
-        .px(px(S2))
+        .px(sp(S2))
         .py(px(5.0))
         .rounded(px(R_LG))
         .hover(|s| s.bg(highlight()))
@@ -108,27 +108,27 @@ pub(crate) fn menu_row_danger(label: &'static str, lead: Icon, on_select: impl F
         .on_select(on_select)
         .flex_row()
         .items_center()
-        .gap(px(S2))
-        .min_h(px(CONTROL_MD))
+        .gap(sp(S2))
+        .min_h(sp(CONTROL_MD))
         // A hairline between rows that fill under the pointer.
         .my(px(1.0))
-        .px(px(S2))
+        .px(sp(S2))
         .rounded(px(R_LG))
         .hover(|s| s.bg(tint(DESTRUCTIVE, 0.1)))
         .child(icon(lead, 16.0).text_color(DESTRUCTIVE))
-        .child(text(label).text_size(px(TEXT_BASE)).text_color(DESTRUCTIVE))
+        .child(text(label).text_size(tx(TEXT_BASE)).text_color(DESTRUCTIVE))
 }
 
 /// A heading inside a menu.
 pub(crate) fn menu_heading(label: impl Into<SharedString>) -> View {
     let label: SharedString = label.into();
-    view().px(px(S2)).pt(px(S2)).pb(px(S1)).child(
-        text(label).text_size(px(TEXT_XS)).font_weight(FontWeight(500)).text_color(FG_FAINT),
+    view().px(sp(S2)).pt(sp(S2)).pb(sp(S1)).child(
+        text(label).text_size(tx(TEXT_XS)).font_weight(FontWeight(500)).text_color(FG_FAINT),
     )
 }
 
 pub(crate) fn menu_divider() -> impl IntoElement {
-    menu_separator().h(px(1.0)).my(px(S1)).mx(px(S1)).bg(BORDER)
+    menu_separator().h(px(1.0)).my(sp(S1)).mx(sp(S1)).bg(BORDER)
 }
 
 /// A pill trigger for a picker in a toolbar: icon, label, chevron.
@@ -137,8 +137,8 @@ pub(crate) fn picker_trigger(lead: Option<Icon>, label: impl IntoReactive<Shared
         .flex_row()
         .items_center()
         .gap(px(5.0))
-        .h(px(CONTROL_SM))
-        .px(px(S2))
+        .h(sp(CONTROL_SM))
+        .px(sp(S2))
         .min_w(px(0.0))
         .flex_shrink(1.0)
         .rounded(px(R_FULL))
@@ -148,7 +148,7 @@ pub(crate) fn picker_trigger(lead: Option<Icon>, label: impl IntoReactive<Shared
     }
     v.child(
         text(label)
-            .text_size(px(TEXT_SM))
+            .text_size(tx(TEXT_SM))
             .font_weight(FontWeight(500))
             .text_color(FG_MUTED)
             .number_of_lines(1)

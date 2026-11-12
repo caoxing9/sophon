@@ -230,7 +230,7 @@ pub(crate) fn palette() -> impl IntoElement {
                 .accessibility_label(t("Command palette"))
                 .auto_focus(true)
                 .on_select(|id: &SharedString| run(id))
-                .empty(view().p(px(S4)).child(text(t("No results")).text_size(px(TEXT_BASE)).text_color(FG_MUTED)))
+                .empty(view().p(sp(S4)).child(text(t("No results")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED)))
                 .h(px(420.0))
                 .search_prefix(icon(Icon::Search, 17.0).text_color(FG_MUTED))
                 .search_bar_class("flex-row items-center gap-3 px-4 h-14 border-b border-border")
@@ -244,13 +244,13 @@ pub(crate) fn palette() -> impl IntoElement {
                     view()
                         .flex_row()
                         .items_center()
-                        .gap(px(S2))
-                        .h(px(CONTROL_MD + 4.0))
-                        .px(px(S3))
-                        .child(text(entry.label.clone()).text_size(px(TEXT_BASE)).text_color(FG).number_of_lines(1).flex_1())
+                        .gap(sp(S2))
+                        .h(sp(CONTROL_MD + 4.0))
+                        .px(sp(S3))
+                        .child(text(entry.label.clone()).text_size(tx(TEXT_BASE)).text_color(FG).number_of_lines(1).flex_1())
                         .child(
                             text(entry.shortcut_label.clone().unwrap_or_default())
-                                .text_size(px(TEXT_SM))
+                                .text_size(tx(TEXT_SM))
                                 .text_color(FG_FAINT),
                         )
                 }),

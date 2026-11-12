@@ -24,22 +24,22 @@ pub(crate) fn page() -> Screen {
     nav_page().key("add-project").header_visible(false).title(t("Add project")).child(
         view()
             .flex_1()
-            .child(top_bar(text(t("Add project")).text_size(px(TEXT_BASE)).font_weight(FontWeight(600)), view().w(px(44.0))))
+            .child(top_bar(text(t("Add project")).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)), view().w(px(44.0))))
             .child(
-                view().px(px(S4)).pb(px(S2)).child(
+                view().px(sp(S4)).pb(sp(S2)).child(
                     view()
                         .flex_row()
                         .items_center()
-                        .gap(px(S2))
+                        .gap(sp(S2))
                         .h(px(44.0))
-                        .px(px(S4))
+                        .px(sp(S4))
                         .rounded(px(R_FULL))
                         .bg(SURFACE2)
                         .child(icon(Icon::Search, 18.0).text_color(FG_MUTED))
                         .child(
                             input()
                                 .flex_1()
-                                .text_size(px(TEXT_LG))
+                                .text_size(tx(TEXT_LG))
                                 .text_color(FG)
                                 .value(move || query.get())
                                 .on_change(move |v: &str| query.set(v.to_owned()))
@@ -52,7 +52,7 @@ pub(crate) fn page() -> Screen {
                 Some(untracked(move || if searching { found(query).into_element() } else { folders(browse).into_element() }))
             })))
             .child(
-                view().px(px(S4)).pt(px(S2)).pb_safe_area_plus(px(S2)).child(
+                view().px(sp(S4)).pt(sp(S2)).pb_safe_area_plus(sp(S2)).child(
                     liquid_glass(view()).rounded(px(R_FULL)).child(
                         button()
                             .on_press(move || {
@@ -67,14 +67,14 @@ pub(crate) fn page() -> Screen {
                             .flex_row()
                             .items_center()
                             .justify_center()
-                            .gap(px(S2))
+                            .gap(sp(S2))
                             .rounded(px(R_FULL))
                             .bg(ACCENT)
                             .active(|s| s.opacity(0.8))
                             .child(icon(Icon::FolderPlus, 18.0).text_color(ACCENT_FG))
                             .child(
                                 text(move || tf("Add “{}”", &[&folder_name.get()]))
-                                    .text_size(px(TEXT_LG))
+                                    .text_size(tx(TEXT_LG))
                                     .font_weight(FontWeight(600))
                                     .text_color(ACCENT_FG)
                                     .number_of_lines(1),
@@ -90,14 +90,14 @@ pub(crate) fn page() -> Screen {
 fn folders(browse: Memo<store::Browse>) -> impl IntoElement {
     scroll().flex_1().child(
         view()
-            .px(px(S4))
-            .gap(px(S2))
+            .px(sp(S4))
+            .gap(sp(S2))
             .child(
                 view()
                     .flex_row()
                     .items_center()
-                    .gap(px(S2))
-                    .px(px(S1))
+                    .gap(sp(S2))
+                    .px(sp(S1))
                     .child(
                         button()
                             .on_press(move || {
@@ -117,8 +117,8 @@ fn folders(browse: Memo<store::Browse>) -> impl IntoElement {
                     .child(
                         text(move || browse.with(|b| b.cwd.clone()))
                             .flex_1()
-                            .text_size(px(TEXT_SM))
-                            .font_family(|| MONO)
+                            .text_size(tx(TEXT_SM))
+                            .font_family(mono_font)
                             .text_color(FG_MUTED)
                             .number_of_lines(1),
                     ),
@@ -127,29 +127,29 @@ fn folders(browse: Memo<store::Browse>) -> impl IntoElement {
                 let b = browse.get();
                 Some(untracked(move || {
                     if let Some(e) = b.error.clone() {
-                        return text(e).p(px(S4)).text_size(px(TEXT_BASE)).text_color(DANGER).into_element();
+                        return text(e).p(sp(S4)).text_size(tx(TEXT_BASE)).text_color(DANGER).into_element();
                     }
                     if !b.loaded {
-                        return view().pt(px(S8)).items_center().child(loader(None)).into_element();
+                        return view().pt(sp(S8)).items_center().child(loader(None)).into_element();
                     }
                     if b.folders.is_empty() {
-                        return text(t("No folders here")).p(px(S4)).text_size(px(TEXT_BASE)).text_color(FG_MUTED).into_element();
+                        return text(t("No folders here")).p(sp(S4)).text_size(tx(TEXT_BASE)).text_color(FG_MUTED).into_element();
                     }
                     list(b.folders.clone()).into_element()
                 }))
             }))
-            .child(view().h(px(S4))),
+            .child(view().h(sp(S4))),
     )
 }
 
 /// Folders matching what is typed (paths from the home folder).
 fn found(query: Signal<String>) -> impl IntoElement {
     let results = computed(move || store::find_dirs(query.get().trim()));
-    scroll().flex_1().child(view().px(px(S4)).pb(px(S4)).child(dynamic(move || {
+    scroll().flex_1().child(view().px(sp(S4)).pb(sp(S4)).child(dynamic(move || {
         let list_of = results.get();
         Some(untracked(move || {
             if list_of.is_empty() {
-                return text(t("No matching folders")).p(px(S4)).text_size(px(TEXT_BASE)).text_color(FG_MUTED).into_element();
+                return text(t("No matching folders")).p(sp(S4)).text_size(tx(TEXT_BASE)).text_color(FG_MUTED).into_element();
             }
             list(list_of.clone()).into_element()
         }))
@@ -167,9 +167,9 @@ fn list(folders: Vec<String>) -> View {
                 .on_press(move || store::browse(&open))
                 .flex_row()
                 .items_center()
-                .gap(px(S3))
+                .gap(sp(S3))
                 .min_h(px(52.0))
-                .px(px(S4))
+                .px(sp(S4))
                 .when(i > 0, |v| v.border_t_1().border_color(BORDER))
                 .active(|s| s.bg(highlight()))
                 .child(icon(Icon::Folder, 20.0).text_color(ACCENT))
@@ -177,8 +177,8 @@ fn list(folders: Vec<String>) -> View {
                     view()
                         .flex_1()
                         .min_w(px(0.0))
-                        .child(text(name).text_size(px(TEXT_LG)).number_of_lines(1))
-                        .child(text(path).text_size(px(TEXT_XS)).text_color(FG_FAINT).number_of_lines(1)),
+                        .child(text(name).text_size(tx(TEXT_LG)).number_of_lines(1))
+                        .child(text(path).text_size(tx(TEXT_XS)).text_color(FG_FAINT).number_of_lines(1)),
                 )
                 .child(icon(Icon::ChevronRight, 16.0).text_color(FG_FAINT)),
         );

@@ -39,6 +39,72 @@ pub(crate) fn appearance_card() -> View {
             ),
             false,
         ))
+        .child(row(
+            t("Interface font"),
+            t("Any font installed on this device"),
+            font_field(false, "SF Pro"),
+            false,
+        ))
+        .child(row(
+            t("Code font"),
+            t("For code, terminals and numbers"),
+            font_field(true, "JetBrains Mono"),
+            false,
+        ))
+        .child(row(
+            t("Text size"),
+            t("The size of the interface's text, in points"),
+            view()
+                .flex_row()
+                .items_center()
+                .gap(px(6.0))
+                .child(icon_btn(Icon::Minus, Sz::Sm, t("Smaller"), || store::set_font_size(store::look().0 - 1.0)))
+                .child(
+                    nsh_base::button()
+                        .on_press(|| store::set_font_size(store::DEFAULT_FONT_SIZE))
+                        .accessibility_label(t("Back to the default size"))
+                        .w(px(40.0))
+                        .items_center()
+                        .child(text(|| format!("{}", store::look().0)).text_size(tx(TEXT_BASE)).font_family(mono_font)),
+                )
+                .child(icon_btn(Icon::Plus, Sz::Sm, t("Larger"), || store::set_font_size(store::look().0 + 1.0))),
+            false,
+        ))
+        .child(row(
+            t("Compact"),
+            t("Tighter rows and gaps: more on screen"),
+            switch(|| store::look().1, store::set_compact),
+            false,
+        ))
+        // The same, by hand: `fontFamily`, `monoFontFamily`, `fontSize` and
+        // `compact` in the settings file, read when Sophon starts.
+        .when(!MOBILE && cfg!(target_os = "macos"), |card| {
+            card.child(row(
+                t("Settings file"),
+                t("fontFamily, monoFontFamily, fontSize and compact can be set there too; Sophon reads it when it starts"),
+                btn(t("Open settings.json"), Variant::Outline, Sz::Sm, None, store::open_settings_file),
+                false,
+            ))
+        })
+}
+
+/// The font in use, or the default's name: pressed, the installed fonts
+/// to pick from.
+fn font_field(mono: bool, _example: &'static str) -> impl IntoElement {
+    btn(
+        move || -> SharedString {
+            let (ui, code) = store::fonts();
+            match if mono { code } else { ui } {
+                Some(name) => name.into(),
+                None if mono => "Menlo".into(),
+                None => t("System font").into(),
+            }
+        },
+        Variant::Outline,
+        Sz::Sm,
+        Some(Icon::ChevronsUpDown),
+        move || store::open_modal(store::Modal::Fonts { mono }),
+    )
 }
 
 /// What Return does while an agent runs.
@@ -124,15 +190,15 @@ pub(crate) fn page(compact: bool, sections: View) -> impl IntoElement {
                 view()
                     .flex_row()
                     .items_center()
-                    .gap(px(S2))
-                    .child(text(t("Settings")).text_size(px(TEXT_2XL)).font_weight(FontWeight(500))),
+                    .gap(sp(S2))
+                    .child(text(t("Settings")).text_size(tx(TEXT_2XL)).font_weight(FontWeight(500))),
             )
             .child(sections.gap(px(if compact { S6 } else { S8 }))),
     )
 }
 
 pub(crate) fn section(title: &'static str, body: impl IntoElement) -> View {
-    view().gap(px(S3)).child(section_label(title)).child(body)
+    view().gap(sp(S3)).child(section_label(title)).child(body)
 }
 
 /// A settings row: title and hint on the leading rail, the control trailing.
@@ -140,16 +206,16 @@ pub(crate) fn row(title: impl IntoReactive<SharedString>, hint: impl IntoReactiv
     view()
         .flex_row()
         .items_center()
-        .gap(px(S4))
-        .px(px(S4))
-        .py(px(S4))
+        .gap(sp(S4))
+        .px(sp(S4))
+        .py(sp(S4))
         .when(!first, |v| v.border_t_1().border_color(BORDER))
         .child(
             view()
                 .flex_1()
                 .gap(px(2.0))
-                .child(text(title).text_size(px(TEXT_BASE)).text_color(FG))
-                .child(text(hint).text_size(px(TEXT_SM)).text_color(FG_MUTED)),
+                .child(text(title).text_size(tx(TEXT_BASE)).text_color(FG))
+                .child(text(hint).text_size(tx(TEXT_SM)).text_color(FG_MUTED)),
         )
         .child(control)
 }
@@ -183,8 +249,8 @@ pub(crate) fn host_card() -> View {
                 Conn::Connected { version, .. } if !version.is_empty() => version.clone(),
                 _ => "—".into(),
             }))
-            .text_size(px(TEXT_BASE))
-            .font_family(|| MONO)
+            .text_size(tx(TEXT_BASE))
+            .font_family(mono_font)
             .text_color(FG_MUTED),
             false,
         ))
@@ -205,7 +271,7 @@ pub(crate) fn text_generation_card() -> View {
         t("Names chats and branches. A small, fast model is plenty and costs less"),
         dynamic(move || {
             if !loaded.get() {
-                return Some(untracked(|| text(t("Loading…")).text_size(px(TEXT_SM)).text_color(FG_MUTED).into_element()));
+                return Some(untracked(|| working(t("Loading…")).into_element()));
             }
             Some(untracked(move || {
                 dropdown(picker_trigger(Some(Icon::Cpu), move || label.get()))
@@ -286,7 +352,7 @@ pub(crate) fn behavior_card() -> impl IntoElement {
     });
     view().child(dynamic(move || {
         if !loaded.get() {
-            return Some(untracked(|| text(t("Loading…")).text_color(FG_MUTED).into_element()));
+            return Some(untracked(|| working(t("Loading…")).into_element()));
         }
         Some(untracked(move || {
             card()
@@ -298,18 +364,18 @@ pub(crate) fn behavior_card() -> impl IntoElement {
                 .child(host_flag(t("Remote relay"), t("Reach this host from your phone through the encrypted relay"), "/relay/enabled", true, false))
                 .child(
                     view()
-                        .px(px(S4))
-                        .py(px(S4))
-                        .gap(px(S2))
+                        .px(sp(S4))
+                        .py(sp(S4))
+                        .gap(sp(S2))
                         .border_t_1()
                         .border_color(BORDER)
-                        .child(text(t("Extra system prompt")).text_size(px(TEXT_BASE)))
-                        .child(text(t("Appended to every agent's instructions")).text_size(px(TEXT_SM)).text_color(FG_MUTED))
+                        .child(text(t("Extra system prompt")).text_size(tx(TEXT_BASE)))
+                        .child(text(t("Appended to every agent's instructions")).text_size(tx(TEXT_SM)).text_color(FG_MUTED))
                         .child(
                             field()
                                 .multiline(true)
                                 .h(px(88.0))
-                                .py(px(S2))
+                                .py(sp(S2))
                                 .value(move || prompt.get())
                                 .on_change(move |v: &str| prompt.set(v.to_owned()))
                                 .placeholder(t("e.g. Answer in Chinese. Run the tests before you finish")),

@@ -34,7 +34,7 @@ pub(crate) fn dir_page(dir: String) -> Screen {
         view()
             .flex_1()
             .child(top_bar(
-                text(title).text_size(px(TEXT_BASE)).font_weight(FontWeight(600)).number_of_lines(1),
+                text(title).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).number_of_lines(1),
                 view().w(px(44.0)),
             ))
             .child(view().flex_1().px_safe_area().child(listing(dir))),
@@ -57,7 +57,7 @@ fn listing(dir: String) -> impl IntoElement {
             )
             .keys(move || entries.with(|e| e.iter().flatten().map(|e| e.path.clone()).collect::<Vec<_>>()))
             .estimated_item_size(px(52.0))
-            .content_padding_bottom(px(S4))
+            .content_padding_bottom(sp(S4))
             .flex_1()
             .into_element(),
         }))
@@ -73,9 +73,9 @@ fn entry_row(entry: Memo<Option<DirEntry>>) -> impl IntoElement {
         })
         .flex_row()
         .items_center()
-        .gap(px(S3))
+        .gap(sp(S3))
         .min_h(px(52.0))
-        .px(px(S4))
+        .px(sp(S4))
         .active(|s| s.bg(highlight()))
         .child(dynamic(move || {
             let glyph = if is_dir() { Icon::Folder } else { Icon::File };
@@ -83,13 +83,13 @@ fn entry_row(entry: Memo<Option<DirEntry>>) -> impl IntoElement {
         }))
         .child(
             text(move || entry.with(|e| e.as_ref().map(|e| e.name.clone()).unwrap_or_default()))
-                .text_size(px(TEXT_BASE))
+                .text_size(tx(TEXT_BASE))
                 .number_of_lines(1)
                 .flex_1(),
         )
         .child(
             text(move || entry.with(|e| e.as_ref().filter(|e| !e.is_dir).map(|e| format_size(e.size as usize)).unwrap_or_default()))
-                .text_size(px(TEXT_SM))
+                .text_size(tx(TEXT_SM))
                 .text_color(FG_FAINT),
         )
         .child(icon(Icon::ChevronRight, 16.0).text_color(FG_FAINT))
@@ -113,8 +113,8 @@ pub(crate) fn file_page(path: String) -> Screen {
             .child(top_bar(
                 view()
                     .items_center()
-                    .child(text(name).text_size(px(TEXT_BASE)).font_weight(FontWeight(600)).number_of_lines(1))
-                    .child(text(dir).text_size(px(TEXT_XS)).text_color(FG_MUTED).number_of_lines(1)),
+                    .child(text(name).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).number_of_lines(1))
+                    .child(text(dir).text_size(tx(TEXT_XS)).text_color(FG_MUTED).number_of_lines(1)),
                 view()
                     .opacity(move || if busy.get() { 0.4_f32 } else { 1.0 })
                     .child(glass_button(Icon::Download, t("Download"), move || store::download_file(&down))),
@@ -158,12 +158,12 @@ fn content(path: String) -> AnyElement {
                 return scroll()
                     .flex_1()
                     .child(
-                        view().p(px(S4)).child(
+                        view().p(sp(S4)).child(
                             text_view()
                                 .markdown(move || Some(SharedString::from(doc.clone())))
                                 .selectable(true)
                                 .gap_3()
-                                .text_size(px(TEXT_CONTENT))
+                                .text_size(tx(TEXT_CONTENT))
                                 .line_height(px(24.0))
                                 .text_color(FG),
                         ),
@@ -174,18 +174,18 @@ fn content(path: String) -> AnyElement {
                 .flex_1()
                 .child(
                     view()
-                        .p(px(S4))
-                        .gap(px(S3))
+                        .p(sp(S4))
+                        .gap(sp(S3))
                         .child(
                             text(shown)
-                                .text_size(px(TEXT_SM))
+                                .text_size(tx(TEXT_SM))
                                 .line_height(px(19.0))
-                                .font_family(|| MONO)
+                                .font_family(mono_font)
                                 .text_color(FG)
                                 .selectable(true),
                         )
                         .when(cut, |v| {
-                            v.child(text(t("The rest of the file is in its download")).text_size(px(TEXT_SM)).text_color(FG_MUTED))
+                            v.child(text(t("The rest of the file is in its download")).text_size(tx(TEXT_SM)).text_color(FG_MUTED))
                         }),
                 )
                 .into_element()
@@ -200,11 +200,11 @@ fn download_note(path: String, why: String) -> AnyElement {
         .flex_1()
         .items_center()
         .justify_center()
-        .gap(px(S3))
-        .p(px(S6))
+        .gap(sp(S3))
+        .p(sp(S6))
         .pb(px(96.0))
         .child(icon(Icon::File, 40.0).text_color(FG_FAINT))
-        .child(text(why).text_size(px(TEXT_BASE)).text_color(FG_MUTED).text_center())
+        .child(text(why).text_size(tx(TEXT_BASE)).text_color(FG_MUTED).text_center())
         .child(btn(t("Download"), Variant::Primary, Sz::Md, Some(Icon::Download), move || store::download_file(&path)))
         .into_element()
 }
@@ -212,9 +212,9 @@ fn download_note(path: String, why: String) -> AnyElement {
 fn note(glyph: Icon, message: String) -> AnyElement {
     view()
         .flex_row()
-        .gap(px(S2))
-        .p(px(S4))
+        .gap(sp(S2))
+        .p(sp(S4))
         .child(icon(glyph, 16.0).text_color(FG_FAINT))
-        .child(text(message).text_size(px(TEXT_BASE)).text_color(FG_MUTED).flex_1())
+        .child(text(message).text_size(tx(TEXT_BASE)).text_color(FG_MUTED).flex_1())
         .into_element()
 }

@@ -804,6 +804,8 @@ pub(crate) enum SendBehavior {
 /// The open dialog, if any.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Modal {
+    /// Picks the interface's font, or the code font (`mono`).
+    Fonts { mono: bool },
     RenameWorkspace { id: String, name: String },
     RenameAgent { id: String, name: String },
     RenameHost { id: String, name: String },
@@ -2305,6 +2307,10 @@ fn save_prefs() {
         "collapsedProjects": global::<Collapsed>().with_untracked(|c| c.0.clone()),
         "favoriteModels": global::<FavoriteModels>().with_untracked(|f| f.0.clone()),
         "language": crate::i18n::lang_untracked().as_str(),
+        "fontFamily": global::<Fonts>().with_untracked(|f| f.ui.clone()),
+        "monoFontFamily": global::<Fonts>().with_untracked(|f| f.mono.clone()),
+        "fontSize": global::<Look>().with_untracked(|l| l.font_size),
+        "compact": global::<Look>().with_untracked(|l| l.compact),
         "appearance": match global::<Theme>().with_untracked(|t| t.0) {
             nsh_core::platform::Appearance::Light => "light",
             nsh_core::platform::Appearance::Dark => "dark",
@@ -2346,6 +2352,12 @@ pub(crate) fn load_prefs() {
     };
     global::<LocalServiceChosen>().set(LocalServiceChosen(chosen));
     let my_space = v.get("mySpaceName").and_then(serde_json::Value::as_str).map(str::to_owned).filter(|n| !n.trim().is_empty());
+    let font = |k: &str| v.get(k).and_then(serde_json::Value::as_str).and_then(font_name);
+    global::<Fonts>().set(Fonts { ui: font("fontFamily"), mono: font("monoFontFamily") });
+    apply_look(Look {
+        font_size: v.get("fontSize").and_then(serde_json::Value::as_f64).map_or(DEFAULT_FONT_SIZE, font_size_of),
+        compact: v.get("compact").and_then(serde_json::Value::as_bool).unwrap_or(false),
+    });
     global::<Settings>().update(|s| {
         s.send_behavior = behavior;
         s.keep_awake = keep_awake;
@@ -2401,6 +2413,108 @@ pub(crate) fn appearance() -> nsh_core::platform::Appearance {
     global::<Theme>().with(|t| t.0)
 }
 
+/// The fonts the user chose, by family name: the interface's, and the one
+/// for code. `None`: the system's, and Menlo. In `settings.json` as
+/// `fontFamily` and `monoFontFamily`, as an editor's settings have them;
+/// a list (`"SF Mono, Menlo"`) is read as its first name.
+#[derive(Clone, Default, PartialEq)]
+struct Fonts {
+    ui: Option<String>,
+    mono: Option<String>,
+}
+
+/// The interface's text size and density: the base text size in points
+/// (`fontSize`, 14 unless set, from 11 to 20) and whether rows and gaps
+/// are tighter (`compact`).
+#[derive(Clone, Copy, PartialEq)]
+struct Look {
+    font_size: f32,
+    compact: bool,
+}
+
+impl Default for Look {
+    fn default() -> Self {
+        Look { font_size: DEFAULT_FONT_SIZE, compact: false }
+    }
+}
+
+pub(crate) const DEFAULT_FONT_SIZE: f32 = 14.0;
+/// How much of the usual spacing and control heights compact mode keeps.
+const COMPACT: f32 = 0.82;
+
+thread_local! {
+    /// (text, spacing) factors for `kit::tx` and `kit::sp`, which run for
+    /// every view made: kept beside the global, not read through it.
+    static SCALE: std::cell::Cell<(f32, f32)> = const { std::cell::Cell::new((1.0, 1.0)) };
+}
+
+/// The factors text sizes and spacing are multiplied by.
+pub(crate) fn ui_scale() -> (f32, f32) {
+    SCALE.get()
+}
+
+fn apply_look(look: Look) {
+    SCALE.set((look.font_size / DEFAULT_FONT_SIZE, if look.compact { COMPACT } else { 1.0 }));
+    global::<Look>().set(look);
+}
+
+/// (base text size, compact), tracked: a change mounts the UI again.
+pub(crate) fn look() -> (f32, bool) {
+    global::<Look>().with(|l| (l.font_size, l.compact))
+}
+
+/// A text size as set: within what the layout holds, in half points.
+pub(crate) fn font_size_of(points: f64) -> f32 {
+    ((points.clamp(11.0, 20.0) * 2.0).round() / 2.0) as f32
+}
+
+pub(crate) fn set_font_size(points: f32) {
+    let look = global::<Look>().with_untracked(|l| *l);
+    apply_look(Look { font_size: font_size_of(f64::from(points)), ..look });
+    save_prefs();
+}
+
+pub(crate) fn set_compact(compact: bool) {
+    let look = global::<Look>().with_untracked(|l| *l);
+    apply_look(Look { compact, ..look });
+    save_prefs();
+}
+
+/// A font setting as typed: the first family of a comma list, without
+/// quotes; nothing when empty.
+pub(crate) fn font_name(typed: &str) -> Option<String> {
+    let first = typed.split(',').next().unwrap_or_default().trim().trim_matches(|c| c == '"' || c == '\'').trim();
+    (!first.is_empty()).then(|| first.to_owned())
+}
+
+/// (interface, code), for the UI to mount with: tracked, so a change
+/// mounts it again.
+pub(crate) fn fonts() -> (Option<String>, Option<String>) {
+    global::<Fonts>().with(|f| (f.ui.clone(), f.mono.clone()))
+}
+
+pub(crate) fn fonts_untracked() -> (Option<String>, Option<String>) {
+    global::<Fonts>().with_untracked(|f| (f.ui.clone(), f.mono.clone()))
+}
+
+/// Sets the interface's font (`mono`: the code font) and remembers it.
+pub(crate) fn set_font(mono: bool, typed: &str) {
+    let name = font_name(typed);
+    global::<Fonts>().update(|f| if mono { f.mono = name } else { f.ui = name });
+    save_prefs();
+}
+
+/// Opens `settings.json` in the text editor (written first, so it is
+/// there and current).
+pub(crate) fn open_settings_file() {
+    save_prefs();
+    #[cfg(target_os = "macos")]
+    {
+        let path = crate::daemon::data_dir().join("settings.json");
+        let _ = std::process::Command::new("/usr/bin/open").arg("-t").arg(path).spawn();
+    }
+}
+
 /// Shows the app in `appearance` and remembers it.
 pub(crate) fn set_appearance(appearance: nsh_core::platform::Appearance) {
     global::<Theme>().set(Theme(appearance));
@@ -2450,22 +2564,29 @@ pub(crate) fn service_cli() -> Option<std::path::PathBuf> {
 /// installed with npm is a script that starts `node`, which is not there
 /// ("env: node: No such file or directory"), and the service it starts
 /// looks for the agents on what it is given. So: the app's own, then the
-/// folder of the command line itself, then the usual folders for what is
-/// installed by hand, Homebrew or a Node version manager.
+/// folder of the command line itself first (its own `node` runs it), then
+/// the app's own PATH, then the usual folders for what is installed by
+/// hand, Homebrew or a Node version manager.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn service_path(cli: &std::path::Path) -> std::ffi::OsString {
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
-    let mut dirs: Vec<std::path::PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
     let mut add = |dir: std::path::PathBuf| {
         if !dirs.contains(&dir) {
             dirs.push(dir);
         }
     };
+    // The command line's own folder first: the `node` beside it is the one
+    // it was installed with (the one Sophon carries, for its own service),
+    // not whichever a shell's PATH happens to have first.
     if let Some(dir) = cli.parent() {
         add(dir.to_path_buf());
     }
-    // Where the link points too: beside the real script is its `node`.
+    // Where the link points too.
     if let Some(dir) = std::fs::canonicalize(cli).ok().and_then(|p| p.parent().map(std::path::Path::to_path_buf)) {
+        add(dir);
+    }
+    for dir in std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).unwrap_or_default() {
         add(dir);
     }
     for dir in crate::bundled_cli::install_dirs(&home) {
@@ -3194,6 +3315,71 @@ pub(crate) fn update_agent(path: &str) {
 #[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
 pub(crate) fn update_agent(_path: &str) {}
 
+/// An agent's CLI being installed by Sophon (`agent_update::install_cli`),
+/// by provider: under way, or why it failed.
+#[derive(Clone, Default, PartialEq)]
+pub(crate) struct AgentInstall {
+    pub(crate) running: bool,
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Clone, Default)]
+struct AgentInstalls(HashMap<String, AgentInstall>);
+
+pub(crate) fn agent_install(provider: &str) -> Option<AgentInstall> {
+    global::<AgentInstalls>().with(|i| i.0.get(provider).cloned())
+}
+
+/// Installs `provider`'s CLI on this Mac, then asks the providers again:
+/// the service is pointed at what was installed.
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+pub(crate) fn install_agent(provider: &str) {
+    if !on_this_mac() || agent_install(provider).is_some_and(|i| i.running) {
+        return;
+    }
+    let id = provider.to_owned();
+    global::<AgentInstalls>().update(|i| {
+        i.0.insert(id.clone(), AgentInstall { running: true, error: None });
+    });
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let which = id.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(crate::agent_update::install_cli(&which));
+    });
+    spawn_detached(async move {
+        let result = rx.recv().await.unwrap_or_else(|| Err("stopped".into()));
+        global::<AgentInstalls>().update(|i| {
+            i.0.insert(id.clone(), AgentInstall { running: false, error: result.as_ref().err().cloned() });
+        });
+        if result.is_ok() {
+            // Found again where it now is, even if it was looked for before.
+            BUNDLED_SENT.with_borrow_mut(|sent| sent.clear());
+            refresh_agents();
+        }
+    });
+}
+
+#[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
+pub(crate) fn install_agent(_provider: &str) {}
+
+/// Opens Terminal on `command` (an agent's own sign-in, which asks in the
+/// browser and waits there): a script of its own, so the window says what
+/// it runs and closes nothing of the user's.
+pub(crate) fn run_in_terminal(command: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let path = std::env::temp_dir().join("sophon-sign-in.command");
+        let script = format!("#!/bin/bash\nclear\necho '{}'\necho\n{}\necho\necho 'Done: you can close this window and go back to Sophon.'\n", command.replace('\'', ""), command);
+        if std::fs::write(&path, script).is_ok() {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700));
+            let _ = std::process::Command::new("/usr/bin/open").arg(&path).spawn();
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = command;
+}
+
 /// Asks the providers again, and their diagnostics.
 pub(crate) fn refresh_agents() {
     global::<Diagnostics>().update(|d| d.map.clear());
@@ -3749,25 +3935,29 @@ fn deliver(agent_id: &str, text: &str, behavior: Option<&'static str>) {
 /// A system notification when an agent starts needing you while you look
 /// elsewhere; the press opens it.
 fn notify_attention(next: &Agent) {
+    use crate::daemon::push::{self, Reason};
     let before = agent(&next.id);
-    push_attention(before.as_ref(), next);
-    let needed = |a: &Agent| a.requires_attention || !a.pending.is_empty();
-    let finished = before.as_ref().is_some_and(|b| b.is_running()) && !next.is_running();
-    let newly = needed(next) && !before.as_ref().is_some_and(needed);
-    if !(newly || finished) || selected_id().as_deref() == Some(next.id.as_str()) && lifecycle_active() {
+    // What a schedule ran on its own, and a sub-agent's turns (its parent's
+    // business), ask for nobody's eyes.
+    if next.parent_id.is_some() || is_hidden_run(next) {
         return;
     }
-    let body = if !next.pending.is_empty() {
-        format!("Waiting for your approval: {}", next.pending[0].title)
-    } else if finished {
-        "Finished its turn".to_owned()
-    } else {
-        "Needs your attention".to_owned()
-    };
+    // Only what is new and unseen: an approval, or a result the service
+    // marks unread (`push::reason`); and not the agent on screen.
+    let Some(why) = push::reason(before.as_ref(), next) else { return };
+    if selected_id().as_deref() == Some(next.id.as_str()) && lifecycle_active() {
+        return;
+    }
+    push_attention(next, why);
     // The computer's push says it to this phone already.
     if cfg!(target_os = "ios") && push_served() {
         return;
     }
+    let body = match why {
+        Reason::Permission => format!("Waiting for your approval: {}", next.pending.first().map(|p| p.title.as_str()).unwrap_or_default()),
+        Reason::Finished => "Finished its turn".to_owned(),
+        Reason::Attention => "Needs your attention".to_owned(),
+    };
     let n = nsh_core::notifications::Notification::new(format!("agent:{}", next.id), next.title.clone(), body);
     let _ = show_notification(n);
 }
@@ -3874,17 +4064,12 @@ fn open_pressed_agent() {
 
 /// The paired phones that asked for push notifications hear the same
 /// (`docs/push.md`): the computer whose service this is tells them, so
-/// only it, and not while the agent is on screen here. A sub-agent's turns
-/// are its parent's business.
-fn push_attention(before: Option<&Agent>, next: &Agent) {
-    #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+/// only it.
+fn push_attention(next: &Agent, why: crate::daemon::push::Reason) {
+    #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
     {
         use crate::daemon::{push, push_gateway};
-        if !is_desktop() || !on_this_mac() || next.parent_id.is_some() {
-            return;
-        }
-        let Some(why) = push::reason(before, next) else { return };
-        if selected_id().as_deref() == Some(next.id.as_str()) && lifecycle_active() {
+        if !is_desktop() || !on_this_mac() {
             return;
         }
         let Some(record) = push_gateway::record() else { return };
@@ -3893,8 +4078,8 @@ fn push_attention(before: Option<&Agent>, next: &Agent) {
             push_gateway::send(push::agent_push(&record.id, next, why, &wants));
         }
     }
-    #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
-    let _ = (before, next);
+    #[cfg(any(target_arch = "wasm32", target_os = "ios", target_os = "android"))]
+    let _ = (next, why);
 }
 
 /// The mark each plan limit was last seen at (`push::limit_mark`), by its
@@ -4060,11 +4245,6 @@ pub(crate) fn recent_sessions() -> Option<Vec<crate::daemon::connection::RecentS
 
 pub(crate) fn search_sessions(query: &str) {
     send(Command::RecentSessions { query: query.to_owned() });
-}
-
-pub(crate) fn import_session(s: &crate::daemon::connection::RecentSession) {
-    send(Command::ImportSession { provider: s.provider.clone(), handle: s.handle.clone(), cwd: s.cwd.clone() });
-    notify(t("Importing session…").into());
 }
 
 /// The sessions being imported together, one after another (each import
@@ -4921,10 +5101,29 @@ mod model_rule_tests {
         let dirs: Vec<std::path::PathBuf> = std::env::split_paths(&path).collect();
         assert!(dirs.contains(&bin), "the folder of the command line");
         assert!(dirs.contains(&std::fs::canonicalize(&lib).unwrap()), "the folder it links to");
-        // What the app had comes first, unchanged.
+        // Its own folder before anything the app's PATH has: its `node`
+        // is the one that runs it.
+        assert_eq!(dirs.first(), Some(&bin));
         let own: Vec<std::path::PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
-        assert_eq!(&dirs[..own.len()], &own[..]);
+        assert!(own.iter().all(|d| dirs.contains(d)), "the app's own PATH is kept");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_text_size_stays_within_what_the_layout_holds() {
+        assert_eq!(crate::store::font_size_of(14.0), 14.0);
+        assert_eq!(crate::store::font_size_of(15.3), 15.5);
+        assert_eq!(crate::store::font_size_of(4.0), 11.0);
+        assert_eq!(crate::store::font_size_of(40.0), 20.0);
+    }
+
+    #[test]
+    fn a_font_setting_is_its_first_family_name() {
+        assert_eq!(crate::store::font_name("JetBrains Mono").as_deref(), Some("JetBrains Mono"));
+        assert_eq!(crate::store::font_name(" 'Fira Code', Menlo, monospace ").as_deref(), Some("Fira Code"));
+        assert_eq!(crate::store::font_name("\"LXGW WenKai\"").as_deref(), Some("LXGW WenKai"));
+        assert_eq!(crate::store::font_name("  "), None);
+        assert_eq!(crate::store::font_name(""), None);
     }
 
     #[test]

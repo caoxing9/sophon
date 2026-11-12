@@ -41,8 +41,10 @@ impl HomeTab {
 }
 
 /// Room the floating bar and the new button take at the foot of the lists:
-/// each tab's content scrolls under the bar and comes to rest clear of it.
-pub(super) const BAR_ROOM: f32 = 112.0;
+/// each tab's content scrolls under the bar and comes to rest clear of it,
+/// with air between them (the bar's top is some 100 points up from the
+/// foot of a phone with a home indicator; at 112 the last card touched it).
+pub(super) const BAR_ROOM: f32 = 132.0;
 
 pub(crate) fn home() -> impl IntoElement {
     let tab = signal(HomeTab::Chats);
@@ -63,9 +65,9 @@ pub(crate) fn home() -> impl IntoElement {
                             .flex_1()
                             .child(large_header(
                                 t("Usage"),
-                                view().flex_row().items_center().gap(px(S2)).child(host_chip()).child(round_button(Icon::RotateCw, t("Refresh"), store::refresh_usage)),
+                                view().flex_row().items_center().gap(sp(S2)).child(host_chip()).child(round_button(Icon::RotateCw, t("Refresh"), store::refresh_usage)),
                             ))
-                            .child(scroll().flex_1().child(view().px(px(S4)).pt(px(S2)).pb(px(BAR_ROOM)).child(crate::ui::shared::usage::usage_sections())))
+                            .child(scroll().flex_1().child(view().px(sp(S4)).pt(sp(S2)).pb(px(BAR_ROOM)).child(crate::ui::shared::usage::usage_sections())))
                             .into_element()
                     }
                     HomeTab::Chats => view()
@@ -78,7 +80,7 @@ pub(crate) fn home() -> impl IntoElement {
                         .flex_1()
                         .child(large_header(
                             t("Projects"),
-                            view().flex_row().items_center().gap(px(S2)).child(host_chip()).child(round_button(Icon::Plus, t("Add project"), || {
+                            view().flex_row().items_center().gap(sp(S2)).child(host_chip()).child(round_button(Icon::Plus, t("Add project"), || {
                                 show_sheet(None, vec![
                                     SheetItem::new(t("Add a folder of the computer"), || super::push(super::Route::AddProject)).icon(Icon::FolderPlus),
                                 ])
@@ -99,17 +101,17 @@ fn large_header(title: &'static str, trailing: impl IntoElement) -> View {
         .flex_row()
         .items_center()
         .justify_between()
-        .gap(px(S3))
-        .px(px(S4))
-        .pt(px(S2))
-        .pb(px(S2))
+        .gap(sp(S3))
+        .px(sp(S4))
+        .pt(sp(S2))
+        .pb(sp(S2))
         .child(text(title).text_size(px(30.0)).font_weight(FontWeight(700)).number_of_lines(1).flex_shrink(1.0))
         .child(trailing)
 }
 
 /// iOS's search field: a 36 pt rounded field on a light fill.
 fn search_field(query: Signal<String>, placeholder: &'static str) -> View {
-    view().px(px(S4)).pb(px(S3)).child(
+    view().px(sp(S4)).pb(sp(S3)).child(
         view()
             .flex_row()
             .items_center()
@@ -122,7 +124,7 @@ fn search_field(query: Signal<String>, placeholder: &'static str) -> View {
             .child(
                 input()
                     .flex_1()
-                    .text_size(px(TEXT_LG))
+                    .text_size(tx(TEXT_LG))
                     .text_color(FG)
                     .value(move || query.get())
                     .on_change(move |v: &str| query.set(v.to_owned()))
@@ -183,12 +185,12 @@ fn host_chip() -> impl IntoElement {
         .h(px(32.0))
         .max_w(px(180.0))
         .pl(px(10.0))
-        .pr(px(S2))
+        .pr(sp(S2))
         .rounded(px(R_FULL))
         .bg(tint(FG, 0.07))
         .active(|s| s.opacity(0.7))
         .child(crate::ui::shared::conn_mark())
-        .child(text(move || name.get()).text_size(px(TEXT_SM)).font_weight(FontWeight(500)).number_of_lines(1).flex_shrink(1.0))
+        .child(text(move || name.get()).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).number_of_lines(1).flex_shrink(1.0))
         .child(icon(Icon::ChevronDown, 12.0).text_color(FG_MUTED))
 }
 
@@ -209,7 +211,7 @@ fn foot(tab: Signal<HomeTab>) -> impl IntoElement {
             view()
                 .flex_row()
                 .items_center()
-                .pr(px(S4))
+                .pr(sp(S4))
                 .pointer_events(nsh_core::PointerEvents::BoxNone)
                 .child(
                     view().flex_1().child(
@@ -291,7 +293,7 @@ fn group_header(project_id: String, name: String, count: usize) -> impl IntoElem
         .items_center()
         .gap(px(6.0))
         .h(px(32.0))
-        .px(px(S1))
+        .px(sp(S1))
         .active(|s| s.opacity(0.6))
         .child(
             icon(Icon::ChevronDown, 13.0)
@@ -299,8 +301,8 @@ fn group_header(project_id: String, name: String, count: usize) -> impl IntoElem
                 .rotate(move || Radians(if folded.get() { -std::f32::consts::FRAC_PI_2 } else { 0.0 }))
                 .transition_transform(),
         )
-        .child(text(name).text_size(px(TEXT_SM)).font_weight(FontWeight(600)).text_color(FG_MUTED).number_of_lines(1).flex_1())
-        .child(text(count.to_string()).text_size(px(TEXT_SM)).text_color(FG_FAINT))
+        .child(text(name).text_size(tx(TEXT_SM)).font_weight(FontWeight(600)).text_color(FG_MUTED).number_of_lines(1).flex_1())
+        .child(text(count.to_string()).text_size(tx(TEXT_SM)).text_color(FG_FAINT))
 }
 
 /// A folding group: its header always, its card revealed (a clipped
@@ -312,7 +314,7 @@ fn group(project_id: String, name: String, rows: Vec<AnyElement>) -> impl IntoEl
     nsh_base::collapsible()
         .open(move || !store::is_collapsed(&pid))
         .reveal(true)
-        .gap(px(S1))
+        .gap(sp(S1))
         .content(group_card(rows))
         .child(group_header(project_id, name, count))
 }
@@ -334,8 +336,8 @@ fn row_shell(lead: View, title: String, line: String, trailing: View, divider: b
         .on_press(on_press)
         .flex_row()
         .items_center()
-        .gap(px(S3))
-        .pl(px(S4))
+        .gap(sp(S3))
+        .pl(sp(S4))
         .active(|s| s.bg(highlight()))
         .child(lead)
         .child(
@@ -344,10 +346,10 @@ fn row_shell(lead: View, title: String, line: String, trailing: View, divider: b
                 .min_w(px(0.0))
                 .flex_row()
                 .items_center()
-                .gap(px(S2))
+                .gap(sp(S2))
                 .min_h(px(60.0))
                 .py(px(10.0))
-                .pr(px(S4))
+                .pr(sp(S4))
                 .when(divider, |v| v.border_t_1().border_color(tint(BORDER, 0.8)))
                 .child(
                     view()
@@ -355,7 +357,7 @@ fn row_shell(lead: View, title: String, line: String, trailing: View, divider: b
                         .min_w(px(0.0))
                         .gap(px(2.0))
                         .child(text(title).text_size(px(16.0)).font_weight(FontWeight(600)).number_of_lines(1))
-                        .child(text(line).text_size(px(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1)),
+                        .child(text(line).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1)),
                 )
                 .child(trailing),
         )
@@ -392,7 +394,7 @@ fn chats(query: Signal<String>) -> impl IntoElement {
             // One list, the latest first, as Messages' (the projects tab
             // groups by project).
             let rows = items.iter().cloned().enumerate().map(|(i, (a, w))| chat_row(a, w, i > 0)).collect();
-            let col = view().px(px(S4)).pb(px(BAR_ROOM)).child(group_card(rows));
+            let col = view().px(sp(S4)).pb(px(BAR_ROOM)).child(group_card(rows));
             col.into_element()
         }))
     }))
@@ -408,7 +410,7 @@ fn chat_row(a: Agent, w: Option<Workspace>, divider: bool) -> AnyElement {
     let trailing = view()
         .items_end()
         .gap(px(4.0))
-        .child(text(time::ago(&a.updated_at)).text_size(px(TEXT_XS)).text_color(FG_FAINT))
+        .child(text(time::ago(&a.updated_at)).text_size(tx(TEXT_XS)).text_color(FG_FAINT))
         .child(if needs_you {
             view()
                 .min_w(px(18.0))
@@ -461,7 +463,7 @@ pub(crate) fn projects(query: Signal<String>, new_agent: bool) -> impl IntoEleme
                 }
                 return empty(t("No workspaces yet. Start one on the computer.")).into_element();
             }
-            let mut col = view().px(px(S4)).pb(px(BAR_ROOM)).gap(px(S3));
+            let mut col = view().px(sp(S4)).pb(px(BAR_ROOM)).gap(sp(S3));
             for (pid, name, workspaces) in groups.clone() {
                 let rows = workspaces.into_iter().enumerate().map(|(i, w)| workspace_row(w, new_agent, i > 0)).collect();
                 col = col.child(group(pid, name, rows));
@@ -478,8 +480,8 @@ fn workspace_row(w: Workspace, new_agent: bool, divider: bool) -> AnyElement {
     let trailing = view()
         .flex_row()
         .items_center()
-        .gap(px(S2))
-        .child(text(time::ago(&w.activity_at)).text_size(px(TEXT_XS)).text_color(FG_FAINT))
+        .gap(sp(S2))
+        .child(text(time::ago(&w.activity_at)).text_size(tx(TEXT_XS)).text_color(FG_FAINT))
         .child(icon(Icon::ChevronRight, 14.0).text_color(FG_FAINT));
     let kind = if w.branch.is_some() { Icon::GitBranch } else { Icon::Folder };
     row_shell(glyph(kind, Status::of_workspace(&w.status)), w.name.clone(), line, trailing, divider, move || {
@@ -495,8 +497,8 @@ fn connecting() -> impl IntoElement {
             Conn::Down(_) => t("Can't reach the computer · retrying").to_owned(),
             _ => t("Connecting…").to_owned(),
         })
-        .mt(px(S3))
-        .text_size(px(TEXT_SM))
+        .mt(sp(S3))
+        .text_size(tx(TEXT_SM))
         .text_color(FG_MUTED),
     )
 }
@@ -504,9 +506,9 @@ fn connecting() -> impl IntoElement {
 fn empty(message: &'static str) -> impl IntoElement {
     view()
         .items_center()
-        .px(px(S8))
+        .px(sp(S8))
         .pt(px(S8 * 2.0))
-        .child(text(message).text_size(px(TEXT_BASE)).line_height(px(20.0)).text_color(FG_MUTED).text_center())
+        .child(text(message).text_size(tx(TEXT_BASE)).line_height(px(20.0)).text_color(FG_MUTED).text_center())
 }
 
 /// A new conversation: the workspaces to start it in, searchable, under
@@ -517,24 +519,24 @@ pub(crate) fn new_chat_page() -> nsh_core::element::Screen {
         view()
             .flex_1()
             .child(super::top_bar(
-                text(t("New conversation")).text_size(px(TEXT_BASE)).font_weight(FontWeight(600)),
+                text(t("New conversation")).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)),
                 view().w(px(44.0)),
             ))
             .child(
-                view().px(px(S4)).pb(px(S2)).child(
+                view().px(sp(S4)).pb(sp(S2)).child(
                     view()
                         .flex_row()
                         .items_center()
-                        .gap(px(S2))
+                        .gap(sp(S2))
                         .h(px(44.0))
-                        .px(px(S4))
+                        .px(sp(S4))
                         .rounded(px(R_FULL))
                         .bg(SURFACE2)
                         .child(icon(Icon::Search, 18.0).text_color(FG_MUTED))
                         .child(
                             input()
                                 .flex_1()
-                                .text_size(px(TEXT_LG))
+                                .text_size(tx(TEXT_LG))
                                 .text_color(FG)
                                 .value(move || query.get())
                                 .on_change(move |v: &str| query.set(v.to_owned()))

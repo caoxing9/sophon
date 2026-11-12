@@ -13,7 +13,7 @@ pub(crate) fn settings(compact: bool) -> impl IntoElement {
     view()
         .flex_1()
         .child(when(move || compact, || {
-            view().px(px(S4)).pt(px(S2)).child(icon_btn(Icon::ArrowLeft, Sz::Sm, t("Back"), store::go_home))
+            view().px(sp(S4)).pt(sp(S2)).child(icon_btn(Icon::ArrowLeft, Sz::Sm, t("Back"), store::go_home))
         }))
         .child(page(
             compact,
@@ -89,7 +89,7 @@ fn spaces_card() -> impl IntoElement {
             };
             let switch_btn = |id: Option<String>, here: bool| -> AnyElement {
                 if here {
-                    text(t("In use")).text_size(px(TEXT_SM)).text_color(FG_MUTED).into_element()
+                    text(t("In use")).text_size(tx(TEXT_SM)).text_color(FG_MUTED).into_element()
                 } else {
                     btn(t("Switch"), Variant::Outline, Sz::Sm, None, move || store::switch_host(id.clone())).into_element()
                 }
@@ -101,7 +101,7 @@ fn spaces_card() -> impl IntoElement {
                 view()
                     .flex_row()
                     .items_center()
-                    .gap(px(S1))
+                    .gap(sp(S1))
                     .child(switch_btn(None, current.is_none()))
                     .child(icon_btn(Icon::Pencil, Sz::Sm, t("Rename"), move || {
                         store::open_modal(store::Modal::RenameMySpace { name: store::settings().my_space_name.unwrap_or_default() })
@@ -119,7 +119,7 @@ fn spaces_card() -> impl IntoElement {
                     view()
                         .flex_row()
                         .items_center()
-                        .gap(px(S1))
+                        .gap(sp(S1))
                         .child(switch_btn(Some(h.id.clone()), here))
                         .child(icon_btn(Icon::Pencil, Sz::Sm, t("Rename"), move || {
                             store::open_modal(store::Modal::RenameHost { id: rename_id.clone(), name: rename_name.clone() })
@@ -209,22 +209,22 @@ fn relay_row() -> impl IntoElement {
     let local = computed(|| store::current_host().is_none());
     when(local, move || {
         view()
-            .px(px(S4))
-            .py(px(S4))
-            .gap(px(S2))
+            .px(sp(S4))
+            .py(sp(S4))
+            .gap(sp(S2))
             .border_t_1()
             .border_color(BORDER)
-            .child(text(t("Relay server")).text_size(px(TEXT_BASE)))
+            .child(text(t("Relay server")).text_size(tx(TEXT_BASE)))
             .child(
                 text(t("Where phones reach this Mac away from home. Empty: the default relay. Applies after a service restart"))
-                    .text_size(px(TEXT_SM))
+                    .text_size(tx(TEXT_SM))
                     .text_color(FG_MUTED),
             )
             .child(
                 view()
                     .flex_row()
                     .items_center()
-                    .gap(px(S2))
+                    .gap(sp(S2))
                     .child(
                         field()
                             .flex_1()
@@ -232,8 +232,8 @@ fn relay_row() -> impl IntoElement {
                             .value(move || value.get())
                             .on_change(move |v: &str| value.set(v.to_owned()))
                             .placeholder("relay.paseo.sh")
-                            .font_family(|| MONO)
-                            .text_size(px(TEXT_SM)),
+                            .font_family(mono_font)
+                            .text_size(tx(TEXT_SM)),
                     )
                     .child(
                         btn(t("Save"), Variant::Outline, Sz::Sm, None, move || {

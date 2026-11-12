@@ -36,13 +36,13 @@ pub(crate) fn page() -> Screen {
                         .items_center()
                         .child(
                             text(move || selected.with(|a| a.as_ref().map(|a| a.title.clone()).unwrap_or_else(|| t("New agent").into())))
-                                .text_size(px(TEXT_BASE))
+                                .text_size(tx(TEXT_BASE))
                                 .font_weight(FontWeight(600))
                                 .number_of_lines(1),
                         )
                         .child(
                             text(move || ws.with(|w| w.as_ref().map(|w| w.name.clone()).unwrap_or_default()))
-                                .text_size(px(TEXT_XS))
+                                .text_size(tx(TEXT_XS))
                                 .text_color(FG_MUTED)
                                 .number_of_lines(1),
                         ),
@@ -128,7 +128,7 @@ fn switcher(ws: Memo<Option<crate::daemon::Workspace>>) -> impl IntoElement {
                 .border_color(FG)
                 .items_center()
                 .justify_center()
-                .child(text(move || count.get().to_string()).text_size(px(TEXT_SM)).font_weight(FontWeight(600))),
+                .child(text(move || count.get().to_string()).text_size(tx(TEXT_SM)).font_weight(FontWeight(600))),
         )
 }
 
@@ -177,10 +177,10 @@ fn offline_banner() -> impl IntoElement {
             .flex_row()
             .items_center()
             .justify_center()
-            .gap(px(S2))
+            .gap(sp(S2))
             .h(px(28.0))
-            .mx(px(S3))
-            .mt(px(S1))
+            .mx(sp(S3))
+            .mt(sp(S1))
             .rounded(px(R_FULL))
             .bg(tint(WARNING, 0.14))
             .child(icon(Icon::RotateCw, 13.0).text_color(WARNING))
@@ -189,7 +189,7 @@ fn offline_banner() -> impl IntoElement {
                     Conn::Down(_) => t("Can't reach the computer · retrying").to_owned(),
                     _ => t("Reconnecting…").to_owned(),
                 })
-                .text_size(px(TEXT_SM))
+                .text_size(tx(TEXT_SM))
                 .text_color(WARNING),
             )
     })
@@ -203,7 +203,7 @@ pub(crate) fn subagent_page(parent: String, id: String) -> Screen {
         view()
             .flex_1()
             .child(top_bar(
-                text(move || title.get()).text_size(px(TEXT_BASE)).font_weight(FontWeight(600)).number_of_lines(1),
+                text(move || title.get()).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).number_of_lines(1),
                 view().w(px(44.0)),
             ))
             .child(view().flex_1().px_safe_area().pb_safe_area().child(crate::ui::shared::timeline::subagent_pane(parent, id))),
@@ -226,11 +226,11 @@ fn draft() -> impl IntoElement {
         .child(view().flex_1().items_center().justify_center().child(mark(48.0, Lift::Flat)))
         .child(
             view()
-                .px(px(S2))
-                .pb(px(S2))
-                .gap(px(S2))
+                .px(sp(S2))
+                .pb(sp(S2))
+                .gap(sp(S2))
                 .child(when(move || error.with(Option::is_some), move || {
-                    text(move || error.get().unwrap_or_default()).px(px(S3)).text_size(px(TEXT_SM)).text_color(DANGER)
+                    text(move || error.get().unwrap_or_default()).px(sp(S3)).text_size(tx(TEXT_SM)).text_color(DANGER)
                 }))
                 .child(picker_row(Icon::Cpu, move || host.get(), || {
                     let current = store::current_host().map(|h| h.id);
@@ -277,13 +277,13 @@ fn picker_row(glyph: Icon, value: impl Fn() -> String + 'static, on_press: impl 
         .on_press(on_press)
         .flex_row()
         .items_center()
-        .gap(px(S3))
+        .gap(sp(S3))
         .h(px(52.0))
-        .px(px(S4))
+        .px(sp(S4))
         .rounded(px(16.0))
         .bg(tint(FG, 0.06))
         .active(|s| s.opacity(0.7))
         .child(icon(glyph, 18.0).text_color(FG_MUTED))
-        .child(text(value).text_size(px(TEXT_LG)).number_of_lines(1).flex_1())
+        .child(text(value).text_size(tx(TEXT_LG)).number_of_lines(1).flex_1())
         .child(icon(Icon::ChevronsUpDown, 16.0).text_color(FG_FAINT))
 }
