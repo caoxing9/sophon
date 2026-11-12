@@ -3809,6 +3809,72 @@ fn push_attention(before: Option<&Agent>, next: &Agent) {
     let _ = (before, next);
 }
 
+/// The mark each plan limit was last seen at (`push::limit_mark`), by its
+/// key: a push says a limit once as it passes 80% and 95%.
+#[cfg_attr(any(target_arch = "wasm32", target_os = "ios"), allow(dead_code))]
+#[derive(Clone, Default)]
+struct LimitMarks(HashMap<String, u32>);
+
+/// The paired phones hear when a plan limit of this computer passes 80%
+/// or 95%, with when it runs out at the pace so far.
+fn push_limits(list: &[crate::daemon::connection::ProviderUsage]) {
+    #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+    {
+        use crate::daemon::{push, push_gateway};
+        use crate::usage::{self, limits};
+        if !is_desktop() || !on_this_mac() {
+            return;
+        }
+        let history = untracked(limit_history);
+        let now = usage::now();
+        let mut news: Vec<(String, u32, Option<String>)> = Vec::new();
+        global::<LimitMarks>().update(|marks| {
+            for p in list {
+                for w in &p.windows {
+                    let Some(pct) = w.used else { continue };
+                    let key = limit_key(p, w);
+                    let mark = push::limit_mark(pct);
+                    if push::limit_news(marks.0.insert(key.clone(), mark), mark) {
+                        let resets = w.resets_at.as_deref().and_then(usage::parse::rfc3339);
+                        let points = history.windows.get(&key).map(Vec::as_slice).unwrap_or_default();
+                        let out = limits::forecast(limits::current_window(points, resets), now, pct, resets, limits::window_length(&w.id, &w.label));
+                        news.push((format!("{} · {}", p.name, w.label), pct.round() as u32, out.map(|at| usage::time_label(at, &usage::local_offset))));
+                    }
+                }
+            }
+        });
+        if news.is_empty() {
+            return;
+        }
+        let Some(record) = push_gateway::record() else { return };
+        let space = current_space_home().map(|h| h.to_string_lossy().into_owned());
+        for wants in record.wanting(space.as_deref()) {
+            for (label, percent, ends) in &news {
+                push_gateway::send(push::usage_push(&record.id, label, *percent, ends.as_deref(), &wants));
+            }
+        }
+    }
+    #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
+    let _ = list;
+}
+
+/// While a paired phone wants push notifications, the plan limits are read
+/// every twenty minutes, so one near its end is said without the usage
+/// page open.
+#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+pub(crate) fn watch_limits_for_push() {
+    fn again() {
+        set_timeout(std::time::Duration::from_secs(20 * 60), || {
+            let wanted = crate::daemon::push_gateway::record().is_some_and(|r| !r.devices.is_empty());
+            if wanted && on_this_mac() && matches!(conn(), Conn::Connected { .. }) {
+                send(Command::Usage);
+            }
+            again();
+        });
+    }
+    Owner::detached().run(again);
+}
+
 /// An action a paired device pressed on a notification: the approval is
 /// answered, the reply sent, as from here.
 pub(crate) fn push_act(act: crate::daemon::push::Act) {
@@ -4601,6 +4667,7 @@ pub(crate) fn apply(event: Event) {
         }),
         Event::Usage(list) => {
             record_limits(&list);
+            push_limits(&list);
             global::<UsageState>().update(|u| u.0 = Some(list));
         }
         Event::DaemonConfig(cfg) => {

@@ -277,6 +277,25 @@ pub fn usage_push(host: &str, label: &str, percent: u32, ends: Option<&str>, wan
     })
 }
 
+/// The mark a limit at `percent` has reached: 95, 80, or 0 below them. A
+/// push says each once as the use climbs past it.
+pub fn limit_mark(percent: f64) -> u32 {
+    if percent >= 95.0 {
+        95
+    } else if percent >= 80.0 {
+        80
+    } else {
+        0
+    }
+}
+
+/// Whether a limit now at `mark` is news after `told`, the mark known
+/// before: a higher one. The first reading (`None`) is not: the app just
+/// started, and what it finds was said already or is old.
+pub fn limit_news(told: Option<u32>, mark: u32) -> bool {
+    told.is_some_and(|told| mark > told)
+}
+
 /// `text` in at most `max` characters, with an ellipsis when cut.
 fn clip(text: &str, max: usize) -> String {
     let one_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -430,6 +449,19 @@ mod tests {
         let p = usage_push("m", "Claude · Weekly", 80, Some("11-16 11:09"), &wants);
         assert_eq!(p["body"], "Claude · Weekly 已用 80%，按当前速度约 11-16 11:09 用完");
         assert_eq!(usage_push("m", "Codex · Weekly", 90, None, &Wants::default())["body"], "Codex · Weekly is at 90%");
+    }
+
+    #[test]
+    fn a_limit_is_news_once_as_it_passes_each_mark() {
+        assert_eq!((limit_mark(12.0), limit_mark(80.0), limit_mark(94.9), limit_mark(95.0), limit_mark(100.0)), (0, 80, 80, 95, 95));
+        // Found high when the app starts: not said again.
+        assert!(!limit_news(None, 80));
+        assert!(limit_news(Some(0), 80));
+        assert!(!limit_news(Some(80), 80));
+        assert!(limit_news(Some(80), 95));
+        // The window reset: back below, and news again later.
+        assert!(!limit_news(Some(95), 0));
+        assert!(limit_news(Some(0), 95));
     }
 
     #[test]
