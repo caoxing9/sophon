@@ -1463,7 +1463,9 @@ fn update_dialog() -> View {
                 .child(text(format!("v{v}")).text_size(tx(TEXT_LG)).font_weight(FontWeight(600)))
                 .child(
                     nsh_base::text_view()
-                        .markdown(move || Some(SharedString::from(notes.clone())))
+                        // A link opens in the browser (or the app it belongs to).
+                        .links(nsh_base::TextViewLinks::Open)
+.markdown(move || Some(SharedString::from(notes.clone())))
                         .selectable(true)
                         .gap_2()
                         .text_size(tx(TEXT_BASE))
