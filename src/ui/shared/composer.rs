@@ -150,7 +150,11 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                     // The text takes the card's upper part whole, a line
                     // and a half at least: a tap a little under the line
                     // lands in it, not on the bar.
-                    .child(editor(doc, text_value, placeholder, TEXT_LG, 160.0, changed).px(sp(S1)).min_h(px(34.0)))
+                    .child(
+                        view()
+                            .child(editor(doc, text_value, placeholder, TEXT_LG, 160.0, changed).px(sp(S1)).min_h(px(34.0)))
+                            .child(hold_to_talk(doc, empty)),
+                    )
                     .child(
                         view()
                             .flex_row()
@@ -847,8 +851,75 @@ thread_local! {
     static MIC_DOC: std::cell::Cell<Option<Doc>> = const { std::cell::Cell::new(None) };
 }
 
-/// Dictation is listening (for Fn's push to talk, macOS).
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+/// The phone's push to talk, over its empty composer while the keyboard
+/// is down: held, dictation listens (a moment in, so a tap stays a tap)
+/// and stops when it is let go; a tap brings the keyboard, as a tap on the
+/// text does. With text in it, or the keyboard up, the text is the
+/// editor's to touch (and the keyboard has its own microphone).
+fn hold_to_talk(doc: Doc, empty: Memo<bool>) -> impl IntoElement {
+    let listening = computed(move || global::<Dictating>().with(|d| d.0));
+    // Kept while it listens: the words it puts in make the composer not
+    // empty, and the finger still on it must be heard letting go.
+    let shown = computed(move || MOBILE && (listening.get() || (empty.get() && nsh_core::element::keyboard_height().0 <= 0.0)));
+    when(shown, move || {
+        let held = signal(0u64);
+        let started = signal(false);
+        let release = move |tap: bool| {
+            held.update(|h| *h += 1);
+            if started.get_untracked() {
+                started.set(false);
+                if dictating() {
+                    dictate(doc);
+                }
+            } else if tap && let Some(session) = doc.session() {
+                session.focus();
+            }
+        };
+        view()
+            .absolute()
+            .top(px(0.0))
+            .bottom(px(0.0))
+            .left(px(0.0))
+            .right(px(0.0))
+            .flex_row()
+            .items_center()
+            .justify_end()
+            .px(sp(S2))
+            .claim_touches(TouchClaim::on_start().ask(|r: &ClaimRequest| r.claim()))
+            .keep_touches(true)
+            .on_responder_grant(move |_: &ResponderEvent| {
+                let n = held.get_untracked() + 1;
+                held.set(n);
+                set_timeout(std::time::Duration::from_millis(300), move || {
+                    if held.get_untracked() == n && !dictating() {
+                        started.set(true);
+                        dictate(doc);
+                    }
+                });
+            })
+            .on_responder_release(move |_: &ResponderEvent| release(true))
+            .on_responder_terminate(move |_: &ResponderEvent| release(false))
+            .child(
+                view()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(6.0))
+                    .px(sp(S3))
+                    .h(px(28.0))
+                    .rounded(px(R_FULL))
+                    .bg(move || if listening.get() { tint(DANGER, 0.14) } else { tint(FG, 0.0) })
+                    .child(icon(Icon::Mic, 14.0).text_color(move || if listening.get() { DANGER } else { FG_FAINT }))
+                    .child(
+                        text(move || if listening.get() { t("Listening… let go to stop") } else { t("Hold to talk") }.to_owned())
+                            .text_size(tx(TEXT_SM))
+                            .text_color(move || if listening.get() { DANGER } else { FG_FAINT }),
+                    ),
+            )
+    })
+}
+
+/// Dictation is listening (for push to talk: Fn on macOS, the phone's
+/// held composer).
 pub(crate) fn dictating() -> bool {
     global::<Dictating>().with_untracked(|d| d.0)
 }
