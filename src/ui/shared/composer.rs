@@ -840,7 +840,8 @@ thread_local! {
     static MIC_DOC: std::cell::Cell<Option<Doc>> = const { std::cell::Cell::new(None) };
 }
 
-/// Dictation is listening.
+/// Dictation is listening (for Fn's push to talk, macOS).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn dictating() -> bool {
     global::<Dictating>().with_untracked(|d| d.0)
 }
