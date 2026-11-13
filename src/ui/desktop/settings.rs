@@ -20,6 +20,7 @@ pub(crate) fn settings(compact: bool) -> impl IntoElement {
             view()
                 .child(section(t("Appearance"), appearance_card()))
                 .child(section(t("Sending"), sending_card()))
+                .when(cfg!(target_os = "macos"), |v| v.child(section(t("Dictation"), dictation_card())))
                 .child(section(t("Storage"), storage_card()))
                 .child(section(t("Power"), keep_awake_card()))
                 .child(when(crate::update::can_check, || section(t("Updates"), updates_card())))

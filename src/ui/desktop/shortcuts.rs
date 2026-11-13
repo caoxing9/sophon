@@ -12,6 +12,22 @@ use crate::store::{self, ExplorerTab, Modal, Screen, Tab};
 /// Binds the app's shortcuts for as long as the shell lives.
 pub(crate) fn bind() {
     menu();
+    // Fn on its own (macOS): heard by a monitor of the modifier keys, on
+    // the main thread, and handed here.
+    #[cfg(target_os = "macos")]
+    {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+        crate::platform::fn_key::watch(move || {
+            let _ = tx.send(());
+        });
+        store::spawn_detached(async move {
+            while rx.recv().await.is_some() {
+                if store::dictation_key() == store::DictationKey::Fn {
+                    crate::ui::shared::composer::toggle_dictation();
+                }
+            }
+        });
+    }
     for (keystroke, action) in keys(false) {
         on_key(&keystroke, move |_| action());
     }
@@ -49,7 +65,11 @@ fn keys(with_menu: bool) -> Vec<(String, std::rc::Rc<dyn Fn()>)> {
         }),
         key("mod+b", store::toggle_sidebar),
         // Dictation, as the composer's microphone.
-        key("shift+mod+d", crate::ui::shared::composer::toggle_dictation),
+        key("shift+mod+d", || {
+            if store::dictation_key() == store::DictationKey::ShiftCmdD {
+                crate::ui::shared::composer::toggle_dictation();
+            }
+        }),
         key("mod+e", store::toggle_explorer),
     ];
     for n in 1..=9usize {
@@ -137,7 +157,7 @@ fn items() -> Vec<CommandItem> {
         CommandItem::new("usage", t("Usage")).group(t("Actions")).keywords(["limits", "quota", "cost"]),
         CommandItem::new("import", t("Import a session")).group(t("Actions")).keywords(["claude", "codex", "resume"]),
         CommandItem::new("toggle-sidebar", t("Toggle sidebar")).group(t("Actions")).shortcut("mod+b"),
-        CommandItem::new("dictate", t("Dictate")).group(t("Actions")).shortcut("shift+mod+d").keywords(["voice", "speech", "mic"]),
+        CommandItem::new("dictate", t("Dictate")).group(t("Actions")).keywords(["voice", "speech", "mic"]),
     ];
     // Only a draft with text has a link to share.
     if !store::current_draft_text().trim().is_empty() {

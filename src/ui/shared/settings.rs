@@ -126,6 +126,21 @@ pub(crate) fn sending_card() -> View {
 }
 
 /// Whether this Mac stays awake while its agents run (the desktop's).
+/// The key that starts and stops dictation (the desktop's).
+pub(crate) fn dictation_card() -> View {
+    use store::DictationKey;
+    card().child(row(
+        t("Dictation key"),
+        t("Starts and stops dictation, as the microphone does. For Fn alone, set macOS's \"Press 🌐 key to\" to Do Nothing (System Settings → Keyboard)"),
+        segmented(
+            vec![(DictationKey::Fn, "Fn".into()), (DictationKey::ShiftCmdD, "⇧⌘D".into()), (DictationKey::Off, t("Off").into())],
+            store::dictation_key,
+            store::set_dictation_key,
+        ),
+        true,
+    ))
+}
+
 pub(crate) fn keep_awake_card() -> View {
     use store::KeepAwake;
     card().child(row(

@@ -480,6 +480,11 @@ pub(crate) fn replace_text(session: &EditorSession, from: usize, to: usize, text
     let (from, to) = (from.min(size), to.min(size));
     let mut tr = state.tr();
     tr.insert_text(text, Some(from), Some(to));
+    // The caret after the text put in: what comes next (more of the same
+    // dictation, typing, the next dictation) goes on from there, not
+    // before it.
+    let end = (from + text.encode_utf16().count()).min(tr.doc().content().size());
+    tr.set_selection(TextSelection::create(tr.doc(), end, None));
     tr.scroll_into_view();
     dispatch(session, tr);
 }

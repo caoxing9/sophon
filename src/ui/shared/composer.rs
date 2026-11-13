@@ -233,7 +233,9 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         .child(chips::preview_layer(key))
         .child(glass_strong(view())
         .w_full()
-        .rounded(px(24.0))
+        // Close to the bar above it (where it runs, the branch): the two
+        // read as one piece, not a pill under a card.
+        .rounded(px(16.0))
         .border_color(move || if over.get() { ACCENT.into() } else { glass_edge() })
         .child(editor(doc, text_value, placeholder, TEXT_CONTENT, 220.0, changed).mx(sp(S4)).mt(px(14.0)).mb(sp(S1)))
         .child(

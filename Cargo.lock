@@ -3093,6 +3093,7 @@ name = "sophon"
 version = "0.2.14"
 dependencies = [
  "base64 0.22.1",
+ "block2",
  "chrono",
  "crypto_box",
  "env_logger",

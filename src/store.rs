@@ -2405,6 +2405,11 @@ fn save_prefs() {
         "push": s.push.0,
         "pushHide": s.push_hide,
         "pushDevice": s.push_device,
+        "dictationKey": match global::<DictationKeyPref>().with_untracked(|k| k.0) {
+            DictationKey::Fn => "fn",
+            DictationKey::ShiftCmdD => "shift+mod+d",
+            DictationKey::Off => "off",
+        },
         "keepAwake": match s.keep_awake {
             KeepAwake::Off => "off",
             KeepAwake::On => "on",
@@ -2438,11 +2443,39 @@ fn save_prefs() {
 }
 
 /// Restores what `save_prefs` wrote.
+/// The key that starts and stops dictation on the desktop.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum DictationKey {
+    /// Fn (🌐) pressed on its own (macOS).
+    #[default]
+    Fn,
+    /// Shift Command D.
+    ShiftCmdD,
+    Off,
+}
+
+#[derive(Clone, Copy, Default, PartialEq)]
+struct DictationKeyPref(DictationKey);
+
+pub(crate) fn dictation_key() -> DictationKey {
+    global::<DictationKeyPref>().with(|k| k.0)
+}
+
+pub(crate) fn set_dictation_key(key: DictationKey) {
+    global::<DictationKeyPref>().set(DictationKeyPref(key));
+    save_prefs();
+}
+
 pub(crate) fn load_prefs() {
     // (A Mac with no service of its own runs agents all the same: Sophon
     // carries one. It used to start as one that only connects to others.)
     let Some(text) = crate::daemon::read_file("settings.json") else { return };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return };
+    global::<DictationKeyPref>().set(DictationKeyPref(match v.get("dictationKey").and_then(serde_json::Value::as_str) {
+        Some("shift+mod+d") => DictationKey::ShiftCmdD,
+        Some("off") => DictationKey::Off,
+        _ => DictationKey::Fn,
+    }));
     let behavior = match v.get("sendBehavior").and_then(serde_json::Value::as_str) {
         Some("interrupt") => SendBehavior::Interrupt,
         Some("queue") => SendBehavior::Queue,
