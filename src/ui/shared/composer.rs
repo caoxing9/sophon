@@ -136,6 +136,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         let settings = computed(move || settings_summary(live));
         return view()
             .w_full()
+            .child(elsewhere_bar(live))
             .child(queue_track(live))
             .child(suggest_panel(target, doc))
             .child(chips::preview_layer(key))
@@ -218,6 +219,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         .w_full()
         .max_w(px(CONTENT_MAX_WIDTH))
         .self_center()
+        .child(elsewhere_bar(live))
         .child(queue_track(live))
         .child(suggest_panel(target, doc))
         .child(chips::preview_layer(key))
@@ -510,6 +512,39 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
 }
 
 /// Messages waiting for the running turn to end.
+/// Over the composer of a conversation whose Claude Code session runs in
+/// the background on this Mac: messages from here fail while it does, so
+/// it is said before one is sent, with a way to close it there.
+fn elsewhere_bar(live: bool) -> impl IntoElement {
+    let session = computed(move || {
+        let agent = store::selected_agent().filter(|a| live && a.provider == "claude" && !a.is_running())?;
+        agent.session_id.filter(|s| crate::elsewhere::in_background(s))
+    });
+    view().child(dynamic(move || {
+        let session = session.get()?;
+        Some(untracked(move || {
+            let short = crate::elsewhere::short(&session);
+            card()
+                .mb(sp(S2))
+                .px(sp(S3))
+                .py(sp(S2))
+                .flex_row()
+                .items_center()
+                .gap(sp(S3))
+                .child(icon(Icon::Terminal, 15.0).text_color(FG_MUTED))
+                .child(
+                    text(tf("Open in a Claude Code background session ({}): messages sent here fail until it is closed there", &[&short]))
+                        .text_size(tx(TEXT_SM))
+                        .text_color(FG_MUTED)
+                        .flex_1(),
+                )
+                .child(btn(t("Close it there"), Variant::Outline, Sz::Sm, None, move || {
+                    store::open_modal(store::Modal::CloseElsewhere { session: session.clone() })
+                }))
+        }))
+    }))
+}
+
 fn queue_track(live: bool) -> impl IntoElement {
     let queued = computed(move || if live { store::selected_id().map(|id| store::queue(&id)).unwrap_or_default() } else { vec![] });
     let held = computed(move || live && store::selected_id().is_some_and(|id| store::queue_held(&id)));

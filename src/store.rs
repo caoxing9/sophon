@@ -830,6 +830,9 @@ pub(crate) enum Modal {
     Update,
     ImportSession,
     RestartDaemon,
+    /// Stops a conversation's Claude Code session that runs in the
+    /// background (`elsewhere`), by its id.
+    CloseElsewhere { session: String },
     AddHost,
     /// Names a new space on this Mac.
     CreateSpace,

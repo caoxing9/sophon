@@ -318,6 +318,17 @@ fn body(m: Modal) -> View {
             name,
             move |v| store::file_op(op, &path, v),
         ),
+        Modal::CloseElsewhere { session } => sheet(t("Close it there?"))
+            .child(
+                text(tf("Claude Code's background session {} stops: what it is doing there ends. Its conversation is kept, and goes on here", &[&crate::elsewhere::short(&session)]))
+                    .text_size(tx(TEXT_BASE))
+                    .line_height(px(20.0))
+                    .text_color(FG_MUTED),
+            )
+            .child(actions(btn(t("Close it"), Variant::Destructive, Sz::Md, None, move || {
+                crate::elsewhere::close(&session);
+                store::close_modal();
+            }))),
         Modal::RestartDaemon => sheet(t("Restart service"))
             .child(
                 text(t("Running agents stop and resume when the service is back, if resume on startup is on. Terminals keep running"))
