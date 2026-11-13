@@ -411,13 +411,33 @@ pub enum Item {
     Notice { message: String },
 }
 
+/// What a conversation says in place of the agent's own failure when its
+/// session is open somewhere else.
+const ELSEWHERE: &str = "This conversation is running somewhere else: a Claude Code session in a terminal or in the background ({}). A session runs in one place at a time, so messages cannot be sent from here while it does. To go on here, end it there first: claude stop {}";
+
+/// The session Claude Code names when it refuses to resume one that is
+/// running in the background, in the failure the service shows as the
+/// agent's message ("[System Error] … Error: That session is running in
+/// the background (8bd78e07). Run `claude attach` …").
+fn running_elsewhere(message: &str) -> Option<String> {
+    if !message.trim_start().starts_with("[System Error]") {
+        return None;
+    }
+    let after = message.split("That session is running in the background (").nth(1)?;
+    let session = after.split(')').next()?.trim();
+    (!session.is_empty() && session.len() <= 64 && session.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).then(|| session.to_owned())
+}
+
 impl Item {
     /// Decodes a timeline item; `None` for kinds this client does not show.
     pub fn from_json(v: &Value) -> Option<Self> {
         let text = || str_of(v, "text").unwrap_or_default();
         Some(match v.get("type")?.as_str()? {
             "user_message" => Item::User { text: text(), message_id: str_of(v, "messageId"), images: vec![] },
-            "assistant_message" => Item::Assistant { text: text() },
+            "assistant_message" => match running_elsewhere(&text()) {
+                Some(session) => Item::Error { message: crate::i18n::tf(ELSEWHERE, &[&session, &session]) },
+                None => Item::Assistant { text: text() },
+            },
             "reasoning" => Item::Reasoning { text: text() },
             "tool_call" => Item::Tool {
                 call_id: str_of(v, "callId").unwrap_or_default(),
@@ -781,5 +801,22 @@ mod tests {
             "detail": {"type": "read", "filePath": "src/main.rs"}
         }));
         assert!(matches!(tool, Some(Item::Tool { summary, .. }) if summary == "src/main.rs"));
+    }
+}
+
+#[cfg(test)]
+mod elsewhere_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_session_running_elsewhere_is_said_plainly() {
+        let refused = "[System Error] Claude Code process exited with code 1\n\ncode: 1\n\nError: That session is running in the background (8bd78e07). Run `claude attach 8bd78e07` to open it, or `claude stop 8bd78e07` first to resume it here. Add --fork-session to branch off a copy instead.";
+        assert_eq!(running_elsewhere(refused).as_deref(), Some("8bd78e07"));
+        let item = Item::from_json(&json!({ "type": "assistant_message", "text": refused })).unwrap();
+        assert!(matches!(item, Item::Error { message } if message.contains("claude stop 8bd78e07")));
+        // The agent quoting the sentence is the agent's message still.
+        assert_eq!(running_elsewhere("It said: That session is running in the background (8bd78e07)."), None);
+        assert_eq!(running_elsewhere("[System Error] Claude Code process exited with code 1"), None);
     }
 }
