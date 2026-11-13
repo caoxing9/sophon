@@ -468,8 +468,19 @@ fn trigger_at(session: &EditorSession) -> Option<(Trigger, usize)> {
 /// The slash-command or file list over the composer.
 fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
     let trigger = computed(move || doc.tracked().and_then(|s| trigger_at(&s)).map(|(t, _)| t));
+    // A new query: the keyboard's place back to the first, the list back
+    // if Escape put it away.
+    effect(move || {
+        let _ = trigger.get();
+        global::<composer_doc::MenuSelected>().set(composer_doc::MenuSelected(0));
+        global::<composer_doc::MenuClosed>().set(composer_doc::MenuClosed(false));
+    });
+    cleanup(|| composer_doc::set_menu(None));
     view().child(dynamic(move || {
-        let trigger = trigger.get()?;
+        let Some(trigger) = trigger.get().filter(|_| !global::<composer_doc::MenuClosed>().with(|c| c.0)) else {
+            composer_doc::set_menu(None);
+            return None;
+        };
         let rows: Vec<(Icon, String, String, String, bool)> = match &trigger {
             Trigger::Slash(prefix) => {
                 let agent = store::selected_id()?;
@@ -506,29 +517,40 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
             }
         };
         if rows.is_empty() {
+            composer_doc::set_menu(None);
             return None;
         }
+        // Choosing row `i`, by a press or by the keyboard.
+        let choose = {
+            let rows = rows.clone();
+            std::rc::Rc::new(move |i: usize| {
+                let Some((_, _, _, insert, dir)) = rows.get(i).cloned() else { return };
+                // Where the caret is now: the list may be a keystroke
+                // behind it.
+                let Some(session) = doc.session() else { return };
+                let Some((trigger, head)) = trigger_at(&session) else { return };
+                match trigger {
+                    // A command replaces what was typed.
+                    Trigger::Slash(_) => composer_doc::replace_text(&session, 1, head, &insert),
+                    // A path becomes a chip in place of its query.
+                    Trigger::Mention(q) => {
+                        let from = head - q.encode_utf16().count() - 1;
+                        composer_doc::insert_mention(&session, from, head, &insert, dir);
+                    }
+                }
+                session.focus();
+            })
+        };
+        composer_doc::set_menu(Some(composer_doc::Menu { count: rows.len(), pick: choose.clone() }));
         Some(untracked(move || {
+            let selected = computed(|| global::<composer_doc::MenuSelected>().with(|s| s.0));
             let mut list = card().mb(sp(S2)).p(sp(S1)).bg(POPOVER).shadow_md();
-            for (glyph, label, detail, insert, dir) in rows.clone() {
+            for (i, (glyph, label, detail, _, _)) in rows.clone().into_iter().enumerate() {
+                let choose = choose.clone();
                 list = list.child(
                     button()
-                        .on_press(move || {
-                            // Where the caret is now: the list may be a
-                            // keystroke behind it.
-                            let Some(session) = doc.session() else { return };
-                            let Some((trigger, head)) = trigger_at(&session) else { return };
-                            match trigger {
-                                // A command replaces what was typed.
-                                Trigger::Slash(_) => composer_doc::replace_text(&session, 1, head, &insert),
-                                // A path becomes a chip in place of its query.
-                                Trigger::Mention(q) => {
-                                    let from = head - q.encode_utf16().count() - 1;
-                                    composer_doc::insert_mention(&session, from, head, &insert, dir);
-                                }
-                            }
-                            session.focus();
-                        })
+                        .on_press(move || choose(i))
+                        .bg(move || if selected.get() == i { highlight() } else { tint(FG, 0.0) })
                         .flex_row()
                         .items_center()
                         .gap(sp(S2))
