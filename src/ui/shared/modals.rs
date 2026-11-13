@@ -208,6 +208,8 @@ pub(crate) fn modal_layer() -> impl IntoElement {
                                     )
                             } else if m == Modal::Palette {
                                 view().self_stretch().items_center().pt(relative(0.12)).flex_1().child(crate::ui::desktop::shortcuts::palette())
+                            } else if m == Modal::ChangedFiles {
+                                view().self_stretch().items_center().pt(relative(0.12)).flex_1().child(crate::ui::desktop::shortcuts::changed_files())
                             } else if MOBILE && matches!(m, Modal::ToolDetail { .. }) {
                                 // The phone: a sheet at the foot, full width.
                                 view()
@@ -275,7 +277,7 @@ fn body(m: Modal) -> View {
             }))),
         Modal::Commit => commit(),
         Modal::ReportIssue => report_issue(),
-        Modal::Palette => view(),
+        Modal::Palette | Modal::ChangedFiles => view(),
         Modal::NewSchedule => schedule_form(None),
         Modal::EditSchedule(s) => schedule_form(Some(s)),
         Modal::AddProject => add_project(),

@@ -184,11 +184,19 @@ fn chrome_strip() -> impl IntoElement {
 fn sidebar_toggle() -> impl IntoElement {
     let bar = computed(title_bar);
     let shown = computed(move || bar.get().top.0 > 0.0 && window().width >= px(SPLIT_WIDTH));
+    // At the sidebar's right edge while it shows, as Claude's and ChatGPT's
+    // are; with the sidebar away, beside the window's buttons, where it
+    // brings the sidebar back.
+    let left = move || {
+        let beside_buttons = bar.get().left.0 + 2.0;
+        let at_edge = store::sidebar_width() - 30.0 - S2;
+        Length::from(px(if store::sidebar_hidden() { beside_buttons } else { at_edge.max(beside_buttons) }))
+    };
     when(shown, move || {
         view()
             .absolute()
             .top(px(0.0))
-            .left(move || Length::from(px(bar.get().left.0 + 2.0)))
+            .left(left)
             .h(move || Length::from(px(bar.get().top.0)))
             .justify_center()
             .child(icon_btn(Icon::PanelLeft, Sz::Sm, t("Toggle sidebar  ⌘B"), store::toggle_sidebar))

@@ -820,6 +820,8 @@ pub(crate) enum Modal {
     /// Reporting an issue on GitHub (`feedback`).
     ReportIssue,
     Palette,
+    /// The open workspace's changed files, to open one's diff (⌘P).
+    ChangedFiles,
     NewSchedule,
     EditSchedule(crate::daemon::connection::Schedule),
     AddProject,
