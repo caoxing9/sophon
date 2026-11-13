@@ -44,15 +44,6 @@ pub(crate) fn settings() -> impl IntoElement {
                         false,
                     )),
                 ))
-                .child(section(
-                    t("Feedback"),
-                    card().child(row(
-                        t("Report an issue"),
-                        t("A bug, an idea or a question, as an issue on GitHub"),
-                        btn(t("Report…"), Variant::Outline, Sz::Sm, Some(Icon::GitPullRequest), || store::open_modal(store::Modal::ReportIssue)),
-                        true,
-                    )),
-                ))
                 .child(section(t("Coding agents"), crate::ui::shared::agents::agents_card(false)))
                 // The last card rests above the floating bar, as the other
                 // tabs' lists do: the page's own foot and the gap before
