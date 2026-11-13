@@ -48,6 +48,8 @@ fn keys(with_menu: bool) -> Vec<(String, std::rc::Rc<dyn Fn()>)> {
             }
         }),
         key("mod+b", store::toggle_sidebar),
+        // Dictation, as the composer's microphone.
+        key("shift+mod+d", crate::ui::shared::composer::toggle_dictation),
         key("mod+e", store::toggle_explorer),
     ];
     for n in 1..=9usize {
@@ -135,6 +137,7 @@ fn items() -> Vec<CommandItem> {
         CommandItem::new("usage", t("Usage")).group(t("Actions")).keywords(["limits", "quota", "cost"]),
         CommandItem::new("import", t("Import a session")).group(t("Actions")).keywords(["claude", "codex", "resume"]),
         CommandItem::new("toggle-sidebar", t("Toggle sidebar")).group(t("Actions")).shortcut("mod+b"),
+        CommandItem::new("dictate", t("Dictate")).group(t("Actions")).shortcut("shift+mod+d").keywords(["voice", "speech", "mic"]),
     ];
     // Only a draft with text has a link to share.
     if !store::current_draft_text().trim().is_empty() {
@@ -195,6 +198,7 @@ fn run(id: &str) {
             store::open_modal(Modal::ImportSession);
         }
         "toggle-sidebar" => store::toggle_sidebar(),
+        "dictate" => crate::ui::shared::composer::toggle_dictation(),
         "copy-prompt-link" => store::copy_prompt_link(),
         "new-agent" => new_chat(),
         "new-terminal" => store::new_terminal(),

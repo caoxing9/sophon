@@ -151,9 +151,19 @@ fn agent_row(p: Provider, d: Option<Diagnostic>, u: Option<store::AgentUpdate>, 
     // Installed, and its own account not signed in (the desktop app's
     // sign-in is not the CLI's): its sign-in, in Terminal.
     let sign_in = (editable && store::on_this_mac() && !agents::created_by_sophon(cfg, &p.id))
-        .then(|| d.login.as_ref().filter(|l| !l.signed_in).and(d.path.clone()))
-        .flatten()
-        .filter(|_| p.id == "claude");
+        .then(|| match p.id.as_str() {
+            "claude" => d.login.as_ref().filter(|l| !l.signed_in).and(d.path.clone()).map(|path| format!("'{}' auth login", path.replace('\'', ""))),
+            // Codex says nothing of its login to the service: asked here.
+            // Through a gateway it signs in to none.
+            "codex" if !gateway => d.path.clone().filter(|path| store::codex_signed_out(path)).map(|path| format!("'{}' login", path.replace('\'', ""))),
+            _ => None,
+        })
+        .flatten();
+    if editable && p.id == "codex" && !gateway
+        && let Some(path) = d.path.clone()
+    {
+        store::check_codex_login(path);
+    }
 
     let mut trailing = view().flex_row().items_center().gap(sp(S2));
     if installable {
@@ -167,9 +177,9 @@ fn agent_row(p: Provider, d: Option<Diagnostic>, u: Option<store::AgentUpdate>, 
             move || store::install_agent(&id),
         ));
     }
-    if let Some(path) = sign_in {
+    if let Some(command) = sign_in {
         trailing = trailing.child(btn(t("Sign in"), Variant::Primary, Sz::Sm, None, move || {
-            store::run_in_terminal(&format!("'{}' auth login", path.replace('\'', "")))
+            store::run_in_terminal(&command)
         }));
     }
     if editable

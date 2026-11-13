@@ -834,6 +834,70 @@ struct Dictating(bool);
 thread_local! {
     static SPEECH: std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<nsh_core::element::SpeechRecognition>>>> =
         const { std::cell::RefCell::new(None) };
+    /// The composer on screen, for the dictation shortcut.
+    static MIC_DOC: std::cell::Cell<Option<Doc>> = const { std::cell::Cell::new(None) };
+}
+
+/// The dictation shortcut: starts or stops dictating into the composer on
+/// screen, as its microphone button does.
+pub(crate) fn toggle_dictation() {
+    if let Some(doc) = MIC_DOC.with(std::cell::Cell::get) {
+        dictate(doc);
+    }
+}
+
+/// The language dictation listens for: Sophon's own when it speaks
+/// Chinese (the system's may be English on a Mac set up in English), the
+/// system's otherwise.
+fn dictation_lang() -> Option<String> {
+    crate::i18n::is_zh().then(|| "zh-CN".to_owned())
+}
+
+/// Starts dictating into `doc` at its caret, or stops.
+fn dictate(doc: Doc) {
+    let on = global::<Dictating>();
+    if on.with_untracked(|d| d.0) {
+        SPEECH.with_borrow(|s| {
+            if let Some(s) = s {
+                s.borrow().stop();
+            }
+        });
+        return;
+    }
+    let Some(session) = doc.session() else { return };
+    let state = session.state();
+    let at = state.selection().from();
+    // A space from the text before, unless at a line's start.
+    let spaced = at > 1
+        && state.doc().text_between(at - 1, at, Some("\n"), Some(composer_doc::OBJECT)).chars().all(|c| !c.is_whitespace());
+    let inserted = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let mut request = nsh_core::speech::SpeechRequest::default();
+    request.lang = dictation_lang();
+    let speech = std::rc::Rc::new(std::cell::RefCell::new(recognize_speech(request)));
+    on.update(|d| d.0 = true);
+    SPEECH.with_borrow_mut(|s| *s = Some(speech.clone()));
+    spawn(async move {
+        // Borrowed only while polled, so Stop can reach the session.
+        while let Some(ev) = std::future::poll_fn(|cx| speech.borrow_mut().poll_next(cx)).await {
+            match ev {
+                nsh_core::speech::SpeechEvent::Result { text, .. } => {
+                    // Chinese runs on without spaces.
+                    let text = if spaced && !text.starts_with(|c: char| !c.is_ascii()) { format!(" {text}") } else { text };
+                    composer_doc::replace_text(&session, at, at + inserted.get(), &text);
+                    inserted.set(text.encode_utf16().count());
+                }
+                nsh_core::speech::SpeechEvent::End { error } => {
+                    if let Some(e) = error {
+                        store::notify(tf("Dictation stopped: {}", &[&format!("{e:?}")]));
+                    }
+                    break;
+                }
+                _ => {}
+            }
+        }
+        on.update(|d| d.0 = false);
+        SPEECH.with_borrow_mut(|s| *s = None);
+    });
 }
 
 /// Dictation: speech to text into the composer at the caret, with the
@@ -841,48 +905,9 @@ thread_local! {
 /// replaces what the previous one inserted.
 fn mic_button(doc: Doc) -> impl IntoElement {
     let on = global::<Dictating>();
+    MIC_DOC.with(|d| d.set(Some(doc)));
     nsh_base::button()
-        .on_press(move || {
-            if on.with_untracked(|d| d.0) {
-                SPEECH.with_borrow(|s| {
-                    if let Some(s) = s {
-                        s.borrow().stop();
-                    }
-                });
-                return;
-            }
-            let Some(session) = doc.session() else { return };
-            let state = session.state();
-            let at = state.selection().from();
-            // A space from the text before, unless at a line's start.
-            let spaced = at > 1
-                && state.doc().text_between(at - 1, at, Some("\n"), Some(composer_doc::OBJECT)).chars().all(|c| !c.is_whitespace());
-            let inserted = std::rc::Rc::new(std::cell::Cell::new(0usize));
-            let speech = std::rc::Rc::new(std::cell::RefCell::new(recognize_speech(nsh_core::speech::SpeechRequest::default())));
-            on.update(|d| d.0 = true);
-            SPEECH.with_borrow_mut(|s| *s = Some(speech.clone()));
-            spawn(async move {
-                // Borrowed only while polled, so Stop can reach the session.
-                while let Some(ev) = std::future::poll_fn(|cx| speech.borrow_mut().poll_next(cx)).await {
-                    match ev {
-                        nsh_core::speech::SpeechEvent::Result { text, .. } => {
-                            let text = if spaced { format!(" {text}") } else { text };
-                            composer_doc::replace_text(&session, at, at + inserted.get(), &text);
-                            inserted.set(text.encode_utf16().count());
-                        }
-                        nsh_core::speech::SpeechEvent::End { error } => {
-                            if let Some(e) = error {
-                                store::notify(tf("Dictation stopped: {}", &[&format!("{e:?}")]));
-                            }
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-                on.update(|d| d.0 = false);
-                SPEECH.with_borrow_mut(|s| *s = None);
-            });
-        })
+        .on_press(move || dictate(doc))
         .accessibility_label(t("Dictate"))
         .w(sp(CONTROL_SM))
         .h(sp(CONTROL_SM))

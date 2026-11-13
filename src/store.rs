@@ -3470,6 +3470,55 @@ fn check_agent_update(path: String) {
 #[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
 fn check_agent_update(_path: String) {}
 
+/// Whether Codex's CLI at a path is signed in (`codex login status`), as
+/// last looked; the service says nothing of Codex's login.
+#[derive(Clone, Default)]
+struct CodexLogins(HashMap<String, bool>);
+
+/// Codex's CLI at `path` is known to be signed out.
+pub(crate) fn codex_signed_out(path: &str) -> bool {
+    global::<CodexLogins>().with(|l| l.0.get(path) == Some(&false))
+}
+
+/// Looks whether Codex's CLI at `path` is signed in, on a thread of its
+/// own (this Mac's only); again when asked again (after a sign-in).
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+pub(crate) fn check_codex_login(path: String) {
+    // The row is drawn again on every change of the providers: asked at
+    // most every half minute.
+    thread_local! {
+        static ASKED: RefCell<HashMap<String, std::time::Instant>> = RefCell::new(HashMap::new());
+    }
+    let recent = ASKED.with_borrow(|a| a.get(&path).is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(30)));
+    if !on_this_mac() || recent {
+        return;
+    }
+    ASKED.with_borrow_mut(|a| {
+        a.insert(path.clone(), std::time::Instant::now());
+    });
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Option<bool>>();
+    let cli = path.clone();
+    std::thread::spawn(move || {
+        let bin = std::path::PathBuf::from(&cli);
+        let out = std::process::Command::new(&bin)
+            .args(["login", "status"])
+            .env("PATH", service_path(&bin))
+            .stdin(std::process::Stdio::null())
+            .output();
+        let _ = tx.send(out.ok().map(|o| o.status.success()));
+    });
+    spawn_detached(async move {
+        if let Some(Some(signed_in)) = rx.recv().await {
+            global::<CodexLogins>().update(|l| {
+                l.0.insert(path, signed_in);
+            });
+        }
+    });
+}
+
+#[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
+pub(crate) fn check_codex_login(_path: String) {}
+
 /// Updates the CLI at `path` the way it was installed, then asks the
 /// providers again for their versions. This computer's only.
 #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
