@@ -18,23 +18,32 @@ pub(crate) fn bind() {
     // main thread, and handed here.
     #[cfg(target_os = "macos")]
     {
-        use crate::platform::fn_key::FnKey;
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<FnKey>();
+        use crate::platform::fn_key::Heard;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Heard>();
         crate::platform::fn_key::watch(move |k| {
             let _ = tx.send(k);
         });
+        crate::platform::fn_key::set_shortcut(store::dictation_key().as_ref());
         store::spawn_detached(async move {
-            // Each press, numbered: a hold's timer starts only its own.
+            // Each Fn press, numbered: a hold's timer starts only its own.
             let press = std::rc::Rc::new(std::cell::Cell::new(0u64));
             let started = std::rc::Rc::new(std::cell::Cell::new(false));
-            while let Some(k) = rx.recv().await {
-                if store::dictation_key() != store::DictationKey::Fn {
-                    continue;
-                }
-                let n = press.get() + 1;
-                press.set(n);
-                match k {
-                    FnKey::Down => {
+            while let Some(heard) = rx.recv().await {
+                let fn_chosen = store::dictation_key().is_some_and(|k| k.is_fn());
+                match heard {
+                    Heard::Recorded(key) => {
+                        store::record_dictation_key(false);
+                        store::set_dictation_key(Some(key));
+                    }
+                    Heard::Cancelled => store::record_dictation_key(false),
+                    Heard::Cleared => {
+                        store::record_dictation_key(false);
+                        store::set_dictation_key(None);
+                    }
+                    Heard::Shortcut => crate::ui::shared::composer::toggle_dictation(),
+                    Heard::FnDown if fn_chosen => {
+                        let n = press.get() + 1;
+                        press.set(n);
                         let (press, started) = (press.clone(), started.clone());
                         set_timeout(std::time::Duration::from_millis(250), move || {
                             if press.get() == n && !crate::ui::shared::composer::dictating() {
@@ -43,11 +52,13 @@ pub(crate) fn bind() {
                             }
                         });
                     }
-                    FnKey::Up | FnKey::Combined => {
+                    Heard::FnUp | Heard::FnCombined if fn_chosen => {
+                        press.set(press.get() + 1);
                         if started.replace(false) && crate::ui::shared::composer::dictating() {
                             crate::ui::shared::composer::toggle_dictation();
                         }
                     }
+                    _ => {}
                 }
             }
         });
@@ -88,12 +99,6 @@ fn keys(with_menu: bool) -> Vec<(String, std::rc::Rc<dyn Fn()>)> {
             }
         }),
         key("mod+b", store::toggle_sidebar),
-        // Dictation, as the composer's microphone.
-        key("shift+mod+d", || {
-            if store::dictation_key() == store::DictationKey::ShiftCmdD {
-                crate::ui::shared::composer::toggle_dictation();
-            }
-        }),
         key("mod+e", store::toggle_explorer),
     ];
     for n in 1..=9usize {

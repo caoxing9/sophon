@@ -2417,11 +2417,7 @@ fn save_prefs() {
         "push": s.push.0,
         "pushHide": s.push_hide,
         "pushDevice": s.push_device,
-        "dictationKey": match global::<DictationKeyPref>().with_untracked(|k| k.0) {
-            DictationKey::Fn => "fn",
-            DictationKey::ShiftCmdD => "shift+mod+d",
-            DictationKey::Off => "off",
-        },
+        "dictationKey": global::<DictationKeyPref>().with_untracked(|k| k.0.as_ref().map(Hotkey::to_json)),
         "keepAwake": match s.keep_awake {
             KeepAwake::Off => "off",
             KeepAwake::On => "on",
@@ -2455,27 +2451,88 @@ fn save_prefs() {
 }
 
 /// Restores what `save_prefs` wrote.
-/// The key that starts and stops dictation on the desktop.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum DictationKey {
-    /// Fn (🌐) pressed on its own (macOS).
-    #[default]
-    Fn,
-    /// Shift Command D.
-    ShiftCmdD,
-    Off,
+/// A modifier of a [`Hotkey`].
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) const MOD_CTRL: u8 = 1;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) const MOD_ALT: u8 = 2;
+pub(crate) const MOD_SHIFT: u8 = 4;
+pub(crate) const MOD_CMD: u8 = 8;
+
+/// A shortcut, as the keyboard sends it: a key (by its code, which does
+/// not change with the keyboard's layout), the modifiers held, and how it
+/// is shown (`⇧⌘D`). Fn on its own is code 63 with no modifiers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Hotkey {
+    pub(crate) code: u16,
+    pub(crate) mods: u8,
+    pub(crate) label: String,
 }
 
-#[derive(Clone, Copy, Default, PartialEq)]
-struct DictationKeyPref(DictationKey);
+impl Hotkey {
+    /// Fn (🌐) on its own: dictation's default, held to talk.
+    pub(crate) fn fn_key() -> Self {
+        Self { code: 63, mods: 0, label: "Fn".to_owned() }
+    }
 
-pub(crate) fn dictation_key() -> DictationKey {
-    global::<DictationKeyPref>().with(|k| k.0)
+    pub(crate) fn is_fn(&self) -> bool {
+        self.code == 63 && self.mods == 0
+    }
+
+    /// The modifiers' symbols, in macOS's order.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(crate) fn mods_label(mods: u8) -> String {
+        [(MOD_CTRL, "⌃"), (MOD_ALT, "⌥"), (MOD_SHIFT, "⇧"), (MOD_CMD, "⌘")].iter().filter(|(b, _)| mods & b != 0).map(|(_, s)| *s).collect()
+    }
+
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({ "code": self.code, "mods": self.mods, "label": self.label })
+    }
+
+    fn from_json(v: &serde_json::Value) -> Option<Self> {
+        Some(Self {
+            code: u16::try_from(v.get("code")?.as_u64()?).ok()?,
+            mods: u8::try_from(v.get("mods")?.as_u64()?).ok()?,
+            label: v.get("label")?.as_str()?.to_owned(),
+        })
+    }
 }
 
-pub(crate) fn set_dictation_key(key: DictationKey) {
+/// Dictation's shortcut (the desktop's): Fn by default, `None` for none.
+#[derive(Clone, PartialEq)]
+struct DictationKeyPref(Option<Hotkey>);
+
+impl Default for DictationKeyPref {
+    fn default() -> Self {
+        Self(Some(Hotkey::fn_key()))
+    }
+}
+
+pub(crate) fn dictation_key() -> Option<Hotkey> {
+    global::<DictationKeyPref>().with(|k| k.0.clone())
+}
+
+pub(crate) fn set_dictation_key(key: Option<Hotkey>) {
+    #[cfg(target_os = "macos")]
+    crate::platform::fn_key::set_shortcut(key.as_ref());
     global::<DictationKeyPref>().set(DictationKeyPref(key));
     save_prefs();
+}
+
+/// A new shortcut for dictation is being recorded in settings.
+#[derive(Clone, Copy, Default, PartialEq)]
+struct RecordingKey(bool);
+
+pub(crate) fn recording_dictation_key() -> bool {
+    global::<RecordingKey>().with(|r| r.0)
+}
+
+/// Starts (or stops) recording a new shortcut for dictation: the next
+/// combination pressed becomes it.
+pub(crate) fn record_dictation_key(on: bool) {
+    #[cfg(target_os = "macos")]
+    crate::platform::fn_key::record(on);
+    global::<RecordingKey>().set(RecordingKey(on));
 }
 
 pub(crate) fn load_prefs() {
@@ -2483,10 +2540,17 @@ pub(crate) fn load_prefs() {
     // carries one. It used to start as one that only connects to others.)
     let Some(text) = crate::daemon::read_file("settings.json") else { return };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return };
-    global::<DictationKeyPref>().set(DictationKeyPref(match v.get("dictationKey").and_then(serde_json::Value::as_str) {
-        Some("shift+mod+d") => DictationKey::ShiftCmdD,
-        Some("off") => DictationKey::Off,
-        _ => DictationKey::Fn,
+    // `dictationKey`: a shortcut, `null` for none; an earlier version's
+    // names ("off", "shift+mod+d") read as they meant.
+    global::<DictationKeyPref>().set(DictationKeyPref(match v.get("dictationKey") {
+        None => Some(Hotkey::fn_key()),
+        Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(s)) => match s.as_str() {
+            "off" => None,
+            "shift+mod+d" => Some(Hotkey { code: 2, mods: MOD_SHIFT | MOD_CMD, label: "⇧⌘D".to_owned() }),
+            _ => Some(Hotkey::fn_key()),
+        },
+        Some(v) => Some(Hotkey::from_json(v).unwrap_or_else(Hotkey::fn_key)),
     }));
     // Steering was the default, and was saved as it was: only where
     // someone chose it does it stay (`sendBehaviorChosen`), the rest queue.
