@@ -4237,11 +4237,11 @@ pub(crate) fn set_control(live: bool, change: Control) {
     }
 }
 
-/// The last message the user sent each conversation, as far as this
-/// device knows: what it sent itself, else its copy of the conversation
-/// (`None`: looked, none). With when the user last sent one, to look
-/// again once that moves.
 thread_local! {
+    /// The last message the user sent each conversation, as far as this
+    /// device knows: what it sent itself, else its copy of the conversation
+    /// (`None`: looked, none). With when the user last sent one, to look
+    /// again once that moves.
     static LAST_SAID: RefCell<HashMap<String, (String, Option<String>)>> = RefCell::new(HashMap::new());
 }
 
