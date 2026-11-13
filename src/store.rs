@@ -781,11 +781,11 @@ struct Queues(HashMap<String, Vec<Queued>>);
 /// A message waiting its turn, with the pictures and files it was written
 /// with (taken from the composer as it was queued, so they go with it and
 /// not with the message after).
-#[derive(Clone)]
-struct Queued {
-    text: String,
-    images: Vec<ImageInput>,
-    attachments: Vec<serde_json::Value>,
+#[derive(Clone, PartialEq)]
+pub(crate) struct Queued {
+    pub(crate) text: String,
+    pub(crate) images: Vec<ImageInput>,
+    pub(crate) attachments: Vec<serde_json::Value>,
 }
 /// The agents whose queue waits: stopped with Escape, its messages stay
 /// until they are sent on or taken back to be edited.
@@ -3020,8 +3020,8 @@ pub(crate) fn set_language(lang: crate::i18n::Lang) {
     save_prefs();
 }
 
-pub(crate) fn queue(agent_id: &str) -> Vec<String> {
-    global::<Queues>().with(|q| q.0.get(agent_id).map(|l| l.iter().map(|m| m.text.clone()).collect()).unwrap_or_default())
+pub(crate) fn queue(agent_id: &str) -> Vec<Queued> {
+    global::<Queues>().with(|q| q.0.get(agent_id).cloned().unwrap_or_default())
 }
 
 /// Whether `agent_id`'s queue waits (stopped with Escape).

@@ -648,7 +648,32 @@ fn queue_track(live: bool) -> impl IntoElement {
                         .items_center()
                         .gap(sp(S2))
                         .child(icon(Icon::Inbox, 14.0).text_color(FG_FAINT))
-                        .child(text(msg).text_size(tx(TEXT_BASE)).number_of_lines(1).flex_1())
+                        .child(text({
+                            let mut body = msg.text.clone();
+                            for image in &msg.images {
+                                body = body.replace(&format!("[{}]", image.name), "");
+                            }
+                            body.trim().to_owned()
+                        }).text_size(tx(TEXT_BASE)).number_of_lines(1).flex_1())
+                        .child({
+                            let mut previews = view().flex_row().items_center().gap(sp(1.0));
+                            for attachment in msg.images.clone() {
+                                let uri = format!("data:{};base64,{}", attachment.mime, attachment.data);
+                                let name = attachment.name.clone();
+                                let open_uri = uri.clone();
+                                previews = previews.child(
+                                    nsh_base::button()
+                                        .on_press(move || store::open_modal(store::Modal::Picture { name: name.clone(), uri: open_uri.clone() }))
+                                        .w(px(30.0))
+                                        .h(px(30.0))
+                                        .p(px(1.0))
+                                        .rounded(px(R_MD))
+                                        .overflow_hidden()
+                                        .child(image(uri).w(px(28.0)).h(px(28.0)).object_fit(nsh_core::ResizeMode::Cover)),
+                                );
+                            }
+                            previews
+                        })
                         // Into the running turn now, without waiting for it
                         // to end.
                         .child(btn(t("Steer"), Variant::Ghost, Sz::Sm, Some(Icon::CircleArrowUp), move || {
