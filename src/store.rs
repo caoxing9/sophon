@@ -817,6 +817,8 @@ pub(crate) enum Modal {
     RemoveSpace { id: String, name: String, folder: String },
     ArchiveWorkspace { id: String, name: String },
     Commit,
+    /// Reporting an issue on GitHub (`feedback`).
+    ReportIssue,
     Palette,
     NewSchedule,
     EditSchedule(crate::daemon::connection::Schedule),

@@ -15,6 +15,7 @@ mod bundled_cli;
 mod cadence;
 pub mod daemon;
 mod elsewhere;
+mod feedback;
 mod fold;
 #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 mod follow;
