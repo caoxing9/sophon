@@ -251,7 +251,9 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                     .into_element()
                 }
                 RowKind::Assistant => text_view()
-                    // While searching, the words found are marked in the
+                    // A link opens in the browser (or the app it belongs to).
+                    .links(nsh_base::TextViewLinks::Open)
+// While searching, the words found are marked in the
                     // text itself, not only the message they are in.
                     .markdown(move || {
                         let body = text_of();
@@ -860,7 +862,9 @@ fn plan_card(p: Permission, plan: String) -> View {
         .child(
             scroll().max_h(px(320.0)).child(
                 text_view()
-                    .markdown(move || Some(SharedString::from(plan.clone())))
+                    // A link opens in the browser (or the app it belongs to).
+                    .links(nsh_base::TextViewLinks::Open)
+.markdown(move || Some(SharedString::from(plan.clone())))
                     .selectable(true)
                     .gap_2()
                     .text_size(tx(TEXT_BASE))
@@ -1141,7 +1145,9 @@ fn static_row(item: Item) -> AnyElement {
                 .into_element()
         }
         Item::Assistant { text: t } => text_view()
-            .markdown(move || Some(SharedString::from(t.clone())))
+            // A link opens in the browser (or the app it belongs to).
+            .links(nsh_base::TextViewLinks::Open)
+.markdown(move || Some(SharedString::from(t.clone())))
             .selectable(true)
             .gap_3()
             .text_size(tx(TEXT_CONTENT))

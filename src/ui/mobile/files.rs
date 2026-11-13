@@ -160,7 +160,9 @@ fn content(path: String) -> AnyElement {
                     .child(
                         view().p(sp(S4)).child(
                             text_view()
-                                .markdown(move || Some(SharedString::from(doc.clone())))
+                                // A link opens in the browser (or the app it belongs to).
+                                .links(nsh_base::TextViewLinks::Open)
+.markdown(move || Some(SharedString::from(doc.clone())))
                                 .selectable(true)
                                 .gap_3()
                                 .text_size(tx(TEXT_CONTENT))
