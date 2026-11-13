@@ -588,12 +588,16 @@ fn user_actions(item: Memo<Option<Item>>) -> View {
 /// edited 2 files"), failures and progress, and a chevron. Pressed, its
 /// calls show under it, or fold away again.
 /// To the start and to the end of the conversation: small glass discs
-/// centred over the list, each there only while the list is more than a
-/// screen from that end, fading in and out. The end's sits just above the
+/// centred over the list, there while it is being scrolled (and under the
+/// pointer), each only while the list is more than a screen from that end,
+/// fading in and out; still, the conversation is left clear. The end's sits just above the
 /// composer (on the phone, above its floating card).
 fn jump_buttons() -> impl IntoElement {
     let ends = computed(store::timeline_ends);
-    let disc = |glyph: Icon, label: &'static str, go: fn(), shown: Memo<bool>| {
+    // Under the pointer the disc stays, so it can be reached once the
+    // scrolling has stopped.
+    let held = signal(false);
+    let disc = move |glyph: Icon, label: &'static str, go: fn(), shown: Memo<bool>| {
         nsh_base::button()
             .on_press(go)
             .accessibility_label(label)
@@ -615,8 +619,9 @@ fn jump_buttons() -> impl IntoElement {
             .pointer_events(move || if shown.get() { PointerEvents::Auto } else { PointerEvents::None })
             .child(icon(glyph, 15.0).text_color(FG_MUTED).group_hover(|s| s.text_color(FG)))
     };
-    let to_start = computed(move || ends.with(|e| e.away_from_start));
-    let to_end = computed(move || ends.with(|e| e.away_from_end));
+    let live = move || store::timeline_scrolling() || held.get();
+    let to_start = computed(move || live() && ends.with(|e| e.away_from_start));
+    let to_end = computed(move || live() && ends.with(|e| e.away_from_end));
     let row = || view().absolute().left(px(0.0)).right(px(0.0)).items_center();
     view()
         .absolute()
@@ -625,8 +630,16 @@ fn jump_buttons() -> impl IntoElement {
         .left(px(0.0))
         .right(px(0.0))
         .pointer_events(PointerEvents::BoxNone)
-        .child(row().top(sp(S3)).child(disc(Icon::ArrowUp, t("Go to the start"), store::jump_timeline_start, to_start)))
-        .child(row().bottom(px(if MOBILE { 196.0 } else { S3 })).child(disc(Icon::ArrowDown, t("Go to the end"), store::jump_timeline_end, to_end)))
+        .child(row().top(sp(S3)).child(hover_keeps(held, disc(Icon::ArrowUp, t("Go to the start"), store::jump_timeline_start, to_start))))
+        .child(row().bottom(px(if MOBILE { 196.0 } else { S3 })).child(hover_keeps(held, disc(Icon::ArrowDown, t("Go to the end"), store::jump_timeline_end, to_end))))
+}
+
+/// `el`, `held` while the pointer is over it.
+fn hover_keeps(held: Signal<bool>, el: impl IntoElement) -> View {
+    view()
+        .on_mouse_enter(move |_: &MouseEvent| held.set(true))
+        .on_mouse_leave(move |_: &MouseEvent| held.set(false))
+        .child(el)
 }
 
 /// Within this of its end, the conversation's list keeps its end in place.

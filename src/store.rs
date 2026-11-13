@@ -1377,6 +1377,23 @@ pub(crate) fn group_summary(start: usize, end: usize) -> crate::fold::Summary {
 pub(crate) fn set_timeline_scroll(offset: f32, content: f32, height: f32) {
     let from_end = content - offset - height;
     TIMELINE_FROM_END.with(|d| d.set(from_end));
+    // Scrolling now (not the list settling as it opens): the jumps show
+    // until it has been still a moment.
+    let settling = TIMELINE_OPENED.with(|o| o.get().is_some_and(|at| at.elapsed() < std::time::Duration::from_millis(1200)));
+    if !settling {
+        let n = TIMELINE_SCROLLS.with(|c| {
+            c.set(c.get() + 1);
+            c.get()
+        });
+        if !global::<TimelineScrolling>().with_untracked(|s| s.0) {
+            global::<TimelineScrolling>().set(TimelineScrolling(true));
+        }
+        set_timeout(std::time::Duration::from_millis(1500), move || {
+            if TIMELINE_SCROLLS.with(std::cell::Cell::get) == n {
+                global::<TimelineScrolling>().set(TimelineScrolling(false));
+            }
+        });
+    }
     let ends = TimelineEnds { away_from_start: offset > height || jumping_start(), away_from_end: from_end > height };
     if global::<TimelineEnds>().with_untracked(|e| *e != ends) {
         global::<TimelineEnds>().set(ends);
@@ -1392,6 +1409,14 @@ pub(crate) struct TimelineEnds {
 
 pub(crate) fn timeline_ends() -> TimelineEnds {
     global::<TimelineEnds>().get()
+}
+
+/// The conversation's list is being scrolled, or was a moment ago.
+#[derive(Clone, Copy, Default, PartialEq)]
+struct TimelineScrolling(bool);
+
+pub(crate) fn timeline_scrolling() -> bool {
+    global::<TimelineScrolling>().with(|s| s.0)
 }
 
 /// Going to the conversation's start: each earlier page, as it comes, is
@@ -4498,10 +4523,17 @@ thread_local! {
     static TIMELINE_LIST: RefCell<Option<ElementRef>> = const { RefCell::new(None) };
     /// How far the conversation's list is from its end, as it last said.
     static TIMELINE_FROM_END: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
+    /// When the conversation's list was made.
+    static TIMELINE_OPENED: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
+    /// Counts scroll events, so only the last one's timer ends `TimelineScrolling`.
+    static TIMELINE_SCROLLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 pub(crate) fn set_timeline_list(list: ElementRef) {
     TIMELINE_LIST.with_borrow_mut(|l| *l = Some(list));
+    // The list going to its end as it opens is not the user scrolling.
+    TIMELINE_OPENED.with(|o| o.set(Some(std::time::Instant::now())));
+    global::<TimelineScrolling>().set(TimelineScrolling(false));
 }
 
 /// Brings item `index` into view: its row, or its folded group's.
