@@ -130,9 +130,15 @@ impl NodeView for MentionView {
         let selected = cx.selected();
         let path = attr(node, "path").to_owned();
         let dir = node.attrs().get("dir").and_then(Value::as_bool).unwrap_or(false);
+        // Another conversation: its title.
+        let conversation = path.strip_prefix(composer_doc::CONVERSATION).map(|id| store::agent(id).map(|a| a.title).unwrap_or_else(|| t("Conversation").to_owned()));
         // The path's last part: enough to tell files apart in a line.
         let tail = path.trim_end_matches('/').rsplit('/').next().unwrap_or(&path).to_owned();
         let tail = if dir { format!("{tail}/") } else { tail };
+        let (glyph, tail, label) = match conversation {
+            Some(title) => (Icon::Bot, title.clone(), title),
+            None => (if dir { Icon::Folder } else { Icon::FileText }, tail, path),
+        };
         // Not a button: a press beside it places the caret, as on text.
         view()
             .flex_row()
@@ -147,8 +153,8 @@ impl NodeView for MentionView {
             .border_1()
             .border_color(move || if selected.get() { tint(ACCENT, 0.9) } else { tint(ACCENT, 0.18) })
             .bg(move || if selected.get() { tint(ACCENT, 0.18) } else { tint(ACCENT, 0.06) })
-            .label(path)
-            .child(icon(if dir { Icon::Folder } else { Icon::FileText }, 12.0).text_color(ACCENT))
+            .label(label)
+            .child(icon(glyph, 12.0).text_color(ACCENT))
             .child(text(chip_name(&tail)).text_size(tx(TEXT_SM)).line_height(px(16.0)).font_family(mono_font).text_color(ACCENT).number_of_lines(1))
             .into_element()
     }

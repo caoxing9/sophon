@@ -103,7 +103,14 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
     };
     let submit = move || {
         let Some(session) = doc.session() else { return };
-        let out = composer_doc::outgoing(session.state().doc());
+        let mut out = composer_doc::outgoing(session.state().doc());
+        // The conversations mentioned, their words after the message.
+        for id in &out.conversations {
+            if let Some(context) = store::conversation_context(id) {
+                out.message.push_str("\n\n");
+                out.message.push_str(&context);
+            }
+        }
         store::sync_attachments(&out.attachments);
         match target {
             Target::Agent => {
@@ -481,14 +488,21 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
                     Target::Agent => store::current_workspace().map(|w| w.directory),
                     Target::Form => Some(store::form().path),
                 }?;
-                store::suggestions(&cwd, query)
+                // Other conversations first, by their titles, then files.
+                let q = query.to_lowercase();
+                let here = store::selected_id();
+                let mut rows: Vec<(Icon, String, String, String, bool)> = store::agents()
                     .into_iter()
-                    .take(8)
-                    .map(|(path, dir)| {
-                        let rel = path.strip_prefix(&cwd).map(|p| p.trim_start_matches('/').to_owned()).unwrap_or(path);
-                        (if dir { Icon::Folder } else { Icon::FileText }, rel.clone(), String::new(), rel, dir)
-                    })
-                    .collect()
+                    .filter(|a| Some(&a.id) != here.as_ref() && !a.archived && a.parent_id.is_none())
+                    .filter(|a| q.is_empty() || a.title.to_lowercase().contains(&q))
+                    .take(if q.is_empty() { 3 } else { 4 })
+                    .map(|a| (Icon::Bot, a.title.clone(), t("Conversation").to_owned(), format!("{}{}", composer_doc::CONVERSATION, a.id), false))
+                    .collect();
+                rows.extend(store::suggestions(&cwd, query).into_iter().take(8 - rows.len()).map(|(path, dir)| {
+                    let rel = path.strip_prefix(&cwd).map(|p| p.trim_start_matches('/').to_owned()).unwrap_or(path);
+                    (if dir { Icon::Folder } else { Icon::FileText }, rel.clone(), String::new(), rel, dir)
+                }));
+                rows
             }
         };
         if rows.is_empty() {

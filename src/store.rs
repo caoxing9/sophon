@@ -4239,6 +4239,54 @@ pub(crate) fn set_control(live: bool, change: Control) {
 
 /// Starts the form's agent: in the open workspace (draft tab), or in a new
 /// workspace (new-workspace screen).
+/// Another conversation's words, for a message that mentions it: its last
+/// messages as this device keeps them (the user's and the agent's, not
+/// its calls), and where its whole record is on the computer it ran on,
+/// for the agent to read more.
+pub(crate) fn conversation_context(agent_id: &str) -> Option<String> {
+    let a = agent(agent_id)?;
+    const MESSAGES: usize = 12;
+    const EACH: usize = 1200;
+    let items = crate::daemon::connection::cached_timeline(agent_id).map(|t| t.0).unwrap_or_default();
+    let mut lines: Vec<String> = items
+        .iter()
+        .rev()
+        .filter_map(|i| match i {
+            Item::User { text, .. } => Some(("user", text)),
+            Item::Assistant { text } => Some(("assistant", text)),
+            _ => None,
+        })
+        .filter(|(_, t)| !t.trim().is_empty())
+        .take(MESSAGES)
+        .map(|(who, t)| {
+            let t = t.trim();
+            let cut: String = t.chars().take(EACH).collect();
+            format!("[{who}] {cut}{}", if cut.len() < t.len() { "…" } else { "" })
+        })
+        .collect();
+    lines.reverse();
+    let record = a.session_id.as_deref().map(|sid| match a.provider.as_str() {
+        "claude" => {
+            let folder: String = a.cwd.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+            format!("~/.claude/projects/{folder}/{sid}.jsonl (Claude Code's record, one JSON object a line)")
+        }
+        "codex" => format!("the file under ~/.codex/sessions whose name ends in {sid}.jsonl (Codex's record)"),
+        _ => format!("session {sid} of {}", a.provider),
+    });
+    let mut out = format!("--- The conversation \"{}\" ({} in {}), which this message refers to:\n", a.title, a.provider, a.cwd);
+    if lines.is_empty() {
+        out.push_str("(None of its messages are at hand here.)\n");
+    } else {
+        out.push_str(&lines.join("\n"));
+        out.push('\n');
+    }
+    if let Some(record) = record {
+        out.push_str(&format!("Its whole record: {record}\n"));
+    }
+    out.push_str("---");
+    Some(out)
+}
+
 pub(crate) fn submit_form() {
     let f = form();
     if f.busy || f.path.trim().is_empty() || f.provider.is_empty() {

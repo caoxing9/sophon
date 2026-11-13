@@ -601,6 +601,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Paired", "已配对"),
     ("Updating the service…", "正在更新服务…"),
     ("Restarting the service…", "正在重启服务…"),
+    ("Conversation", "对话"),
     ("Listening…", "正在听…"),
     ("Let go to stop", "松开结束"),
     ("Press keys…", "请按快捷键…"),

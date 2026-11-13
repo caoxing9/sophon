@@ -27,6 +27,9 @@ use crate::ui::kit::MOBILE;
 /// The chip's node types, and the attributes they carry.
 pub(crate) const ATTACHMENT: &str = "attachment";
 pub(crate) const MENTION: &str = "mention";
+/// A mention's path that names another conversation: this, then its
+/// agent's id.
+pub(crate) const CONVERSATION: &str = "conversation:";
 
 /// What a chip's attachment is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,6 +123,9 @@ pub(crate) struct Outgoing {
     /// stood, so the agent reads where a file belongs in the sentence and
     /// the sent message shows its chips in place ([`segments`]).
     pub(crate) message: String,
+    /// The other conversations mentioned (agent ids), whose words go
+    /// with the message.
+    pub(crate) conversations: Vec<String>,
 }
 
 impl Outgoing {
@@ -152,9 +158,20 @@ pub(crate) fn outgoing(doc: &Node) -> Outgoing {
                     out.message.push_str(&format!("[{}]", name.trim()));
                 }
                 MENTION => {
-                    let mention = format!("@{}", attr_str(inline, "path"));
+                    let path = attr_str(inline, "path");
+                    let mention = format!("@{path}");
                     out.text.push_str(&mention);
-                    out.message.push_str(&mention);
+                    // Another conversation: named in the message, its
+                    // words added after it (`store::conversation_context`).
+                    match path.strip_prefix(CONVERSATION) {
+                        Some(id) => {
+                            out.message.push_str(&format!("《{}》", crate::store::agent(id).map(|a| a.title).unwrap_or_default()));
+                            if !out.conversations.iter().any(|c| c == id) {
+                                out.conversations.push(id.to_owned());
+                            }
+                        }
+                        None => out.message.push_str(&mention),
+                    }
                 }
                 // A line break, or anything with a text of its own.
                 _ => {

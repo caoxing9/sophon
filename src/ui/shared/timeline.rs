@@ -420,6 +420,10 @@ pub(crate) fn mark_matches(markdown: &str, query: &str) -> String {
 /// the composer (`[name]` in the text, `composer_doc::segments`): a
 /// picture's chip carries its thumbnail and shows it large under the
 /// pointer; a message from the host's history has the names alone.
+/// Where another conversation's words begin in a message that refers to
+/// it (`store::conversation_context`).
+pub(crate) const CONTEXT_MARK: &str = "\n\n--- The conversation \"";
+
 fn user_text(item: Memo<Option<Item>>, selectable: bool) -> impl IntoElement {
     use crate::ui::shared::composer_doc::{Segment, is_image_name, segments};
     view().child(dynamic(move || {
@@ -427,6 +431,12 @@ fn user_text(item: Memo<Option<Item>>, selectable: bool) -> impl IntoElement {
             Some(Item::User { text, images, .. }) => (text.clone(), images.clone()),
             _ => Default::default(),
         });
+        // Another conversation's words sent with it (`store::conversation_
+        // context`) are the agent's to read, not the bubble's to show.
+        let body = match body.find(CONTEXT_MARK) {
+            Some(at) => body[..at].trim_end().to_owned(),
+            None => body,
+        };
         let f = store::find();
         Some(untracked(move || {
             let mut line = text("").text_size(tx(TEXT_CONTENT)).line_height(px(22.0)).text_color(FG).selectable(selectable);
