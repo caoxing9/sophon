@@ -12,18 +12,42 @@ use crate::store::{self, ExplorerTab, Modal, Screen, Tab};
 /// Binds the app's shortcuts for as long as the shell lives.
 pub(crate) fn bind() {
     menu();
-    // Fn on its own (macOS): heard by a monitor of the modifier keys, on
-    // the main thread, and handed here.
+    // Fn held on its own (macOS), push to talk: dictation listens while
+    // it is held (after a quarter second, so a tap does nothing) and stops
+    // when it is let go. Heard by a monitor of the modifier keys on the
+    // main thread, and handed here.
     #[cfg(target_os = "macos")]
     {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
-        crate::platform::fn_key::watch(move || {
-            let _ = tx.send(());
+        use crate::platform::fn_key::FnKey;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<FnKey>();
+        crate::platform::fn_key::watch(move |k| {
+            let _ = tx.send(k);
         });
         store::spawn_detached(async move {
-            while rx.recv().await.is_some() {
-                if store::dictation_key() == store::DictationKey::Fn {
-                    crate::ui::shared::composer::toggle_dictation();
+            // Each press, numbered: a hold's timer starts only its own.
+            let press = std::rc::Rc::new(std::cell::Cell::new(0u64));
+            let started = std::rc::Rc::new(std::cell::Cell::new(false));
+            while let Some(k) = rx.recv().await {
+                if store::dictation_key() != store::DictationKey::Fn {
+                    continue;
+                }
+                let n = press.get() + 1;
+                press.set(n);
+                match k {
+                    FnKey::Down => {
+                        let (press, started) = (press.clone(), started.clone());
+                        set_timeout(std::time::Duration::from_millis(250), move || {
+                            if press.get() == n && !crate::ui::shared::composer::dictating() {
+                                started.set(true);
+                                crate::ui::shared::composer::toggle_dictation();
+                            }
+                        });
+                    }
+                    FnKey::Up | FnKey::Combined => {
+                        if started.replace(false) && crate::ui::shared::composer::dictating() {
+                            crate::ui::shared::composer::toggle_dictation();
+                        }
+                    }
                 }
             }
         });

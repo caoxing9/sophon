@@ -603,7 +603,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Restarting the service…", "正在重启服务…"),
     ("Dictation", "听写"),
     ("Dictation key", "听写快捷键"),
-    ("Starts and stops dictation, as the microphone does. For Fn alone, set macOS's \"Press 🌐 key to\" to Do Nothing (System Settings → Keyboard)", "开始和停止听写，和麦克风按钮一样。用 Fn 时，请把 macOS 的「按下 🌐 键时」设为「不执行任何操作」（系统设置 → 键盘）"),
+    ("Fn: hold it to talk, let go to stop (set macOS's \"Press 🌐 key to\" to Do Nothing, System Settings → Keyboard). ⇧⌘D: press to start and to stop", "Fn：按住说话，松开停止（请把 macOS 的「按下 🌐 键时」设为「不执行任何操作」，系统设置 → 键盘）。⇧⌘D：按一下开始，再按一下停止"),
     ("Find a changed file", "搜索改动的文件"),
     ("Find a changed file…", "搜索改动的文件…"),
     ("Changed files", "改动的文件"),

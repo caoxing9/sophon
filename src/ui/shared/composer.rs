@@ -840,6 +840,11 @@ thread_local! {
     static MIC_DOC: std::cell::Cell<Option<Doc>> = const { std::cell::Cell::new(None) };
 }
 
+/// Dictation is listening.
+pub(crate) fn dictating() -> bool {
+    global::<Dictating>().with_untracked(|d| d.0)
+}
+
 /// The dictation shortcut: starts or stops dictating into the composer on
 /// screen, as its microphone button does.
 pub(crate) fn toggle_dictation() {

@@ -131,7 +131,7 @@ pub(crate) fn dictation_card() -> View {
     use store::DictationKey;
     card().child(row(
         t("Dictation key"),
-        t("Starts and stops dictation, as the microphone does. For Fn alone, set macOS's \"Press 🌐 key to\" to Do Nothing (System Settings → Keyboard)"),
+        t("Fn: hold it to talk, let go to stop (set macOS's \"Press 🌐 key to\" to Do Nothing, System Settings → Keyboard). ⇧⌘D: press to start and to stop"),
         segmented(
             vec![(DictationKey::Fn, "Fn".into()), (DictationKey::ShiftCmdD, "⇧⌘D".into()), (DictationKey::Off, t("Off").into())],
             store::dictation_key,
