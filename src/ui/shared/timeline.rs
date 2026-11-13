@@ -1348,28 +1348,106 @@ pub(crate) fn find_bar() -> impl IntoElement {
 /// While the agent runs and nothing it says is streaming: the mark
 /// breathing at the foot of the conversation, so a sent message never sits
 /// there without an answer in sight.
+/// The words a turn goes by, one per turn, as Claude Code's status line
+/// has them.
+const VERBS_EN: [&str; 16] = [
+    "Thinking", "Pondering", "Brewing", "Fermenting", "Percolating", "Mulling", "Simmering", "Tinkering",
+    "Crafting", "Musing", "Conjuring", "Noodling", "Ruminating", "Whirring", "Cogitating", "Marinating",
+];
+const VERBS_ZH: [&str; 12] = ["思考中", "琢磨中", "酝酿中", "发酵中", "推敲中", "构思中", "打磨中", "冥想中", "捣鼓中", "盘算中", "斟酌中", "沉吟中"];
+
+/// The star's frames, as Claude Code's spinner turns them.
+const STAR: [&str; 6] = ["·", "✢", "✳", "✶", "✻", "✽"];
+
+thread_local! {
+    /// When each agent's running turn was first seen running here.
+    static TURN_STARTED: std::cell::RefCell<std::collections::HashMap<String, std::time::Instant>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// About how many tokens `text` is: four letters of English to a token,
+/// a character of Chinese (or other wide script) to one.
+fn tokens_in(text: &str) -> usize {
+    let (narrow, wide) = text.chars().fold((0usize, 0usize), |(n, w), c| if c.is_ascii() { (n + 1, w) } else { (n, w + 1) });
+    narrow / 4 + wide
+}
+
+/// "3.2k", "860".
+fn short_count(n: usize) -> String {
+    if n >= 1000 { format!("{:.1}k", n as f64 / 1000.0) } else { n.to_string() }
+}
+
+/// "53s", "2m 05s".
+fn short_time(secs: u64) -> String {
+    if secs < 60 { format!("{secs}s") } else { format!("{}m {:02}s", secs / 60, secs % 60) }
+}
+
+/// While the agent works, at the conversation's foot, as Claude Code's
+/// status line: a turning star, the turn's word, how long it has run and
+/// about how many tokens it has written so far (its messages, thinking and
+/// calls since the user's message, counted here: the service says the
+/// turn's tokens only at its end).
 fn thinking(running: Memo<bool>) -> impl IntoElement {
-    let state = computed(move || {
+    let agent = computed(store::selected_id);
+    // The turn's start, kept per agent while it runs.
+    effect(move || {
+        let (Some(id), on) = (agent.get(), running.get()) else { return };
+        TURN_STARTED.with_borrow_mut(|m| {
+            if on {
+                m.entry(id).or_insert_with(std::time::Instant::now);
+            } else {
+                m.remove(&id);
+            }
+        });
+    });
+    // What the turn has written: everything after the user's last message.
+    let written = computed(move || {
+        let count = store::item_count();
+        let mut tokens = 0;
+        for i in (0..count).rev() {
+            match store::item_at(i) {
+                Some(Item::User { .. }) | None => break,
+                Some(Item::Assistant { text } | Item::Reasoning { text }) => tokens += tokens_in(&text),
+                Some(Item::Tool { summary, detail, .. }) => tokens += tokens_in(&summary) + tokens_in(&detail.to_string()) / 4,
+                Some(_) => {}
+            }
+        }
+        tokens
+    });
+    view().child(dynamic(move || {
         if !running.get() {
             return None;
         }
-        let last = store::item_count().checked_sub(1).and_then(store::item_at);
-        match last {
-            // Its words are on screen already.
-            Some(Item::Assistant { .. }) => None,
-            Some(Item::User { .. }) | None => Some(t("Thinking…")),
-            Some(_) => Some(t("Working…")),
-        }
-    });
-    view().child(dynamic(move || {
-        let label = state.get()?;
+        let id = agent.get_untracked().unwrap_or_default();
         Some(untracked(move || {
-            // The words alone, breathing so they read as live.
-            let breath = animated_value(1.0);
-            let half = nsh_core::element::Timing::new(900.0, Easing::EaseInOut);
-            Animation::sequence([Animation::timing(&breath, 0.45, half.clone()), Animation::timing(&breath, 1.0, half)])
-                .looped(None)
-                .start();
+            let started = TURN_STARTED.with_borrow(|m| m.get(&id).copied()).unwrap_or_else(std::time::Instant::now);
+            // One word for the turn, by when it began.
+            let seed = {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                format!("{started:?}{id}").hash(&mut h);
+                h.finish() as usize
+            };
+            let verb = if crate::i18n::is_zh() { VERBS_ZH[seed % VERBS_ZH.len()] } else { VERBS_EN[seed % VERBS_EN.len()] };
+            // The star turns, and the time goes on, from one tick.
+            let tick = signal(0u64);
+            spawn(async move {
+                loop {
+                    nsh_core::element::timer(std::time::Duration::from_millis(120)).await;
+                    tick.update(|t| *t += 1);
+                }
+            });
+            let star = move || STAR[(tick.get() as usize / 2) % STAR.len()].to_owned();
+            let detail = move || {
+                tick.get();
+                let secs = started.elapsed().as_secs();
+                let tokens = written.get();
+                if tokens == 0 {
+                    format!("({})", short_time(secs))
+                } else {
+                    format!("({} · ↓ {} tokens)", short_time(secs), short_count(tokens))
+                }
+            };
             view()
                 .w_full()
                 .max_w(px(CONTENT_MAX_WIDTH + 2.0 * S6))
@@ -1377,10 +1455,30 @@ fn thinking(running: Memo<bool>) -> impl IntoElement {
                 // The rows' own inset, so the words line up with the text.
                 .px(sp(S6))
                 .py(sp(S3))
-                .child(text(label).text_size(tx(TEXT_SM)).text_color(FG_MUTED).bind_opacity(&breath))
+                .flex_row()
+                .items_center()
+                .gap(sp(S2))
+                .child(text(star).text_size(tx(TEXT_BASE)).font_family(mono_font).text_color(ACCENT).w(px(14.0)))
+                .child(text(format!("{verb}…")).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(ACCENT))
+                .child(text(detail).text_size(tx(TEXT_SM)).text_color(FG_FAINT))
                 .into_element()
         }))
     }))
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::{short_count, short_time, tokens_in};
+
+    #[test]
+    fn the_status_line_counts_and_times_as_claude_code_does() {
+        assert_eq!(tokens_in("abcdefgh"), 2);
+        assert_eq!(tokens_in("你好"), 2);
+        assert_eq!(short_count(860), "860");
+        assert_eq!(short_count(3200), "3.2k");
+        assert_eq!(short_time(53), "53s");
+        assert_eq!(short_time(125), "2m 05s");
+    }
 }
 
 #[cfg(test)]
