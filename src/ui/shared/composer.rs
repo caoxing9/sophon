@@ -213,7 +213,10 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                             )
                             .child(view().flex_1())
                             .child(disc(running, busy, empty, submit)),
-                    ),
+                    )
+                    // While it listens, the whole card is the listening:
+                    // over the rest, so last.
+                    .child(listening_card(doc)),
             )
             .into_element();
     }
@@ -907,14 +910,65 @@ fn hold_to_talk(doc: Doc, empty: Memo<bool>) -> impl IntoElement {
                     .px(sp(S3))
                     .h(px(28.0))
                     .rounded(px(R_FULL))
-                    .bg(move || if listening.get() { tint(DANGER, 0.14) } else { tint(FG, 0.0) })
-                    .child(icon(Icon::Mic, 14.0).text_color(move || if listening.get() { DANGER } else { FG_FAINT }))
-                    .child(
-                        text(move || if listening.get() { t("Listening… let go to stop") } else { t("Hold to talk") }.to_owned())
-                            .text_size(tx(TEXT_SM))
-                            .text_color(move || if listening.get() { DANGER } else { FG_FAINT }),
-                    ),
+                    .opacity(move || if listening.get() { 0.0_f32 } else { 1.0 })
+                    .child(icon(Icon::Mic, 14.0).text_color(FG_FAINT))
+                    .child(text(t("Hold to talk")).text_size(tx(TEXT_SM)).text_color(FG_FAINT)),
             )
+    })
+}
+
+/// The phone's card while dictation listens, as Codex's voice mode: over
+/// the whole composer, a wave that moves, what it has heard so far (the
+/// words go into the text under it) and how to stop. It takes no touch:
+/// the finger holding the text keeps its gesture.
+fn listening_card(doc: Doc) -> impl IntoElement {
+    let listening = computed(move || global::<Dictating>().with(|d| d.0));
+    let heard = computed(move || {
+        let text = doc.tracked().map(|s| composer_doc::outgoing(s.state().doc()).text).unwrap_or_default();
+        // The end of it, as it comes.
+        let chars: Vec<char> = text.trim().chars().collect();
+        let tail: String = chars[chars.len().saturating_sub(60)..].iter().collect();
+        if chars.len() > 60 { format!("…{tail}") } else { tail }
+    });
+    when(listening, move || {
+        // Five bars, each rising and falling at its own pace.
+        let mut wave = view().flex_row().items_center().gap(px(4.0)).h(px(28.0));
+        for (i, ms) in [420.0_f32, 300.0, 520.0, 360.0, 460.0].into_iter().enumerate() {
+            let level = animated_value(0.35);
+            let half = nsh_core::element::Timing::new(ms, Easing::EaseInOut);
+            Animation::sequence([Animation::timing(&level, 1.0, half.clone()), Animation::timing(&level, 0.3 + 0.1 * (i % 3) as f32, half)])
+                .looped(None)
+                .start();
+            wave = wave.child(
+                view().w(px(4.0)).h(px(26.0)).rounded(px(R_FULL)).bg(ACCENT).bind_transform(nsh_core::TransformKind::ScaleY, &level),
+            );
+        }
+        view()
+            .absolute()
+            .top(px(0.0))
+            .bottom(px(0.0))
+            .left(px(0.0))
+            .right(px(0.0))
+            .rounded(px(24.0))
+            .bg(SURFACE0)
+            .pointer_events(PointerEvents::None)
+            .px(sp(S4))
+            .py(sp(S3))
+            .gap(sp(S2))
+            .justify_center()
+            .child(
+                view()
+                    .flex_row()
+                    .items_center()
+                    .gap(sp(S3))
+                    .child(wave)
+                    .child(text(t("Listening…")).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).text_color(FG))
+                    .child(view().flex_1())
+                    .child(text(t("Let go to stop")).text_size(tx(TEXT_SM)).text_color(FG_FAINT)),
+            )
+            .child(when(move || heard.with(|h| !h.is_empty()), move || {
+                text(move || heard.get()).text_size(tx(TEXT_BASE)).text_color(FG_MUTED).number_of_lines(2)
+            }))
     })
 }
 
