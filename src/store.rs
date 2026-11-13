@@ -4239,13 +4239,13 @@ pub(crate) fn set_control(live: bool, change: Control) {
 
 thread_local! {
     /// The last message the user sent each conversation, as far as this
-    /// device knows: what it sent itself, else its copy of the conversation
-    /// (`None`: looked, none). With when the user last sent one, to look
-    /// again once that moves.
-    static LAST_SAID: RefCell<HashMap<String, (String, Option<String>)>> = RefCell::new(HashMap::new());
+    /// device knows: what it sent itself, what the open conversation shows,
+    /// else (once) its copy of the conversation (`None`: looked, none).
+    static LAST_SAID: RefCell<HashMap<String, Option<String>>> = RefCell::new(HashMap::new());
 }
 
-/// Bumped when this device sends a message: the lists' names read it.
+/// Bumped when a conversation's last message here changes: the lists'
+/// names read it.
 #[derive(Clone, Copy, Default, PartialEq)]
 struct LastSaidRev(u64);
 
@@ -4258,10 +4258,35 @@ fn as_name(text: &str) -> Option<String> {
     Some(line.chars().take(120).collect())
 }
 
+/// Keeps `said` as the conversation's last message, the lists told.
+fn set_last_said(agent_id: &str, said: Option<String>) {
+    let changed = LAST_SAID.with_borrow_mut(|l| l.insert(agent_id.to_owned(), said.clone()) != Some(said));
+    if changed {
+        global::<LastSaidRev>().update(|r| r.0 += 1);
+    }
+}
+
+/// The open conversation's last message from the user, as it changes:
+/// the freshest there is (the copy on disk is written as a page loads,
+/// not as messages come).
+pub(crate) fn watch_last_said() {
+    effect(|| {
+        let (agent_id, said) = global::<Timeline>().with(|t| {
+            let said = t.items.iter().rev().find_map(|i| match i {
+                Item::User { text, .. } => as_name(text),
+                _ => None,
+            });
+            (t.agent_id.clone(), said)
+        });
+        if let (Some(id), Some(said)) = (agent_id, said) {
+            untracked(|| set_last_said(&id, Some(said)));
+        }
+    });
+}
+
 /// The conversation's last message from the user, as a name.
 fn last_said(a: &Agent) -> Option<String> {
-    let known = LAST_SAID.with_borrow(|l| l.get(&a.id).filter(|(at, _)| *at == a.last_user_message_at).map(|(_, said)| said.clone()));
-    if let Some(said) = known {
+    if let Some(said) = LAST_SAID.with_borrow(|l| l.get(&a.id).cloned()) {
         return said;
     }
     let said = crate::daemon::connection::cached_timeline(&a.id).and_then(|(items, ..)| {
@@ -4270,8 +4295,9 @@ fn last_said(a: &Agent) -> Option<String> {
             _ => None,
         })
     });
+    // Kept quietly: read while a list draws.
     LAST_SAID.with_borrow_mut(|l| {
-        l.insert(a.id.clone(), (a.last_user_message_at.clone(), said.clone()));
+        l.insert(a.id.clone(), said.clone());
     });
     said
 }
@@ -4444,11 +4470,7 @@ fn deliver(agent_id: &str, text: &str, behavior: Option<&'static str>) {
 fn deliver_with(agent_id: &str, text: &str, behavior: Option<&'static str>, images: Vec<ImageInput>, attachments: Vec<serde_json::Value>) {
     // The conversation's name in its lists, until the host says when.
     if let Some(name) = as_name(text) {
-        let at = agent(agent_id).map(|a| a.last_user_message_at).unwrap_or_default();
-        LAST_SAID.with_borrow_mut(|l| {
-            l.insert(agent_id.to_owned(), (at, Some(name)));
-        });
-        global::<LastSaidRev>().update(|r| r.0 += 1);
+        set_last_said(agent_id, Some(name));
     }
     let mut shown = text.to_owned();
     // A file the text does not name where its chip stood (a message
