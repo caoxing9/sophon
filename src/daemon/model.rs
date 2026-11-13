@@ -413,7 +413,7 @@ pub enum Item {
 
 /// What a conversation says in place of the agent's own failure when its
 /// session is open somewhere else.
-const ELSEWHERE: &str = "This conversation is running somewhere else: a Claude Code session in a terminal or in the background ({}). A session runs in one place at a time, so messages cannot be sent from here while it does. To go on here, end it there first: claude stop {}";
+const ELSEWHERE: &str = "This conversation is open somewhere else: a Claude Code session in a terminal or in the background ({}). It stays open there between replies, even while nothing runs, and a session is open in one place at a time, so messages cannot be sent from here. To go on here, close it there first: claude stop {}";
 
 /// The session Claude Code names when it refuses to resume one that is
 /// running in the background, in the failure the service shows as the
