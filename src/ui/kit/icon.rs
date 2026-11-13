@@ -100,6 +100,7 @@ pub(crate) enum Icon {
     Wrench,
     Zap,
     Lock,
+    MessageSquare,
     PenLine,
     ShieldOff,
     X,
@@ -108,6 +109,7 @@ pub(crate) enum Icon {
 fn markup(icon: Icon) -> &'static str {
     match icon {
         Icon::Activity => include_str!("../../../assets/icons/activity.svg"),
+        Icon::MessageSquare => include_str!("../../../assets/icons/message-square.svg"),
         Icon::Archive => include_str!("../../../assets/icons/archive.svg"),
         Icon::ArrowDown => include_str!("../../../assets/icons/arrow-down.svg"),
         Icon::ArrowLeft => include_str!("../../../assets/icons/arrow-left.svg"),

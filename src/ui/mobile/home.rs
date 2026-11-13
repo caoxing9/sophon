@@ -72,7 +72,12 @@ pub(crate) fn home() -> impl IntoElement {
                     }
                     HomeTab::Chats => view()
                         .flex_1()
-                        .child(large_header(t("Chats"), host_chip()))
+                        .child(large_header(
+                            t("Chats"),
+                            view().flex_row().items_center().gap(sp(S2)).child(host_chip()).child(round_button(Icon::MessageSquare, t("Feedback"), || {
+                                store::open_modal(store::Modal::ReportIssue)
+                            })),
+                        ))
                         .child(search_field(query, t("Search conversations")))
                         .child(chats(query))
                         .into_element(),

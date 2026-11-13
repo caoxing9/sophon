@@ -62,7 +62,7 @@ pub(crate) fn file_pane(path: String) -> impl IntoElement {
                     return preview::fallback(other, Icon::CircleAlert, e);
                 }
                 if !loaded {
-                    return note(Icon::RotateCw, t("Loading…").into());
+                    return view().flex_1().items_center().justify_center().child(eclipse(36.0)).into_element();
                 }
                 if kind != "text" {
                     return preview::fallback(other, Icon::File, tf("This {} file can't be shown as text", &[&kind.to_string()]));
@@ -76,15 +76,4 @@ pub(crate) fn file_pane(path: String) -> impl IntoElement {
                     .into_element()
             }))
         })))
-}
-
-fn note(glyph: Icon, message: String) -> AnyElement {
-    view()
-        .flex_1()
-        .items_center()
-        .justify_center()
-        .gap(sp(S2))
-        .child(icon(glyph, 18.0).text_color(FG_FAINT))
-        .child(text(message).text_size(tx(TEXT_BASE)).text_color(FG_MUTED))
-        .into_element()
 }

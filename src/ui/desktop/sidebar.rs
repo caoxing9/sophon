@@ -250,6 +250,7 @@ fn footer() -> impl IntoElement {
                 store::open_modal(store::Modal::AddProject)
             })),
         )
+        .child(icon_btn(Icon::MessageSquare, Sz::Md, t("Feedback"), || store::open_modal(store::Modal::ReportIssue)))
         .child(icon_btn(Icon::Activity, Sz::Md, t("Usage"), store::open_usage))
         .child(icon_btn(Icon::Settings, Sz::Md, t("Settings"), store::open_settings))
 }

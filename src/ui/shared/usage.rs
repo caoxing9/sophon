@@ -21,7 +21,6 @@ use crate::{
 
 pub(crate) fn usage_page(compact: bool) -> impl IntoElement {
     let range = signal(Range::Week);
-    let busy = computed(|| store::local_usage().loading);
     scroll().flex_1().child(
         view()
             .w_full()
@@ -37,7 +36,6 @@ pub(crate) fn usage_page(compact: bool) -> impl IntoElement {
                     .gap(sp(S2))
                     .when(compact, |v| v.child(icon_btn(Icon::ArrowLeft, Sz::Sm, t("Back"), store::go_home)))
                     .child(text(t("Usage")).text_size(tx(TEXT_2XL)).font_weight(FontWeight(500)).flex_1())
-                    .child(dynamic(move || busy.get().then(|| untracked(|| text(t("Reading session logs…")).text_size(tx(TEXT_SM)).text_color(FG_MUTED)))))
                     .child(icon_btn(Icon::RotateCw, Sz::Md, t("Refresh"), store::refresh_usage)),
             )
             .child(history_section(range))
@@ -64,10 +62,22 @@ fn history_section(range: Signal<Range>) -> View {
                 .when(!MOBILE, |v| v.flex_row().items_center())
                 .gap(sp(S3))
                 .child(
-                    text(if MOBILE { t("The computer's sessions") } else { t("This computer's sessions") })
-                        .text_size(tx(TEXT_LG))
-                        .font_weight(FontWeight(500))
-                        .when(!MOBILE, |v| v.flex_1()),
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap(sp(S2))
+                        .when(!MOBILE, |v| v.flex_1())
+                        .child(
+                            text(if MOBILE { t("The computer's sessions") } else { t("This computer's sessions") })
+                                .text_size(tx(TEXT_LG))
+                                .font_weight(FontWeight(500)),
+                        )
+                        // Reading the logs again (Refresh) with numbers on
+                        // screen: the small mark beside the title, on the
+                        // phone and the desktop alike.
+                        .child(dynamic(move || {
+                            local.with(|l| l.loading && l.report.is_some()).then(|| untracked(|| eclipse(18.0).into_element()))
+                        })),
                 )
                 .child(segmented(
                     vec![(Range::Today, t("Today").into()), (Range::Week, t("7 days").into()), (Range::Month, t("30 days").into())],
@@ -96,7 +106,8 @@ fn history_section(range: Signal<Range>) -> View {
             let (report, loading) = local.with(|l| (l.report.clone(), l.loading));
             let r = range.get();
             Some(untracked(move || match report {
-                None if loading => muted(t("Reading session logs…")).into_element(),
+                // The first reading: the mark, where the numbers will be.
+                None if loading => loading_block(240.0).into_element(),
                 None if cfg!(any(target_os = "ios", target_os = "android", target_arch = "wasm32")) => muted(t("Session statistics come from Sophon on the computer: pair with it there (not with the service alone) to see them")).into_element(),
                 None => muted(t("No session logs found")).into_element(),
                 Some(report) => {
@@ -317,7 +328,7 @@ fn limits_section() -> View {
             let d = data.get();
             let h = history.get();
             Some(untracked(move || match d {
-                None => muted(t("Loading…")).into_element(),
+                None => loading_block(140.0).into_element(),
                 Some(list) if list.is_empty() => muted(t("No usage reported by your providers")).into_element(),
                 Some(list) => {
                     let mut col = view().flex_row().flex_wrap().gap(sp(S4));

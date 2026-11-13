@@ -836,7 +836,7 @@ pub(crate) fn commit_diff_pane(sha: String, path: String) -> impl IntoElement {
             let d = data.get();
             let language = language.clone();
             Some(untracked(move || match d.clone() {
-                None => empty_note(Icon::RotateCw, t("Loading…").into()).into_element(),
+                None => view().flex_1().items_center().justify_center().child(eclipse(36.0)).into_element(),
                 Some(Err(e)) => empty_note(Icon::Info, e).into_element(),
                 Some(Ok(f)) => {
                     let mut v = diff_view().patch(SharedString::from(f.patch)).layout(DiffLayout::Unified).text_size(tx(TEXT_CODE)).flex_1();
