@@ -3041,6 +3041,22 @@ pub(crate) fn escape_composer() {
     set_draft(&agent.id, &text);
 }
 
+/// Sends queued message `index` now, into the running turn (steer), as
+/// Codex's queue does; the rest stay queued.
+pub(crate) fn steer_queued(agent_id: &str, index: usize) {
+    let mut text = None;
+    global::<Queues>().update(|q| {
+        if let Some(list) = q.0.get_mut(agent_id)
+            && index < list.len()
+        {
+            text = Some(list.remove(index));
+        }
+    });
+    let Some(text) = text else { return };
+    let running = agent(agent_id).is_some_and(|a| a.is_running());
+    deliver(agent_id, &text, running.then_some("steer"));
+}
+
 pub(crate) fn unqueue(agent_id: &str, index: usize) {
     global::<Queues>().update(|q| {
         if let Some(list) = q.0.get_mut(agent_id)

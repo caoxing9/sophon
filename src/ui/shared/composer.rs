@@ -584,6 +584,13 @@ fn queue_track(live: bool) -> impl IntoElement {
                         .gap(sp(S2))
                         .child(icon(Icon::Inbox, 14.0).text_color(FG_FAINT))
                         .child(text(msg).text_size(tx(TEXT_BASE)).number_of_lines(1).flex_1())
+                        // Into the running turn now, without waiting for it
+                        // to end.
+                        .child(btn(t("Steer"), Variant::Ghost, Sz::Sm, Some(Icon::CircleArrowUp), move || {
+                            if let Some(id) = store::selected_id() {
+                                store::steer_queued(&id, i);
+                            }
+                        }))
                         .child(icon_btn(Icon::X, Sz::Sm, t("Remove from queue"), move || {
                             if let Some(id) = store::selected_id() {
                                 store::unqueue(&id, i);
