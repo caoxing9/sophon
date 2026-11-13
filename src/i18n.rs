@@ -609,6 +609,8 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Close it", "关掉"),
     ("Closed there: the conversation goes on here", "已在那边关掉，对话在这里继续"),
     ("Could not close it there: {}", "没能在那边关掉：{}"),
+    ("Go to the start", "到最顶部"),
+    ("Go to the end", "到最底部"),
     ("Updates", "更新"),
     ("Sophon {}", "Sophon {}"),
     ("This is the newest version", "已是最新版本"),

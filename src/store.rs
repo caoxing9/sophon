@@ -1366,9 +1366,78 @@ pub(crate) fn group_summary(start: usize, end: usize) -> crate::fold::Summary {
 }
 
 /// Opens or folds a group of tool calls.
-/// The conversation's list scrolled: how far from its end it is now.
-pub(crate) fn set_timeline_from_end(distance: f32) {
-    TIMELINE_FROM_END.with(|d| d.set(distance));
+/// The conversation's list scrolled: its offset from the top, the
+/// content's height and its own. Keeps how far it is from its end, and
+/// whether it is more than a screen from either end (the buttons that go
+/// there show then).
+pub(crate) fn set_timeline_scroll(offset: f32, content: f32, height: f32) {
+    let from_end = content - offset - height;
+    TIMELINE_FROM_END.with(|d| d.set(from_end));
+    let ends = TimelineEnds { away_from_start: offset > height || jumping_start(), away_from_end: from_end > height };
+    if global::<TimelineEnds>().with_untracked(|e| *e != ends) {
+        global::<TimelineEnds>().set(ends);
+    }
+}
+
+/// How far the conversation's list is from its ends: more than a screen.
+#[derive(Clone, Copy, Default, PartialEq)]
+pub(crate) struct TimelineEnds {
+    pub(crate) away_from_start: bool,
+    pub(crate) away_from_end: bool,
+}
+
+pub(crate) fn timeline_ends() -> TimelineEnds {
+    global::<TimelineEnds>().get()
+}
+
+/// Going to the conversation's start: each earlier page, as it comes, is
+/// gone to as well, until there is none.
+#[derive(Clone, Copy, Default)]
+struct JumpingStart(bool);
+
+fn jumping_start() -> bool {
+    global::<JumpingStart>().with_untracked(|j| j.0)
+}
+
+/// Goes to the start of the conversation: its first message, the earlier
+/// pages loaded on the way.
+pub(crate) fn jump_timeline_start() {
+    TIMELINE_LIST.with_borrow(|l| {
+        if let Some(list) = l {
+            list.scroll_to_index(0, nsh_core::geometry::Percentage(0.0), px(0.0), true);
+        }
+    });
+    let more = global::<Timeline>().with_untracked(|t| t.older.is_some());
+    global::<JumpingStart>().set(JumpingStart(more));
+    if more {
+        load_older();
+    }
+}
+
+/// An earlier page came while going to the start: to its first row too,
+/// and on to the next page while there is one.
+fn go_on_to_start() {
+    if !jumping_start() {
+        return;
+    }
+    set_timeout(std::time::Duration::from_millis(60), || {
+        TIMELINE_LIST.with_borrow(|l| {
+            if let Some(list) = l {
+                list.scroll_to_index(0, nsh_core::geometry::Percentage(0.0), px(0.0), false);
+            }
+        });
+        let more = global::<Timeline>().with_untracked(|t| t.older.is_some());
+        global::<JumpingStart>().set(JumpingStart(more));
+        if more {
+            load_older();
+        }
+    });
+}
+
+/// Goes to the end of the conversation.
+pub(crate) fn jump_timeline_end() {
+    global::<JumpingStart>().set(JumpingStart(false));
+    scroll_timeline_end_after(&[0], true);
 }
 
 pub(crate) fn set_group_open(id: &str, open: bool) {
@@ -4839,7 +4908,8 @@ pub(crate) fn apply(event: Event) {
                 }
             });
         }
-        Event::TimelineOlder { agent_id, items, older } => global::<Timeline>().update(|t| {
+        Event::TimelineOlder { agent_id, items, older } => {
+            global::<Timeline>().update(|t| {
             if t.agent_id.as_deref() == Some(agent_id.as_str()) {
                 let mut merged = items;
                 crate::sent_pictures::restore(&mut merged);
@@ -4849,7 +4919,9 @@ pub(crate) fn apply(event: Event) {
                 t.older = older;
                 t.loading_older = false;
             }
-        }),
+        });
+            go_on_to_start();
+        }
         Event::Commands { agent_id, list } => global::<Commands>().update(|c| {
             c.0.insert(agent_id, list);
         }),

@@ -78,7 +78,7 @@ pub(crate) fn timeline() -> impl IntoElement {
                 // How far from its end the list is, for what depends on
                 // its keeping the end in place (`store::set_group_open`).
                 .event_throttle(100.0)
-                .on_scroll(|e: &ScrollEvent| store::set_timeline_from_end((e.content_size.height - e.offset.y - e.size.height).0))
+                .on_scroll(|e: &ScrollEvent| store::set_timeline_scroll(e.offset.y.0, e.content_size.height.0, e.size.height.0))
                 .content_padding_top(sp(S4))
                 // The phone's composer floats over the end; the desktop's
                 // sits below the list.
@@ -94,6 +94,7 @@ pub(crate) fn timeline() -> impl IntoElement {
                     view().absolute().top(sp(S2)).left(px(0.0)).right(px(0.0)).items_center().child(eclipse(24.0))
                 }))
                 .when(!MOBILE, |v| v.child(turn_rail()))
+                .child(jump_buttons())
                 .into_element()
         }))
     }))
@@ -584,6 +585,46 @@ fn user_actions(item: Memo<Option<Item>>) -> View {
 /// A run of tool calls as one row: what they did ("Ran 3 commands,
 /// edited 2 files"), failures and progress, and a chevron. Pressed, its
 /// calls show under it, or fold away again.
+/// To the start and to the end of the conversation: round buttons at the
+/// list's right edge, each there only while the list is more than a screen
+/// from that end. The end's sits above the phone's floating composer.
+fn jump_buttons() -> impl IntoElement {
+    let ends = computed(store::timeline_ends);
+    let round = |glyph: Icon, label: &'static str, go: fn()| {
+        nsh_base::button()
+            .on_press(go)
+            .accessibility_label(label)
+            .w(px(32.0))
+            .h(px(32.0))
+            .rounded(px(R_FULL))
+            .items_center()
+            .justify_center()
+            .bg(SURFACE0)
+            .border_1()
+            .border_color(tint(BORDER, 0.8))
+            .shadow_sm()
+            .hover(|s| s.bg(highlight()))
+            .active(|s| s.opacity(0.7))
+            .child(icon(glyph, 16.0).text_color(FG_MUTED))
+    };
+    let right = px(if MOBILE { S3 } else { S4 });
+    view()
+        .absolute()
+        .top(px(0.0))
+        .bottom(px(0.0))
+        .right(right)
+        .child(when(move || ends.with(|e| e.away_from_start), move || {
+            view().absolute().top(sp(S3)).right(px(0.0)).child(round(Icon::ArrowUp, t("Go to the start"), store::jump_timeline_start))
+        }))
+        .child(when(move || ends.with(|e| e.away_from_end), move || {
+            view()
+                .absolute()
+                .bottom(px(if MOBILE { 210.0 } else { S3 }))
+                .right(px(0.0))
+                .child(round(Icon::ArrowDown, t("Go to the end"), store::jump_timeline_end))
+        }))
+}
+
 /// Within this of its end, the conversation's list keeps its end in place.
 pub(crate) const FOLLOW_END: f32 = 40.0;
 
