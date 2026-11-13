@@ -776,7 +776,17 @@ struct Timeline {
 }
 /// Messages waiting for the running turn to end, per agent.
 #[derive(Clone, Default)]
-struct Queues(HashMap<String, Vec<String>>);
+struct Queues(HashMap<String, Vec<Queued>>);
+
+/// A message waiting its turn, with the pictures and files it was written
+/// with (taken from the composer as it was queued, so they go with it and
+/// not with the message after).
+#[derive(Clone)]
+struct Queued {
+    text: String,
+    images: Vec<ImageInput>,
+    attachments: Vec<serde_json::Value>,
+}
 /// The agents whose queue waits: stopped with Escape, its messages stay
 /// until they are sent on or taken back to be edited.
 #[derive(Clone, Default)]
@@ -793,11 +803,12 @@ struct Suggestions {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) enum SendBehavior {
     /// Adds the message to the running turn.
-    #[default]
     Steer,
     /// Stops the turn and starts a new one with the message.
     Interrupt,
-    /// Holds it until the turn ends.
+    /// Holds it until the turn ends: the default, so a message written
+    /// while the agent works waits its turn, shown queued.
+    #[default]
     Queue,
 }
 
@@ -817,7 +828,11 @@ pub(crate) enum Modal {
     RemoveSpace { id: String, name: String, folder: String },
     ArchiveWorkspace { id: String, name: String },
     Commit,
+    /// Reporting an issue on GitHub (`feedback`).
+    ReportIssue,
     Palette,
+    /// The open workspace's changed files, to open one's diff (⌘P).
+    ChangedFiles,
     NewSchedule,
     EditSchedule(crate::daemon::connection::Schedule),
     AddProject,
@@ -919,6 +934,16 @@ impl Default for LocalService {
 /// earlier version's default does not hold.
 #[derive(Clone, Default, PartialEq)]
 struct LocalServiceChosen(bool);
+
+/// The send behaviour was chosen in settings (not the default saved).
+#[derive(Clone, Copy, Default)]
+struct SendBehaviorChosen(bool);
+
+/// Sets what Return does while the agent runs, as chosen in settings.
+pub(crate) fn set_send_behavior(behavior: SendBehavior) {
+    global::<SendBehaviorChosen>().set(SendBehaviorChosen(true));
+    edit_settings(|s| s.send_behavior = behavior);
+}
 
 /// Whether this Mac runs agents of its own.
 pub(crate) fn local_service() -> bool {
@@ -1373,6 +1398,23 @@ pub(crate) fn group_summary(start: usize, end: usize) -> crate::fold::Summary {
 pub(crate) fn set_timeline_scroll(offset: f32, content: f32, height: f32) {
     let from_end = content - offset - height;
     TIMELINE_FROM_END.with(|d| d.set(from_end));
+    // Scrolling now (not the list settling as it opens): the jumps show
+    // until it has been still a moment.
+    let settling = TIMELINE_OPENED.with(|o| o.get().is_some_and(|at| at.elapsed() < std::time::Duration::from_millis(1200)));
+    if !settling {
+        let n = TIMELINE_SCROLLS.with(|c| {
+            c.set(c.get() + 1);
+            c.get()
+        });
+        if !global::<TimelineScrolling>().with_untracked(|s| s.0) {
+            global::<TimelineScrolling>().set(TimelineScrolling(true));
+        }
+        set_timeout(std::time::Duration::from_millis(1500), move || {
+            if TIMELINE_SCROLLS.with(std::cell::Cell::get) == n {
+                global::<TimelineScrolling>().set(TimelineScrolling(false));
+            }
+        });
+    }
     let ends = TimelineEnds { away_from_start: offset > height || jumping_start(), away_from_end: from_end > height };
     if global::<TimelineEnds>().with_untracked(|e| *e != ends) {
         global::<TimelineEnds>().set(ends);
@@ -1388,6 +1430,14 @@ pub(crate) struct TimelineEnds {
 
 pub(crate) fn timeline_ends() -> TimelineEnds {
     global::<TimelineEnds>().get()
+}
+
+/// The conversation's list is being scrolled, or was a moment ago.
+#[derive(Clone, Copy, Default, PartialEq)]
+struct TimelineScrolling(bool);
+
+pub(crate) fn timeline_scrolling() -> bool {
+    global::<TimelineScrolling>().with(|s| s.0)
 }
 
 /// Going to the conversation's start: each earlier page, as it comes, is
@@ -2372,10 +2422,12 @@ fn save_prefs() {
         },
         "localService": s.local_service.0,
         "localServiceChosen": global::<LocalServiceChosen>().with_untracked(|c| c.0),
+        "sendBehaviorChosen": global::<SendBehaviorChosen>().with_untracked(|c| c.0),
         "mySpaceName": s.my_space_name,
         "push": s.push.0,
         "pushHide": s.push_hide,
         "pushDevice": s.push_device,
+        "dictationKey": global::<DictationKeyPref>().with_untracked(|k| k.0.as_ref().map(Hotkey::to_json)),
         "keepAwake": match s.keep_awake {
             KeepAwake::Off => "off",
             KeepAwake::On => "on",
@@ -2409,15 +2461,128 @@ fn save_prefs() {
 }
 
 /// Restores what `save_prefs` wrote.
+/// A modifier of a [`Hotkey`].
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) const MOD_CTRL: u8 = 1;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) const MOD_ALT: u8 = 2;
+pub(crate) const MOD_SHIFT: u8 = 4;
+pub(crate) const MOD_CMD: u8 = 8;
+
+/// A shortcut, as the keyboard sends it: a key (by its code, which does
+/// not change with the keyboard's layout), the modifiers held, and how it
+/// is shown (`⇧⌘D`). Fn on its own is code 63 with no modifiers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Hotkey {
+    pub(crate) code: u16,
+    pub(crate) mods: u8,
+    pub(crate) label: String,
+}
+
+impl Hotkey {
+    /// Fn (🌐) on its own: dictation's default, held to talk.
+    pub(crate) fn fn_key() -> Self {
+        Self { code: 63, mods: 0, label: "Fn".to_owned() }
+    }
+
+    pub(crate) fn is_fn(&self) -> bool {
+        self.code == 63 && self.mods == 0
+    }
+
+    /// The modifiers' symbols, in macOS's order.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(crate) fn mods_label(mods: u8) -> String {
+        [(MOD_CTRL, "⌃"), (MOD_ALT, "⌥"), (MOD_SHIFT, "⇧"), (MOD_CMD, "⌘")].iter().filter(|(b, _)| mods & b != 0).map(|(_, s)| *s).collect()
+    }
+
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({ "code": self.code, "mods": self.mods, "label": self.label })
+    }
+
+    fn from_json(v: &serde_json::Value) -> Option<Self> {
+        Some(Self {
+            code: u16::try_from(v.get("code")?.as_u64()?).ok()?,
+            mods: u8::try_from(v.get("mods")?.as_u64()?).ok()?,
+            label: v.get("label")?.as_str()?.to_owned(),
+        })
+    }
+}
+
+/// Dictation's shortcut (the desktop's): Fn by default, `None` for none.
+#[derive(Clone, PartialEq)]
+struct DictationKeyPref(Option<Hotkey>);
+
+impl Default for DictationKeyPref {
+    fn default() -> Self {
+        Self(Some(Hotkey::fn_key()))
+    }
+}
+
+pub(crate) fn dictation_key() -> Option<Hotkey> {
+    global::<DictationKeyPref>().with(|k| k.0.clone())
+}
+
+/// The picture viewer's wheel, as it turns: the zoom asked, numbered.
+#[derive(Clone, Copy, Default, PartialEq)]
+pub(crate) struct PictureZoom(pub(crate) u64, pub(crate) f32);
+
+pub(crate) fn picture_zoom() -> PictureZoom {
+    global::<PictureZoom>().get()
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn zoom_picture(factor: f32) {
+    global::<PictureZoom>().update(|z| *z = PictureZoom(z.0 + 1, factor));
+}
+
+pub(crate) fn set_dictation_key(key: Option<Hotkey>) {
+    #[cfg(target_os = "macos")]
+    crate::platform::fn_key::set_shortcut(key.as_ref());
+    global::<DictationKeyPref>().set(DictationKeyPref(key));
+    save_prefs();
+}
+
+/// A new shortcut for dictation is being recorded in settings.
+#[derive(Clone, Copy, Default, PartialEq)]
+struct RecordingKey(bool);
+
+pub(crate) fn recording_dictation_key() -> bool {
+    global::<RecordingKey>().with(|r| r.0)
+}
+
+/// Starts (or stops) recording a new shortcut for dictation: the next
+/// combination pressed becomes it.
+pub(crate) fn record_dictation_key(on: bool) {
+    #[cfg(target_os = "macos")]
+    crate::platform::fn_key::record(on);
+    global::<RecordingKey>().set(RecordingKey(on));
+}
+
 pub(crate) fn load_prefs() {
     // (A Mac with no service of its own runs agents all the same: Sophon
     // carries one. It used to start as one that only connects to others.)
     let Some(text) = crate::daemon::read_file("settings.json") else { return };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return };
+    // `dictationKey`: a shortcut, `null` for none; an earlier version's
+    // names ("off", "shift+mod+d") read as they meant.
+    global::<DictationKeyPref>().set(DictationKeyPref(match v.get("dictationKey") {
+        None => Some(Hotkey::fn_key()),
+        Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(s)) => match s.as_str() {
+            "off" => None,
+            "shift+mod+d" => Some(Hotkey { code: 2, mods: MOD_SHIFT | MOD_CMD, label: "⇧⌘D".to_owned() }),
+            _ => Some(Hotkey::fn_key()),
+        },
+        Some(v) => Some(Hotkey::from_json(v).unwrap_or_else(Hotkey::fn_key)),
+    }));
+    // Steering was the default, and was saved as it was: only where
+    // someone chose it does it stay (`sendBehaviorChosen`), the rest queue.
+    let chosen = v.get("sendBehaviorChosen").and_then(serde_json::Value::as_bool).unwrap_or(false);
+    global::<SendBehaviorChosen>().set(SendBehaviorChosen(chosen));
     let behavior = match v.get("sendBehavior").and_then(serde_json::Value::as_str) {
         Some("interrupt") => SendBehavior::Interrupt,
-        Some("queue") => SendBehavior::Queue,
-        _ => SendBehavior::Steer,
+        Some("steer") if chosen => SendBehavior::Steer,
+        _ => SendBehavior::Queue,
     };
     let keep_awake = match v.get("keepAwake").and_then(serde_json::Value::as_str) {
         Some("off") => KeepAwake::Off,
@@ -2856,7 +3021,7 @@ pub(crate) fn set_language(lang: crate::i18n::Lang) {
 }
 
 pub(crate) fn queue(agent_id: &str) -> Vec<String> {
-    global::<Queues>().with(|q| q.0.get(agent_id).cloned().unwrap_or_default())
+    global::<Queues>().with(|q| q.0.get(agent_id).map(|l| l.iter().map(|m| m.text.clone()).collect()).unwrap_or_default())
 }
 
 /// Whether `agent_id`'s queue waits (stopped with Escape).
@@ -2880,8 +3045,13 @@ pub(crate) fn escape_composer() {
         return;
     }
     // Attachments stand as chips in the composer's text, which this would
-    // replace: they are sent or removed first.
-    if queued.is_empty() || !pending_images().is_empty() || !pending_files().is_empty() {
+    // replace: they are sent or removed first. Queued messages that carry
+    // their own stay queued (their chips are gone from the composer).
+    if queued.is_empty()
+        || !pending_images().is_empty()
+        || !pending_files().is_empty()
+        || queued.iter().any(|m| !m.images.is_empty() || !m.attachments.is_empty())
+    {
         return;
     }
     global::<Queues>().update(|q| {
@@ -2890,13 +3060,29 @@ pub(crate) fn escape_composer() {
     global::<QueueHeld>().update(|h| {
         h.0.remove(&agent.id);
     });
-    let mut text = queued.join("\n");
+    let mut text = queued.iter().map(|m| m.text.as_str()).collect::<Vec<_>>().join("\n");
     let draft = draft(&agent.id);
     if !draft.trim().is_empty() {
         text.push('\n');
         text.push_str(&draft);
     }
     set_draft(&agent.id, &text);
+}
+
+/// Sends queued message `index` now, into the running turn (steer), as
+/// Codex's queue does; the rest stay queued.
+pub(crate) fn steer_queued(agent_id: &str, index: usize) {
+    let mut text = None;
+    global::<Queues>().update(|q| {
+        if let Some(list) = q.0.get_mut(agent_id)
+            && index < list.len()
+        {
+            text = Some(list.remove(index));
+        }
+    });
+    let Some(m) = text else { return };
+    let running = agent(agent_id).is_some_and(|a| a.is_running());
+    deliver_with(agent_id, &m.text, running.then_some("steer"), m.images, m.attachments);
 }
 
 pub(crate) fn unqueue(agent_id: &str, index: usize) {
@@ -3441,6 +3627,55 @@ fn check_agent_update(path: String) {
 #[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
 fn check_agent_update(_path: String) {}
 
+/// Whether Codex's CLI at a path is signed in (`codex login status`), as
+/// last looked; the service says nothing of Codex's login.
+#[derive(Clone, Default)]
+struct CodexLogins(HashMap<String, bool>);
+
+/// Codex's CLI at `path` is known to be signed out.
+pub(crate) fn codex_signed_out(path: &str) -> bool {
+    global::<CodexLogins>().with(|l| l.0.get(path) == Some(&false))
+}
+
+/// Looks whether Codex's CLI at `path` is signed in, on a thread of its
+/// own (this Mac's only); again when asked again (after a sign-in).
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+pub(crate) fn check_codex_login(path: String) {
+    // The row is drawn again on every change of the providers: asked at
+    // most every half minute.
+    thread_local! {
+        static ASKED: RefCell<HashMap<String, std::time::Instant>> = RefCell::new(HashMap::new());
+    }
+    let recent = ASKED.with_borrow(|a| a.get(&path).is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(30)));
+    if !on_this_mac() || recent {
+        return;
+    }
+    ASKED.with_borrow_mut(|a| {
+        a.insert(path.clone(), std::time::Instant::now());
+    });
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Option<bool>>();
+    let cli = path.clone();
+    std::thread::spawn(move || {
+        let bin = std::path::PathBuf::from(&cli);
+        let out = std::process::Command::new(&bin)
+            .args(["login", "status"])
+            .env("PATH", service_path(&bin))
+            .stdin(std::process::Stdio::null())
+            .output();
+        let _ = tx.send(out.ok().map(|o| o.status.success()));
+    });
+    spawn_detached(async move {
+        if let Some(Some(signed_in)) = rx.recv().await {
+            global::<CodexLogins>().update(|l| {
+                l.0.insert(path, signed_in);
+            });
+        }
+    });
+}
+
+#[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
+pub(crate) fn check_codex_login(_path: String) {}
+
 /// Updates the CLI at `path` the way it was installed, then asks the
 /// providers again for their versions. This computer's only.
 #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
@@ -3669,6 +3904,18 @@ pub(crate) fn open_tab(tab: Tab) {
     if let Tab::Agent(id) = &tab {
         global::<LastOpen>().update(|l| l.agent = Some(id.clone()));
         save_prefs();
+        // Looked at: its finished turn is seen. The workspace's own mark
+        // is cleared as it opens (`open_workspace`); the agent's was not,
+        // and its count stayed in the lists (the phone's above all).
+        if agent(id).is_some_and(|a| a.requires_attention && a.pending.is_empty()) {
+            global::<Agents>().update(|list| {
+                if let Some(a) = list.0.iter_mut().find(|a| &a.id == id) {
+                    a.requires_attention = false;
+                    a.attention_reason = None;
+                }
+            });
+            send(Command::ClearAgentAttention(id.clone()));
+        }
     }
     let agent_id = match &tab {
         Tab::Agent(id) => Some(id.clone()),
@@ -3990,6 +4237,145 @@ pub(crate) fn set_control(live: bool, change: Control) {
     }
 }
 
+thread_local! {
+    /// The last message the user sent each conversation, as far as this
+    /// device knows: what it sent itself, what the open conversation shows,
+    /// else (once) its copy of the conversation (`None`: looked, none).
+    static LAST_SAID: RefCell<HashMap<String, Option<String>>> = RefCell::new(HashMap::new());
+}
+
+/// Bumped when a conversation's last message here changes: the lists'
+/// names read it.
+#[derive(Clone, Copy, Default, PartialEq)]
+struct LastSaidRev(u64);
+
+/// A message as a name: its first line, without what came with it (another
+/// conversation's words) and without runs of spaces.
+fn as_name(text: &str) -> Option<String> {
+    let text = text.split(crate::ui::shared::timeline::CONTEXT_MARK).next().unwrap_or("");
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let line: String = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    Some(line.chars().take(120).collect())
+}
+
+/// Keeps `said` as the conversation's last message, the lists told.
+fn set_last_said(agent_id: &str, said: Option<String>) {
+    let changed = LAST_SAID.with_borrow_mut(|l| l.insert(agent_id.to_owned(), said.clone()) != Some(said));
+    if changed {
+        global::<LastSaidRev>().update(|r| r.0 += 1);
+    }
+}
+
+/// The open conversation's last message from the user, as it changes:
+/// the freshest there is (the copy on disk is written as a page loads,
+/// not as messages come).
+pub(crate) fn watch_last_said() {
+    effect(|| {
+        let (agent_id, said) = global::<Timeline>().with(|t| {
+            let said = t.items.iter().rev().find_map(|i| match i {
+                Item::User { text, .. } => as_name(text),
+                _ => None,
+            });
+            (t.agent_id.clone(), said)
+        });
+        if let (Some(id), Some(said)) = (agent_id, said) {
+            untracked(|| set_last_said(&id, Some(said)));
+        }
+    });
+}
+
+/// The conversation's last message from the user, as a name.
+fn last_said(a: &Agent) -> Option<String> {
+    if let Some(said) = LAST_SAID.with_borrow(|l| l.get(&a.id).cloned()) {
+        return said;
+    }
+    let said = crate::daemon::connection::cached_timeline(&a.id).and_then(|(items, ..)| {
+        items.iter().rev().find_map(|i| match i {
+            Item::User { text, .. } => as_name(text),
+            _ => None,
+        })
+    });
+    // Kept quietly: read while a list draws.
+    LAST_SAID.with_borrow_mut(|l| {
+        l.insert(a.id.clone(), said.clone());
+    });
+    said
+}
+
+/// A conversation's name in its lists: the name someone gave it, else the
+/// last thing the user said to it, else the title it was given.
+pub(crate) fn conversation_title(a: &Agent) -> String {
+    if a.named {
+        return a.title.clone();
+    }
+    // Read again when this device sends one.
+    global::<LastSaidRev>().with(|_| ());
+    last_said(a).unwrap_or_else(|| a.title.clone())
+}
+
+/// What the sidebar calls conversation `a`: its workspace's name when it is
+/// the workspace's only conversation (the sidebar shows the workspace),
+/// its own title when there are several.
+pub(crate) fn conversation_name(a: &Agent) -> String {
+    let Some(ws) = a.workspace_id.as_deref().and_then(workspace) else { return a.title.clone() };
+    let siblings = workspace_agents(&ws.id).iter().filter(|x| !x.archived && x.parent_id.is_none() && !is_hidden_run(x)).count();
+    if siblings <= 1 && !ws.name.trim().is_empty() { ws.name } else { conversation_title(a) }
+}
+
+/// The name of the project conversation `a` is in.
+pub(crate) fn project_name_of(a: &Agent) -> Option<String> {
+    let ws = a.workspace_id.as_deref().and_then(workspace)?;
+    projects().into_iter().find(|p| p.id == ws.project_id).map(|p| p.name)
+}
+
+/// Another conversation's words, for a message that mentions it: its last
+/// messages as this device keeps them (the user's and the agent's, not
+/// its calls), and where its whole record is on the computer it ran on,
+/// for the agent to read more.
+pub(crate) fn conversation_context(agent_id: &str) -> Option<String> {
+    let a = agent(agent_id)?;
+    const MESSAGES: usize = 12;
+    const EACH: usize = 1200;
+    let items = crate::daemon::connection::cached_timeline(agent_id).map(|t| t.0).unwrap_or_default();
+    let mut lines: Vec<String> = items
+        .iter()
+        .rev()
+        .filter_map(|i| match i {
+            Item::User { text, .. } => Some(("user", text)),
+            Item::Assistant { text } => Some(("assistant", text)),
+            _ => None,
+        })
+        .filter(|(_, t)| !t.trim().is_empty())
+        .take(MESSAGES)
+        .map(|(who, t)| {
+            let t = t.trim();
+            let cut: String = t.chars().take(EACH).collect();
+            format!("[{who}] {cut}{}", if cut.len() < t.len() { "…" } else { "" })
+        })
+        .collect();
+    lines.reverse();
+    let record = a.session_id.as_deref().map(|sid| match a.provider.as_str() {
+        "claude" => {
+            let folder: String = a.cwd.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+            format!("~/.claude/projects/{folder}/{sid}.jsonl (Claude Code's record, one JSON object a line)")
+        }
+        "codex" => format!("the file under ~/.codex/sessions whose name ends in {sid}.jsonl (Codex's record)"),
+        _ => format!("session {sid} of {}", a.provider),
+    });
+    let mut out = format!("--- The conversation \"{}\" ({} in {}), which this message refers to:\n", conversation_name(&a), a.provider, a.cwd);
+    if lines.is_empty() {
+        out.push_str("(None of its messages are at hand here.)\n");
+    } else {
+        out.push_str(&lines.join("\n"));
+        out.push('\n');
+    }
+    if let Some(record) = record {
+        out.push_str(&format!("Its whole record: {record}\n"));
+    }
+    out.push_str("---");
+    Some(out)
+}
+
 /// Starts the form's agent: in the open workspace (draft tab), or in a new
 /// workspace (new-workspace screen).
 pub(crate) fn submit_form() {
@@ -4062,7 +4448,8 @@ pub(crate) fn send_message(text: &str) -> bool {
     let behavior = settings().send_behavior;
     // A pending permission must be answered first; queueing would wait forever.
     if agent.is_running() && behavior == SendBehavior::Queue && agent.pending.is_empty() {
-        global::<Queues>().update(|q| q.0.entry(agent.id.clone()).or_default().push(text.to_owned()));
+        let queued = Queued { text: text.to_owned(), images: take_images(), attachments: take_files() };
+        global::<Queues>().update(|q| q.0.entry(agent.id.clone()).or_default().push(queued));
         return true;
     }
     deliver(&agent.id, text, agent.is_running().then_some(match behavior {
@@ -4076,6 +4463,15 @@ fn deliver(agent_id: &str, text: &str, behavior: Option<&'static str>) {
     let mine = image_key() == agent_id;
     let images = if mine { take_images() } else { vec![] };
     let attachments = if mine { take_files() } else { vec![] };
+    deliver_with(agent_id, text, behavior, images, attachments);
+}
+
+/// [`deliver`] with the pictures and files given (a queued message's own).
+fn deliver_with(agent_id: &str, text: &str, behavior: Option<&'static str>, images: Vec<ImageInput>, attachments: Vec<serde_json::Value>) {
+    // The conversation's name in its lists, until the host says when.
+    if let Some(name) = as_name(text) {
+        set_last_said(agent_id, Some(name));
+    }
     let mut shown = text.to_owned();
     // A file the text does not name where its chip stood (a message
     // queued before, a draft kept as text) is named after it.
@@ -4370,13 +4766,13 @@ fn flush_queue(agent: &Agent) {
         return;
     }
     let next = global::<Queues>().with_untracked(|q| q.0.get(&agent.id).and_then(|l| l.first().cloned()));
-    if let Some(text) = next {
+    if let Some(m) = next {
         global::<Queues>().update(|q| {
             if let Some(list) = q.0.get_mut(&agent.id) {
                 list.remove(0);
             }
         });
-        deliver(&agent.id, &text, None);
+        deliver_with(&agent.id, &m.text, None, m.images, m.attachments);
     }
 }
 
@@ -4494,10 +4890,17 @@ thread_local! {
     static TIMELINE_LIST: RefCell<Option<ElementRef>> = const { RefCell::new(None) };
     /// How far the conversation's list is from its end, as it last said.
     static TIMELINE_FROM_END: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
+    /// When the conversation's list was made.
+    static TIMELINE_OPENED: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
+    /// Counts scroll events, so only the last one's timer ends `TimelineScrolling`.
+    static TIMELINE_SCROLLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 pub(crate) fn set_timeline_list(list: ElementRef) {
     TIMELINE_LIST.with_borrow_mut(|l| *l = Some(list));
+    // The list going to its end as it opens is not the user scrolling.
+    TIMELINE_OPENED.with(|o| o.set(Some(std::time::Instant::now())));
+    global::<TimelineScrolling>().set(TimelineScrolling(false));
 }
 
 /// Brings item `index` into view: its row, or its folded group's.

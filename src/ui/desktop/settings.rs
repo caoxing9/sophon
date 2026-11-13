@@ -20,6 +20,7 @@ pub(crate) fn settings(compact: bool) -> impl IntoElement {
             view()
                 .child(section(t("Appearance"), appearance_card()))
                 .child(section(t("Sending"), sending_card()))
+                .when(cfg!(target_os = "macos"), |v| v.child(section(t("Dictation"), dictation_card())))
                 .child(section(t("Storage"), storage_card()))
                 .child(section(t("Power"), keep_awake_card()))
                 .child(when(crate::update::can_check, || section(t("Updates"), updates_card())))
@@ -59,6 +60,15 @@ pub(crate) fn settings(compact: bool) -> impl IntoElement {
                 .child(when(store::local_service, || section(t("Spaces"), spaces_card())))
                 .child(section(t("Devices"), devices_card()))
                 .child(section(t("Host behavior"), behavior_card()))
+                .child(section(
+                    t("Feedback"),
+                    card().child(row(
+                        t("Report an issue"),
+                        t("A bug, an idea or a question, as an issue on GitHub"),
+                        btn(t("Report…"), Variant::Outline, Sz::Sm, Some(Icon::GitPullRequest), || store::open_modal(store::Modal::ReportIssue)),
+                        true,
+                    )),
+                ))
                 .child(section(t("Coding agents"), crate::ui::shared::agents::agents_card(true)))
                 .child(section(t("Text generation"), text_generation_card())),
         ))

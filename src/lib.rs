@@ -15,6 +15,7 @@ mod bundled_cli;
 mod cadence;
 pub mod daemon;
 mod elsewhere;
+mod feedback;
 mod fold;
 #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 mod follow;
@@ -98,6 +99,8 @@ pub fn App() -> impl IntoElement {
     #[cfg(not(target_os = "ios"))]
     store::watch_notification_presses();
     store::watch_pairing_links();
+    // Every device names conversations by the last thing said to them.
+    store::watch_last_said();
     // The web's desktop idiom is still a page: no bridge, no updates.
     if is_desktop() && !cfg!(target_arch = "wasm32") {
         // A Mac that only connects to others runs none of this side.

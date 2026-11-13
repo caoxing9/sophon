@@ -103,7 +103,14 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
     };
     let submit = move || {
         let Some(session) = doc.session() else { return };
-        let out = composer_doc::outgoing(session.state().doc());
+        let mut out = composer_doc::outgoing(session.state().doc());
+        // The conversations mentioned, their words after the message.
+        for id in &out.conversations {
+            if let Some(context) = store::conversation_context(id) {
+                out.message.push_str("\n\n");
+                out.message.push_str(&context);
+            }
+        }
         store::sync_attachments(&out.attachments);
         match target {
             Target::Agent => {
@@ -111,8 +118,8 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                     && store::send_message(&out.message)
                 {
                     store::set_draft(&id, "");
-                    // A queued message leaves its attachments for the one
-                    // sent next; their chips stay.
+                    // Its attachments went with it (sent, or queued with
+                    // it): their chips go from the composer.
                     composer_doc::keep_only_chips(&session, &store::pending_attachment_ids());
                 }
             }
@@ -150,7 +157,11 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                     // The text takes the card's upper part whole, a line
                     // and a half at least: a tap a little under the line
                     // lands in it, not on the bar.
-                    .child(editor(doc, text_value, placeholder, TEXT_LG, 160.0, changed).px(sp(S1)).min_h(px(34.0)))
+                    .child(
+                        view()
+                            .child(editor(doc, text_value, placeholder, TEXT_LG, 160.0, changed).px(sp(S1)).min_h(px(34.0)))
+                            .child(hold_to_talk(doc, empty)),
+                    )
                     .child(
                         view()
                             .flex_row()
@@ -209,7 +220,10 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                             )
                             .child(view().flex_1())
                             .child(disc(running, busy, empty, submit)),
-                    ),
+                    )
+                    // While it listens, the whole card is the listening:
+                    // over the rest, so last.
+                    .child(listening_card(doc)),
             )
             .into_element();
     }
@@ -233,7 +247,9 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         .child(chips::preview_layer(key))
         .child(glass_strong(view())
         .w_full()
-        .rounded(px(24.0))
+        // Close to the bar above it (where it runs, the branch): the two
+        // read as one piece, not a pill under a card.
+        .rounded(px(16.0))
         .border_color(move || if over.get() { ACCENT.into() } else { glass_edge() })
         .child(editor(doc, text_value, placeholder, TEXT_CONTENT, 220.0, changed).mx(sp(S4)).mt(px(14.0)).mb(sp(S1)))
         .child(
@@ -452,9 +468,21 @@ fn trigger_at(session: &EditorSession) -> Option<(Trigger, usize)> {
 /// The slash-command or file list over the composer.
 fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
     let trigger = computed(move || doc.tracked().and_then(|s| trigger_at(&s)).map(|(t, _)| t));
+    // A new query: the keyboard's place back to the first, the list back
+    // if Escape put it away.
+    effect(move || {
+        let _ = trigger.get();
+        global::<composer_doc::MenuSelected>().set(composer_doc::MenuSelected(0));
+        global::<composer_doc::MenuClosed>().set(composer_doc::MenuClosed(false));
+    });
+    cleanup(|| composer_doc::set_menu(None));
     view().child(dynamic(move || {
-        let trigger = trigger.get()?;
-        let rows: Vec<(Icon, String, String, String, bool)> = match &trigger {
+        let Some(trigger) = trigger.get().filter(|_| !global::<composer_doc::MenuClosed>().with(|c| c.0)) else {
+            composer_doc::set_menu(None);
+            return None;
+        };
+        // (icon, label, detail, what goes in, a folder, the label in code type)
+        let rows: Vec<(Icon, String, String, String, bool, bool)> = match &trigger {
             Trigger::Slash(prefix) => {
                 let agent = store::selected_id()?;
                 store::commands(&agent)
@@ -463,7 +491,7 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
                     .take(8)
                     .map(|c| {
                         let insert = format!("/{} ", c.name);
-                        (if c.skill { Icon::Sparkles } else { Icon::Slash }, format!("/{}", c.name), c.description, insert, false)
+                        (if c.skill { Icon::Sparkles } else { Icon::Slash }, format!("/{}", c.name), c.description, insert, false, true)
                     })
                     .collect()
             }
@@ -472,40 +500,73 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
                     Target::Agent => store::current_workspace().map(|w| w.directory),
                     Target::Form => Some(store::form().path),
                 }?;
-                store::suggestions(&cwd, query)
+                // Other conversations first, named as the sidebar names
+                // them, with their project and when they last moved, the
+                // latest first; then files.
+                let q = query.to_lowercase();
+                let here = store::selected_id();
+                let mut found: Vec<(crate::daemon::Agent, String)> = store::agents()
                     .into_iter()
-                    .take(8)
-                    .map(|(path, dir)| {
-                        let rel = path.strip_prefix(&cwd).map(|p| p.trim_start_matches('/').to_owned()).unwrap_or(path);
-                        (if dir { Icon::Folder } else { Icon::FileText }, rel.clone(), String::new(), rel, dir)
+                    .filter(|a| Some(&a.id) != here.as_ref() && !a.archived && a.parent_id.is_none() && !store::is_hidden_run(a))
+                    .map(|a| {
+                        let name = store::conversation_name(&a);
+                        (a, name)
                     })
-                    .collect()
+                    .filter(|(a, name)| q.is_empty() || name.to_lowercase().contains(&q) || a.title.to_lowercase().contains(&q))
+                    .collect();
+                found.sort_by(|x, y| y.0.updated_at.cmp(&x.0.updated_at));
+                let mut rows: Vec<(Icon, String, String, String, bool, bool)> = found
+                    .into_iter()
+                    .take(if q.is_empty() { 4 } else { 5 })
+                    .map(|(a, name)| {
+                        let place = store::project_name_of(&a).unwrap_or_else(|| crate::daemon::model::folder_name(&a.cwd));
+                        let when = crate::ui::mobile::time::ago(&a.updated_at);
+                        let detail = if when.is_empty() { place } else { format!("{place} · {when}") };
+                        (Icon::Bot, name, detail, format!("{}{}", composer_doc::CONVERSATION, a.id), false, false)
+                    })
+                    .collect();
+                rows.extend(store::suggestions(&cwd, query).into_iter().take(9usize.saturating_sub(rows.len())).map(|(path, dir)| {
+                    let rel = path.strip_prefix(&cwd).map(|p| p.trim_start_matches('/').to_owned()).unwrap_or(path);
+                    (if dir { Icon::Folder } else { Icon::FileText }, rel.clone(), String::new(), rel, dir, true)
+                }));
+                rows
             }
         };
         if rows.is_empty() {
+            composer_doc::set_menu(None);
             return None;
         }
+        // Choosing row `i`, by a press or by the keyboard.
+        let choose = {
+            let rows = rows.clone();
+            std::rc::Rc::new(move |i: usize| {
+                let Some((_, _, _, insert, dir, _)) = rows.get(i).cloned() else { return };
+                // Where the caret is now: the list may be a keystroke
+                // behind it.
+                let Some(session) = doc.session() else { return };
+                let Some((trigger, head)) = trigger_at(&session) else { return };
+                match trigger {
+                    // A command replaces what was typed.
+                    Trigger::Slash(_) => composer_doc::replace_text(&session, 1, head, &insert),
+                    // A path becomes a chip in place of its query.
+                    Trigger::Mention(q) => {
+                        let from = head - q.encode_utf16().count() - 1;
+                        composer_doc::insert_mention(&session, from, head, &insert, dir);
+                    }
+                }
+                session.focus();
+            })
+        };
+        composer_doc::set_menu(Some(composer_doc::Menu { count: rows.len(), pick: choose.clone() }));
         Some(untracked(move || {
+            let selected = computed(|| global::<composer_doc::MenuSelected>().with(|s| s.0));
             let mut list = card().mb(sp(S2)).p(sp(S1)).bg(POPOVER).shadow_md();
-            for (glyph, label, detail, insert, dir) in rows.clone() {
+            for (i, (glyph, label, detail, _, _, code)) in rows.clone().into_iter().enumerate() {
+                let choose = choose.clone();
                 list = list.child(
                     button()
-                        .on_press(move || {
-                            // Where the caret is now: the list may be a
-                            // keystroke behind it.
-                            let Some(session) = doc.session() else { return };
-                            let Some((trigger, head)) = trigger_at(&session) else { return };
-                            match trigger {
-                                // A command replaces what was typed.
-                                Trigger::Slash(_) => composer_doc::replace_text(&session, 1, head, &insert),
-                                // A path becomes a chip in place of its query.
-                                Trigger::Mention(q) => {
-                                    let from = head - q.encode_utf16().count() - 1;
-                                    composer_doc::insert_mention(&session, from, head, &insert, dir);
-                                }
-                            }
-                            session.focus();
-                        })
+                        .on_press(move || choose(i))
+                        .bg(move || if selected.get() == i { highlight() } else { tint(FG, 0.0) })
                         .flex_row()
                         .items_center()
                         .gap(sp(S2))
@@ -514,8 +575,14 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
                         .rounded(px(R_LG))
                         .hover(|s| s.bg(highlight()))
                         .child(icon(glyph, 15.0).text_color(FG_MUTED))
-                        .child(text(label).text_size(tx(TEXT_BASE)).font_family(mono_font).text_color(FG).flex_shrink_0())
-                        .child(text(detail).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1).flex_1()),
+                        .child(if code {
+                            text(label).text_size(tx(TEXT_BASE)).font_family(mono_font).text_color(FG).flex_shrink_0()
+                        } else {
+                            // A conversation's name in the text's own type, as
+                            // the sidebar shows it, cut to leave its detail.
+                            text(label).text_size(tx(TEXT_BASE)).text_color(FG).number_of_lines(1).flex_shrink(1.0)
+                        })
+                        .child(text(detail).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1).flex_shrink_0().when(!code, |t| t.ml(sp(S2))).when(code, |t| t.flex_1())),
                 );
             }
             list
@@ -582,6 +649,13 @@ fn queue_track(live: bool) -> impl IntoElement {
                         .gap(sp(S2))
                         .child(icon(Icon::Inbox, 14.0).text_color(FG_FAINT))
                         .child(text(msg).text_size(tx(TEXT_BASE)).number_of_lines(1).flex_1())
+                        // Into the running turn now, without waiting for it
+                        // to end.
+                        .child(btn(t("Steer"), Variant::Ghost, Sz::Sm, Some(Icon::CircleArrowUp), move || {
+                            if let Some(id) = store::selected_id() {
+                                store::steer_queued(&id, i);
+                            }
+                        }))
                         .child(icon_btn(Icon::X, Sz::Sm, t("Remove from queue"), move || {
                             if let Some(id) = store::selected_id() {
                                 store::unqueue(&id, i);
@@ -834,6 +908,178 @@ struct Dictating(bool);
 thread_local! {
     static SPEECH: std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<nsh_core::element::SpeechRecognition>>>> =
         const { std::cell::RefCell::new(None) };
+    /// The composer on screen, for the dictation shortcut.
+    static MIC_DOC: std::cell::Cell<Option<Doc>> = const { std::cell::Cell::new(None) };
+}
+
+/// The phone's push to talk, over its empty composer while the keyboard
+/// is down, unmarked: held, dictation listens (a moment in, so a tap stays a tap)
+/// and stops when it is let go; a tap brings the keyboard, as a tap on the
+/// text does. With text in it, or the keyboard up, the text is the
+/// editor's to touch (and the keyboard has its own microphone).
+fn hold_to_talk(doc: Doc, empty: Memo<bool>) -> impl IntoElement {
+    let listening = computed(move || global::<Dictating>().with(|d| d.0));
+    // Kept while it listens: the words it puts in make the composer not
+    // empty, and the finger still on it must be heard letting go.
+    let shown = computed(move || MOBILE && (listening.get() || (empty.get() && nsh_core::element::keyboard_height().0 <= 0.0)));
+    when(shown, move || {
+        let held = signal(0u64);
+        let started = signal(false);
+        let release = move |tap: bool| {
+            held.update(|h| *h += 1);
+            if started.get_untracked() {
+                started.set(false);
+                if dictating() {
+                    dictate(doc);
+                }
+            } else if tap && let Some(session) = doc.session() {
+                session.focus();
+            }
+        };
+        view()
+            .absolute()
+            .top(px(0.0))
+            .bottom(px(0.0))
+            .left(px(0.0))
+            .right(px(0.0))
+            .claim_touches(TouchClaim::on_start().ask(|r: &ClaimRequest| r.claim()))
+            .keep_touches(true)
+            .on_responder_grant(move |_: &ResponderEvent| {
+                let n = held.get_untracked() + 1;
+                held.set(n);
+                set_timeout(std::time::Duration::from_millis(300), move || {
+                    if held.get_untracked() == n && !dictating() {
+                        started.set(true);
+                        dictate(doc);
+                    }
+                });
+            })
+            .on_responder_release(move |_: &ResponderEvent| release(true))
+            .on_responder_terminate(move |_: &ResponderEvent| release(false))
+    })
+}
+
+/// The phone's card while dictation listens, as Codex's voice mode: over
+/// the whole composer, a wave that moves, what it has heard so far (the
+/// words go into the text under it) and how to stop. It takes no touch:
+/// the finger holding the text keeps its gesture.
+fn listening_card(doc: Doc) -> impl IntoElement {
+    let listening = computed(move || global::<Dictating>().with(|d| d.0));
+    let heard = computed(move || {
+        let text = doc.tracked().map(|s| composer_doc::outgoing(s.state().doc()).text).unwrap_or_default();
+        // The end of it, as it comes.
+        let chars: Vec<char> = text.trim().chars().collect();
+        let tail: String = chars[chars.len().saturating_sub(60)..].iter().collect();
+        if chars.len() > 60 { format!("…{tail}") } else { tail }
+    });
+    when(listening, move || {
+        // Five bars, each rising and falling at its own pace.
+        let mut wave = view().flex_row().items_center().gap(px(4.0)).h(px(28.0));
+        for (i, ms) in [420.0_f32, 300.0, 520.0, 360.0, 460.0].into_iter().enumerate() {
+            let level = animated_value(0.35);
+            let half = nsh_core::element::Timing::new(ms, Easing::EaseInOut);
+            Animation::sequence([Animation::timing(&level, 1.0, half.clone()), Animation::timing(&level, 0.3 + 0.1 * (i % 3) as f32, half)])
+                .looped(None)
+                .start();
+            wave = wave.child(
+                view().w(px(4.0)).h(px(26.0)).rounded(px(R_FULL)).bg(ACCENT).bind_transform(nsh_core::TransformKind::ScaleY, &level),
+            );
+        }
+        view()
+            .absolute()
+            .top(px(0.0))
+            .bottom(px(0.0))
+            .left(px(0.0))
+            .right(px(0.0))
+            .rounded(px(24.0))
+            .bg(SURFACE0)
+            .pointer_events(PointerEvents::None)
+            .px(sp(S4))
+            .py(sp(S3))
+            .gap(sp(S2))
+            .justify_center()
+            .child(
+                view()
+                    .flex_row()
+                    .items_center()
+                    .gap(sp(S3))
+                    .child(wave)
+                    .child(text(t("Listening…")).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).text_color(FG))
+                    .child(view().flex_1())
+                    .child(text(t("Let go to stop")).text_size(tx(TEXT_SM)).text_color(FG_FAINT)),
+            )
+            .child(when(move || heard.with(|h| !h.is_empty()), move || {
+                text(move || heard.get()).text_size(tx(TEXT_BASE)).text_color(FG_MUTED).number_of_lines(2)
+            }))
+    })
+}
+
+/// Dictation is listening (for push to talk: Fn on macOS, the phone's
+/// held composer).
+pub(crate) fn dictating() -> bool {
+    global::<Dictating>().with_untracked(|d| d.0)
+}
+
+/// The dictation shortcut: starts or stops dictating into the composer on
+/// screen, as its microphone button does.
+pub(crate) fn toggle_dictation() {
+    if let Some(doc) = MIC_DOC.with(std::cell::Cell::get) {
+        dictate(doc);
+    }
+}
+
+/// The language dictation listens for: Sophon's own when it speaks
+/// Chinese (the system's may be English on a Mac set up in English), the
+/// system's otherwise.
+fn dictation_lang() -> Option<String> {
+    crate::i18n::is_zh().then(|| "zh-CN".to_owned())
+}
+
+/// Starts dictating into `doc` at its caret, or stops.
+fn dictate(doc: Doc) {
+    let on = global::<Dictating>();
+    if on.with_untracked(|d| d.0) {
+        SPEECH.with_borrow(|s| {
+            if let Some(s) = s {
+                s.borrow().stop();
+            }
+        });
+        return;
+    }
+    let Some(session) = doc.session() else { return };
+    let state = session.state();
+    let at = state.selection().from();
+    // A space from the text before, unless at a line's start.
+    let spaced = at > 1
+        && state.doc().text_between(at - 1, at, Some("\n"), Some(composer_doc::OBJECT)).chars().all(|c| !c.is_whitespace());
+    let inserted = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let mut request = nsh_core::speech::SpeechRequest::default();
+    request.lang = dictation_lang();
+    let speech = std::rc::Rc::new(std::cell::RefCell::new(recognize_speech(request)));
+    on.update(|d| d.0 = true);
+    SPEECH.with_borrow_mut(|s| *s = Some(speech.clone()));
+    spawn(async move {
+        // Borrowed only while polled, so Stop can reach the session.
+        while let Some(ev) = std::future::poll_fn(|cx| speech.borrow_mut().poll_next(cx)).await {
+            match ev {
+                nsh_core::speech::SpeechEvent::Result { text, .. } => {
+                    // Chinese runs on without spaces.
+                    let text = if spaced && !text.starts_with(|c: char| !c.is_ascii()) { format!(" {text}") } else { text };
+                    composer_doc::replace_text(&session, at, at + inserted.get(), &text);
+                    inserted.set(text.encode_utf16().count());
+                }
+                nsh_core::speech::SpeechEvent::End { error } => {
+                    if let Some(e) = error {
+                        store::notify(tf("Dictation stopped: {}", &[&format!("{e:?}")]));
+                    }
+                    break;
+                }
+                _ => {}
+            }
+        }
+        on.update(|d| d.0 = false);
+        SPEECH.with_borrow_mut(|s| *s = None);
+    });
 }
 
 /// Dictation: speech to text into the composer at the caret, with the
@@ -841,48 +1087,9 @@ thread_local! {
 /// replaces what the previous one inserted.
 fn mic_button(doc: Doc) -> impl IntoElement {
     let on = global::<Dictating>();
+    MIC_DOC.with(|d| d.set(Some(doc)));
     nsh_base::button()
-        .on_press(move || {
-            if on.with_untracked(|d| d.0) {
-                SPEECH.with_borrow(|s| {
-                    if let Some(s) = s {
-                        s.borrow().stop();
-                    }
-                });
-                return;
-            }
-            let Some(session) = doc.session() else { return };
-            let state = session.state();
-            let at = state.selection().from();
-            // A space from the text before, unless at a line's start.
-            let spaced = at > 1
-                && state.doc().text_between(at - 1, at, Some("\n"), Some(composer_doc::OBJECT)).chars().all(|c| !c.is_whitespace());
-            let inserted = std::rc::Rc::new(std::cell::Cell::new(0usize));
-            let speech = std::rc::Rc::new(std::cell::RefCell::new(recognize_speech(nsh_core::speech::SpeechRequest::default())));
-            on.update(|d| d.0 = true);
-            SPEECH.with_borrow_mut(|s| *s = Some(speech.clone()));
-            spawn(async move {
-                // Borrowed only while polled, so Stop can reach the session.
-                while let Some(ev) = std::future::poll_fn(|cx| speech.borrow_mut().poll_next(cx)).await {
-                    match ev {
-                        nsh_core::speech::SpeechEvent::Result { text, .. } => {
-                            let text = if spaced { format!(" {text}") } else { text };
-                            composer_doc::replace_text(&session, at, at + inserted.get(), &text);
-                            inserted.set(text.encode_utf16().count());
-                        }
-                        nsh_core::speech::SpeechEvent::End { error } => {
-                            if let Some(e) = error {
-                                store::notify(tf("Dictation stopped: {}", &[&format!("{e:?}")]));
-                            }
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-                on.update(|d| d.0 = false);
-                SPEECH.with_borrow_mut(|s| *s = None);
-            });
-        })
+        .on_press(move || dictate(doc))
         .accessibility_label(t("Dictate"))
         .w(sp(CONTROL_SM))
         .h(sp(CONTROL_SM))

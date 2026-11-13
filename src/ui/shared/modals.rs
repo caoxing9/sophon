@@ -89,6 +89,21 @@ fn desktop_picture(uri: String) -> AnyElement {
             .hover(|s| s.bg(AdaptiveColor::rgb(0xffffff, 0xffffff).opacity(0.16)))
             .child(icon(glyph, 16.0).text_color(white))
     };
+    // The wheel (macOS's monitor, `platform::picture_input`) zooms from
+    // where the zoom is; it hears only while a picture is open.
+    #[cfg(target_os = "macos")]
+    {
+        crate::platform::picture_input::set_open(true);
+        cleanup(|| crate::platform::picture_input::set_open(false));
+    }
+    let (wheel_zoom, level_wheel) = (zoom_to.clone(), level.clone());
+    let seen = std::cell::Cell::new(store::picture_zoom().0);
+    effect(move || {
+        let store::PictureZoom(n, factor) = store::picture_zoom();
+        if seen.replace(n) != n {
+            wheel_zoom(level_wheel.get() * factor);
+        }
+    });
     let (zoom_in, zoom_out, reset_zoom, pinched) = (zoom_to.clone(), zoom_to.clone(), zoom_to.clone(), zoom_to);
     let (level_in, level_out, level_pinch) = (level.clone(), level.clone(), level.clone());
     let (turns_turn, turns_reset) = (turns.clone(), turns);
@@ -208,6 +223,8 @@ pub(crate) fn modal_layer() -> impl IntoElement {
                                     )
                             } else if m == Modal::Palette {
                                 view().self_stretch().items_center().pt(relative(0.12)).flex_1().child(crate::ui::desktop::shortcuts::palette())
+                            } else if m == Modal::ChangedFiles {
+                                view().self_stretch().items_center().pt(relative(0.12)).flex_1().child(crate::ui::desktop::shortcuts::changed_files())
                             } else if MOBILE && matches!(m, Modal::ToolDetail { .. }) {
                                 // The phone: a sheet at the foot, full width.
                                 view()
@@ -274,7 +291,8 @@ fn body(m: Modal) -> View {
                 store::close_modal();
             }))),
         Modal::Commit => commit(),
-        Modal::Palette => view(),
+        Modal::ReportIssue => report_issue(),
+        Modal::Palette | Modal::ChangedFiles => view(),
         Modal::NewSchedule => schedule_form(None),
         Modal::EditSchedule(s) => schedule_form(Some(s)),
         Modal::AddProject => add_project(),
@@ -393,6 +411,100 @@ fn rename(title: &'static str, current: String, apply: impl Fn(&str) + Clone + '
                 .auto_focus(true),
         )
         .child(actions(btn(t("Save"), Variant::Primary, Sz::Md, None, save)))
+}
+
+/// The versions and system an issue is reported from: nothing of the
+/// user's own (no names, addresses or paths).
+fn issue_environment() -> Vec<(String, String)> {
+    let mut env = vec![
+        ("Sophon".to_owned(), crate::update::current_version()),
+        ("System".to_owned(), format!("{} {}", std::env::consts::OS, std::env::consts::ARCH)),
+    ];
+    if let store::Conn::Connected { version, .. } = store::conn() {
+        env.push(("Service".to_owned(), version));
+        env.push(("Computer".to_owned(), if store::on_this_mac() { "this Mac".to_owned() } else { "another computer".to_owned() }));
+    }
+    if let Some(a) = store::selected_agent() {
+        env.push(("Agent".to_owned(), format!("{}{}", a.provider, a.model.map(|m| format!(" · {m}")).unwrap_or_default())));
+    }
+    env.push(("Language".to_owned(), if crate::i18n::is_zh() { "zh" } else { "en" }.to_owned()));
+    env
+}
+
+/// Reporting an issue: what kind, a title, what happened (and for a bug
+/// how, and what was expected), the versions; GitHub's page opens with it,
+/// to read and submit there.
+fn report_issue() -> View {
+    use crate::feedback::{Kind, Report};
+    let kind = signal(Kind::Bug);
+    let title = signal(String::new());
+    let what = signal(String::new());
+    let steps = signal(String::new());
+    let expected = signal(String::new());
+    let with_env = signal(true);
+    let area = |value: Signal<String>, placeholder: &'static str, h: f32| {
+        field()
+            .multiline(true)
+            .h(px(h))
+            .py(sp(S2))
+            .value(move || value.get())
+            .on_change(move |v: &str| value.set(v.to_owned()))
+            .placeholder(placeholder)
+    };
+    let go = move || {
+        let report = Report {
+            title: title.get_untracked(),
+            what: what.get_untracked(),
+            steps: steps.get_untracked(),
+            expected: expected.get_untracked(),
+            environment: with_env.get_untracked().then(issue_environment),
+        };
+        let _ = open_url(crate::feedback::url(kind.get_untracked(), &report));
+        store::close_modal();
+    };
+    sheet(t("Report an issue"))
+        .w(px(520.0))
+        .child(segmented(
+            vec![(Kind::Bug, t("Bug").into()), (Kind::Feature, t("Feature").into()), (Kind::Question, t("Question").into())],
+            move || kind.get(),
+            move |k| kind.set(k),
+        ))
+        .child(field().value(move || title.get()).on_change(move |v: &str| title.set(v.to_owned())).placeholder(t("Title, in a line")).auto_focus(true))
+        .child(dynamic(move || {
+            let k = kind.get();
+            Some(untracked(move || match k {
+                Kind::Bug => view()
+                    .gap(sp(S3))
+                    .child(area(what, t("What happened"), 84.0))
+                    .child(area(steps, t("Steps to make it happen again"), 64.0))
+                    .child(area(expected, t("What you expected"), 48.0))
+                    .into_element(),
+                Kind::Feature => view()
+                    .gap(sp(S3))
+                    .child(area(what, t("What it would do"), 84.0))
+                    .child(area(steps, t("Why you want it"), 64.0))
+                    .into_element(),
+                Kind::Question => area(what, t("Your question"), 120.0).into_element(),
+            }))
+        }))
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap(sp(S3))
+                .child(switch(move || with_env.get(), move |on| with_env.set(on)))
+                .child(
+                    text(t("Include Sophon's and the service's versions and the system (nothing of yours)"))
+                        .text_size(tx(TEXT_SM))
+                        .text_color(FG_MUTED)
+                        .flex_1(),
+                ),
+        )
+        .child(text(t("GitHub opens with the issue filled in: read it there and submit it with your account")).text_size(tx(TEXT_SM)).text_color(FG_FAINT))
+        .child(actions(
+            btn(t("Open in GitHub"), Variant::Primary, Sz::Md, Some(Icon::ExternalLink), go)
+                .disabled(move || title.with(|s| s.trim().is_empty()) && what.with(|s| s.trim().is_empty())),
+        ))
 }
 
 fn commit() -> View {

@@ -134,7 +134,7 @@ fn conversation_row(agent: ReadSignal<crate::daemon::Agent>, actions: bool) -> i
         .h(sp(ROW_HEIGHT))
         .pl(sp(S2))
         .child(view().w(px(15.0)).items_center().child(status_dot(move || agent.with(|a| Status::of_agent(&a.status, a.requires_attention || !a.pending.is_empty())))))
-        .child(text(move || agent.with(|a| a.title.clone())).text_size(tx(TEXT_BASE)).text_color(FG).number_of_lines(1).flex_1());
+        .child(text(move || agent.with(store::conversation_title)).text_size(tx(TEXT_BASE)).text_color(FG).number_of_lines(1).flex_1());
     let more = dropdown(
         view()
             .w(px(24.0))
@@ -146,7 +146,17 @@ fn conversation_row(agent: ReadSignal<crate::daemon::Agent>, actions: bool) -> i
             .child(icon(Icon::Ellipsis, 15.0).text_color(FG_FAINT)),
     )
     .align(nsh_core::overlay::Align::End)
-    .child(view().child(menu_row(t("Archive"), Some(Icon::Archive), None, false, move || store::archive_agent(&id))));
+    .child(
+        view()
+            .child({
+                let id = id.clone();
+                menu_row(t("Rename"), Some(Icon::Pencil), None, false, move || {
+                    let name = agent.with_untracked(store::conversation_title);
+                    store::open_modal(store::Modal::RenameAgent { id: id.clone(), name });
+                })
+            })
+            .child(menu_row(t("Archive"), Some(Icon::Archive), None, false, move || store::archive_agent(&id))),
+    );
     view()
         .mx(sp(S2))
         .mb(px(2.0))

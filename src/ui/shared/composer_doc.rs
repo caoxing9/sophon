@@ -27,6 +27,9 @@ use crate::ui::kit::MOBILE;
 /// The chip's node types, and the attributes they carry.
 pub(crate) const ATTACHMENT: &str = "attachment";
 pub(crate) const MENTION: &str = "mention";
+/// A mention's path that names another conversation: this, then its
+/// agent's id.
+pub(crate) const CONVERSATION: &str = "conversation:";
 
 /// What a chip's attachment is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,6 +123,9 @@ pub(crate) struct Outgoing {
     /// stood, so the agent reads where a file belongs in the sentence and
     /// the sent message shows its chips in place ([`segments`]).
     pub(crate) message: String,
+    /// The other conversations mentioned (agent ids), whose words go
+    /// with the message.
+    pub(crate) conversations: Vec<String>,
 }
 
 impl Outgoing {
@@ -152,9 +158,20 @@ pub(crate) fn outgoing(doc: &Node) -> Outgoing {
                     out.message.push_str(&format!("[{}]", name.trim()));
                 }
                 MENTION => {
-                    let mention = format!("@{}", attr_str(inline, "path"));
+                    let path = attr_str(inline, "path");
+                    let mention = format!("@{path}");
                     out.text.push_str(&mention);
-                    out.message.push_str(&mention);
+                    // Another conversation: named in the message, its
+                    // words added after it (`store::conversation_context`).
+                    match path.strip_prefix(CONVERSATION) {
+                        Some(id) => {
+                            out.message.push_str(&format!("《{}》", crate::store::agent(id).map(|a| crate::store::conversation_name(&a)).unwrap_or_default()));
+                            if !out.conversations.iter().any(|c| c == id) {
+                                out.conversations.push(id.to_owned());
+                            }
+                        }
+                        None => out.message.push_str(&mention),
+                    }
                 }
                 // A line break, or anything with a text of its own.
                 _ => {
@@ -291,7 +308,55 @@ pub(crate) fn register_submit(target: &'static str, submit: impl Fn() + 'static)
     });
 }
 
+/// The suggestions over the composer (`/` commands, `@` files and
+/// conversations) as the keyboard moves through them: how many, and what
+/// choosing one does. Set by the list while it shows.
+pub(crate) struct Menu {
+    pub(crate) count: usize,
+    pub(crate) pick: std::rc::Rc<dyn Fn(usize)>,
+}
+
+/// The suggestion the keyboard is on.
+#[derive(Clone, Copy, Default, PartialEq)]
+pub(crate) struct MenuSelected(pub(crate) usize);
+
+/// The suggestions were put away with Escape, until what is typed changes.
+#[derive(Clone, Copy, Default, PartialEq)]
+pub(crate) struct MenuClosed(pub(crate) bool);
+
+pub(crate) fn set_menu(menu: Option<Menu>) {
+    MENU.with_borrow_mut(|m| *m = menu);
+}
+
+/// A key the suggestions take while they show: `true` if it was theirs.
+fn menu_key(key: &str) -> bool {
+    let Some(count) = MENU.with_borrow(|m| m.as_ref().map(|m| m.count)) else { return false };
+    if count == 0 {
+        return false;
+    }
+    let sel = global::<MenuSelected>();
+    match key {
+        "down" => sel.update(|s| s.0 = (s.0 + 1) % count),
+        "up" => sel.update(|s| s.0 = (s.0 + count - 1) % count),
+        "pick" => {
+            let at = sel.with_untracked(|s| s.0.min(count - 1));
+            if let Some(pick) = MENU.with_borrow(|m| m.as_ref().map(|m| m.pick.clone())) {
+                // After the key, as the send is: not inside the editor's
+                // own key handling.
+                set_timeout(Duration::ZERO, move || pick(at));
+            }
+        }
+        "close" => {
+            set_menu(None);
+            global::<MenuClosed>().set(MenuClosed(true));
+        }
+        _ => return false,
+    }
+    true
+}
+
 thread_local! {
+    static MENU: RefCell<Option<Menu>> = const { RefCell::new(None) };
     /// The app's shortcuts (`nsh/keymap` syntax) for the editor to run
     /// ([`set_app_keys`]).
     static APP_KEYS: RefCell<Vec<(String, std::rc::Rc<dyn Fn()>)>> = const { RefCell::new(Vec::new()) };
@@ -326,6 +391,10 @@ fn new_session(key: &str, text: &str) -> EditorSession {
     let schema = schema();
     let mut bindings = kit::history_keys();
     bindings.extend(kit::hard_break_keys(&schema, false));
+    // The suggestions' keys, while they show; the editor's own otherwise.
+    for (name, what) in [("ArrowDown", "down"), ("ArrowUp", "up"), ("Tab", "pick")] {
+        bindings.push((name.into(), command(move |_, dispatch| dispatch.is_some() && menu_key(what))));
+    }
     if !MOBILE {
         // Enter sends, Shift+Enter breaks the line (bound above). The
         // keymap runs inside the editor's key handling, so the send waits
@@ -334,6 +403,9 @@ fn new_session(key: &str, text: &str) -> EditorSession {
         bindings.push((
             "Enter".into(),
             command(move |_, dispatch| {
+                if dispatch.is_some() && menu_key("pick") {
+                    return true;
+                }
                 if dispatch.is_some() {
                     let target = target.clone();
                     set_timeout(Duration::ZERO, move || {
@@ -346,19 +418,25 @@ fn new_session(key: &str, text: &str) -> EditorSession {
             }),
         ));
     }
-    // Escape in an agent's composer: stops the agent, then takes the
-    // queued messages back (`store::escape_composer`).
-    if key.starts_with("agent:") {
-        bindings.push((
-            "Escape".into(),
-            command(move |_, dispatch| {
-                if dispatch.is_some() {
-                    set_timeout(Duration::ZERO, crate::store::escape_composer);
-                }
-                true
-            }),
-        ));
-    }
+    // Escape puts the suggestions away; in an agent's composer without
+    // them it stops the agent, then takes the queued messages back
+    // (`store::escape_composer`).
+    let agent_composer = key.starts_with("agent:");
+    bindings.push((
+        "Escape".into(),
+        command(move |_, dispatch| {
+            if dispatch.is_some() && menu_key("close") {
+                return true;
+            }
+            if !agent_composer {
+                return false;
+            }
+            if dispatch.is_some() {
+                set_timeout(Duration::ZERO, crate::store::escape_composer);
+            }
+            true
+        }),
+    ));
     // The app's shortcuts, run after the key as the send is.
     // Commands are `Send`: each holds its shortcut's place in the list.
     let names: Vec<String> = APP_KEYS.with_borrow(|k| k.iter().map(|(name, _)| editor_key_name(name)).collect());
@@ -480,6 +558,11 @@ pub(crate) fn replace_text(session: &EditorSession, from: usize, to: usize, text
     let (from, to) = (from.min(size), to.min(size));
     let mut tr = state.tr();
     tr.insert_text(text, Some(from), Some(to));
+    // The caret after the text put in: what comes next (more of the same
+    // dictation, typing, the next dictation) goes on from there, not
+    // before it.
+    let end = (from + text.encode_utf16().count()).min(tr.doc().content().size());
+    tr.set_selection(TextSelection::create(tr.doc(), end, None));
     tr.scroll_into_view();
     dispatch(session, tr);
 }
@@ -567,6 +650,7 @@ mod tests {
                 text: "Look at @src/main.rs and \nthen\nthis".into(),
                 attachments: vec!["img-1".into(), "file-2".into()],
                 message: "Look at @src/main.rs and [shot.png]\nthen\n[a.pdf]this".into(),
+                conversations: vec![],
             }
         );
     }

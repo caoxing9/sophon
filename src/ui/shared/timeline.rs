@@ -272,20 +272,58 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                     .line_height(px(24.0))
                     .text_color(FG)
                     .into_element(),
-                RowKind::Reasoning => view()
-                    .flex_row()
-                    .gap(sp(S2))
-                    .child(icon(Icon::Brain, 15.0).text_color(FG_FAINT).mt(px(2.0)))
-                    .child(
-                        text(move || text_of().trim().to_owned())
-                            .text_size(px(13.0))
-                            .line_height(px(19.0))
-                            .italic()
-                            .number_of_lines(3)
-                            .text_color(FG_MUTED)
-                            .flex_1(),
-                    )
-                    .into_element(),
+                // The agent's thinking, folded to one line ("Thinking"):
+                // a press shows it whole, another folds it again.
+                RowKind::Reasoning => {
+                    // Under an open group, indented as its calls are.
+                    let indent = move || px(if grouped.get() { S4 } else { 0.0 });
+                    let key = move || text_of().chars().take(80).collect::<String>();
+                    let open = computed(move || global::<OpenThoughts>().with(|o| o.0.contains(&key())));
+                    view()
+                        .pl(indent)
+                        .child(
+                            nsh_base::button()
+                                .on_press(move || {
+                                    let k = key();
+                                    global::<OpenThoughts>().update(|o| {
+                                        if !o.0.remove(&k) {
+                                            o.0.insert(k);
+                                        }
+                                    });
+                                })
+                                .accessibility_label(t("Thinking"))
+                                .flex_row()
+                                .items_center()
+                                .gap(sp(S2))
+                                .h(px(24.0))
+                                .self_start()
+                                .group()
+                                .child(icon(Icon::Brain, 15.0).text_color(FG_FAINT))
+                                .child(
+                                    text(move || if streaming.get() { t("Thinking…") } else { t("Thinking") }.to_owned())
+                                        .text_size(px(13.0))
+                                        .text_color(FG_FAINT)
+                                        .group_hover(|s| s.text_color(FG_MUTED)),
+                                )
+                                .child(
+                                    icon(Icon::ChevronRight, 12.0)
+                                        .text_color(FG_FAINT)
+                                        .rotate(move || Radians(if open.get() { std::f32::consts::FRAC_PI_2 } else { 0.0 }))
+                                        .transition_transform(),
+                                ),
+                        )
+                        .child(when(open, move || {
+                            text(move || text_of().trim().to_owned())
+                                .text_size(px(13.0))
+                                .line_height(px(19.0))
+                                .italic()
+                                .text_color(FG_MUTED)
+                                .selectable(true)
+                                .pl(px(15.0 + S2))
+                                .pt(px(2.0))
+                        }))
+                        .into_element()
+                }
                 // A call under an open group sits indented under its
                 // summary, past the summary's chevron.
                 RowKind::Tool => view().pl(move || px(if grouped.get() { S4 } else { 0.0 })).child(tool_row(item)).into_element(),
@@ -382,6 +420,10 @@ pub(crate) fn mark_matches(markdown: &str, query: &str) -> String {
 /// the composer (`[name]` in the text, `composer_doc::segments`): a
 /// picture's chip carries its thumbnail and shows it large under the
 /// pointer; a message from the host's history has the names alone.
+/// Where another conversation's words begin in a message that refers to
+/// it (`store::conversation_context`).
+pub(crate) const CONTEXT_MARK: &str = "\n\n--- The conversation \"";
+
 fn user_text(item: Memo<Option<Item>>, selectable: bool) -> impl IntoElement {
     use crate::ui::shared::composer_doc::{Segment, is_image_name, segments};
     view().child(dynamic(move || {
@@ -389,6 +431,12 @@ fn user_text(item: Memo<Option<Item>>, selectable: bool) -> impl IntoElement {
             Some(Item::User { text, images, .. }) => (text.clone(), images.clone()),
             _ => Default::default(),
         });
+        // Another conversation's words sent with it (`store::conversation_
+        // context`) are the agent's to read, not the bubble's to show.
+        let body = match body.find(CONTEXT_MARK) {
+            Some(at) => body[..at].trim_end().to_owned(),
+            None => body,
+        };
         let f = store::find();
         Some(untracked(move || {
             let mut line = text("").text_size(tx(TEXT_CONTENT)).line_height(px(22.0)).text_color(FG).selectable(selectable);
@@ -588,12 +636,16 @@ fn user_actions(item: Memo<Option<Item>>) -> View {
 /// edited 2 files"), failures and progress, and a chevron. Pressed, its
 /// calls show under it, or fold away again.
 /// To the start and to the end of the conversation: small glass discs
-/// centred over the list, each there only while the list is more than a
-/// screen from that end, fading in and out. The end's sits just above the
+/// at the list's right, there while it is being scrolled (and under the
+/// pointer), each only while the list is more than a screen from that end,
+/// fading in and out; still, the conversation is left clear. The end's sits just above the
 /// composer (on the phone, above its floating card).
 fn jump_buttons() -> impl IntoElement {
     let ends = computed(store::timeline_ends);
-    let disc = |glyph: Icon, label: &'static str, go: fn(), shown: Memo<bool>| {
+    // Under the pointer the disc stays, so it can be reached once the
+    // scrolling has stopped.
+    let held = signal(false);
+    let disc = move |glyph: Icon, label: &'static str, go: fn(), shown: Memo<bool>| {
         nsh_base::button()
             .on_press(go)
             .accessibility_label(label)
@@ -615,9 +667,11 @@ fn jump_buttons() -> impl IntoElement {
             .pointer_events(move || if shown.get() { PointerEvents::Auto } else { PointerEvents::None })
             .child(icon(glyph, 15.0).text_color(FG_MUTED).group_hover(|s| s.text_color(FG)))
     };
-    let to_start = computed(move || ends.with(|e| e.away_from_start));
-    let to_end = computed(move || ends.with(|e| e.away_from_end));
-    let row = || view().absolute().left(px(0.0)).right(px(0.0)).items_center();
+    let live = move || store::timeline_scrolling() || held.get();
+    let to_start = computed(move || live() && ends.with(|e| e.away_from_start));
+    let to_end = computed(move || live() && ends.with(|e| e.away_from_end));
+    // At the right, past the text's lines (centred they lay over the text).
+    let row = || view().absolute().left(px(0.0)).right(px(0.0)).items_end().pr(sp(S6));
     view()
         .absolute()
         .top(px(0.0))
@@ -625,8 +679,16 @@ fn jump_buttons() -> impl IntoElement {
         .left(px(0.0))
         .right(px(0.0))
         .pointer_events(PointerEvents::BoxNone)
-        .child(row().top(sp(S3)).child(disc(Icon::ArrowUp, t("Go to the start"), store::jump_timeline_start, to_start)))
-        .child(row().bottom(px(if MOBILE { 196.0 } else { S3 })).child(disc(Icon::ArrowDown, t("Go to the end"), store::jump_timeline_end, to_end)))
+        .child(row().top(sp(S3)).child(hover_keeps(held, disc(Icon::ArrowUp, t("Go to the start"), store::jump_timeline_start, to_start))))
+        .child(row().bottom(px(if MOBILE { 196.0 } else { S3 })).child(hover_keeps(held, disc(Icon::ArrowDown, t("Go to the end"), store::jump_timeline_end, to_end))))
+}
+
+/// `el`, `held` while the pointer is over it.
+fn hover_keeps(held: Signal<bool>, el: impl IntoElement) -> View {
+    view()
+        .on_mouse_enter(move |_: &MouseEvent| held.set(true))
+        .on_mouse_leave(move |_: &MouseEvent| held.set(false))
+        .child(el)
 }
 
 /// Within this of its end, the conversation's list keeps its end in place.
@@ -682,6 +744,11 @@ fn group_row(group: Memo<Option<Group>>) -> impl IntoElement {
             }))
         }))
 }
+
+/// Thoughts shown whole, by how they begin: the list recycles its rows,
+/// and an index moves as earlier pages load.
+#[derive(Clone, Default)]
+struct OpenThoughts(std::collections::HashSet<String>);
 
 /// Tool calls open under their rows, by call id: the list recycles its
 /// rows, so what is open is kept here rather than in a row.
@@ -1295,28 +1362,106 @@ pub(crate) fn find_bar() -> impl IntoElement {
 /// While the agent runs and nothing it says is streaming: the mark
 /// breathing at the foot of the conversation, so a sent message never sits
 /// there without an answer in sight.
+/// The words a turn goes by, one per turn, as Claude Code's status line
+/// has them.
+const VERBS_EN: [&str; 16] = [
+    "Thinking", "Pondering", "Brewing", "Fermenting", "Percolating", "Mulling", "Simmering", "Tinkering",
+    "Crafting", "Musing", "Conjuring", "Noodling", "Ruminating", "Whirring", "Cogitating", "Marinating",
+];
+const VERBS_ZH: [&str; 12] = ["思考中", "琢磨中", "酝酿中", "发酵中", "推敲中", "构思中", "打磨中", "冥想中", "捣鼓中", "盘算中", "斟酌中", "沉吟中"];
+
+/// The star's frames, as Claude Code's spinner turns them.
+const STAR: [&str; 6] = ["·", "✢", "✳", "✶", "✻", "✽"];
+
+thread_local! {
+    /// When each agent's running turn was first seen running here.
+    static TURN_STARTED: std::cell::RefCell<std::collections::HashMap<String, std::time::Instant>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// About how many tokens `text` is: four letters of English to a token,
+/// a character of Chinese (or other wide script) to one.
+fn tokens_in(text: &str) -> usize {
+    let (narrow, wide) = text.chars().fold((0usize, 0usize), |(n, w), c| if c.is_ascii() { (n + 1, w) } else { (n, w + 1) });
+    narrow / 4 + wide
+}
+
+/// "3.2k", "860".
+fn short_count(n: usize) -> String {
+    if n >= 1000 { format!("{:.1}k", n as f64 / 1000.0) } else { n.to_string() }
+}
+
+/// "53s", "2m 05s".
+fn short_time(secs: u64) -> String {
+    if secs < 60 { format!("{secs}s") } else { format!("{}m {:02}s", secs / 60, secs % 60) }
+}
+
+/// While the agent works, at the conversation's foot, as Claude Code's
+/// status line: a turning star, the turn's word, how long it has run and
+/// about how many tokens it has written so far (its messages, thinking and
+/// calls since the user's message, counted here: the service says the
+/// turn's tokens only at its end).
 fn thinking(running: Memo<bool>) -> impl IntoElement {
-    let state = computed(move || {
+    let agent = computed(store::selected_id);
+    // The turn's start, kept per agent while it runs.
+    effect(move || {
+        let (Some(id), on) = (agent.get(), running.get()) else { return };
+        TURN_STARTED.with_borrow_mut(|m| {
+            if on {
+                m.entry(id).or_insert_with(std::time::Instant::now);
+            } else {
+                m.remove(&id);
+            }
+        });
+    });
+    // What the turn has written: everything after the user's last message.
+    let written = computed(move || {
+        let count = store::item_count();
+        let mut tokens = 0;
+        for i in (0..count).rev() {
+            match store::item_at(i) {
+                Some(Item::User { .. }) | None => break,
+                Some(Item::Assistant { text } | Item::Reasoning { text }) => tokens += tokens_in(&text),
+                Some(Item::Tool { summary, detail, .. }) => tokens += tokens_in(&summary) + tokens_in(&detail.to_string()) / 4,
+                Some(_) => {}
+            }
+        }
+        tokens
+    });
+    view().child(dynamic(move || {
         if !running.get() {
             return None;
         }
-        let last = store::item_count().checked_sub(1).and_then(store::item_at);
-        match last {
-            // Its words are on screen already.
-            Some(Item::Assistant { .. }) => None,
-            Some(Item::User { .. }) | None => Some(t("Thinking…")),
-            Some(_) => Some(t("Working…")),
-        }
-    });
-    view().child(dynamic(move || {
-        let label = state.get()?;
+        let id = agent.get_untracked().unwrap_or_default();
         Some(untracked(move || {
-            // The words alone, breathing so they read as live.
-            let breath = animated_value(1.0);
-            let half = nsh_core::element::Timing::new(900.0, Easing::EaseInOut);
-            Animation::sequence([Animation::timing(&breath, 0.45, half.clone()), Animation::timing(&breath, 1.0, half)])
-                .looped(None)
-                .start();
+            let started = TURN_STARTED.with_borrow(|m| m.get(&id).copied()).unwrap_or_else(std::time::Instant::now);
+            // One word for the turn, by when it began.
+            let seed = {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                format!("{started:?}{id}").hash(&mut h);
+                h.finish() as usize
+            };
+            let verb = if crate::i18n::is_zh() { VERBS_ZH[seed % VERBS_ZH.len()] } else { VERBS_EN[seed % VERBS_EN.len()] };
+            // The star turns, and the time goes on, from one tick.
+            let tick = signal(0u64);
+            spawn(async move {
+                loop {
+                    nsh_core::element::timer(std::time::Duration::from_millis(120)).await;
+                    tick.update(|t| *t += 1);
+                }
+            });
+            let star = move || STAR[(tick.get() as usize / 2) % STAR.len()].to_owned();
+            let detail = move || {
+                tick.get();
+                let secs = started.elapsed().as_secs();
+                let tokens = written.get();
+                if tokens == 0 {
+                    format!("({})", short_time(secs))
+                } else {
+                    format!("({} · ↓ {} tokens)", short_time(secs), short_count(tokens))
+                }
+            };
             view()
                 .w_full()
                 .max_w(px(CONTENT_MAX_WIDTH + 2.0 * S6))
@@ -1324,10 +1469,30 @@ fn thinking(running: Memo<bool>) -> impl IntoElement {
                 // The rows' own inset, so the words line up with the text.
                 .px(sp(S6))
                 .py(sp(S3))
-                .child(text(label).text_size(tx(TEXT_SM)).text_color(FG_MUTED).bind_opacity(&breath))
+                .flex_row()
+                .items_center()
+                .gap(sp(S2))
+                .child(text(star).text_size(tx(TEXT_BASE)).font_family(mono_font).text_color(ACCENT).w(px(14.0)))
+                .child(text(format!("{verb}…")).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(ACCENT))
+                .child(text(detail).text_size(tx(TEXT_SM)).text_color(FG_FAINT))
                 .into_element()
         }))
     }))
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::{short_count, short_time, tokens_in};
+
+    #[test]
+    fn the_status_line_counts_and_times_as_claude_code_does() {
+        assert_eq!(tokens_in("abcdefgh"), 2);
+        assert_eq!(tokens_in("你好"), 2);
+        assert_eq!(short_count(860), "860");
+        assert_eq!(short_count(3200), "3.2k");
+        assert_eq!(short_time(53), "53s");
+        assert_eq!(short_time(125), "2m 05s");
+    }
 }
 
 #[cfg(test)]

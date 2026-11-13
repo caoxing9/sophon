@@ -16,7 +16,8 @@ SRC="${NSH_SRC:-$HOME/.cache/sophon-nsh/$REV}"
 if [ ! -d "$SRC/.git" ]; then
   mkdir -p "$SRC"
   git -C "$SRC" init -q
-  git -C "$SRC" remote add origin https://github.com/longbridge/nsh.git
+  # The repository Cargo.toml pins NSH from (its revisions may not be upstream yet).
+  git -C "$SRC" remote add origin https://github.com/caoxing9/nsh.git
 fi
 if [ "$(git -C "$SRC" rev-parse HEAD 2>/dev/null || true)" != "$REV" ]; then
   git -C "$SRC" fetch -q --depth 1 origin "$REV"

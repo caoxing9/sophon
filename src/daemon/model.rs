@@ -290,6 +290,11 @@ pub struct Agent {
     /// The session's id in the agent's own records (the service's
     /// `persistence`), when it keeps one.
     pub session_id: Option<String>,
+    /// Its title was given by someone (Rename; the label `sophon.named`),
+    /// not made from its first message.
+    pub named: bool,
+    /// When the user last sent it a message.
+    pub last_user_message_at: String,
 }
 
 impl Agent {
@@ -328,6 +333,8 @@ impl Agent {
             attention_reason: str_of(v, "attentionReason"),
             archived: v.get("archivedAt").is_some_and(|a| !a.is_null()),
             scheduled: v.pointer("/labels/paseo.schedule-id").is_some_and(|l| !l.is_null()),
+            named: v.pointer("/labels/sophon.named").and_then(Value::as_str) == Some("1"),
+            last_user_message_at: str_of(v, "lastUserMessageAt").unwrap_or_default(),
             updated_at: str_of(v, "updatedAt").unwrap_or_default(),
             session_id: v.pointer("/persistence/sessionId").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned),
             pending: v

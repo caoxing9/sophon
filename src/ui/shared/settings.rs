@@ -119,13 +119,58 @@ pub(crate) fn sending_card() -> View {
                 (SendBehavior::Queue, t("Queue").into()),
             ],
             || store::settings().send_behavior,
-            |b| store::edit_settings(|s| s.send_behavior = b),
+            store::set_send_behavior,
         ),
         true,
     ))
 }
 
 /// Whether this Mac stays awake while its agents run (the desktop's).
+/// Dictation's shortcut (the desktop's), recorded as Raycast's are: a
+/// press on the field, then the combination; Fn on its own by default.
+pub(crate) fn dictation_card() -> View {
+    let recording = computed(store::recording_dictation_key);
+    let key = computed(store::dictation_key);
+    let field = nsh_base::button()
+        .on_press(move || store::record_dictation_key(!recording.get_untracked()))
+        .accessibility_label(t("Dictation key"))
+        .min_w(px(120.0))
+        .h(sp(CONTROL_SM))
+        .px(sp(S3))
+        .rounded(px(R_LG))
+        .items_center()
+        .justify_center()
+        .bg(SURFACE2)
+        .border_1()
+        .border_color(move || if recording.get() { ACCENT.into() } else { tint(BORDER, 1.0) })
+        .child(text(move || {
+            if recording.get() {
+                t("Press keys…").to_owned()
+            } else {
+                key.get().map(|k| k.label).unwrap_or_else(|| t("None").to_owned())
+            }
+        })
+        .text_size(tx(TEXT_BASE))
+        .font_weight(FontWeight(500))
+        .text_color(move || if recording.get() { FG_MUTED } else { FG }));
+    let reset = when(move || !recording.get() && !key.get().is_some_and(|k| k.is_fn()), || {
+        icon_btn(Icon::RotateCw, Sz::Sm, t("Back to Fn"), || store::set_dictation_key(Some(store::Hotkey::fn_key())))
+    });
+    card().child(row(
+        t("Dictation key"),
+        move || {
+            if recording.get() {
+                t("Press the combination, or Fn alone. Esc cancels, Delete leaves dictation without a key")
+            } else {
+                t("Press it to record another. Fn: hold to talk, let go to stop (set macOS's \"Press 🌐 key to\" to Do Nothing, System Settings → Keyboard). Any other: press to start, again to stop")
+            }
+            .to_owned()
+        },
+        view().flex_row().items_center().gap(sp(S2)).child(reset).child(field),
+        true,
+    ))
+}
+
 pub(crate) fn keep_awake_card() -> View {
     use store::KeepAwake;
     card().child(row(

@@ -111,7 +111,8 @@ jobs:
           APP=.nsh/out/Sophon.app
           # The service's own binaries first: --deep does not reach Resources.
           scripts/sign-service.sh "$APP" "$IDENTITY"
-          codesign --force --deep --options runtime --timestamp --sign "$IDENTITY" "$APP"
+          # The app's own entitlements: the microphone, for dictation.
+          codesign --force --deep --options runtime --timestamp --entitlements scripts/app.entitlements --sign "$IDENTITY" "$APP"
           codesign --verify --deep --strict --verbose=2 "$APP"
 
           printf '%s' "$ASC_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
