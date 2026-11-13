@@ -56,20 +56,28 @@ pub(crate) fn fold(items: &[Item], running: bool, choice: &HashMap<String, bool>
     let mut rows = Vec::with_capacity(items.len());
     let mut i = 0;
     while i < items.len() {
+        // A run is the agent at work between what it says: its calls, and
+        // its thinking between them (as Claude Code's app shows a turn's
+        // steps under one summary), two calls at least.
         let mut end = i;
-        while end < items.len() && matches!(items[end], Item::Tool { .. }) {
+        while end < items.len() && matches!(items[end], Item::Tool { .. } | Item::Reasoning { .. }) {
             end += 1;
         }
-        if end - i < 2 {
+        let calls = items[i..end].iter().filter(|t| matches!(t, Item::Tool { .. })).count();
+        if calls < 2 {
             rows.push(Row::Item { index: i, grouped: false });
             i += 1;
             continue;
         }
         let run = &items[i..end];
-        let id = match &items[i] {
-            Item::Tool { call_id, .. } if !call_id.is_empty() => call_id.clone(),
-            _ => format!("#{i}"),
-        };
+        // Its first call's id: the same as thinking comes before it.
+        let id = run
+            .iter()
+            .find_map(|t| match t {
+                Item::Tool { call_id, .. } if !call_id.is_empty() => Some(call_id.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| format!("#{i}"));
         // The run the agent is in (the last one), or one with a call still
         // going, stays open so its progress shows.
         let live = running && (end == items.len() || run.iter().any(|t| status_of(t) == "running"));
@@ -186,6 +194,22 @@ fn capitalize(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn thinking_between_calls_folds_with_them() {
+        let think = || Item::Reasoning { text: "hm".into() };
+        let call = |id: &str| Item::Tool { call_id: id.into(), name: "Bash".into(), kind: "shell".into(), status: "completed".into(), summary: String::new(), detail: serde_json::Value::Null, error: None };
+        let say = || Item::Assistant { text: "done".into() };
+        // thinking, call, thinking, call, thinking, call, then words.
+        let items = vec![think(), call("a"), think(), call("b"), think(), call("c"), say()];
+        let rows = fold(&items, false, &HashMap::new());
+        assert_eq!(rows.len(), 2);
+        assert!(matches!(&rows[0], Row::Group(g) if g.start == 0 && g.end == 6 && g.id == "a" && !g.open));
+        assert_eq!(summarize(&items[0..6]).commands, 3);
+        // Thinking with one call stays as it is.
+        let items = vec![think(), call("a"), say()];
+        assert_eq!(fold(&items, false, &HashMap::new()).len(), 3);
+    }
+
     use super::*;
     use serde_json::Value;
 
@@ -233,7 +257,9 @@ mod tests {
         let items = vec![
             tool("a", "shell", "completed", ""),
             tool("b", "shell", "completed", ""),
-            Item::Reasoning { text: "hm".into() },
+            // What the agent says splits runs; its thinking does not
+            // (`thinking_between_calls_folds_with_them`).
+            Item::Assistant { text: "so".into() },
             tool("c", "read", "completed", "x"),
             tool("d", "read", "completed", "y"),
             tool("e", "read", "completed", "z"),

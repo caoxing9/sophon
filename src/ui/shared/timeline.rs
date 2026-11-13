@@ -275,9 +275,12 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                 // The agent's thinking, folded to one line ("Thinking"):
                 // a press shows it whole, another folds it again.
                 RowKind::Reasoning => {
+                    // Under an open group, indented as its calls are.
+                    let indent = move || px(if grouped.get() { S4 } else { 0.0 });
                     let key = move || text_of().chars().take(80).collect::<String>();
                     let open = computed(move || global::<OpenThoughts>().with(|o| o.0.contains(&key())));
                     view()
+                        .pl(indent)
                         .child(
                             nsh_base::button()
                                 .on_press(move || {
