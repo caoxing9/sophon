@@ -2522,6 +2522,18 @@ pub(crate) fn dictation_key() -> Option<Hotkey> {
     global::<DictationKeyPref>().with(|k| k.0.clone())
 }
 
+/// The picture viewer's wheel, as it turns: the zoom asked, numbered.
+#[derive(Clone, Copy, Default, PartialEq)]
+pub(crate) struct PictureZoom(pub(crate) u64, pub(crate) f32);
+
+pub(crate) fn picture_zoom() -> PictureZoom {
+    global::<PictureZoom>().get()
+}
+
+pub(crate) fn zoom_picture(factor: f32) {
+    global::<PictureZoom>().update(|z| *z = PictureZoom(z.0 + 1, factor));
+}
+
 pub(crate) fn set_dictation_key(key: Option<Hotkey>) {
     #[cfg(target_os = "macos")]
     crate::platform::fn_key::set_shortcut(key.as_ref());

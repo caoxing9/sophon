@@ -89,6 +89,21 @@ fn desktop_picture(uri: String) -> AnyElement {
             .hover(|s| s.bg(AdaptiveColor::rgb(0xffffff, 0xffffff).opacity(0.16)))
             .child(icon(glyph, 16.0).text_color(white))
     };
+    // The wheel (macOS's monitor, `platform::picture_input`) zooms from
+    // where the zoom is; it hears only while a picture is open.
+    #[cfg(target_os = "macos")]
+    {
+        crate::platform::picture_input::set_open(true);
+        cleanup(|| crate::platform::picture_input::set_open(false));
+    }
+    let (wheel_zoom, level_wheel) = (zoom_to.clone(), level.clone());
+    let seen = std::cell::Cell::new(store::picture_zoom().0);
+    effect(move || {
+        let store::PictureZoom(n, factor) = store::picture_zoom();
+        if seen.replace(n) != n {
+            wheel_zoom(level_wheel.get() * factor);
+        }
+    });
     let (zoom_in, zoom_out, reset_zoom, pinched) = (zoom_to.clone(), zoom_to.clone(), zoom_to.clone(), zoom_to);
     let (level_in, level_out, level_pinch) = (level.clone(), level.clone(), level.clone());
     let (turns_turn, turns_reset) = (turns.clone(), turns);

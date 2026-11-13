@@ -3,6 +3,8 @@
 pub(crate) mod fonts;
 #[cfg(target_os = "macos")]
 pub(crate) mod fn_key;
+#[cfg(target_os = "macos")]
+pub(crate) mod picture_input;
 
 #[cfg(target_os = "android")]
 pub(crate) mod android;

@@ -16,6 +16,36 @@ pub(crate) fn bind() {
     // it is held (after a quarter second, so a tap does nothing) and stops
     // when it is let go. Heard by a monitor of the modifier keys on the
     // main thread, and handed here.
+    // The picture viewer's wheel and clicks (macOS): its drag takes the
+    // presses and NSH has no wheel event.
+    #[cfg(target_os = "macos")]
+    {
+        use crate::platform::picture_input::Heard;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Heard>();
+        crate::platform::picture_input::watch(move |h| {
+            let _ = tx.send(h);
+        });
+        store::spawn_detached(async move {
+            while let Some(heard) = rx.recv().await {
+                if !matches!(store::modal(), Some(Modal::Picture { .. })) {
+                    continue;
+                }
+                match heard {
+                    Heard::Zoom(f) => store::zoom_picture(f),
+                    Heard::Click { x, y } => {
+                        let w = window();
+                        // Not on the viewer's own buttons: the bar at the
+                        // foot, the cross at the top right.
+                        let on_bar = y > w.height.0 - 72.0 && (x - w.width.0 / 2.0).abs() < 150.0;
+                        let on_cross = y < 60.0 && x > w.width.0 - 60.0;
+                        if !on_bar && !on_cross {
+                            store::close_modal();
+                        }
+                    }
+                }
+            }
+        });
+    }
     #[cfg(target_os = "macos")]
     {
         use crate::platform::fn_key::Heard;

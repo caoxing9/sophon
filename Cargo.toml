@@ -62,7 +62,7 @@ nsh-platform-macos = { git = "https://github.com/caoxing9/nsh", rev = "05b351c64
 # The pasteboard's image, for a copied file the app may not read (already in the tree through nsh-platform-macos).
 objc2 = "0.6.5"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSData"] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard", "NSEvent", "NSResponder", "block2"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard", "NSEvent", "NSResponder", "NSWindow", "NSView", "block2", "objc2-core-foundation"] }
 # The Fn key's monitor (`platform::fn_key`; already in the tree through nsh-platform-macos).
 block2 = "0.6.2"
 

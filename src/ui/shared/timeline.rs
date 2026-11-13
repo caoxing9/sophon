@@ -623,7 +623,7 @@ fn user_actions(item: Memo<Option<Item>>) -> View {
 /// edited 2 files"), failures and progress, and a chevron. Pressed, its
 /// calls show under it, or fold away again.
 /// To the start and to the end of the conversation: small glass discs
-/// centred over the list, there while it is being scrolled (and under the
+/// at the list's right, there while it is being scrolled (and under the
 /// pointer), each only while the list is more than a screen from that end,
 /// fading in and out; still, the conversation is left clear. The end's sits just above the
 /// composer (on the phone, above its floating card).
@@ -657,7 +657,8 @@ fn jump_buttons() -> impl IntoElement {
     let live = move || store::timeline_scrolling() || held.get();
     let to_start = computed(move || live() && ends.with(|e| e.away_from_start));
     let to_end = computed(move || live() && ends.with(|e| e.away_from_end));
-    let row = || view().absolute().left(px(0.0)).right(px(0.0)).items_center();
+    // At the right, past the text's lines (centred they lay over the text).
+    let row = || view().absolute().left(px(0.0)).right(px(0.0)).items_end().pr(sp(S6));
     view()
         .absolute()
         .top(px(0.0))
