@@ -119,7 +119,7 @@ pub(crate) fn sending_card() -> View {
                 (SendBehavior::Queue, t("Queue").into()),
             ],
             || store::settings().send_behavior,
-            |b| store::edit_settings(|s| s.send_behavior = b),
+            store::set_send_behavior,
         ),
         true,
     ))

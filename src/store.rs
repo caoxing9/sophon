@@ -793,11 +793,12 @@ struct Suggestions {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) enum SendBehavior {
     /// Adds the message to the running turn.
-    #[default]
     Steer,
     /// Stops the turn and starts a new one with the message.
     Interrupt,
-    /// Holds it until the turn ends.
+    /// Holds it until the turn ends: the default, so a message written
+    /// while the agent works waits its turn, shown queued.
+    #[default]
     Queue,
 }
 
@@ -923,6 +924,16 @@ impl Default for LocalService {
 /// earlier version's default does not hold.
 #[derive(Clone, Default, PartialEq)]
 struct LocalServiceChosen(bool);
+
+/// The send behaviour was chosen in settings (not the default saved).
+#[derive(Clone, Copy, Default)]
+struct SendBehaviorChosen(bool);
+
+/// Sets what Return does while the agent runs, as chosen in settings.
+pub(crate) fn set_send_behavior(behavior: SendBehavior) {
+    global::<SendBehaviorChosen>().set(SendBehaviorChosen(true));
+    edit_settings(|s| s.send_behavior = behavior);
+}
 
 /// Whether this Mac runs agents of its own.
 pub(crate) fn local_service() -> bool {
@@ -2401,6 +2412,7 @@ fn save_prefs() {
         },
         "localService": s.local_service.0,
         "localServiceChosen": global::<LocalServiceChosen>().with_untracked(|c| c.0),
+        "sendBehaviorChosen": global::<SendBehaviorChosen>().with_untracked(|c| c.0),
         "mySpaceName": s.my_space_name,
         "push": s.push.0,
         "pushHide": s.push_hide,
@@ -2476,10 +2488,14 @@ pub(crate) fn load_prefs() {
         Some("off") => DictationKey::Off,
         _ => DictationKey::Fn,
     }));
+    // Steering was the default, and was saved as it was: only where
+    // someone chose it does it stay (`sendBehaviorChosen`), the rest queue.
+    let chosen = v.get("sendBehaviorChosen").and_then(serde_json::Value::as_bool).unwrap_or(false);
+    global::<SendBehaviorChosen>().set(SendBehaviorChosen(chosen));
     let behavior = match v.get("sendBehavior").and_then(serde_json::Value::as_str) {
         Some("interrupt") => SendBehavior::Interrupt,
-        Some("queue") => SendBehavior::Queue,
-        _ => SendBehavior::Steer,
+        Some("steer") if chosen => SendBehavior::Steer,
+        _ => SendBehavior::Queue,
     };
     let keep_awake = match v.get("keepAwake").and_then(serde_json::Value::as_str) {
         Some("off") => KeepAwake::Off,
