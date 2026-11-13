@@ -1363,11 +1363,20 @@ pub(crate) fn group_summary(start: usize, end: usize) -> crate::fold::Summary {
 }
 
 /// Opens or folds a group of tool calls.
+/// The conversation's list scrolled: how far from its end it is now.
+pub(crate) fn set_timeline_from_end(distance: f32) {
+    TIMELINE_FROM_END.with(|d| d.set(distance));
+}
+
 pub(crate) fn set_group_open(id: &str, open: bool) {
     global::<Timeline>().update(|t| {
         t.folds.insert(id.to_owned(), open);
     });
-    if open {
+    // Only at the end: further up the calls open downwards under the summary,
+    // which stays where it was pressed, and moving it then is a jump (on
+    // the phone, where the calls are most of a screen, a bounce).
+    let at_end = TIMELINE_FROM_END.with(std::cell::Cell::get) <= crate::ui::shared::timeline::FOLLOW_END;
+    if open && at_end {
         // At the end of the conversation the list keeps its end in place,
         // so the calls push the summary up out of view: bring it back near
         // the top once they are laid out, where it folds them again.
@@ -1377,7 +1386,10 @@ pub(crate) fn set_group_open(id: &str, open: bool) {
             if let Some(row) = row {
                 TIMELINE_LIST.with_borrow(|l| {
                     if let Some(list) = l {
-                        list.scroll_to_index(row as u32, nsh_core::geometry::Percentage(0.1), px(0.0), true);
+                        // At once on the phone: the list has just moved
+                        // to keep its end, and a glide back after that
+                        // reads as a bounce.
+                        list.scroll_to_index(row as u32, nsh_core::geometry::Percentage(0.1), px(0.0), !crate::ui::kit::MOBILE);
                     }
                 });
             }
@@ -4401,6 +4413,8 @@ pub(crate) struct Find {
 
 thread_local! {
     static TIMELINE_LIST: RefCell<Option<ElementRef>> = const { RefCell::new(None) };
+    /// How far the conversation's list is from its end, as it last said.
+    static TIMELINE_FROM_END: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
 }
 
 pub(crate) fn set_timeline_list(list: ElementRef) {
