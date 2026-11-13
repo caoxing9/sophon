@@ -518,13 +518,37 @@ fn queue_track(live: bool) -> impl IntoElement {
                 t("Queued")
             }));
             for (i, msg) in list.clone().into_iter().enumerate() {
+                let mut message = msg.text.clone();
+                for image in &msg.images {
+                    message = message.replace(&format!("[{}]", image.name), "");
+                }
+                let message = message.trim().to_owned();
                 track = track.child(
                     view()
                         .flex_row()
                         .items_center()
                         .gap(px(S2))
                         .child(icon(Icon::Inbox, 14.0).text_color(FG_FAINT))
-                        .child(text(msg).text_size(px(TEXT_BASE)).number_of_lines(1).flex_1())
+                        .child(text(message).text_size(px(TEXT_BASE)).number_of_lines(1).flex_1())
+                        .child(dynamic(move || {
+                            let mut row = view().flex_row().items_center().gap(px(4.0));
+                            for attachment in msg.images.clone() {
+                                let uri = format!("data:{};base64,{}", attachment.mime, attachment.data);
+                                let name = attachment.name.clone();
+                                let open_uri = uri.clone();
+                                row = row.child(
+                                    nsh_base::button()
+                                        .on_press(move || store::open_modal(store::Modal::Picture { name: name.clone(), uri: open_uri.clone() }))
+                                        .w(px(30.0))
+                                        .h(px(30.0))
+                                        .p(px(1.0))
+                                        .rounded(px(R_MD))
+                                        .overflow_hidden()
+                                        .child(image(uri).w(px(28.0)).h(px(28.0)).object_fit(nsh_core::ResizeMode::Cover)),
+                                );
+                            }
+                            row
+                        }))
                         .child(icon_btn(Icon::X, Sz::Sm, t("Remove from queue"), move || {
                             if let Some(id) = store::selected_id() {
                                 store::unqueue(&id, i);

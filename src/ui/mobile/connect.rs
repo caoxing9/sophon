@@ -136,6 +136,14 @@ enum ScanState {
 
 fn scan(back: impl Fn() + Clone + 'static) -> impl IntoElement {
     let state = signal(ScanState::Looking);
+    // Android's back button: to the welcome screen, not out of the app.
+    on_back_press({
+        let back = back.clone();
+        move || {
+            back();
+            true
+        }
+    });
     let on_event = move |e: &NativeEvent| match &*e.name {
         "scan" => {
             let value = e.data.get("value").and_then(|v| v.as_str()).unwrap_or_default().to_owned();
@@ -167,6 +175,11 @@ fn scan(back: impl Fn() + Clone + 'static) -> impl IntoElement {
                 Some(untracked(move || {
                     if denied {
                         return permission_card().into_element();
+                    }
+                    // Sophon has no camera view on Android: the phone's own
+                    // camera reads the code and opens its link here.
+                    if cfg!(target_os = "android") {
+                        return camera_app_card().into_element();
                     }
                     view()
                         .flex_1()
@@ -224,6 +237,26 @@ fn frame() -> impl IntoElement {
         .child(corner(true, false))
         .child(corner(false, true))
         .child(corner(false, false))
+}
+
+/// Android's way to scan: with the phone's camera app, or by pasting.
+fn camera_app_card() -> impl IntoElement {
+    view()
+        .mt(px(S6))
+        .p(px(S6))
+        .rounded(px(R_XL))
+        .bg(SURFACE2)
+        .gap(px(S4))
+        .child(text(t("Scan with your phone's camera")).text_size(px(TEXT_BASE)).font_weight(FontWeight(600)))
+        .child(
+            text(t("Sophon can't open the camera on Android yet. Scan the QR code in Sophon on your computer with your phone's camera app and open the link it finds, or copy the pairing link there and paste it here."))
+                .text_size(px(TEXT_BASE))
+                .line_height(px(20.0))
+                .text_color(FG_MUTED),
+        )
+        .child(view().items_start().child(btn(t("Paste pairing link"), Variant::Primary, Sz::Md, Some(Icon::ClipboardPaste), || {
+            store::open_modal(store::Modal::AddHost)
+        })))
 }
 
 fn permission_card() -> impl IntoElement {

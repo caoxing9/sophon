@@ -213,18 +213,25 @@ fn foot(tab: Signal<HomeTab>) -> impl IntoElement {
                 .pointer_events(nsh_core::PointerEvents::BoxNone)
                 .child(
                     view().flex_1().child(
-                        tab_bar()
-                            .items(vec![
-                                TabBarItem::new("").icon("bubble.left.and.bubble.right"),
-                                TabBarItem::new("").icon("folder"),
-                                TabBarItem::new("").icon("chart.bar"),
-                                TabBarItem::new("").icon("gearshape"),
-                            ])
-                            .selected_index(move || tab.get().index())
-                            .on_change(move |i: &u32| {
-                                dismiss_keyboard();
-                                tab.set(HomeTab::from_index(*i));
-                            }),
+                        view()
+                            // Android's native tab component can be
+                            // transparent while its host is being mounted;
+                            // keep the navigation surface visible behind it.
+                            .bg(SURFACE2)
+                            .child(
+                                tab_bar()
+                                    .items(vec![
+                                        TabBarItem::new("").icon("bubble.left.and.bubble.right"),
+                                        TabBarItem::new("").icon("folder"),
+                                        TabBarItem::new("").icon("chart.bar"),
+                                        TabBarItem::new("").icon("gearshape"),
+                                    ])
+                                    .selected_index(move || tab.get().index())
+                                    .on_change(move |i: &u32| {
+                                        dismiss_keyboard();
+                                        tab.set(HomeTab::from_index(*i));
+                                    }),
+                            ),
                     ),
                 )
                 .child(
@@ -408,20 +415,7 @@ fn chat_row(a: Agent, w: Option<Workspace>, divider: bool) -> AnyElement {
     let trailing = view()
         .items_end()
         .gap(px(4.0))
-        .child(text(time::ago(&a.updated_at)).text_size(px(TEXT_XS)).text_color(FG_FAINT))
-        .child(if needs_you {
-            view()
-                .min_w(px(18.0))
-                .h(px(18.0))
-                .px(px(5.0))
-                .rounded(px(R_FULL))
-                .bg(ACCENT)
-                .items_center()
-                .justify_center()
-                .child(text(a.pending.len().max(1).to_string()).text_size(px(11.0)).font_weight(FontWeight(600)).text_color(ACCENT_FG))
-        } else {
-            view().h(px(18.0))
-        });
+        .child(text(time::ago(&a.updated_at)).text_size(px(TEXT_XS)).text_color(FG_FAINT));
     let (id, ws) = (a.id.clone(), w.as_ref().map(|w| w.id.clone()));
     row_shell(glyph(Icon::Bot, status), a.title.clone(), line, trailing, divider, move || {
         match &ws {

@@ -205,6 +205,16 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
         let id = ws.with(|w| w.as_ref().map(|w| w.id.clone()));
         id.is_some_and(|id| store::screen() == Screen::Workspace(id))
     });
+    let display_name = computed(move || {
+        let workspace = ws.get();
+        let Some(workspace) = workspace else { return String::new() };
+        store::agents()
+            .into_iter()
+            .filter(|a| a.workspace_id.as_deref() == Some(workspace.id.as_str()) && !a.title.trim().is_empty())
+            .max_by(|a, b| a.updated_at.cmp(&b.updated_at))
+            .map(|a| a.title)
+            .unwrap_or(workspace.name)
+    });
     let status = move || ws.with(|w| w.as_ref().map(|w| Status::of_workspace(&w.status)).unwrap_or(Status::Idle));
 
     let main = button()
@@ -222,7 +232,7 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
         .pl(px(S2))
         .child(view().w(px(15.0)).items_center().child(status_dot(status)))
         .child(
-            text(move || ws.with(|w| w.as_ref().map(|w| w.name.clone()).unwrap_or_default()))
+            text(move || display_name.get())
                 .text_size(px(TEXT_BASE))
                 .text_color(move || if selected.get() { FG } else { FG })
                 .number_of_lines(1)
@@ -240,18 +250,7 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
                 }
                 row
             }))
-        }))
-        .child(
-            text(move || {
-                ws.with(|w| match w {
-                    Some(w) if w.additions + w.deletions > 0 => format!("+{} −{}", w.additions, w.deletions),
-                    _ => String::new(),
-                })
-            })
-            .text_size(px(TEXT_XS))
-            .font_family(|| MONO)
-            .text_color(FG_FAINT),
-        );
+        }));
 
     let more = dropdown(
         view()

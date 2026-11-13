@@ -359,7 +359,7 @@ pub fn start() -> Option<(BridgeInfo, mpsc::UnboundedReceiver<BridgeEvent>)> {
     *STATE.lock().ok()? = Some(state);
     let info = info()?;
     #[cfg(target_os = "macos")]
-    if let Err(e) = super::bonjour::advertise(port, &B64.encode(public)) {
+    if let Err(e) = super::bonjour::advertise(&crate::lan::device_name(), port, &B64.encode(public)) {
         log::warn!("{e}: phones find this Mac by its QR only");
     }
     #[cfg(not(target_os = "macos"))]
@@ -700,12 +700,12 @@ async fn forward<S: AsyncRead + AsyncWrite + Unpin>(
                     if v.get("type").and_then(Value::as_str) == Some("sophon_usage_request") {
                         let own_tx = own_tx.clone();
                         // (A phone is never the host: it has no logs to read.)
-                        #[cfg(not(target_os = "ios"))]
+                        #[cfg(not(any(target_os = "ios", target_os = "android")))]
                         std::thread::spawn(move || {
                             let report = crate::usage::scan::scan();
                             let _ = own_tx.send(json!({ "type": "sophon_usage", "report": report.to_json() }).to_string());
                         });
-                        #[cfg(target_os = "ios")]
+                        #[cfg(any(target_os = "ios", target_os = "android"))]
                         let _ = own_tx.send(json!({ "type": "sophon_usage" }).to_string());
                         continue;
                     }
@@ -723,7 +723,7 @@ async fn forward<S: AsyncRead + AsyncWrite + Unpin>(
                         let answer = |pictures: Vec<String>| json!({ "type": "sophon_pictures", "messageId": field("messageId"), "text": field("text"), "pictures": pictures });
                         // None kept here: the agent's own record of the
                         // conversation has them, read on a thread of its own.
-                        #[cfg(not(target_os = "ios"))]
+                        #[cfg(not(any(target_os = "ios", target_os = "android")))]
                         if pictures.is_empty() {
                             let (own_tx, id, text, cwd) = (own_tx.clone(), field("messageId").to_owned(), field("text").to_owned(), field("cwd").to_owned());
                             std::thread::spawn(move || {

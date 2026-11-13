@@ -242,7 +242,7 @@ pub(crate) fn local_usage() -> LocalUsage {
 
 /// Re-reads the session logs on a thread of its own (only new and changed
 /// files are read), then shows the sums.
-#[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 fn refresh_local_usage() {
     if global::<LocalUsage>().with_untracked(|u| u.loading) {
         return;
@@ -265,7 +265,7 @@ fn refresh_local_usage() {
 
 /// A phone or a browser has no session logs: the host's Sophon reads its
 /// own and sends the sums (through its bridge).
-#[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+#[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
 fn refresh_local_usage() {
     if global::<LocalUsage>().with_untracked(|u| u.loading) {
         return;
@@ -774,9 +774,17 @@ struct Timeline {
     /// group's id; kept while the conversation is open.
     folds: HashMap<String, bool>,
 }
+/// A message waiting for the running turn to end, including its attachments.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Queued {
+    pub(crate) text: String,
+    pub(crate) images: Vec<ImageInput>,
+    pub(crate) attachments: Vec<serde_json::Value>,
+}
+
 /// Messages waiting for the running turn to end, per agent.
 #[derive(Clone, Default)]
-struct Queues(HashMap<String, Vec<String>>);
+struct Queues(HashMap<String, Vec<Queued>>);
 /// The agents whose queue waits: stopped with Escape, its messages stay
 /// until they are sent on or taken back to be edited.
 #[derive(Clone, Default)]
@@ -1685,15 +1693,28 @@ fn downloaded(id: String, result: Result<Vec<u8>, String>) {
 #[cfg(target_os = "ios")]
 fn save_download(name: String, bytes: Vec<u8>) {
     let dir = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default().join("Documents");
-    let target = free_path(&dir, &name);
-    match std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&target, &bytes)) {
-        Ok(()) => notify(tf("Saved “{}” to Files › Sophon", &[&target.file_name().and_then(|n| n.to_str()).unwrap_or(&name)])),
+    save_download_in(&dir, name, &bytes, "Saved “{}” to Files › Sophon");
+}
+
+/// An Android phone: into the shared Downloads folder.
+#[cfg(target_os = "android")]
+fn save_download(name: String, bytes: Vec<u8>) {
+    save_download_in(&crate::platform::android::downloads_dir(), name, &bytes, "Saved “{}” to Downloads");
+}
+
+/// Writes a download into `dir` under a name not taken there, and says so
+/// with `saved` (its `{}` is the name).
+#[cfg(any(target_os = "ios", target_os = "android"))]
+fn save_download_in(dir: &std::path::Path, name: String, bytes: &[u8], saved: &'static str) {
+    let target = free_path(dir, &name);
+    match std::fs::create_dir_all(dir).and_then(|_| std::fs::write(&target, bytes)) {
+        Ok(()) => notify(tf(saved, &[&target.file_name().and_then(|n| n.to_str()).unwrap_or(&name)])),
         Err(e) => notify(tf("Could not download “{}”: {}", &[&name, &e.to_string()])),
     }
 }
 
 /// The desktop: where the save panel says.
-#[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 fn save_download(name: String, bytes: Vec<u8>) {
     spawn_detached(async move {
         let dialog = nsh_core::file_dialog::SaveDialog::new().file_name(name.clone());
@@ -1714,7 +1735,7 @@ fn save_download(name: String, _bytes: Vec<u8>) {
 }
 
 /// `dir/name`, or `dir/name (2).ext`, ... when taken.
-#[cfg(target_os = "ios")]
+#[cfg(any(target_os = "ios", target_os = "android"))]
 fn free_path(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
     let (stem, ext) = match name.rsplit_once('.') {
         Some((s, e)) if !s.is_empty() => (s, format!(".{e}")),
@@ -2099,7 +2120,7 @@ pub(crate) fn start_spaces() {
     if !local_service() {
         return;
     }
-    #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
     {
         let homes: Vec<_> = spaces().iter().filter_map(|h| crate::spaces::home_of(&h.url)).collect();
         if !homes.is_empty() {
@@ -2116,7 +2137,7 @@ pub(crate) fn start_spaces() {
 
 /// Makes a space called `name` and switches to it once its service runs.
 pub(crate) fn create_space(name: &str) {
-    #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
     {
         let name = name.trim().to_owned();
         notify(tf("Creating “{}”…", &[&name]));
@@ -2133,7 +2154,7 @@ pub(crate) fn create_space(name: &str) {
             }
         });
     }
-    #[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+    #[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
     let _ = name;
 }
 
@@ -2227,7 +2248,7 @@ pub(crate) fn add_host(name: &str, url: &str, password: &str) {
 pub(crate) fn remove_host(id: &str) {
     // A space's service stops with it; its folder, with its conversations,
     // stays.
-    #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
     if let Some(home) = hosts().into_iter().find(|h| h.id == id).and_then(|h| crate::spaces::home_of(&h.url)) {
         std::thread::spawn(move || {
             if let Err(e) = crate::spaces::stop(&home) {
@@ -2485,7 +2506,7 @@ pub(crate) fn set_language(lang: crate::i18n::Lang) {
     save_prefs();
 }
 
-pub(crate) fn queue(agent_id: &str) -> Vec<String> {
+pub(crate) fn queue(agent_id: &str) -> Vec<Queued> {
     global::<Queues>().with(|q| q.0.get(agent_id).cloned().unwrap_or_default())
 }
 
@@ -2520,7 +2541,7 @@ pub(crate) fn escape_composer() {
     global::<QueueHeld>().update(|h| {
         h.0.remove(&agent.id);
     });
-    let mut text = queued.join("\n");
+    let mut text = queued.iter().map(|m| m.text.as_str()).collect::<Vec<_>>().join("\n");
     let draft = draft(&agent.id);
     if !draft.trim().is_empty() {
         text.push('\n');
@@ -3036,7 +3057,7 @@ pub(crate) fn agent_update(path: &str) -> Option<AgentUpdate> {
 
 /// Looks up the newest version of the CLI at `path`, once a run: a network
 /// or Homebrew call, on a thread of its own.
-#[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 fn check_agent_update(path: String) {
     if !on_this_mac() || global::<AgentUpdates>().with_untracked(|u| u.0.contains_key(&path)) {
         return;
@@ -3063,12 +3084,12 @@ fn check_agent_update(path: String) {
     });
 }
 
-#[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+#[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
 fn check_agent_update(_path: String) {}
 
 /// Updates the CLI at `path` the way it was installed, then asks the
 /// providers again for their versions. This computer's only.
-#[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 pub(crate) fn update_agent(path: &str) {
     if !on_this_mac() {
         return;
@@ -3103,7 +3124,7 @@ pub(crate) fn update_agent(path: &str) {
     });
 }
 
-#[cfg(any(target_os = "ios", target_arch = "wasm32"))]
+#[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
 pub(crate) fn update_agent(_path: &str) {}
 
 /// Asks the providers again, and their diagnostics.
@@ -3615,7 +3636,13 @@ pub(crate) fn send_message(text: &str) -> bool {
     let behavior = settings().send_behavior;
     // A pending permission must be answered first; queueing would wait forever.
     if agent.is_running() && behavior == SendBehavior::Queue && agent.pending.is_empty() {
-        global::<Queues>().update(|q| q.0.entry(agent.id.clone()).or_default().push(text.to_owned()));
+        global::<Queues>().update(|q| {
+            q.0.entry(agent.id.clone()).or_default().push(Queued {
+                text: text.to_owned(),
+                images: take_images(),
+                attachments: take_files(),
+            });
+        });
         return true;
     }
     deliver(&agent.id, text, agent.is_running().then_some(match behavior {
@@ -3629,6 +3656,18 @@ fn deliver(agent_id: &str, text: &str, behavior: Option<&'static str>) {
     let mine = image_key() == agent_id;
     let images = if mine { take_images() } else { vec![] };
     let attachments = if mine { take_files() } else { vec![] };
+    deliver_with(agent_id, text, behavior, images, attachments);
+}
+
+fn deliver_with(agent_id: &str, text: &str, behavior: Option<&'static str>, images: Vec<ImageInput>, attachments: Vec<serde_json::Value>) {
+    // Keep the conversation label useful in the sidebar: use the user's
+    // latest request instead of the daemon's generated title.
+    if !text.is_empty() {
+        let title: String = text.lines().next().unwrap_or(text).trim().chars().take(80).collect();
+        if !title.is_empty() {
+            rename_agent(agent_id, &title);
+        }
+    }
     let mut shown = text.to_owned();
     // A file the text does not name where its chip stood (a message
     // queued before, a draft kept as text) is named after it.
@@ -3924,13 +3963,13 @@ fn flush_queue(agent: &Agent) {
         return;
     }
     let next = global::<Queues>().with_untracked(|q| q.0.get(&agent.id).and_then(|l| l.first().cloned()));
-    if let Some(text) = next {
+    if let Some(next) = next {
         global::<Queues>().update(|q| {
             if let Some(list) = q.0.get_mut(&agent.id) {
                 list.remove(0);
             }
         });
-        deliver(&agent.id, &text, None);
+        deliver_with(&agent.id, &next.text, None, next.images, next.attachments);
     }
 }
 

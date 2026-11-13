@@ -3,3 +3,5 @@ target/
 ref/
 .DS_Store
 dist/
+.claude/worktrees/
+vendor/magpie/
