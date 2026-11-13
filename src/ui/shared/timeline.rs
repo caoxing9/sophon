@@ -587,44 +587,46 @@ fn user_actions(item: Memo<Option<Item>>) -> View {
 /// A run of tool calls as one row: what they did ("Ran 3 commands,
 /// edited 2 files"), failures and progress, and a chevron. Pressed, its
 /// calls show under it, or fold away again.
-/// To the start and to the end of the conversation: round buttons at the
-/// list's right edge, each there only while the list is more than a screen
-/// from that end. The end's sits above the phone's floating composer.
+/// To the start and to the end of the conversation: small glass discs
+/// centred over the list, each there only while the list is more than a
+/// screen from that end, fading in and out. The end's sits just above the
+/// composer (on the phone, above its floating card).
 fn jump_buttons() -> impl IntoElement {
     let ends = computed(store::timeline_ends);
-    let round = |glyph: Icon, label: &'static str, go: fn()| {
+    let disc = |glyph: Icon, label: &'static str, go: fn(), shown: Memo<bool>| {
         nsh_base::button()
             .on_press(go)
             .accessibility_label(label)
-            .w(px(32.0))
-            .h(px(32.0))
+            .w(px(30.0))
+            .h(px(30.0))
             .rounded(px(R_FULL))
             .items_center()
             .justify_center()
-            .bg(SURFACE0)
+            .bg(glass_fill_strong())
+            .backdrop_blur(px(GLASS_BLUR))
+            .backdrop_saturate(1.7)
             .border_1()
-            .border_color(tint(BORDER, 0.8))
-            .shadow_sm()
-            .hover(|s| s.bg(highlight()))
-            .active(|s| s.opacity(0.7))
-            .child(icon(glyph, 16.0).text_color(FG_MUTED))
+            .border_color(glass_edge())
+            .shadow_md()
+            .group()
+            .active(|s| s.opacity(0.75))
+            .opacity(move || if shown.get() { 1.0_f32 } else { 0.0 })
+            .transition_opacity()
+            .pointer_events(move || if shown.get() { PointerEvents::Auto } else { PointerEvents::None })
+            .child(icon(glyph, 15.0).text_color(FG_MUTED).group_hover(|s| s.text_color(FG)))
     };
-    let right = px(if MOBILE { S3 } else { S4 });
+    let to_start = computed(move || ends.with(|e| e.away_from_start));
+    let to_end = computed(move || ends.with(|e| e.away_from_end));
+    let row = || view().absolute().left(px(0.0)).right(px(0.0)).items_center();
     view()
         .absolute()
         .top(px(0.0))
         .bottom(px(0.0))
-        .right(right)
-        .child(when(move || ends.with(|e| e.away_from_start), move || {
-            view().absolute().top(sp(S3)).right(px(0.0)).child(round(Icon::ArrowUp, t("Go to the start"), store::jump_timeline_start))
-        }))
-        .child(when(move || ends.with(|e| e.away_from_end), move || {
-            view()
-                .absolute()
-                .bottom(px(if MOBILE { 210.0 } else { S3 }))
-                .right(px(0.0))
-                .child(round(Icon::ArrowDown, t("Go to the end"), store::jump_timeline_end))
-        }))
+        .left(px(0.0))
+        .right(px(0.0))
+        .pointer_events(PointerEvents::BoxNone)
+        .child(row().top(sp(S3)).child(disc(Icon::ArrowUp, t("Go to the start"), store::jump_timeline_start, to_start)))
+        .child(row().bottom(px(if MOBILE { 196.0 } else { S3 })).child(disc(Icon::ArrowDown, t("Go to the end"), store::jump_timeline_end, to_end)))
 }
 
 /// Within this of its end, the conversation's list keeps its end in place.
