@@ -601,6 +601,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Paired", "已配对"),
     ("Updating the service…", "正在更新服务…"),
     ("Restarting the service…", "正在重启服务…"),
+    ("This conversation is open somewhere else: a Claude Code session in a terminal or in the background ({}). It stays open there between replies, even while nothing runs, and a session is open in one place at a time, so messages cannot be sent from here. To go on here, close it there first: claude stop {}", "这个对话还在别处开着：终端里或后台的 Claude Code 会话（{}）。即使那边没在跑任务，会话在两次回复之间也一直开着；同一个会话同一时间只能在一个地方打开，所以这里发不了消息。想在这里继续，先在那边关掉它：claude stop {}"),
     ("Updates", "更新"),
     ("Sophon {}", "Sophon {}"),
     ("This is the newest version", "已是最新版本"),
