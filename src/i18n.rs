@@ -601,6 +601,8 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Paired", "已配对"),
     ("Updating the service…", "正在更新服务…"),
     ("Restarting the service…", "正在重启服务…"),
+    ("Go to the start", "到最顶部"),
+    ("Go to the end", "到最底部"),
     ("Updates", "更新"),
     ("Sophon {}", "Sophon {}"),
     ("This is the newest version", "已是最新版本"),
