@@ -359,7 +359,7 @@ pub fn start() -> Option<(BridgeInfo, mpsc::UnboundedReceiver<BridgeEvent>)> {
     *STATE.lock().ok()? = Some(state);
     let info = info()?;
     #[cfg(target_os = "macos")]
-    if let Err(e) = super::bonjour::advertise(port, &B64.encode(public)) {
+    if let Err(e) = super::bonjour::advertise(&crate::lan::device_name(), port, &B64.encode(public)) {
         log::warn!("{e}: phones find this Mac by its QR only");
     }
     #[cfg(not(target_os = "macos"))]
