@@ -317,7 +317,7 @@ fn limits_section() -> View {
             let d = data.get();
             let h = history.get();
             Some(untracked(move || match d {
-                None => muted(t("Loading…")).into_element(),
+                None => loading_block(140.0).into_element(),
                 Some(list) if list.is_empty() => muted(t("No usage reported by your providers")).into_element(),
                 Some(list) => {
                     let mut col = view().flex_row().flex_wrap().gap(sp(S4));

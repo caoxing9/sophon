@@ -519,6 +519,12 @@ pub(crate) fn loader(label: Option<&'static str>) -> View {
 
 /// [`loader`] in the middle of the room a list will take once it is here:
 /// what a sheet or a page shows while it waits for its rows.
+/// The mark alone, in the middle of a block `height` tall: what a part of
+/// a page shows while its data comes (a card's worth, not the page's).
+pub(crate) fn loading_block(height: f32) -> View {
+    view().w_full().min_h(px(height)).items_center().justify_center().child(eclipse(36.0))
+}
+
 pub(crate) fn loading() -> View {
     view().w_full().min_h(px(180.0)).items_center().justify_center().child(loader(Some("Loading…")))
 }

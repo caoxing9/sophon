@@ -31,7 +31,7 @@ pub(crate) fn agents_card(editable: bool) -> impl IntoElement {
         Some(untracked(move || {
             let mut v = view();
             if list.is_empty() {
-                v = v.child(view().px(sp(S4)).py(sp(S4)).child(working(t("Loading…"))));
+                v = v.child(loading_block(120.0));
             }
             for (i, ((p, d), u)) in list.into_iter().zip(diags).zip(updates).enumerate() {
                 v = v.child(agent_row(p, d, u, cfg.as_ref(), editable, i == 0));
