@@ -136,6 +136,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         let settings = computed(move || settings_summary(live));
         return view()
             .w_full()
+            .child(elsewhere_bar(live))
             .child(queue_track(live))
             .child(suggest_panel(target, doc))
             .child(chips::preview_layer(key))
@@ -145,8 +146,11 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                     .px(sp(S3))
                     .pt(sp(S3))
                     .pb(sp(S2))
-                    .gap(sp(S2))
-                    .child(editor(doc, text_value, placeholder, TEXT_LG, 160.0, changed).px(sp(S1)))
+                    .gap(sp(S3))
+                    // The text takes the card's upper part whole, a line
+                    // and a half at least: a tap a little under the line
+                    // lands in it, not on the bar.
+                    .child(editor(doc, text_value, placeholder, TEXT_LG, 160.0, changed).px(sp(S1)).min_h(px(34.0)))
                     .child(
                         view()
                             .flex_row()
@@ -182,7 +186,11 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                                 nsh_base::button()
                                     .on_press(move || options_sheet(live))
                                     .accessibility_label(t("Agent settings"))
-                                    .flex_1()
+                                    // As wide as what it says, no wider: the
+                                    // bar's width under the text was the
+                                    // chip's, and a tap meant for the text
+                                    // opened the agent's settings.
+                                    .flex_shrink(1.0)
                                     .min_w(px(0.0))
                                     .h(px(36.0))
                                     .flex_row()
@@ -199,6 +207,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                                             .flex_shrink(1.0),
                                     ),
                             )
+                            .child(view().flex_1())
                             .child(disc(running, busy, empty, submit)),
                     ),
             )
@@ -218,6 +227,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         .w_full()
         .max_w(px(CONTENT_MAX_WIDTH))
         .self_center()
+        .child(elsewhere_bar(live))
         .child(queue_track(live))
         .child(suggest_panel(target, doc))
         .child(chips::preview_layer(key))
@@ -285,6 +295,10 @@ fn editor(
     styles.caret = Some(PartStyle(StyleRefinement::default().bg(ACCENT).into()));
     styles.selection = Some(PartStyle(StyleRefinement::default().bg(tint(ACCENT, 0.3)).into()));
     styles.placeholder = Some(PartStyle(StyleRefinement::default().text_color(FG_FAINT).into()));
+    // What an input method is composing (pinyin before it becomes
+    // characters): a light accent wash behind it, as the system's own
+    // fields mark it, not the editor's underline under each piece.
+    styles.composition = Some(PartStyle(StyleRefinement::default().no_underline().bg(tint(ACCENT, 0.14)).into()));
     let mut nodes = PartStyles::default();
     nodes.0.insert("paragraph".into(), typography(StyleRefinement::default()).into());
     // The editor wraps each chip in a box of its node's part: that box is
@@ -510,6 +524,39 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
 }
 
 /// Messages waiting for the running turn to end.
+/// Over the composer of a conversation whose Claude Code session runs in
+/// the background on this Mac: messages from here fail while it does, so
+/// it is said before one is sent, with a way to close it there.
+fn elsewhere_bar(live: bool) -> impl IntoElement {
+    let session = computed(move || {
+        let agent = store::selected_agent().filter(|a| live && a.provider == "claude" && !a.is_running())?;
+        agent.session_id.filter(|s| crate::elsewhere::in_background(s))
+    });
+    view().child(dynamic(move || {
+        let session = session.get()?;
+        Some(untracked(move || {
+            let short = crate::elsewhere::short(&session);
+            card()
+                .mb(sp(S2))
+                .px(sp(S3))
+                .py(sp(S2))
+                .flex_row()
+                .items_center()
+                .gap(sp(S3))
+                .child(icon(Icon::Terminal, 15.0).text_color(FG_MUTED))
+                .child(
+                    text(tf("Open in a Claude Code background session ({}): messages sent here fail until it is closed there", &[&short]))
+                        .text_size(tx(TEXT_SM))
+                        .text_color(FG_MUTED)
+                        .flex_1(),
+                )
+                .child(btn(t("Close it there"), Variant::Outline, Sz::Sm, None, move || {
+                    store::open_modal(store::Modal::CloseElsewhere { session: session.clone() })
+                }))
+        }))
+    }))
+}
+
 fn queue_track(live: bool) -> impl IntoElement {
     let queued = computed(move || if live { store::selected_id().map(|id| store::queue(&id)).unwrap_or_default() } else { vec![] });
     let held = computed(move || live && store::selected_id().is_some_and(|id| store::queue_held(&id)));

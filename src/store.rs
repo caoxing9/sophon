@@ -830,6 +830,9 @@ pub(crate) enum Modal {
     Update,
     ImportSession,
     RestartDaemon,
+    /// Stops a conversation's Claude Code session that runs in the
+    /// background (`elsewhere`), by its id.
+    CloseElsewhere { session: String },
     AddHost,
     /// Names a new space on this Mac.
     CreateSpace,
@@ -1363,11 +1366,89 @@ pub(crate) fn group_summary(start: usize, end: usize) -> crate::fold::Summary {
 }
 
 /// Opens or folds a group of tool calls.
+/// The conversation's list scrolled: its offset from the top, the
+/// content's height and its own. Keeps how far it is from its end, and
+/// whether it is more than a screen from either end (the buttons that go
+/// there show then).
+pub(crate) fn set_timeline_scroll(offset: f32, content: f32, height: f32) {
+    let from_end = content - offset - height;
+    TIMELINE_FROM_END.with(|d| d.set(from_end));
+    let ends = TimelineEnds { away_from_start: offset > height || jumping_start(), away_from_end: from_end > height };
+    if global::<TimelineEnds>().with_untracked(|e| *e != ends) {
+        global::<TimelineEnds>().set(ends);
+    }
+}
+
+/// How far the conversation's list is from its ends: more than a screen.
+#[derive(Clone, Copy, Default, PartialEq)]
+pub(crate) struct TimelineEnds {
+    pub(crate) away_from_start: bool,
+    pub(crate) away_from_end: bool,
+}
+
+pub(crate) fn timeline_ends() -> TimelineEnds {
+    global::<TimelineEnds>().get()
+}
+
+/// Going to the conversation's start: each earlier page, as it comes, is
+/// gone to as well, until there is none.
+#[derive(Clone, Copy, Default)]
+struct JumpingStart(bool);
+
+fn jumping_start() -> bool {
+    global::<JumpingStart>().with_untracked(|j| j.0)
+}
+
+/// Goes to the start of the conversation: its first message, the earlier
+/// pages loaded on the way.
+pub(crate) fn jump_timeline_start() {
+    TIMELINE_LIST.with_borrow(|l| {
+        if let Some(list) = l {
+            list.scroll_to_index(0, nsh_core::geometry::Percentage(0.0), px(0.0), true);
+        }
+    });
+    let more = global::<Timeline>().with_untracked(|t| t.older.is_some());
+    global::<JumpingStart>().set(JumpingStart(more));
+    if more {
+        load_older();
+    }
+}
+
+/// An earlier page came while going to the start: to its first row too,
+/// and on to the next page while there is one.
+fn go_on_to_start() {
+    if !jumping_start() {
+        return;
+    }
+    set_timeout(std::time::Duration::from_millis(60), || {
+        TIMELINE_LIST.with_borrow(|l| {
+            if let Some(list) = l {
+                list.scroll_to_index(0, nsh_core::geometry::Percentage(0.0), px(0.0), false);
+            }
+        });
+        let more = global::<Timeline>().with_untracked(|t| t.older.is_some());
+        global::<JumpingStart>().set(JumpingStart(more));
+        if more {
+            load_older();
+        }
+    });
+}
+
+/// Goes to the end of the conversation.
+pub(crate) fn jump_timeline_end() {
+    global::<JumpingStart>().set(JumpingStart(false));
+    scroll_timeline_end_after(&[0], true);
+}
+
 pub(crate) fn set_group_open(id: &str, open: bool) {
     global::<Timeline>().update(|t| {
         t.folds.insert(id.to_owned(), open);
     });
-    if open {
+    // Only at the end: further up the calls open downwards under the summary,
+    // which stays where it was pressed, and moving it then is a jump (on
+    // the phone, where the calls are most of a screen, a bounce).
+    let at_end = TIMELINE_FROM_END.with(std::cell::Cell::get) <= crate::ui::shared::timeline::FOLLOW_END;
+    if open && at_end {
         // At the end of the conversation the list keeps its end in place,
         // so the calls push the summary up out of view: bring it back near
         // the top once they are laid out, where it folds them again.
@@ -1377,7 +1458,10 @@ pub(crate) fn set_group_open(id: &str, open: bool) {
             if let Some(row) = row {
                 TIMELINE_LIST.with_borrow(|l| {
                     if let Some(list) = l {
-                        list.scroll_to_index(row as u32, nsh_core::geometry::Percentage(0.1), px(0.0), true);
+                        // At once on the phone: the list has just moved
+                        // to keep its end, and a glide back after that
+                        // reads as a bounce.
+                        list.scroll_to_index(row as u32, nsh_core::geometry::Percentage(0.1), px(0.0), !crate::ui::kit::MOBILE);
                     }
                 });
             }
@@ -3505,6 +3589,13 @@ pub(crate) fn recover_workspace(id: &str) {
 #[derive(Clone, Copy, Default)]
 struct Restarting(bool);
 
+/// Has the service read `agent_id`'s record again: what was written to it
+/// outside Sophon shows (`follow`).
+#[cfg_attr(any(target_os = "ios", target_os = "android", target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn reload_agent(agent_id: &str) {
+    send(Command::Reload(agent_id.to_owned()));
+}
+
 pub(crate) fn restart_daemon() {
     global::<Restarting>().set(Restarting(true));
     send(Command::RestartDaemon);
@@ -4401,6 +4492,8 @@ pub(crate) struct Find {
 
 thread_local! {
     static TIMELINE_LIST: RefCell<Option<ElementRef>> = const { RefCell::new(None) };
+    /// How far the conversation's list is from its end, as it last said.
+    static TIMELINE_FROM_END: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
 }
 
 pub(crate) fn set_timeline_list(list: ElementRef) {
@@ -4815,7 +4908,8 @@ pub(crate) fn apply(event: Event) {
                 }
             });
         }
-        Event::TimelineOlder { agent_id, items, older } => global::<Timeline>().update(|t| {
+        Event::TimelineOlder { agent_id, items, older } => {
+            global::<Timeline>().update(|t| {
             if t.agent_id.as_deref() == Some(agent_id.as_str()) {
                 let mut merged = items;
                 crate::sent_pictures::restore(&mut merged);
@@ -4825,7 +4919,9 @@ pub(crate) fn apply(event: Event) {
                 t.older = older;
                 t.loading_older = false;
             }
-        }),
+        });
+            go_on_to_start();
+        }
         Event::Commands { agent_id, list } => global::<Commands>().update(|c| {
             c.0.insert(agent_id, list);
         }),

@@ -74,7 +74,11 @@ pub(crate) fn timeline() -> impl IntoElement {
                 .keys(move || rows.with(|r| store::row_keys(r)))
                 .estimated_item_size(px(80.0))
                 .initial_scroll_index(count.saturating_sub(1))
-                .follow_end(px(40.0))
+                .follow_end(px(FOLLOW_END))
+                // How far from its end the list is, for what depends on
+                // its keeping the end in place (`store::set_group_open`).
+                .event_throttle(100.0)
+                .on_scroll(|e: &ScrollEvent| store::set_timeline_scroll(e.offset.y.0, e.content_size.height.0, e.size.height.0))
                 .content_padding_top(sp(S4))
                 // The phone's composer floats over the end; the desktop's
                 // sits below the list.
@@ -90,6 +94,7 @@ pub(crate) fn timeline() -> impl IntoElement {
                     view().absolute().top(sp(S2)).left(px(0.0)).right(px(0.0)).items_center().child(eclipse(24.0))
                 }))
                 .when(!MOBILE, |v| v.child(turn_rail()))
+                .child(jump_buttons())
                 .into_element()
         }))
     }))
@@ -251,7 +256,9 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                     .into_element()
                 }
                 RowKind::Assistant => text_view()
-                    // While searching, the words found are marked in the
+                    // A link opens in the browser (or the app it belongs to).
+                    .links(nsh_base::TextViewLinks::Open)
+// While searching, the words found are marked in the
                     // text itself, not only the message they are in.
                     .markdown(move || {
                         let body = text_of();
@@ -580,6 +587,51 @@ fn user_actions(item: Memo<Option<Item>>) -> View {
 /// A run of tool calls as one row: what they did ("Ran 3 commands,
 /// edited 2 files"), failures and progress, and a chevron. Pressed, its
 /// calls show under it, or fold away again.
+/// To the start and to the end of the conversation: small glass discs
+/// centred over the list, each there only while the list is more than a
+/// screen from that end, fading in and out. The end's sits just above the
+/// composer (on the phone, above its floating card).
+fn jump_buttons() -> impl IntoElement {
+    let ends = computed(store::timeline_ends);
+    let disc = |glyph: Icon, label: &'static str, go: fn(), shown: Memo<bool>| {
+        nsh_base::button()
+            .on_press(go)
+            .accessibility_label(label)
+            .w(px(30.0))
+            .h(px(30.0))
+            .rounded(px(R_FULL))
+            .items_center()
+            .justify_center()
+            .bg(glass_fill_strong())
+            .backdrop_blur(px(GLASS_BLUR))
+            .backdrop_saturate(1.7)
+            .border_1()
+            .border_color(glass_edge())
+            .shadow_md()
+            .group()
+            .active(|s| s.opacity(0.75))
+            .opacity(move || if shown.get() { 1.0_f32 } else { 0.0 })
+            .transition_opacity()
+            .pointer_events(move || if shown.get() { PointerEvents::Auto } else { PointerEvents::None })
+            .child(icon(glyph, 15.0).text_color(FG_MUTED).group_hover(|s| s.text_color(FG)))
+    };
+    let to_start = computed(move || ends.with(|e| e.away_from_start));
+    let to_end = computed(move || ends.with(|e| e.away_from_end));
+    let row = || view().absolute().left(px(0.0)).right(px(0.0)).items_center();
+    view()
+        .absolute()
+        .top(px(0.0))
+        .bottom(px(0.0))
+        .left(px(0.0))
+        .right(px(0.0))
+        .pointer_events(PointerEvents::BoxNone)
+        .child(row().top(sp(S3)).child(disc(Icon::ArrowUp, t("Go to the start"), store::jump_timeline_start, to_start)))
+        .child(row().bottom(px(if MOBILE { 196.0 } else { S3 })).child(disc(Icon::ArrowDown, t("Go to the end"), store::jump_timeline_end, to_end)))
+}
+
+/// Within this of its end, the conversation's list keeps its end in place.
+pub(crate) const FOLLOW_END: f32 = 40.0;
+
 fn group_row(group: Memo<Option<Group>>) -> impl IntoElement {
     let summary = computed(move || group.get().map(|g| store::group_summary(g.start, g.end)).unwrap_or_default());
     let open = computed(move || group.with(|g| g.as_ref().is_some_and(|g| g.open)));
@@ -860,7 +912,9 @@ fn plan_card(p: Permission, plan: String) -> View {
         .child(
             scroll().max_h(px(320.0)).child(
                 text_view()
-                    .markdown(move || Some(SharedString::from(plan.clone())))
+                    // A link opens in the browser (or the app it belongs to).
+                    .links(nsh_base::TextViewLinks::Open)
+.markdown(move || Some(SharedString::from(plan.clone())))
                     .selectable(true)
                     .gap_2()
                     .text_size(tx(TEXT_BASE))
@@ -1141,7 +1195,9 @@ fn static_row(item: Item) -> AnyElement {
                 .into_element()
         }
         Item::Assistant { text: t } => text_view()
-            .markdown(move || Some(SharedString::from(t.clone())))
+            // A link opens in the browser (or the app it belongs to).
+            .links(nsh_base::TextViewLinks::Open)
+.markdown(move || Some(SharedString::from(t.clone())))
             .selectable(true)
             .gap_3()
             .text_size(tx(TEXT_CONTENT))
