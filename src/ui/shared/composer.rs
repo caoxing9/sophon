@@ -855,7 +855,7 @@ thread_local! {
 }
 
 /// The phone's push to talk, over its empty composer while the keyboard
-/// is down: held, dictation listens (a moment in, so a tap stays a tap)
+/// is down, unmarked: held, dictation listens (a moment in, so a tap stays a tap)
 /// and stops when it is let go; a tap brings the keyboard, as a tap on the
 /// text does. With text in it, or the keyboard up, the text is the
 /// editor's to touch (and the keyboard has its own microphone).
@@ -884,10 +884,6 @@ fn hold_to_talk(doc: Doc, empty: Memo<bool>) -> impl IntoElement {
             .bottom(px(0.0))
             .left(px(0.0))
             .right(px(0.0))
-            .flex_row()
-            .items_center()
-            .justify_end()
-            .px(sp(S2))
             .claim_touches(TouchClaim::on_start().ask(|r: &ClaimRequest| r.claim()))
             .keep_touches(true)
             .on_responder_grant(move |_: &ResponderEvent| {
@@ -902,18 +898,6 @@ fn hold_to_talk(doc: Doc, empty: Memo<bool>) -> impl IntoElement {
             })
             .on_responder_release(move |_: &ResponderEvent| release(true))
             .on_responder_terminate(move |_: &ResponderEvent| release(false))
-            .child(
-                view()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(6.0))
-                    .px(sp(S3))
-                    .h(px(28.0))
-                    .rounded(px(R_FULL))
-                    .opacity(move || if listening.get() { 0.0_f32 } else { 1.0 })
-                    .child(icon(Icon::Mic, 14.0).text_color(FG_FAINT))
-                    .child(text(t("Hold to talk")).text_size(tx(TEXT_SM)).text_color(FG_FAINT)),
-            )
     })
 }
 

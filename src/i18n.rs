@@ -603,7 +603,6 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Restarting the service…", "正在重启服务…"),
     ("Listening…", "正在听…"),
     ("Let go to stop", "松开结束"),
-    ("Hold to talk", "按住说话"),
     ("Press keys…", "请按快捷键…"),
     ("None", "无"),
     ("Back to Fn", "恢复为 Fn"),
