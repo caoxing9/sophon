@@ -589,6 +589,7 @@ mod tests {
                 text: "Look at @src/main.rs and \nthen\nthis".into(),
                 attachments: vec!["img-1".into(), "file-2".into()],
                 message: "Look at @src/main.rs and [shot.png]\nthen\n[a.pdf]this".into(),
+                conversations: vec![],
             }
         );
     }
