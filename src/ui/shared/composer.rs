@@ -146,8 +146,11 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                     .px(sp(S3))
                     .pt(sp(S3))
                     .pb(sp(S2))
-                    .gap(sp(S2))
-                    .child(editor(doc, text_value, placeholder, TEXT_LG, 160.0, changed).px(sp(S1)))
+                    .gap(sp(S3))
+                    // The text takes the card's upper part whole, a line
+                    // and a half at least: a tap a little under the line
+                    // lands in it, not on the bar.
+                    .child(editor(doc, text_value, placeholder, TEXT_LG, 160.0, changed).px(sp(S1)).min_h(px(34.0)))
                     .child(
                         view()
                             .flex_row()
@@ -183,7 +186,11 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                                 nsh_base::button()
                                     .on_press(move || options_sheet(live))
                                     .accessibility_label(t("Agent settings"))
-                                    .flex_1()
+                                    // As wide as what it says, no wider: the
+                                    // bar's width under the text was the
+                                    // chip's, and a tap meant for the text
+                                    // opened the agent's settings.
+                                    .flex_shrink(1.0)
                                     .min_w(px(0.0))
                                     .h(px(36.0))
                                     .flex_row()
@@ -200,6 +207,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                                             .flex_shrink(1.0),
                                     ),
                             )
+                            .child(view().flex_1())
                             .child(disc(running, busy, empty, submit)),
                     ),
             )
@@ -287,6 +295,10 @@ fn editor(
     styles.caret = Some(PartStyle(StyleRefinement::default().bg(ACCENT).into()));
     styles.selection = Some(PartStyle(StyleRefinement::default().bg(tint(ACCENT, 0.3)).into()));
     styles.placeholder = Some(PartStyle(StyleRefinement::default().text_color(FG_FAINT).into()));
+    // What an input method is composing (pinyin before it becomes
+    // characters): a light accent wash behind it, as the system's own
+    // fields mark it, not the editor's underline under each piece.
+    styles.composition = Some(PartStyle(StyleRefinement::default().no_underline().bg(tint(ACCENT, 0.14)).into()));
     let mut nodes = PartStyles::default();
     nodes.0.insert("paragraph".into(), typography(StyleRefinement::default()).into());
     // The editor wraps each chip in a box of its node's part: that box is
