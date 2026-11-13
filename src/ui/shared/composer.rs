@@ -111,8 +111,8 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                     && store::send_message(&out.message)
                 {
                     store::set_draft(&id, "");
-                    // A queued message leaves its attachments for the one
-                    // sent next; their chips stay.
+                    // Its attachments went with it (sent, or queued with
+                    // it): their chips go from the composer.
                     composer_doc::keep_only_chips(&session, &store::pending_attachment_ids());
                 }
             }

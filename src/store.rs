@@ -776,7 +776,17 @@ struct Timeline {
 }
 /// Messages waiting for the running turn to end, per agent.
 #[derive(Clone, Default)]
-struct Queues(HashMap<String, Vec<String>>);
+struct Queues(HashMap<String, Vec<Queued>>);
+
+/// A message waiting its turn, with the pictures and files it was written
+/// with (taken from the composer as it was queued, so they go with it and
+/// not with the message after).
+#[derive(Clone)]
+struct Queued {
+    text: String,
+    images: Vec<ImageInput>,
+    attachments: Vec<serde_json::Value>,
+}
 /// The agents whose queue waits: stopped with Escape, its messages stay
 /// until they are sent on or taken back to be edited.
 #[derive(Clone, Default)]
@@ -2998,7 +3008,7 @@ pub(crate) fn set_language(lang: crate::i18n::Lang) {
 }
 
 pub(crate) fn queue(agent_id: &str) -> Vec<String> {
-    global::<Queues>().with(|q| q.0.get(agent_id).cloned().unwrap_or_default())
+    global::<Queues>().with(|q| q.0.get(agent_id).map(|l| l.iter().map(|m| m.text.clone()).collect()).unwrap_or_default())
 }
 
 /// Whether `agent_id`'s queue waits (stopped with Escape).
@@ -3022,8 +3032,13 @@ pub(crate) fn escape_composer() {
         return;
     }
     // Attachments stand as chips in the composer's text, which this would
-    // replace: they are sent or removed first.
-    if queued.is_empty() || !pending_images().is_empty() || !pending_files().is_empty() {
+    // replace: they are sent or removed first. Queued messages that carry
+    // their own stay queued (their chips are gone from the composer).
+    if queued.is_empty()
+        || !pending_images().is_empty()
+        || !pending_files().is_empty()
+        || queued.iter().any(|m| !m.images.is_empty() || !m.attachments.is_empty())
+    {
         return;
     }
     global::<Queues>().update(|q| {
@@ -3032,7 +3047,7 @@ pub(crate) fn escape_composer() {
     global::<QueueHeld>().update(|h| {
         h.0.remove(&agent.id);
     });
-    let mut text = queued.join("\n");
+    let mut text = queued.iter().map(|m| m.text.as_str()).collect::<Vec<_>>().join("\n");
     let draft = draft(&agent.id);
     if !draft.trim().is_empty() {
         text.push('\n');
@@ -3052,9 +3067,9 @@ pub(crate) fn steer_queued(agent_id: &str, index: usize) {
             text = Some(list.remove(index));
         }
     });
-    let Some(text) = text else { return };
+    let Some(m) = text else { return };
     let running = agent(agent_id).is_some_and(|a| a.is_running());
-    deliver(agent_id, &text, running.then_some("steer"));
+    deliver_with(agent_id, &m.text, running.then_some("steer"), m.images, m.attachments);
 }
 
 pub(crate) fn unqueue(agent_id: &str, index: usize) {
@@ -4269,7 +4284,8 @@ pub(crate) fn send_message(text: &str) -> bool {
     let behavior = settings().send_behavior;
     // A pending permission must be answered first; queueing would wait forever.
     if agent.is_running() && behavior == SendBehavior::Queue && agent.pending.is_empty() {
-        global::<Queues>().update(|q| q.0.entry(agent.id.clone()).or_default().push(text.to_owned()));
+        let queued = Queued { text: text.to_owned(), images: take_images(), attachments: take_files() };
+        global::<Queues>().update(|q| q.0.entry(agent.id.clone()).or_default().push(queued));
         return true;
     }
     deliver(&agent.id, text, agent.is_running().then_some(match behavior {
@@ -4283,6 +4299,11 @@ fn deliver(agent_id: &str, text: &str, behavior: Option<&'static str>) {
     let mine = image_key() == agent_id;
     let images = if mine { take_images() } else { vec![] };
     let attachments = if mine { take_files() } else { vec![] };
+    deliver_with(agent_id, text, behavior, images, attachments);
+}
+
+/// [`deliver`] with the pictures and files given (a queued message's own).
+fn deliver_with(agent_id: &str, text: &str, behavior: Option<&'static str>, images: Vec<ImageInput>, attachments: Vec<serde_json::Value>) {
     let mut shown = text.to_owned();
     // A file the text does not name where its chip stood (a message
     // queued before, a draft kept as text) is named after it.
@@ -4577,13 +4598,13 @@ fn flush_queue(agent: &Agent) {
         return;
     }
     let next = global::<Queues>().with_untracked(|q| q.0.get(&agent.id).and_then(|l| l.first().cloned()));
-    if let Some(text) = next {
+    if let Some(m) = next {
         global::<Queues>().update(|q| {
             if let Some(list) = q.0.get_mut(&agent.id) {
                 list.remove(0);
             }
         });
-        deliver(&agent.id, &text, None);
+        deliver_with(&agent.id, &m.text, None, m.images, m.attachments);
     }
 }
 

@@ -272,20 +272,55 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                     .line_height(px(24.0))
                     .text_color(FG)
                     .into_element(),
-                RowKind::Reasoning => view()
-                    .flex_row()
-                    .gap(sp(S2))
-                    .child(icon(Icon::Brain, 15.0).text_color(FG_FAINT).mt(px(2.0)))
-                    .child(
-                        text(move || text_of().trim().to_owned())
-                            .text_size(px(13.0))
-                            .line_height(px(19.0))
-                            .italic()
-                            .number_of_lines(3)
-                            .text_color(FG_MUTED)
-                            .flex_1(),
-                    )
-                    .into_element(),
+                // The agent's thinking, folded to one line ("Thinking"):
+                // a press shows it whole, another folds it again.
+                RowKind::Reasoning => {
+                    let key = move || text_of().chars().take(80).collect::<String>();
+                    let open = computed(move || global::<OpenThoughts>().with(|o| o.0.contains(&key())));
+                    view()
+                        .child(
+                            nsh_base::button()
+                                .on_press(move || {
+                                    let k = key();
+                                    global::<OpenThoughts>().update(|o| {
+                                        if !o.0.remove(&k) {
+                                            o.0.insert(k);
+                                        }
+                                    });
+                                })
+                                .accessibility_label(t("Thinking"))
+                                .flex_row()
+                                .items_center()
+                                .gap(sp(S2))
+                                .h(px(24.0))
+                                .self_start()
+                                .group()
+                                .child(icon(Icon::Brain, 15.0).text_color(FG_FAINT))
+                                .child(
+                                    text(move || if streaming.get() { t("Thinking…") } else { t("Thinking") }.to_owned())
+                                        .text_size(px(13.0))
+                                        .text_color(FG_FAINT)
+                                        .group_hover(|s| s.text_color(FG_MUTED)),
+                                )
+                                .child(
+                                    icon(Icon::ChevronRight, 12.0)
+                                        .text_color(FG_FAINT)
+                                        .rotate(move || Radians(if open.get() { std::f32::consts::FRAC_PI_2 } else { 0.0 }))
+                                        .transition_transform(),
+                                ),
+                        )
+                        .child(when(open, move || {
+                            text(move || text_of().trim().to_owned())
+                                .text_size(px(13.0))
+                                .line_height(px(19.0))
+                                .italic()
+                                .text_color(FG_MUTED)
+                                .selectable(true)
+                                .pl(px(15.0 + S2))
+                                .pt(px(2.0))
+                        }))
+                        .into_element()
+                }
                 // A call under an open group sits indented under its
                 // summary, past the summary's chevron.
                 RowKind::Tool => view().pl(move || px(if grouped.get() { S4 } else { 0.0 })).child(tool_row(item)).into_element(),
@@ -695,6 +730,11 @@ fn group_row(group: Memo<Option<Group>>) -> impl IntoElement {
             }))
         }))
 }
+
+/// Thoughts shown whole, by how they begin: the list recycles its rows,
+/// and an index moves as earlier pages load.
+#[derive(Clone, Default)]
+struct OpenThoughts(std::collections::HashSet<String>);
 
 /// Tool calls open under their rows, by call id: the list recycles its
 /// rows, so what is open is kept here rather than in a row.
