@@ -165,7 +165,7 @@ pub(crate) fn outgoing(doc: &Node) -> Outgoing {
                     // words added after it (`store::conversation_context`).
                     match path.strip_prefix(CONVERSATION) {
                         Some(id) => {
-                            out.message.push_str(&format!("《{}》", crate::store::agent(id).map(|a| a.title).unwrap_or_default()));
+                            out.message.push_str(&format!("《{}》", crate::store::agent(id).map(|a| crate::store::conversation_name(&a)).unwrap_or_default()));
                             if !out.conversations.iter().any(|c| c == id) {
                                 out.conversations.push(id.to_owned());
                             }

@@ -481,7 +481,8 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
             composer_doc::set_menu(None);
             return None;
         };
-        let rows: Vec<(Icon, String, String, String, bool)> = match &trigger {
+        // (icon, label, detail, what goes in, a folder, the label in code type)
+        let rows: Vec<(Icon, String, String, String, bool, bool)> = match &trigger {
             Trigger::Slash(prefix) => {
                 let agent = store::selected_id()?;
                 store::commands(&agent)
@@ -490,7 +491,7 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
                     .take(8)
                     .map(|c| {
                         let insert = format!("/{} ", c.name);
-                        (if c.skill { Icon::Sparkles } else { Icon::Slash }, format!("/{}", c.name), c.description, insert, false)
+                        (if c.skill { Icon::Sparkles } else { Icon::Slash }, format!("/{}", c.name), c.description, insert, false, true)
                     })
                     .collect()
             }
@@ -499,19 +500,34 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
                     Target::Agent => store::current_workspace().map(|w| w.directory),
                     Target::Form => Some(store::form().path),
                 }?;
-                // Other conversations first, by their titles, then files.
+                // Other conversations first, named as the sidebar names
+                // them, with their project and when they last moved, the
+                // latest first; then files.
                 let q = query.to_lowercase();
                 let here = store::selected_id();
-                let mut rows: Vec<(Icon, String, String, String, bool)> = store::agents()
+                let mut found: Vec<(crate::daemon::Agent, String)> = store::agents()
                     .into_iter()
-                    .filter(|a| Some(&a.id) != here.as_ref() && !a.archived && a.parent_id.is_none())
-                    .filter(|a| q.is_empty() || a.title.to_lowercase().contains(&q))
-                    .take(if q.is_empty() { 3 } else { 4 })
-                    .map(|a| (Icon::Bot, a.title.clone(), t("Conversation").to_owned(), format!("{}{}", composer_doc::CONVERSATION, a.id), false))
+                    .filter(|a| Some(&a.id) != here.as_ref() && !a.archived && a.parent_id.is_none() && !store::is_hidden_run(a))
+                    .map(|a| {
+                        let name = store::conversation_name(&a);
+                        (a, name)
+                    })
+                    .filter(|(a, name)| q.is_empty() || name.to_lowercase().contains(&q) || a.title.to_lowercase().contains(&q))
                     .collect();
-                rows.extend(store::suggestions(&cwd, query).into_iter().take(8 - rows.len()).map(|(path, dir)| {
+                found.sort_by(|x, y| y.0.updated_at.cmp(&x.0.updated_at));
+                let mut rows: Vec<(Icon, String, String, String, bool, bool)> = found
+                    .into_iter()
+                    .take(if q.is_empty() { 4 } else { 5 })
+                    .map(|(a, name)| {
+                        let place = store::project_name_of(&a).unwrap_or_else(|| crate::daemon::model::folder_name(&a.cwd));
+                        let when = crate::ui::mobile::time::ago(&a.updated_at);
+                        let detail = if when.is_empty() { place } else { format!("{place} · {when}") };
+                        (Icon::Bot, name, detail, format!("{}{}", composer_doc::CONVERSATION, a.id), false, false)
+                    })
+                    .collect();
+                rows.extend(store::suggestions(&cwd, query).into_iter().take(9usize.saturating_sub(rows.len())).map(|(path, dir)| {
                     let rel = path.strip_prefix(&cwd).map(|p| p.trim_start_matches('/').to_owned()).unwrap_or(path);
-                    (if dir { Icon::Folder } else { Icon::FileText }, rel.clone(), String::new(), rel, dir)
+                    (if dir { Icon::Folder } else { Icon::FileText }, rel.clone(), String::new(), rel, dir, true)
                 }));
                 rows
             }
@@ -524,7 +540,7 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
         let choose = {
             let rows = rows.clone();
             std::rc::Rc::new(move |i: usize| {
-                let Some((_, _, _, insert, dir)) = rows.get(i).cloned() else { return };
+                let Some((_, _, _, insert, dir, _)) = rows.get(i).cloned() else { return };
                 // Where the caret is now: the list may be a keystroke
                 // behind it.
                 let Some(session) = doc.session() else { return };
@@ -545,7 +561,7 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
         Some(untracked(move || {
             let selected = computed(|| global::<composer_doc::MenuSelected>().with(|s| s.0));
             let mut list = card().mb(sp(S2)).p(sp(S1)).bg(POPOVER).shadow_md();
-            for (i, (glyph, label, detail, _, _)) in rows.clone().into_iter().enumerate() {
+            for (i, (glyph, label, detail, _, _, code)) in rows.clone().into_iter().enumerate() {
                 let choose = choose.clone();
                 list = list.child(
                     button()
@@ -559,8 +575,14 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
                         .rounded(px(R_LG))
                         .hover(|s| s.bg(highlight()))
                         .child(icon(glyph, 15.0).text_color(FG_MUTED))
-                        .child(text(label).text_size(tx(TEXT_BASE)).font_family(mono_font).text_color(FG).flex_shrink_0())
-                        .child(text(detail).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1).flex_1()),
+                        .child(if code {
+                            text(label).text_size(tx(TEXT_BASE)).font_family(mono_font).text_color(FG).flex_shrink_0()
+                        } else {
+                            // A conversation's name in the text's own type, as
+                            // the sidebar shows it, cut to leave its detail.
+                            text(label).text_size(tx(TEXT_BASE)).text_color(FG).number_of_lines(1).flex_shrink(1.0)
+                        })
+                        .child(text(detail).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1).flex_shrink_0().when(!code, |t| t.ml(sp(S2))).when(code, |t| t.flex_1())),
                 );
             }
             list

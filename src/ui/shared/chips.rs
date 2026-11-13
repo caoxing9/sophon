@@ -131,7 +131,9 @@ impl NodeView for MentionView {
         let path = attr(node, "path").to_owned();
         let dir = node.attrs().get("dir").and_then(Value::as_bool).unwrap_or(false);
         // Another conversation: its title.
-        let conversation = path.strip_prefix(composer_doc::CONVERSATION).map(|id| store::agent(id).map(|a| a.title).unwrap_or_else(|| t("Conversation").to_owned()));
+        let conversation = path
+            .strip_prefix(composer_doc::CONVERSATION)
+            .map(|id| store::agent(id).map(|a| store::conversation_name(&a)).unwrap_or_else(|| t("Conversation").to_owned()));
         // The path's last part: enough to tell files apart in a line.
         let tail = path.trim_end_matches('/').rsplit('/').next().unwrap_or(&path).to_owned();
         let tail = if dir { format!("{tail}/") } else { tail };

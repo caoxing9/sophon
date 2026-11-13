@@ -4243,6 +4243,21 @@ pub(crate) fn set_control(live: bool, change: Control) {
 /// messages as this device keeps them (the user's and the agent's, not
 /// its calls), and where its whole record is on the computer it ran on,
 /// for the agent to read more.
+/// What the sidebar calls conversation `a`: its workspace's name when it is
+/// the workspace's only conversation (the sidebar shows the workspace),
+/// its own title when there are several.
+pub(crate) fn conversation_name(a: &Agent) -> String {
+    let Some(ws) = a.workspace_id.as_deref().and_then(workspace) else { return a.title.clone() };
+    let siblings = workspace_agents(&ws.id).iter().filter(|x| !x.archived && x.parent_id.is_none() && !is_hidden_run(x)).count();
+    if siblings <= 1 && !ws.name.trim().is_empty() { ws.name } else { a.title.clone() }
+}
+
+/// The name of the project conversation `a` is in.
+pub(crate) fn project_name_of(a: &Agent) -> Option<String> {
+    let ws = a.workspace_id.as_deref().and_then(workspace)?;
+    projects().into_iter().find(|p| p.id == ws.project_id).map(|p| p.name)
+}
+
 pub(crate) fn conversation_context(agent_id: &str) -> Option<String> {
     let a = agent(agent_id)?;
     const MESSAGES: usize = 12;
@@ -4273,7 +4288,7 @@ pub(crate) fn conversation_context(agent_id: &str) -> Option<String> {
         "codex" => format!("the file under ~/.codex/sessions whose name ends in {sid}.jsonl (Codex's record)"),
         _ => format!("session {sid} of {}", a.provider),
     });
-    let mut out = format!("--- The conversation \"{}\" ({} in {}), which this message refers to:\n", a.title, a.provider, a.cwd);
+    let mut out = format!("--- The conversation \"{}\" ({} in {}), which this message refers to:\n", conversation_name(&a), a.provider, a.cwd);
     if lines.is_empty() {
         out.push_str("(None of its messages are at hand here.)\n");
     } else {

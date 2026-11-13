@@ -16,7 +16,7 @@ mod chat;
 mod connect;
 mod home;
 mod settings;
-mod time;
+pub(crate) mod time;
 
 use nsh_base::{nav_page, nav_stack};
 use nsh_core::prelude::*;
