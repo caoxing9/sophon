@@ -74,7 +74,11 @@ pub(crate) fn timeline() -> impl IntoElement {
                 .keys(move || rows.with(|r| store::row_keys(r)))
                 .estimated_item_size(px(80.0))
                 .initial_scroll_index(count.saturating_sub(1))
-                .follow_end(px(40.0))
+                .follow_end(px(FOLLOW_END))
+                // How far from its end the list is, for what depends on
+                // its keeping the end in place (`store::set_group_open`).
+                .event_throttle(100.0)
+                .on_scroll(|e: &ScrollEvent| store::set_timeline_from_end((e.content_size.height - e.offset.y - e.size.height).0))
                 .content_padding_top(sp(S4))
                 // The phone's composer floats over the end; the desktop's
                 // sits below the list.
@@ -580,6 +584,9 @@ fn user_actions(item: Memo<Option<Item>>) -> View {
 /// A run of tool calls as one row: what they did ("Ran 3 commands,
 /// edited 2 files"), failures and progress, and a chevron. Pressed, its
 /// calls show under it, or fold away again.
+/// Within this of its end, the conversation's list keeps its end in place.
+pub(crate) const FOLLOW_END: f32 = 40.0;
+
 fn group_row(group: Memo<Option<Group>>) -> impl IntoElement {
     let summary = computed(move || group.get().map(|g| store::group_summary(g.start, g.end)).unwrap_or_default());
     let open = computed(move || group.with(|g| g.as_ref().is_some_and(|g| g.open)));
