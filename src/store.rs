@@ -3505,6 +3505,13 @@ pub(crate) fn recover_workspace(id: &str) {
 #[derive(Clone, Copy, Default)]
 struct Restarting(bool);
 
+/// Has the service read `agent_id`'s record again: what was written to it
+/// outside Sophon shows (`follow`).
+#[cfg_attr(any(target_os = "ios", target_os = "android", target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn reload_agent(agent_id: &str) {
+    send(Command::Reload(agent_id.to_owned()));
+}
+
 pub(crate) fn restart_daemon() {
     global::<Restarting>().set(Restarting(true));
     send(Command::RestartDaemon);
