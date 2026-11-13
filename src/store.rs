@@ -2530,6 +2530,7 @@ pub(crate) fn picture_zoom() -> PictureZoom {
     global::<PictureZoom>().get()
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn zoom_picture(factor: f32) {
     global::<PictureZoom>().update(|z| *z = PictureZoom(z.0 + 1, factor));
 }
