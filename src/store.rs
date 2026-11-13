@@ -4237,19 +4237,63 @@ pub(crate) fn set_control(live: bool, change: Control) {
     }
 }
 
-/// Starts the form's agent: in the open workspace (draft tab), or in a new
-/// workspace (new-workspace screen).
-/// Another conversation's words, for a message that mentions it: its last
-/// messages as this device keeps them (the user's and the agent's, not
-/// its calls), and where its whole record is on the computer it ran on,
-/// for the agent to read more.
+/// The last message the user sent each conversation, as far as this
+/// device knows: what it sent itself, else its copy of the conversation
+/// (`None`: looked, none). With when the user last sent one, to look
+/// again once that moves.
+thread_local! {
+    static LAST_SAID: RefCell<HashMap<String, (String, Option<String>)>> = RefCell::new(HashMap::new());
+}
+
+/// Bumped when this device sends a message: the lists' names read it.
+#[derive(Clone, Copy, Default, PartialEq)]
+struct LastSaidRev(u64);
+
+/// A message as a name: its first line, without what came with it (another
+/// conversation's words) and without runs of spaces.
+fn as_name(text: &str) -> Option<String> {
+    let text = text.split(crate::ui::shared::timeline::CONTEXT_MARK).next().unwrap_or("");
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let line: String = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    Some(line.chars().take(120).collect())
+}
+
+/// The conversation's last message from the user, as a name.
+fn last_said(a: &Agent) -> Option<String> {
+    let known = LAST_SAID.with_borrow(|l| l.get(&a.id).filter(|(at, _)| *at == a.last_user_message_at).map(|(_, said)| said.clone()));
+    if let Some(said) = known {
+        return said;
+    }
+    let said = crate::daemon::connection::cached_timeline(&a.id).and_then(|(items, ..)| {
+        items.iter().rev().find_map(|i| match i {
+            Item::User { text, .. } => as_name(text),
+            _ => None,
+        })
+    });
+    LAST_SAID.with_borrow_mut(|l| {
+        l.insert(a.id.clone(), (a.last_user_message_at.clone(), said.clone()));
+    });
+    said
+}
+
+/// A conversation's name in its lists: the name someone gave it, else the
+/// last thing the user said to it, else the title it was given.
+pub(crate) fn conversation_title(a: &Agent) -> String {
+    if a.named {
+        return a.title.clone();
+    }
+    // Read again when this device sends one.
+    global::<LastSaidRev>().with(|_| ());
+    last_said(a).unwrap_or_else(|| a.title.clone())
+}
+
 /// What the sidebar calls conversation `a`: its workspace's name when it is
 /// the workspace's only conversation (the sidebar shows the workspace),
 /// its own title when there are several.
 pub(crate) fn conversation_name(a: &Agent) -> String {
     let Some(ws) = a.workspace_id.as_deref().and_then(workspace) else { return a.title.clone() };
     let siblings = workspace_agents(&ws.id).iter().filter(|x| !x.archived && x.parent_id.is_none() && !is_hidden_run(x)).count();
-    if siblings <= 1 && !ws.name.trim().is_empty() { ws.name } else { a.title.clone() }
+    if siblings <= 1 && !ws.name.trim().is_empty() { ws.name } else { conversation_title(a) }
 }
 
 /// The name of the project conversation `a` is in.
@@ -4258,6 +4302,10 @@ pub(crate) fn project_name_of(a: &Agent) -> Option<String> {
     projects().into_iter().find(|p| p.id == ws.project_id).map(|p| p.name)
 }
 
+/// Another conversation's words, for a message that mentions it: its last
+/// messages as this device keeps them (the user's and the agent's, not
+/// its calls), and where its whole record is on the computer it ran on,
+/// for the agent to read more.
 pub(crate) fn conversation_context(agent_id: &str) -> Option<String> {
     let a = agent(agent_id)?;
     const MESSAGES: usize = 12;
@@ -4302,6 +4350,8 @@ pub(crate) fn conversation_context(agent_id: &str) -> Option<String> {
     Some(out)
 }
 
+/// Starts the form's agent: in the open workspace (draft tab), or in a new
+/// workspace (new-workspace screen).
 pub(crate) fn submit_form() {
     let f = form();
     if f.busy || f.path.trim().is_empty() || f.provider.is_empty() {
@@ -4392,6 +4442,14 @@ fn deliver(agent_id: &str, text: &str, behavior: Option<&'static str>) {
 
 /// [`deliver`] with the pictures and files given (a queued message's own).
 fn deliver_with(agent_id: &str, text: &str, behavior: Option<&'static str>, images: Vec<ImageInput>, attachments: Vec<serde_json::Value>) {
+    // The conversation's name in its lists, until the host says when.
+    if let Some(name) = as_name(text) {
+        let at = agent(agent_id).map(|a| a.last_user_message_at).unwrap_or_default();
+        LAST_SAID.with_borrow_mut(|l| {
+            l.insert(agent_id.to_owned(), (at, Some(name)));
+        });
+        global::<LastSaidRev>().update(|r| r.0 += 1);
+    }
     let mut shown = text.to_owned();
     // A file the text does not name where its chip stood (a message
     // queued before, a draft kept as text) is named after it.

@@ -435,7 +435,7 @@ fn chat_row(a: Agent, w: Option<Workspace>, divider: bool) -> AnyElement {
             view().h(px(18.0))
         });
     let (id, ws) = (a.id.clone(), w.as_ref().map(|w| w.id.clone()));
-    row_shell(glyph(Icon::Bot, status), a.title.clone(), line, trailing, divider, move || {
+    row_shell(glyph(Icon::Bot, status), store::conversation_title(&a), line, trailing, divider, move || {
         match &ws {
             Some(ws) => super::open_chat(ws, Some(Tab::Agent(id.clone()))),
             // Its workspace was archived under it: restored, then shown.

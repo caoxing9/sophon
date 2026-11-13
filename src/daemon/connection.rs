@@ -1956,7 +1956,9 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
         Command::Rename { agent_id, title } => vec![request(
             pending,
             Pending::Other("rename agent"),
-            json!({ "type": "update_agent_request", "agentId": agent_id, "name": title }),
+            // Marked as given, so it goes before the last message sent as
+            // the conversation's name.
+            json!({ "type": "update_agent_request", "agentId": agent_id, "name": title, "labels": { "sophon.named": "1" } }),
         )],
         Command::ArchiveWorkspace(workspace_id) => vec![request(
             pending,
