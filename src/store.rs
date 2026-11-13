@@ -3891,6 +3891,18 @@ pub(crate) fn open_tab(tab: Tab) {
     if let Tab::Agent(id) = &tab {
         global::<LastOpen>().update(|l| l.agent = Some(id.clone()));
         save_prefs();
+        // Looked at: its finished turn is seen. The workspace's own mark
+        // is cleared as it opens (`open_workspace`); the agent's was not,
+        // and its count stayed in the lists (the phone's above all).
+        if agent(id).is_some_and(|a| a.requires_attention && a.pending.is_empty()) {
+            global::<Agents>().update(|list| {
+                if let Some(a) = list.0.iter_mut().find(|a| &a.id == id) {
+                    a.requires_attention = false;
+                    a.attention_reason = None;
+                }
+            });
+            send(Command::ClearAgentAttention(id.clone()));
+        }
     }
     let agent_id = match &tab {
         Tab::Agent(id) => Some(id.clone()),

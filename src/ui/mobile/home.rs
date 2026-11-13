@@ -419,7 +419,8 @@ fn chat_row(a: Agent, w: Option<Workspace>, divider: bool) -> AnyElement {
     let trailing = view()
         .items_end()
         .gap(px(4.0))
-        .child(text(time::ago(&a.updated_at)).text_size(tx(TEXT_XS)).text_color(FG_FAINT))
+        // At work now: "now", not when its turn began.
+        .child(text(if a.is_running() { crate::i18n::t("now").to_owned() } else { time::ago(&a.updated_at) }).text_size(tx(TEXT_XS)).text_color(FG_FAINT))
         .child(if needs_you {
             view()
                 .min_w(px(18.0))

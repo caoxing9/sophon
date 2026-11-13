@@ -64,6 +64,9 @@ pub enum Command {
     PinWorkspace { workspace_id: String, pinned: bool },
     RenameWorkspace { workspace_id: String, title: String },
     ClearAttention(String),
+    /// An agent's own "needs you" (a finished turn not seen), cleared
+    /// as its conversation is looked at.
+    ClearAgentAttention(String),
     ListCommands(String),
     /// Files and folders matching `query` under `cwd` (@ mentions).
     Suggest { cwd: String, query: String },
@@ -1487,6 +1490,11 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
             }
             vec![request(pending, Pending::Other("send message"), msg)]
         }
+        Command::ClearAgentAttention(agent_id) => vec![request(
+            pending,
+            Pending::Optional,
+            json!({ "type": "clear_agent_attention", "agentId": agent_id }),
+        )],
         Command::ClearAttention(workspace_id) => vec![request(
             pending,
             Pending::Other("clear attention"),
