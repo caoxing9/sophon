@@ -14,6 +14,7 @@ mod awake;
 mod bundled_cli;
 mod cadence;
 pub mod daemon;
+mod elsewhere;
 mod fold;
 mod i18n;
 mod lan;
@@ -101,6 +102,7 @@ pub fn App() -> impl IntoElement {
         store::start_bridge();
         store::start_spaces();
         store::watch_keep_awake();
+        elsewhere::start();
         #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
         store::watch_limits_for_push();
         update::start();
