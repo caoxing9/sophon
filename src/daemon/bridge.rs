@@ -79,7 +79,8 @@ pub enum BridgeEvent {
     Connected { conn: u64, device: String },
     Disconnected { conn: u64 },
     /// A paired device pressed an action of a push notification
-    /// (`docs/push.md`), checked already.
+    /// (`docs/push.md`), checked already. `Forget` was done already: the
+    /// list of devices changed.
     Act(super::push::Act),
 }
 
@@ -280,6 +281,27 @@ pub fn revoke(device_id: &str) {
     })
     .unwrap_or_default();
     cut.iter().for_each(|n| n.notify_one());
+    forget_pushes_of_revoked();
+}
+
+/// The push notifications of devices whose pairing is no longer good stop
+/// at once, not at the next device's registration.
+fn forget_pushes_of_revoked() {
+    let good = good_tokens();
+    super::push_gateway::update_record(|r| r.keep_only(&good));
+}
+
+/// A device forgot this computer (its "Forget this computer"): its push
+/// notifications stop, and the pairing it had of its own is revoked. A
+/// token shared by every device (the QR's, a space's) stays good.
+fn forgotten_by(token: &str, device: &str) {
+    if super::push_gateway::update_record(|r| r.forget(device, token)) {
+        log::info!("a paired device forgot this computer: no more push notifications to it");
+    }
+    let own = with(|s| s.devices.iter().find(|d| d.token == token).map(|d| d.id.clone())).flatten();
+    if let Some(id) = own {
+        revoke(&id);
+    }
 }
 
 /// Forgets every device and changes the QR's token: everything paired
@@ -294,6 +316,7 @@ pub fn revoke_all() -> Option<BridgeInfo> {
     })
     .unwrap_or_default();
     cut.iter().for_each(|n| n.notify_one());
+    forget_pushes_of_revoked();
     info()
 }
 
@@ -375,7 +398,13 @@ pub fn start() -> Option<(BridgeInfo, mpsc::UnboundedReceiver<BridgeEvent>)> {
                 let Ok(listener) = TcpListener::from_std(std_listener) else { return };
                 log::info!("LAN bridge listening on port {port}");
                 tokio::spawn(relay_loop());
-                tokio::spawn(super::push_gateway::computer_loop(|| with(|s| s.private), good_tokens, |act| emit(BridgeEvent::Act(act))));
+                tokio::spawn(super::push_gateway::computer_loop(|| with(|s| s.private), good_tokens, |token, act| match act {
+                    super::push::Act::Forget { device } => {
+                        forgotten_by(token, &device);
+                        emit(BridgeEvent::Act(super::push::Act::Forget { device }));
+                    }
+                    act => emit(BridgeEvent::Act(act)),
+                }));
                 loop {
                     let Ok((stream, peer)) = listener.accept().await else { continue };
                     tokio::spawn(async move {
