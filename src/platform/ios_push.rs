@@ -14,6 +14,9 @@
 //!   ([`crate::daemon::push_gateway::deliver`]) on a thread of their own,
 //!   from what [`remember_host`] kept: the app's root may not be there.
 //! - [`register`] asks Apple for the device's token: [`next_token`].
+//! - [`forget_host`]: the phone forgot a computer, which is told so through
+//!   its gateway until it heard it; its notifications are not shown here
+//!   meanwhile.
 
 use std::{
     ffi::c_void,
@@ -145,7 +148,12 @@ define_class!(
         fn will_present(&self, _center: &AnyObject, notification: &AnyObject, done: *mut c_void) {
             let (_, data) = describe(notification);
             let agent = data.get("agent").and_then(Value::as_str).unwrap_or_default();
-            let on_screen = !agent.is_empty() && ON_SCREEN.lock().ok().is_some_and(|on| on.as_deref() == Some(agent));
+            let host = data.get("host").and_then(Value::as_str).unwrap_or_default();
+            let forgotten = is_forgotten(host);
+            if forgotten {
+                tell_forgotten(host.to_owned());
+            }
+            let on_screen = forgotten || (!agent.is_empty() && ON_SCREEN.lock().ok().is_some_and(|on| on.as_deref() == Some(agent)));
             // SAFETY: a block `void (^)(UNNotificationPresentationOptions)`.
             unsafe {
                 let invoke: extern "C" fn(*mut c_void, usize) = std::mem::transmute((*(done as *const BlockHead)).invoke);
@@ -167,6 +175,12 @@ define_class!(
             // SAFETY: the completion handler, called once when the work ends.
             let done = unsafe { Completion::copy(done) };
             let field = |k: &str| data.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
+            // From a computer forgotten here: nothing to open or answer.
+            if is_forgotten(&field("host")) {
+                tell_forgotten(field("host"));
+                done.call();
+                return;
+            }
             let act = match action.as_str() {
                 ALLOW | DENY => Some(Act::Permission { agent: field("agent"), permission: field("permission"), allow: action == ALLOW }),
                 REPLY => Some(Act::Reply { agent: field("agent"), text }),
@@ -425,17 +439,104 @@ pub(crate) fn remember_host(id: &str, gateway: &str, tls: bool, key: &[u8; 32], 
     if id.is_empty() {
         return;
     }
+    // Paired again after it was forgotten: it is no longer.
+    edit_hosts(|all| all[id] = json!({ "gateway": gateway, "tls": tls, "key": B64.encode(key), "token": token }));
+}
+
+/// The computers kept, guarded: forgetting runs on threads of its own.
+static HOSTS: Mutex<()> = Mutex::new(());
+
+fn read_hosts() -> Value {
+    std::fs::read_to_string(hosts_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).filter(Value::is_object).unwrap_or_else(|| json!({}))
+}
+
+fn edit_hosts<T>(change: impl FnOnce(&mut Value) -> T) -> T {
+    let _held = HOSTS.lock();
+    let mut all = read_hosts();
+    let out = change(&mut all);
     let path = hosts_path();
-    let mut all: Value = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).filter(Value::is_object).unwrap_or_else(|| json!({}));
-    all[id] = json!({ "gateway": gateway, "tls": tls, "key": B64.encode(key), "token": token });
     let _ = path.parent().map(std::fs::create_dir_all);
     let _ = std::fs::write(&path, all.to_string());
+    out
+}
+
+/// The phone forgot the computer it paired with the bridge `key` and
+/// pairing `token`: it is told so through its gateway (`device`: the id
+/// this phone registered for push with), so that it sends no more
+/// notifications here. Until it heard it, it is kept as forgotten: told
+/// again at each launch and when one of its notifications arrives, which
+/// is not shown.
+pub(crate) fn forget_host(key: &[u8; 32], token: &str, device: &str) {
+    use base64::{Engine, engine::general_purpose::STANDARD as B64};
+    let key = B64.encode(key);
+    let ids: Vec<String> = edit_hosts(|all| {
+        let Some(all) = all.as_object_mut() else { return Vec::new() };
+        all.iter_mut()
+            .filter(|(_, h)| h.get("key").and_then(Value::as_str) == Some(key.as_str()) && h.get("token").and_then(Value::as_str) == Some(token))
+            .map(|(id, h)| {
+                h["forgotten"] = device.into();
+                id.clone()
+            })
+            .collect()
+    });
+    ids.into_iter().for_each(tell_forgotten);
+}
+
+/// Tells again each computer forgotten here that has not heard it yet.
+pub(crate) fn retry_forgotten() {
+    let all = read_hosts();
+    let ids = all.as_object().into_iter().flatten().filter(|(_, h)| h.get("forgotten").is_some()).map(|(id, _)| id.clone());
+    ids.for_each(tell_forgotten);
+}
+
+fn is_forgotten(host: &str) -> bool {
+    !host.is_empty() && read_hosts().get(host).is_some_and(|h| h.get("forgotten").is_some())
+}
+
+/// Computers being told now, so a burst of notifications tells once.
+static TELLING: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Tells the forgotten computer `host`, on a thread: once it heard it (or
+/// no longer knows this phone's pairing) it is forgotten here, too.
+fn tell_forgotten(host: String) {
+    let Ok(mut telling) = TELLING.lock() else { return };
+    if telling.contains(&host) {
+        return;
+    }
+    telling.push(host.clone());
+    drop(telling);
+    std::thread::spawn(move || {
+        let device = read_hosts().get(&host).and_then(|h| h.get("forgotten")).and_then(Value::as_str).map(str::to_owned);
+        if let Some(device) = device {
+            match send_act(&host, &Act::Forget { device }) {
+                Ok(()) => drop_forgotten(&host),
+                // Its pairing was revoked already: nothing more to say.
+                Err(e) if e == "not a paired device" => drop_forgotten(&host),
+                Err(e) => log::info!("a forgotten computer was not told yet: {e}"),
+            }
+        }
+        if let Ok(mut telling) = TELLING.lock() {
+            telling.retain(|h| *h != host);
+        }
+    });
+}
+
+/// `host`, forgotten and told, leaves the list; not when it was paired
+/// again meanwhile.
+fn drop_forgotten(host: &str) {
+    edit_hosts(|all| {
+        if all.get(host).is_some_and(|h| h.get("forgotten").is_some())
+            && let Some(all) = all.as_object_mut()
+        {
+            all.remove(host);
+        }
+    });
 }
 
 /// Delivers `act` to the computer `host` (blocking, at most 20 s).
 fn send_act(host: &str, act: &Act) -> Result<(), String> {
     use base64::{Engine, engine::general_purpose::STANDARD as B64};
-    let all: Value = std::fs::read_to_string(hosts_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).ok_or("no computer known")?;
+    let all = read_hosts();
     let h = all.get(host).ok_or("that computer is not known here")?;
     let s = |k: &str| h.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
     let key: [u8; 32] = B64.decode(s("key")).ok().and_then(|k| k.try_into().ok()).ok_or("no key")?;
