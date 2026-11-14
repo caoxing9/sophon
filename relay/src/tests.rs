@@ -21,9 +21,14 @@ pub fn temp_dir(name: &str) -> PathBuf {
 
 /// Starts the server on a free local port: its `host:port`.
 pub async fn start(gateway: push::Gateway) -> String {
+    start_with(gateway, feedback::Desk::new(None)).await
+}
+
+/// [`start`] with a feedback desk of the test's.
+pub async fn start_with(gateway: push::Gateway, desk: feedback::Desk) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap().to_string();
-    tokio::spawn(listen(listener, Shared::default(), Arc::new(gateway)));
+    tokio::spawn(listen(listener, Shared::default(), Arc::new(gateway), Arc::new(desk)));
     addr
 }
 

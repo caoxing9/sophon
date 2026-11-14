@@ -16,6 +16,12 @@
 # Without them the relay works as before and pushes are answered
 # NotConfigured. The service reads the .p8 as a systemd credential (see
 # sophon-relay.service); run by hand, set APNS_KEY_FILE to its path.
+# Issues reported from Sophon without a GitHub account (/feedback) are filed
+# with a token of the relay's: a fine-grained token with Issues: write on
+# caoxing9/sophon alone (best under a bot account), once:
+#   ssh root@1.2.3.4 'echo FEEDBACK_GITHUB_TOKEN=github_pat_... >> /etc/sophon-relay.env
+#     chmod 600 /etc/sophon-relay.env; systemctl restart sophon-relay'
+# Without it reports are answered NotConfigured and the app offers GitHub.
 # The gateway's own key is /var/lib/sophon-relay/push.key, made on the first
 # start: keep it when moving the server, computers refuse a gateway whose
 # key changed.

@@ -25,8 +25,13 @@
 //! `APNS_TOPIC` (default `dev.sophon.app`). Without them the relay works as
 //! before and the gateway answers every push `NotConfigured`.
 //!
+//! `/feedback` (`feedback.rs`) files an issue reported from Sophon by
+//! someone with no GitHub account, with the relay's own token
+//! (`FEEDBACK_GITHUB_TOKEN`); without one it answers `NotConfigured`.
+//!
 //! Usage: `sophon-relay [ADDR]` (default `0.0.0.0:8443`; `RELAY_ADDR` too).
 
+mod feedback;
 mod push;
 
 use std::{
@@ -117,15 +122,17 @@ struct Wanted {
     role: Role,
 }
 
-/// The two services of the port.
+/// The services of the port.
 enum Route {
     Relay(Wanted),
     Push(push::Wanted),
+    Feedback,
 }
 
 fn route(uri: &str) -> Result<Route, &'static str> {
     match uri.split_once('?').map_or(uri, |(path, _)| path) {
         "/push" => push::parse(uri).map(Route::Push),
+        "/feedback" => Ok(Route::Feedback),
         _ => parse(uri).map(Route::Relay),
     }
 }
@@ -166,7 +173,7 @@ fn parse(uri: &str) -> Result<Wanted, &'static str> {
     Ok(Wanted { server_id, role })
 }
 
-async fn serve(stream: TcpStream, state: Shared, gateway: Arc<push::Gateway>) {
+async fn serve(stream: TcpStream, state: Shared, gateway: Arc<push::Gateway>, desk: Arc<feedback::Desk>) {
     let peer = stream.peer_addr().ok();
     let mut wanted: Result<Route, &'static str> = Err("Expected WebSocket upgrade");
     let config = push::socket_config(&stream).await;
@@ -186,6 +193,7 @@ async fn serve(stream: TcpStream, state: Shared, gateway: Arc<push::Gateway>) {
     let Wanted { server_id, role } = match wanted {
         Ok(Route::Relay(wanted)) => wanted,
         Ok(Route::Push(wanted)) => return push::serve(ws, wanted, gateway).await,
+        Ok(Route::Feedback) => return feedback::serve(ws, peer.map(|p| p.ip()), desk).await,
         Err(_) => return,
     };
     log::info!("{role:?} of {server_id} connected from {peer:?}");
@@ -373,17 +381,18 @@ async fn main() {
     };
     log::info!("sophon-relay listening on {addr}");
     let gateway = Arc::new(push::Gateway::from_env());
+    let desk = Arc::new(feedback::Desk::from_env());
     tokio::select! {
-        _ = listen(listener, Shared::default(), gateway) => {}
+        _ = listen(listener, Shared::default(), gateway, desk) => {}
         _ = tokio::signal::ctrl_c() => {}
     }
 }
 
-async fn listen(listener: TcpListener, state: Shared, gateway: Arc<push::Gateway>) {
+async fn listen(listener: TcpListener, state: Shared, gateway: Arc<push::Gateway>, desk: Arc<feedback::Desk>) {
     loop {
         if let Ok((stream, _)) = listener.accept().await {
             let _ = stream.set_nodelay(true);
-            tokio::spawn(serve(stream, state.clone(), gateway.clone()));
+            tokio::spawn(serve(stream, state.clone(), gateway.clone(), desk.clone()));
         }
     }
 }
