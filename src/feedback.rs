@@ -1,8 +1,9 @@
 //! Reporting an issue to Sophon's repository on GitHub: a form in the app
 //! (what kind, a title, what happened) makes an issue in one shape, with
-//! the versions it ran on, and the browser opens GitHub's new-issue page
-//! filled with it. The user reads it there and submits it with their own
-//! account; Sophon keeps no token and sends nothing itself.
+//! the versions it ran on. It is filed without a GitHub account by
+//! Sophon's relay ([`file`], `relay/src/feedback.rs`), which holds the
+//! token; the app keeps none. Who wants to follow it with their own
+//! account can still open GitHub's new-issue page filled with it ([`url`]).
 
 /// Where issues go: the repository releases come from.
 pub(crate) const REPO: &str = "caoxing9/sophon";
@@ -73,6 +74,56 @@ pub(crate) fn body(kind: Kind, report: &Report) -> String {
     out
 }
 
+/// Sophon's relay, which files reports for people without a GitHub
+/// account (`relay/src/feedback.rs`).
+const FILER: &str = "ws://47.119.154.134:8443/feedback";
+
+/// The frame the relay files (`relay/src/feedback.rs`).
+pub(crate) fn frame(kind: Kind, report: &Report) -> serde_json::Value {
+    serde_json::json!({ "type": "report", "title": title(kind, report), "body": body(kind, report), "label": kind.tag().1 })
+}
+
+/// Files the issue through the relay: its page on GitHub, or why not
+/// (`NotConfigured`, `BadRequest`, `RateLimited`, `Unreachable`). On a
+/// thread of its own with its own runtime, at most 25 seconds.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) async fn file(kind: Kind, report: &Report) -> Result<String, String> {
+    let frame = frame(kind, report).to_string();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let filed = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string()).and_then(|rt| {
+            rt.block_on(async { tokio::time::timeout(std::time::Duration::from_secs(25), send(FILER, frame)).await.unwrap_or_else(|_| Err("Unreachable".into())) })
+        });
+        let _ = tx.send(filed);
+    });
+    rx.await.unwrap_or_else(|_| Err("Unreachable".into()))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn send(url: &str, frame: String) -> Result<String, String> {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let (ws, _) = tokio_tungstenite::connect_async(url).await.map_err(|e| {
+        log::info!("feedback: {e}");
+        "Unreachable".to_owned()
+    })?;
+    let (mut sink, mut stream) = ws.split();
+    sink.send(Message::Text(frame.into())).await.map_err(|_| "Unreachable".to_owned())?;
+    while let Some(Ok(msg)) = stream.next().await {
+        let Message::Text(t) = msg else { continue };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(t.as_str()) else { continue };
+        if v.get("type").and_then(|t| t.as_str()) != Some("filed") {
+            continue;
+        }
+        let field = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_owned);
+        return match (v.get("ok").and_then(|x| x.as_bool()), field("url")) {
+            (Some(true), Some(url)) => Ok(url),
+            _ => Err(field("reason").unwrap_or_else(|| "Unreachable".into())),
+        };
+    }
+    Err("Unreachable".into())
+}
+
 /// GitHub's new-issue page filled with the issue.
 pub(crate) fn url(kind: Kind, report: &Report) -> String {
     format!(
@@ -95,6 +146,16 @@ fn encode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_relay_gets_the_same_issue_and_a_label_it_knows() {
+        let r = Report { title: "Links".into(), what: "Pressed one".into(), ..Default::default() };
+        let f = frame(Kind::Feature, &r);
+        assert_eq!(f["type"], "report");
+        assert_eq!(f["title"], "feat: Links");
+        assert_eq!(f["label"], "enhancement");
+        assert_eq!(f["body"].as_str(), Some(body(Kind::Feature, &r).as_str()));
+    }
 
     #[test]
     fn a_bug_has_its_sections_and_environment() {

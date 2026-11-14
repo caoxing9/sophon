@@ -22,7 +22,8 @@ StateDirectoryMode=0700
 # pushes are answered NotConfigured.
 LoadCredential=apns.p8:/etc/sophon-relay-apns.p8
 Environment=APNS_KEY_FILE=%d/apns.p8
-# APNS_KEY_ID, APNS_TEAM_ID and, if not dev.sophon.app, APNS_TOPIC.
+# APNS_KEY_ID, APNS_TEAM_ID and, if not dev.sophon.app, APNS_TOPIC;
+# FEEDBACK_GITHUB_TOKEN (and FEEDBACK_REPO) for /feedback. Keep it 0600.
 EnvironmentFile=-/etc/sophon-relay.env
 
 [Install]

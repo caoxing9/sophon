@@ -432,8 +432,9 @@ fn issue_environment() -> Vec<(String, String)> {
 }
 
 /// Reporting an issue: what kind, a title, what happened (and for a bug
-/// how, and what was expected), the versions; GitHub's page opens with it,
-/// to read and submit there.
+/// how, and what was expected), the versions. Submit files it through
+/// Sophon's relay, no GitHub account needed (`feedback::file`); "Open in
+/// GitHub" opens GitHub's page with it, to submit with one's own account.
 fn report_issue() -> View {
     use crate::feedback::{Kind, Report};
     let kind = signal(Kind::Bug);
@@ -451,17 +452,40 @@ fn report_issue() -> View {
             .on_change(move |v: &str| value.set(v.to_owned()))
             .placeholder(placeholder)
     };
-    let go = move || {
-        let report = Report {
-            title: title.get_untracked(),
-            what: what.get_untracked(),
-            steps: steps.get_untracked(),
-            expected: expected.get_untracked(),
-            environment: with_env.get_untracked().then(issue_environment),
-        };
-        let _ = open_url(crate::feedback::url(kind.get_untracked(), &report));
+    // Sending, then the issue's page or why it was not filed.
+    let sending = signal(false);
+    let filed = signal(None::<Result<String, String>>);
+    let report = move || Report {
+        title: title.get_untracked(),
+        what: what.get_untracked(),
+        steps: steps.get_untracked(),
+        expected: expected.get_untracked(),
+        environment: with_env.get_untracked().then(issue_environment),
+    };
+    let on_github = move || {
+        let _ = open_url(crate::feedback::url(kind.get_untracked(), &report()));
         store::close_modal();
     };
+    let submit = move || {
+        if sending.get_untracked() {
+            return;
+        }
+        sending.set(true);
+        filed.set(None);
+        let (k, r) = (kind.get_untracked(), report());
+        store::spawn_detached(async move {
+            #[cfg(not(target_arch = "wasm32"))]
+            let result = crate::feedback::file(k, &r).await;
+            #[cfg(target_arch = "wasm32")]
+            let result: Result<String, String> = {
+                let _ = (k, r);
+                Err("NotConfigured".into())
+            };
+            sending.set(false);
+            filed.set(Some(result));
+        });
+    };
+    let empty = move || title.with(|s| s.trim().is_empty()) && what.with(|s| s.trim().is_empty());
     sheet(t("Report an issue"))
         .w(px(520.0))
         .child(segmented(
@@ -500,11 +524,50 @@ fn report_issue() -> View {
                         .flex_1(),
                 ),
         )
-        .child(text(t("GitHub opens with the issue filled in: read it there and submit it with your account")).text_size(tx(TEXT_SM)).text_color(FG_FAINT))
-        .child(actions(
-            btn(t("Open in GitHub"), Variant::Primary, Sz::Md, Some(Icon::ExternalLink), go)
-                .disabled(move || title.with(|s| s.trim().is_empty()) && what.with(|s| s.trim().is_empty())),
-        ))
+        .child(dynamic(move || {
+            Some(untracked(move || match filed.get() {
+                // Filed: where it is, and done.
+                Some(Ok(url)) => view()
+                    .gap(sp(S3))
+                    .child(text(t("Submitted. Thank you! It is a public issue on GitHub now")).text_size(tx(TEXT_SM)).text_color(SUCCESS))
+                    .child(
+                        view()
+                            .flex_row()
+                            .justify_end()
+                            .gap(sp(S2))
+                            .child(btn(t("View the issue"), Variant::Secondary, Sz::Md, Some(Icon::ExternalLink), move || {
+                                let _ = open_url(url.clone());
+                            }))
+                            .child(btn(t("Done"), Variant::Primary, Sz::Md, None, store::close_modal)),
+                    )
+                    .into_element(),
+                result => {
+                    let why = match result.and_then(Result::err).as_deref() {
+                        None => None,
+                        Some("RateLimited") => Some(t("Too many reports from here just now: try again in a while, or open it in GitHub")),
+                        Some("BadRequest") => Some(t("The report needs a title and what happened, and must not be too long")),
+                        Some(_) => Some(t("It could not be sent now: try again, or open it in GitHub")),
+                    };
+                    let mut v = view().gap(sp(S3));
+                    if let Some(why) = why {
+                        v = v.child(text(why).text_size(tx(TEXT_SM)).text_color(DANGER));
+                    }
+                    v.child(text(t("Submitted as a public GitHub issue for Sophon's developers: no account needed")).text_size(tx(TEXT_SM)).text_color(FG_FAINT))
+                        .child(
+                            view()
+                                .flex_row()
+                                .justify_end()
+                                .gap(sp(S2))
+                                .child(btn(t("Cancel"), Variant::Secondary, Sz::Md, None, store::close_modal))
+                                .child(btn(t("Open in GitHub"), Variant::Secondary, Sz::Md, Some(Icon::ExternalLink), on_github).disabled(empty))
+                                .child(
+                                    btn(t("Submit"), Variant::Primary, Sz::Md, None, submit).disabled(move || empty() || sending.get()),
+                                ),
+                        )
+                        .into_element()
+                }
+            }))
+        }))
 }
 
 fn commit() -> View {
