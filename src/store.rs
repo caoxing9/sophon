@@ -2257,11 +2257,38 @@ pub(crate) fn remove_host(id: &str) {
         });
     }
     let was_current = global::<Hosts>().with_untracked(|h| h.current.as_deref() == Some(id));
+    #[cfg(target_os = "ios")]
+    forget_push(id, was_current);
     global::<Hosts>().update(|h| h.list.retain(|x| x.id != id));
     if was_current {
         switch_host(None);
     } else {
         save_hosts();
+    }
+}
+
+/// The phone forgets the computer `id`: the computer is told to send it no
+/// more push notifications (and to revoke this phone's pairing), over the
+/// connection when it is the one in use, and through its gateway, which
+/// reaches it wherever it is (`ios_push::forget_host`).
+#[cfg(target_os = "ios")]
+fn forget_push(id: &str, current: bool) {
+    let Some(host) = hosts().into_iter().find(|h| h.id == id) else { return };
+    let device = settings().push_device;
+    if device.is_empty() {
+        return;
+    }
+    if current {
+        send(Command::PushRegister {
+            device: device.clone(),
+            token: String::new(),
+            env: crate::platform::ios_push::environment().to_owned(),
+            lang: String::new(),
+            hide: false,
+        });
+    }
+    if let Some((_, key, token)) = crate::daemon::relay::PairingLink::parse(&host.url).and_then(|l| l.lan) {
+        crate::platform::ios_push::forget_host(&key, &token, &device);
     }
 }
 
@@ -3777,6 +3804,8 @@ fn push_register_now() {
 pub(crate) fn start_push() {
     use crate::platform::ios_push;
     ios_push::install();
+    // Computers forgotten here that have not heard it yet.
+    ios_push::retry_forgotten();
     if let Some(mut presses) = ios_push::presses() {
         spawn_detached(async move {
             while let Some(id) = presses.recv().await {
@@ -3935,6 +3964,8 @@ pub(crate) fn push_act(act: crate::daemon::push::Act) {
                 deliver(&agent_id, text.trim(), None);
             }
         }
+        // Done by the bridge itself.
+        Act::Forget { .. } => {}
     }
 }
 

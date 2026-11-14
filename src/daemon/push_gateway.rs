@@ -60,9 +60,10 @@ fn now() -> u64 {
 }
 
 /// The computer's socket at the gateway, for as long as the app runs:
-/// `on_act` hears each action a paired device sent (checked already).
+/// `on_act` hears each action a paired device sent (checked already), with
+/// the pairing token it came with.
 /// `secret` and `tokens` are the bridge's key and its devices' tokens now.
-pub async fn computer_loop(secret: impl Fn() -> Option<[u8; 32]>, tokens: impl Fn() -> Vec<String>, on_act: impl Fn(Act)) {
+pub async fn computer_loop(secret: impl Fn() -> Option<[u8; 32]>, tokens: impl Fn() -> Vec<String>, on_act: impl Fn(&str, Act)) {
     let (tx, mut rx) = mpsc::unbounded_channel::<Value>();
     if let Ok(mut guard) = OUTBOX.lock() {
         *guard = Some(Outbox { tx, record: Record::load() });
@@ -98,7 +99,7 @@ async fn serve_computer<S>(
     rx: &mut mpsc::UnboundedReceiver<Value>,
     secret: &impl Fn() -> Option<[u8; 32]>,
     tokens: &impl Fn() -> Vec<String>,
-    on_act: &impl Fn(Act),
+    on_act: &impl Fn(&str, Act),
 ) -> String
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
@@ -154,7 +155,7 @@ where
                         let checked = secret().ok_or("no bridge").and_then(|s| push::check_act(&s, sealed, &tokens(), now()));
                         let mut answer = json!({ "type": "acted", "from": v.get("from"), "ref": v.get("ref"), "ok": checked.is_ok() });
                         match checked {
-                            Ok((_, act)) => on_act(act),
+                            Ok((token, act)) => on_act(&token, act),
                             Err(why) => {
                                 log::info!("push action refused: {why}");
                                 answer["reason"] = why.into();
@@ -241,7 +242,7 @@ mod tests {
         let (ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/push?id=mac1")).await.unwrap();
         let endpoint = addr.clone();
         let serving = tokio::spawn(async move {
-            serve_computer(ws, &endpoint, &mut rx, &move || Some(bridge_secret), &|| vec!["tok".to_owned()], &move |act| {
+            serve_computer(ws, &endpoint, &mut rx, &move || Some(bridge_secret), &|| vec!["tok".to_owned()], &move |_, act| {
                 let _ = acts_tx.send(act);
             })
             .await
