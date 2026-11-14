@@ -4276,11 +4276,21 @@ thread_local! {
 #[derive(Clone, Copy, Default, PartialEq)]
 struct LastSaidRev(u64);
 
-/// A message as a name: its first line, without what came with it (another
-/// conversation's words) and without runs of spaces.
+/// A message as a name: its first line with words, without what came with
+/// it (another conversation's words, the attachments named in it:
+/// `[image.png]`) and without runs of spaces. `None` for a message of
+/// attachments alone.
 fn as_name(text: &str) -> Option<String> {
+    use crate::ui::shared::composer_doc::{Segment, segments};
     let text = text.split(crate::ui::shared::timeline::CONTEXT_MARK).next().unwrap_or("");
-    let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let words: String = segments(text)
+        .into_iter()
+        .map(|s| match s {
+            Segment::Text(t) => t,
+            Segment::Chip(_) => " ".to_owned(),
+        })
+        .collect();
+    let line = words.lines().map(str::trim).find(|l| !l.is_empty())?;
     let line: String = line.split_whitespace().collect::<Vec<_>>().join(" ");
     Some(line.chars().take(120).collect())
 }
@@ -4329,10 +4339,22 @@ fn last_said(a: &Agent) -> Option<String> {
     said
 }
 
-/// A conversation's name in its lists: the name someone gave it, else the
-/// last thing the user said to it, else the title it was given.
+/// How long after its last activity a conversation is still called by
+/// the last thing said to it (seconds): later it is found by its name.
+const LAST_SAID_FOR: i64 = 2 * 60 * 60;
+
+/// Whether a conversation last active at `updated_at` is recent enough
+/// (`now`, seconds) to be called by its last message. An unknown time is.
+fn recently_active(updated_at: &str, now: i64) -> bool {
+    crate::usage::parse::rfc3339(updated_at).is_none_or(|at| now - at < LAST_SAID_FOR)
+}
+
+/// A conversation's name in its lists: the name someone gave it; else,
+/// while it was active in the last two hours, the last thing the user
+/// said to it (the easiest to recognise then); else the title it was
+/// given.
 pub(crate) fn conversation_title(a: &Agent) -> String {
-    if a.named {
+    if a.named || (!a.is_running() && !a.title.trim().is_empty() && !recently_active(&a.updated_at, crate::usage::now())) {
         return a.title.clone();
     }
     // Read again when this device sends one.
@@ -4729,15 +4751,23 @@ fn push_limits(list: &[crate::daemon::connection::ProviderUsage]) {
     let _ = list;
 }
 
-/// While a paired phone wants push notifications, the plan limits are read
-/// every twenty minutes, so one near its end is said without the usage
-/// page open.
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
-pub(crate) fn watch_limits_for_push() {
+/// The plan limits are read as the service connects and every ten minutes
+/// after: the composer shows them (`composer::limits_chip`), and on this
+/// Mac the paired phones hear of one near its end (`push_limits`), with
+/// the usage page closed.
+pub(crate) fn watch_limits() {
+    effect(|| {
+        let url = match conn() {
+            Conn::Connected { url, .. } => Some(url),
+            _ => None,
+        };
+        if url.is_some() {
+            untracked(|| send(Command::Usage));
+        }
+    });
     fn again() {
-        set_timeout(std::time::Duration::from_secs(20 * 60), || {
-            let wanted = crate::daemon::push_gateway::record().is_some_and(|r| !r.devices.is_empty());
-            if wanted && on_this_mac() && matches!(conn(), Conn::Connected { .. }) {
+        set_timeout(std::time::Duration::from_secs(10 * 60), || {
+            if matches!(conn(), Conn::Connected { .. }) {
                 send(Command::Usage);
             }
             again();
@@ -5850,5 +5880,26 @@ mod service_version_tests {
         // A build's suffix is not a number of the version.
         assert!(!newer_version("0.15.4-beta.1", "0.15.4"));
         assert!(newer_version("v0.15.5", "0.15.4"));
+    }
+}
+
+#[cfg(test)]
+mod conversation_name_tests {
+    use super::{LAST_SAID_FOR, as_name, recently_active};
+
+    #[test]
+    fn a_message_s_name_leaves_its_attachments_out() {
+        assert_eq!(as_name("[image.png][image.png] 这个按钮歪了"), Some("这个按钮歪了".into()));
+        assert_eq!(as_name("fix  the [shot.png] tab bar"), Some("fix the tab bar".into()));
+        assert_eq!(as_name("[image.png][image.png]"), None);
+        assert_eq!(as_name("[image.png]\nsecond line"), Some("second line".into()));
+    }
+
+    #[test]
+    fn the_last_message_names_a_conversation_for_two_hours() {
+        let at = crate::usage::parse::rfc3339("2026-11-14T10:00:00Z").unwrap();
+        assert!(recently_active("2026-11-14T10:00:00Z", at + LAST_SAID_FOR - 1));
+        assert!(!recently_active("2026-11-14T10:00:00Z", at + LAST_SAID_FOR));
+        assert!(recently_active("", at), "an unknown time keeps the last message");
     }
 }

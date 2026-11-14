@@ -252,10 +252,20 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                     .py(px(9.0))
                     .rounded(px(18.0))
                     .bg(tint(ACCENT, 0.10))
+                    .selectable(true)
+                    .on_text_selection_change(take_copy)
                     .child(user_text(item, true)))
                     .into_element()
                 }
-                RowKind::Assistant => text_view()
+                // A copy button floats at its corner: under the pointer on
+                // the desktop, always on the phone (no pointer, and a press
+                // there selects).
+                RowKind::Assistant => {
+                    let hover = signal(false);
+                    view()
+                        .on_mouse_enter(move |_: &MouseEvent| hover.set(true))
+                        .on_mouse_leave(move |_: &MouseEvent| hover.set(false))
+                        .child(copy_area(text_view()
                     // A link opens in the browser (or the app it belongs to).
                     .links(nsh_base::TextViewLinks::Open)
 // While searching, the words found are marked in the
@@ -270,8 +280,24 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                     .gap_3()
                     .text_size(tx(TEXT_CONTENT))
                     .line_height(px(24.0))
-                    .text_color(FG)
-                    .into_element(),
+                    .text_color(FG)))
+                        .child(
+                            view()
+                                .absolute()
+                                .top(px(-6.0))
+                                .right(px(0.0))
+                                .rounded(px(R_MD))
+                                .bg(SURFACE0)
+                                .opacity(move || if !streaming.get() && (MOBILE || hover.get()) { 1.0_f32 } else { 0.0 })
+                                .transition_opacity()
+                                .pointer_events(move || if !streaming.get() && (MOBILE || hover.get()) { nsh_core::PointerEvents::Auto } else { nsh_core::PointerEvents::None })
+                                .child(icon_btn(Icon::Copy, Sz::Sm, t("Copy"), move || {
+                                    set_clipboard(text_of());
+                                    store::notify(t("Copied").into());
+                                })),
+                        )
+                        .into_element()
+                }
                 // The agent's thinking, folded to one line ("Thinking"):
                 // a press shows it whole, another folds it again.
                 RowKind::Reasoning => {
@@ -313,14 +339,13 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                                 ),
                         )
                         .child(when(open, move || {
-                            text(move || text_of().trim().to_owned())
-                                .text_size(px(13.0))
-                                .line_height(px(19.0))
-                                .italic()
-                                .text_color(FG_MUTED)
-                                .selectable(true)
-                                .pl(px(15.0 + S2))
-                                .pt(px(2.0))
+                            view().selectable(true).on_text_selection_change(take_copy).pl(px(15.0 + S2)).pt(px(2.0)).child(
+                                text(move || text_of().trim().to_owned())
+                                    .text_size(px(13.0))
+                                    .line_height(px(19.0))
+                                    .italic()
+                                    .text_color(FG_MUTED),
+                            )
                         }))
                         .into_element()
                 }
@@ -338,11 +363,7 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                     .bg(tint(DANGER, 0.08))
                     .child(icon(Icon::CircleAlert, 16.0).text_color(DANGER))
                     .child(
-                        text(text_of)
-                            .text_size(tx(TEXT_BASE))
-                            .text_color(DANGER)
-                            .selectable(true)
-                            .flex_1(),
+                        view().selectable(true).on_text_selection_change(take_copy).flex_1().child(text(text_of).text_size(tx(TEXT_BASE)).text_color(DANGER)),
                     )
                     .into_element(),
                 RowKind::Notice => text(text_of)
@@ -422,6 +443,22 @@ pub(crate) fn mark_matches(markdown: &str, query: &str) -> String {
 /// pointer; a message from the host's history has the names alone.
 /// Where another conversation's words begin in a message that refers to
 /// it (`store::conversation_context`).
+/// Text chosen in the conversation is what ⌘C copies. The composer keeps
+/// the keyboard through clicks elsewhere (as a desktop field does), and
+/// with it the Edit menu's Copy, which then copied nothing: it gives the
+/// keyboard up once something is selected here.
+fn take_copy(e: &nsh_core::element::TextSelectionEvent) {
+    if !e.text.is_empty() {
+        crate::ui::shared::composer_doc::blur_all();
+    }
+}
+
+/// `content` in a selectable area that reports its selection
+/// ([`take_copy`]): a rich text view reports none of its own.
+fn copy_area(content: impl IntoElement) -> View {
+    view().selectable(true).on_text_selection_change(take_copy).child(content)
+}
+
 pub(crate) const CONTEXT_MARK: &str = "\n\n--- The conversation \"";
 
 fn user_text(item: Memo<Option<Item>>, selectable: bool) -> impl IntoElement {
@@ -977,7 +1014,7 @@ fn plan_card(p: Permission, plan: String) -> View {
         .gap(sp(S3))
         .child(card_title(Icon::ListTodo, ACCENT, t("Plan ready for review").into()))
         .child(
-            scroll().max_h(px(320.0)).child(
+            scroll().max_h(px(320.0)).child(copy_area(
                 text_view()
                     // A link opens in the browser (or the app it belongs to).
                     .links(nsh_base::TextViewLinks::Open)
@@ -987,7 +1024,7 @@ fn plan_card(p: Permission, plan: String) -> View {
                     .text_size(tx(TEXT_BASE))
                     .line_height(px(21.0))
                     .text_color(FG),
-            ),
+            )),
         )
         .child(action_buttons(&p))
 }
@@ -1261,7 +1298,7 @@ fn static_row(item: Item) -> AnyElement {
                 .child(user_text(item, true))
                 .into_element()
         }
-        Item::Assistant { text: t } => text_view()
+        Item::Assistant { text: t } => copy_area(text_view()
             // A link opens in the browser (or the app it belongs to).
             .links(nsh_base::TextViewLinks::Open)
 .markdown(move || Some(SharedString::from(t.clone())))
@@ -1269,7 +1306,7 @@ fn static_row(item: Item) -> AnyElement {
             .gap_3()
             .text_size(tx(TEXT_CONTENT))
             .line_height(px(24.0))
-            .text_color(FG)
+            .text_color(FG))
             .into_element(),
         Item::Tool { name, kind, summary, .. } => view()
             .flex_row()
