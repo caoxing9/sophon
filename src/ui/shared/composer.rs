@@ -286,7 +286,8 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
 
                 )
                 .child(mic_button(doc))
-                .child(model_picker(live)),
+                .child(model_picker(live))
+                .child(limits_chip(live)),
                 )
                 .child(view().flex_shrink_0().child(disc(running, busy, empty, submit))),
         ))
@@ -759,6 +760,47 @@ fn model_picker(live: bool) -> impl IntoElement {
             .unwrap_or_default()
     });
     super::model_picker::model_picker(live, name)
+}
+
+/// The plan limits of the composer's provider, after its model: how much
+/// of each window is used and when it starts again, in the warning's
+/// colour from 80% and the danger's from 90%. A press opens the usage
+/// page. Nothing while the provider reports none.
+fn limits_chip(live: bool) -> impl IntoElement {
+    use crate::usage::{self, local_offset};
+    dynamic(move || {
+        let provider = store::controls(live).provider;
+        let p = store::usage()?.into_iter().find(|p| p.id == provider)?;
+        let windows: Vec<_> = p.windows.into_iter().filter_map(|w| Some((w.used?, w))).collect();
+        if windows.is_empty() {
+            return None;
+        }
+        let mut chip = button()
+            .on_press(store::open_usage)
+            .accessibility_label(t("Usage"))
+            .flex_row()
+            .items_center()
+            .gap(sp(S2))
+            .h(sp(CONTROL_SM))
+            .px(sp(S2))
+            .min_w(px(0.0))
+            .flex_shrink(1.0)
+            .rounded(px(R_FULL))
+            .hover(|s| s.bg(highlight()));
+        for (i, (used, w)) in windows.into_iter().enumerate() {
+            let tone = if used >= 90.0 { DANGER } else if used >= 80.0 { WARNING } else { FG_MUTED };
+            let mut words = format!("{} {used:.0}%", w.label);
+            if let Some(at) = w.resets_at.as_deref().and_then(usage::parse::rfc3339) {
+                words.push_str(" · ");
+                words.push_str(&tf("Resets {}", &[&usage::time_label(at, &local_offset)]));
+            }
+            if i > 0 {
+                chip = chip.child(text("|").text_size(tx(TEXT_XS)).text_color(FG_FAINT));
+            }
+            chip = chip.child(text(words).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(tone).number_of_lines(1));
+        }
+        Some(chip)
+    })
 }
 
 pub(crate) fn thinking_options(live: bool) -> Vec<crate::daemon::model::Opt> {

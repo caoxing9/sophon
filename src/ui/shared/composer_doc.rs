@@ -283,6 +283,12 @@ pub(crate) fn existing(key: &str) -> Option<EditorSession> {
     SESSIONS.with_borrow(|m| m.get(key).cloned())
 }
 
+/// Every composer gives up the keyboard (a selection elsewhere is to be
+/// copied).
+pub(crate) fn blur_all() {
+    SESSIONS.with_borrow(|m| m.values().for_each(EditorSession::blur));
+}
+
 /// The composer kind a key names (`"form"`, `"agent"`): what Enter submits.
 pub(crate) fn target_of(key: &str) -> &str {
     key.split(':').next().unwrap_or(key)

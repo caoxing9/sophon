@@ -110,11 +110,10 @@ pub fn App() -> impl IntoElement {
         #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
         follow::start();
         elsewhere::start();
-        #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
-        store::watch_limits_for_push();
         update::start();
         update::preview();
     }
+    store::watch_limits();
     // (The phone asks in `start_push`, and for Apple's token after.)
     #[cfg(not(target_os = "ios"))]
     let _ = request_notification_permission();

@@ -745,6 +745,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("No matching folders", "没有匹配的文件夹"),
     ("Add a folder of the computer", "添加电脑上的文件夹"),
     ("Copy", "复制"),
+    ("Copied", "已复制"),
     ("Rewind conversation to here", "对话回退到这里"),
     ("Rewind files to here", "文件回退到这里"),
     ("Rewind both to here", "对话和文件都回退到这里"),
