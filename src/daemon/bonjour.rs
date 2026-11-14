@@ -136,18 +136,33 @@ fn txt_value(record: &[u8], key: &str) -> Option<String> {
     None
 }
 
-/// Advertises the bridge at `port` under this computer's name, with its
+/// A service instance name: at most 63 bytes, cut at a character.
+fn instance_name(name: &str) -> String {
+    let mut end = name.len().min(63);
+    while !name.is_char_boundary(end) {
+        end -= 1;
+    }
+    name[..end].to_owned()
+}
+
+/// Advertises the bridge at `port` as `name` (this computer's), with its
 /// public key (base64), for as long as the process runs.
-pub fn advertise(port: u16, public_key_b64: &str) -> Result<(), String> {
+///
+/// The name is given rather than left to mDNSResponder: a service left
+/// unnamed takes the computer's name, and a conflict on it is settled by
+/// renaming the computer ("MacBook Pro (2)"). Named, only the service
+/// becomes "name (2)".
+pub fn advertise(name: &str, port: u16, public_key_b64: &str) -> Result<(), String> {
     let record = txt(&[("v", "1"), ("pk", public_key_b64)]);
     let regtype = CString::new(SERVICE).map_err(|e| e.to_string())?;
+    let name = CString::new(instance_name(name)).map_err(|e| e.to_string())?;
     let mut sd: Ref = std::ptr::null_mut();
     let err = unsafe {
         DNSServiceRegister(
             &mut sd,
             0,
             0,
-            std::ptr::null(),
+            name.as_ptr(),
             regtype.as_ptr(),
             std::ptr::null(),
             std::ptr::null(),
@@ -319,11 +334,19 @@ mod tests {
         assert_eq!(txt_value(&[9, b'a'], "a"), None);
     }
 
+    #[test]
+    fn instance_name_fits_a_label() {
+        assert_eq!(instance_name("Aries"), "Aries");
+        assert_eq!(instance_name(&"a".repeat(70)).len(), 63);
+        let cut = instance_name(&format!("{}é", "a".repeat(62)));
+        assert_eq!(cut, "a".repeat(62));
+    }
+
     /// Advertises a test service and finds it again (the local mDNSResponder).
     #[test]
     #[ignore]
     fn advertise_and_browse_live() {
-        advertise(65001, "dGVzdA==").unwrap();
+        advertise("Sophon test", 65001, "dGVzdA==").unwrap();
         let found = browse(Duration::from_secs(5));
         eprintln!("{found:?}");
         assert!(found.iter().any(|f| f.key == "dGVzdA==" && f.addr.ends_with(":65001")));
