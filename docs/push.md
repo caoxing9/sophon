@@ -116,8 +116,19 @@ An action, sealed to the computer:
 { "token": "<the device's pairing token>", "at": 1794450000,
   "kind": "permission", "agent": "<id>", "permission": "<id>", "allow": true }
 { "token": "…", "at": 1794450000, "kind": "reply", "agent": "<id>", "text": "run the tests" }
+{ "token": "…", "at": 1794450000, "kind": "forget", "device": "<the id it registered with>" }
 ```
 
 `at` (seconds) older than ten minutes is refused.
+
+`forget` is sent when the phone forgets the computer: the computer takes
+that device off the push list (only when it registered with the same
+pairing token) and revokes the pairing when the token was the device's
+own (not the QR's or a space's). Until the computer answers `ok` (or
+refuses the token: already revoked), the phone keeps it as forgotten,
+sends `forget` again at each launch and when one of its notifications
+arrives, and does not show those notifications while the app is open.
+Revoking a device on the computer (Remove, Unpair all) also takes it off
+the push list at once.
 
 The notification's `sophon` data: `{ "host": "<computer id>", "agent": "<id>", "permission": "<id>" }`.

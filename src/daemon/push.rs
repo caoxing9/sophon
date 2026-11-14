@@ -158,6 +158,15 @@ impl Record {
         before != self.devices
     }
 
+    /// `device` forgot this computer: it comes off the list, when it is the
+    /// one that registered with `pairing` (no device takes another off).
+    /// Whether anything changed.
+    pub fn forget(&mut self, device: &str, pairing: &str) -> bool {
+        let before = self.devices.len();
+        self.devices.retain(|(id, w)| !(id == device && w.pairing == pairing));
+        before != self.devices.len()
+    }
+
     /// Only the devices whose pairing token is still one of `good` stay.
     /// Whether anything changed.
     pub fn keep_only(&mut self, good: &[String]) -> bool {
@@ -312,6 +321,9 @@ fn clip(text: &str, max: usize) -> String {
 pub enum Act {
     Permission { agent: String, permission: String, allow: bool },
     Reply { agent: String, text: String },
+    /// The device forgot this computer: its push registration (by the id
+    /// it made for itself) goes, and so does its own pairing.
+    Forget { device: String },
 }
 
 /// The action a device sealed to the computer (the sealed JSON of
@@ -320,6 +332,7 @@ pub fn act_json(token: &str, at: u64, act: &Act) -> Value {
     match act {
         Act::Permission { agent, permission, allow } => json!({ "token": token, "at": at, "kind": "permission", "agent": agent, "permission": permission, "allow": allow }),
         Act::Reply { agent, text } => json!({ "token": token, "at": at, "kind": "reply", "agent": agent, "text": text }),
+        Act::Forget { device } => json!({ "token": token, "at": at, "kind": "forget", "device": device }),
     }
 }
 
@@ -341,11 +354,13 @@ pub fn check_act(secret: &[u8; 32], sealed: &str, tokens: &[String], now: u64) -
     let act = match s("kind").as_str() {
         "permission" => Act::Permission { agent: s("agent"), permission: s("permission"), allow: v.get("allow").and_then(Value::as_bool).unwrap_or(false) },
         "reply" => Act::Reply { agent: s("agent"), text: s("text") },
+        "forget" => Act::Forget { device: s("device") },
         _ => return Err("unknown action"),
     };
     let complete = match &act {
         Act::Permission { agent, permission, .. } => !agent.is_empty() && !permission.is_empty(),
         Act::Reply { agent, text } => !agent.is_empty() && !text.trim().is_empty(),
+        Act::Forget { device } => !device.is_empty(),
     };
     if !complete {
         return Err("incomplete action");
@@ -462,6 +477,21 @@ mod tests {
         // The window reset: back below, and news again later.
         assert!(!limit_news(Some(95), 0));
         assert!(limit_news(Some(0), 95));
+    }
+
+    #[test]
+    fn a_device_that_forgot_the_computer_is_taken_off_by_its_own_pairing_only() {
+        let wants = |pairing: &str| Wants { token: "apns".into(), pairing: pairing.into(), ..Default::default() };
+        let mut r = Record::default();
+        r.register("phone", wants("tok-phone"));
+        r.register("pad", wants("tok-pad"));
+        assert!(!r.forget("phone", "tok-pad"), "another device's pairing");
+        assert!(r.forget("phone", "tok-phone"));
+        assert_eq!(r.devices.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), ["pad"]);
+        let (secret, public) = keys();
+        let forget = Act::Forget { device: "phone".into() };
+        let sealed = seal(&public, act_json("tok-phone", 1000, &forget).to_string().as_bytes());
+        assert_eq!(check_act(&secret, &sealed, &["tok-phone".to_owned()], 1000), Ok(("tok-phone".into(), forget)));
     }
 
     #[test]
