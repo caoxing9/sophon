@@ -233,7 +233,9 @@ fn foot(tab: Signal<HomeTab>) -> impl IntoElement {
                             // Android's native tab component can be
                             // transparent while its host is being mounted;
                             // keep the navigation surface visible behind it.
-                            .bg(SURFACE2)
+                            // Not on iOS: its bar is a floating glass pill,
+                            // and a fill behind it shows as a box.
+                            .bg(if cfg!(target_os = "android") { SURFACE2 } else { tint(SURFACE2, 0.0) })
                             .child(
                                 tab_bar()
                                     .items(vec![
