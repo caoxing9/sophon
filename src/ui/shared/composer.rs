@@ -172,8 +172,9 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                                     .on_press(move || {
                                         let Some(key) = key.get_untracked() else { return };
                                         dismiss_keyboard();
-                                        let (camera, images, files) = (key.clone(), key.clone(), key);
+                                        let (camera, images, files, pasted) = (key.clone(), key.clone(), key.clone(), key);
                                         let mut items = vec![
+                                            SheetItem::new(t("Paste"), move || paste_into(pasted.clone())).icon(Icon::ClipboardPaste),
                                             SheetItem::new(t("Photo Library"), move || pick_images_into(images.clone())).icon(Icon::Image),
                                             SheetItem::new(t("Choose Files"), move || pick_files_into(files.clone())).icon(Icon::Folder),
                                         ];
@@ -1174,6 +1175,40 @@ fn mic_button(doc: Doc) -> impl IntoElement {
 /// Cmd+V / Ctrl+V of files: chips at the caret: images (a screenshot) as images, other files uploaded to the
 /// host, and files copied in Finder read and uploaded too (the host may be
 /// another computer). Text pastes into the editor itself.
+/// The phone's Paste (the attach sheet's first item). The composer's
+/// editor draws its text itself over an input the system's edit menu does
+/// not reach, so a long press offers no Paste there. A picture on the
+/// clipboard is attached; else its text goes in at the caret, in place of
+/// what is selected.
+fn paste_into(key: String) {
+    store::spawn_detached(async move {
+        if clipboard_has_image().await
+            && let Some(image) = nsh_core::prelude::clipboard_image().await
+            && let Some((mime, data)) = data_uri(&image.url)
+        {
+            let ext = mime.strip_prefix("image/").unwrap_or("png").to_owned();
+            insert_images(&key, vec![crate::daemon::connection::ImageInput { name: format!("pasted.{ext}"), mime, data }]);
+            return;
+        }
+        let text = clipboard_string().await;
+        if text.is_empty() {
+            store::notify(t("Nothing to paste").to_owned());
+            return;
+        }
+        let Some(session) = composer_doc::existing(&key) else { return };
+        let sel = session.state().selection().clone();
+        composer_doc::replace_text(&session, sel.from(), sel.to(), &text);
+        session.focus();
+    });
+}
+
+/// The type and base64 data of a `data:<type>;base64,<data>` URI.
+fn data_uri(uri: &str) -> Option<(String, String)> {
+    let (head, data) = uri.strip_prefix("data:")?.split_once(',')?;
+    let mime = head.strip_suffix(";base64")?;
+    mime.starts_with("image/").then(|| (mime.to_owned(), data.to_owned()))
+}
+
 fn attach_pasted(key: &str, e: &RichEditorPastedFiles) {
     use base64::Engine;
     let mut images = vec![];
@@ -1317,5 +1352,18 @@ mod model_name_tests {
         assert_eq!(super::model_name("claude-haiku-4-5-20251001"), "Haiku 4.5");
         assert_eq!(super::model_name("claude-sonnet-5"), "Sonnet 5");
         assert_eq!(super::model_name("gpt-6-sol"), "gpt-6-sol");
+    }
+}
+
+#[cfg(test)]
+mod paste_tests {
+    use super::data_uri;
+
+    #[test]
+    fn a_pasted_picture_s_data_uri_gives_its_type_and_data() {
+        assert_eq!(data_uri("data:image/png;base64,iVBOR"), Some(("image/png".into(), "iVBOR".into())));
+        assert_eq!(data_uri("data:text/plain;base64,aGk="), None);
+        assert_eq!(data_uri("data:image/png,raw"), None);
+        assert_eq!(data_uri("file:///tmp/x.png"), None);
     }
 }
