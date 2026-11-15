@@ -561,6 +561,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Name (optional)", "名称（可选）"),
     ("Service password", "服务密码"),
     ("Paste", "粘贴"),
+    ("Nothing to paste", "剪贴板里没有可粘贴的内容"),
     ("Connect", "连接"),
     ("Neither the LAN bridge nor the relay is available: turn on Remote relay in Settings", "局域网桥接和中转都不可用，请在设置中开启远程中转"),
     ("The Sophon service isn't running on this Mac", "本机的 Sophon 服务未运行"),
