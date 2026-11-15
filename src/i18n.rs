@@ -275,6 +275,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     // Workspace
     ("New tab", "新标签页"),
     ("New agent", "新对话"),
+    ("Switch agent · {}", "切换对话 · {}"),
     ("New terminal", "新终端"),
     ("Terminal", "终端"),
     ("Close terminal", "关闭终端"),
