@@ -47,7 +47,6 @@ pub(crate) fn page() -> Screen {
                                 .number_of_lines(1),
                         ),
                     glass_group()
-                        .child(switcher(ws))
                         .child(header_button(Icon::FileDiff, t("Changes"), || {
                             dismiss_keyboard();
                             push(Route::Changes)
@@ -88,48 +87,24 @@ fn body() -> impl IntoElement {
         }))
 }
 
-/// The workspace's agents in a rounded square with their count; pressed,
-/// the system's sheet of them and a new one.
-fn switcher(ws: Memo<Option<crate::daemon::Workspace>>) -> impl IntoElement {
-    let count = computed(move || {
-        ws.with(|w| w.as_ref().map(|w| store::workspace_agents(&w.id).iter().filter(|a| !a.archived).count()).unwrap_or(0))
-    });
-    button()
-        .on_press(move || {
-            let agents = ws.with_untracked(|w| w.as_ref().map(|w| store::workspace_agents(&w.id)).unwrap_or_default());
-            let open = store::selected_id();
-            let mut items: Vec<SheetItem> = agents
-                .iter()
-                .rev()
-                .filter(|a| !a.archived)
-                .map(|a| {
-                    let id = a.id.clone();
-                    let status = Status::of_agent(&a.status, a.requires_attention || !a.pending.is_empty()).label();
-                    let on = open.as_deref() == Some(a.id.as_str());
-                    SheetItem::new(format!("{} · {status}", a.title), move || store::open_tab(Tab::Agent(id.clone()))).icon(Icon::Bot).checked(on)
-                })
-                .collect();
-            items.push(SheetItem::new(t("New agent"), || store::open_tab(Tab::Draft)).icon(Icon::SquarePen));
-            show_sheet(Some(t("Agents").into()), items);
+/// The workspace's agents, the open one checked, and a new one: the
+/// system's sheet (from the open agent's actions).
+fn agents_sheet() {
+    let agents = store::current_workspace().map(|w| store::workspace_agents(&w.id)).unwrap_or_default();
+    let open = store::selected_id();
+    let mut items: Vec<SheetItem> = agents
+        .iter()
+        .rev()
+        .filter(|a| !a.archived)
+        .map(|a| {
+            let id = a.id.clone();
+            let status = Status::of_agent(&a.status, a.requires_attention || !a.pending.is_empty()).label();
+            let on = open.as_deref() == Some(a.id.as_str());
+            SheetItem::new(format!("{} · {status}", a.title), move || store::open_tab(Tab::Agent(id.clone()))).icon(Icon::Bot).checked(on)
         })
-        .accessibility_label(t("Agents"))
-        .w(px(40.0))
-        .h(px(44.0))
-        .items_center()
-        .justify_center()
-        .active(|s| s.opacity(0.6))
-        .child(
-            view()
-                .min_w(px(22.0))
-                .h(px(22.0))
-                .px(px(4.0))
-                .rounded(px(6.0))
-                .border(px(1.5))
-                .border_color(FG)
-                .items_center()
-                .justify_center()
-                .child(text(move || count.get().to_string()).text_size(tx(TEXT_SM)).font_weight(FontWeight(600))),
-        )
+        .collect();
+    items.push(SheetItem::new(t("New agent"), || store::open_tab(Tab::Draft)).icon(Icon::SquarePen));
+    show_sheet(Some(t("Agents").into()), items);
 }
 
 /// A 40 × 44 pt action of the header's glass group.
@@ -149,7 +124,20 @@ fn header_button(glyph: Icon, label: &'static str, on_press: impl Fn() + 'static
 fn agent_sheet() {
     let Some(a) = store::selected_agent() else { return };
     let (rename, archive, title) = (a.id.clone(), a.id.clone(), a.title.clone());
+    let others = store::current_workspace()
+        .map(|w| store::workspace_agents(&w.id).iter().filter(|x| !x.archived && x.id != a.id).count())
+        .unwrap_or(0);
     let mut items = vec![
+        // The workspace's other agents (the header's count once).
+        if others > 0 {
+            SheetItem::new(crate::i18n::tf("Switch agent · {}", &[&(others + 1).to_string()]), || {
+                // After this sheet has gone.
+                set_timeout(std::time::Duration::from_millis(350), agents_sheet);
+            })
+            .icon(Icon::Bot)
+        } else {
+            SheetItem::new(t("New agent"), || store::open_tab(Tab::Draft)).icon(Icon::SquarePen)
+        },
         SheetItem::new(t("Browse files"), || push(Route::Files(".".into()))).icon(Icon::Folder),
         SheetItem::new(t("Fork into new agent"), store::fork_selected).icon(Icon::GitCompare),
         SheetItem::new(t("Rename"), move || store::open_modal(store::Modal::RenameAgent { id: rename.clone(), name: title.clone() })).icon(Icon::Pencil),
