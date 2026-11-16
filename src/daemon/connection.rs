@@ -27,7 +27,15 @@ pub enum Command {
     /// connection without a word: one silent since is checked at once (a
     /// ping, a short wait) instead of after the ping timeout, and a wait
     /// between attempts ends now.
-    Resume,
+    Resume {
+        /// How long it was away: after long (`LONG_AWAY`) what shows is
+        /// stale, and a slow answer is replaced as soon as a missing one.
+        away: Duration,
+    },
+    /// The device's network changed (`platform::network`): back online, or
+    /// another interface. Online, a wait between attempts ends now and a
+    /// live connection is checked; off Wi-Fi, a LAN connection is dropped.
+    NetworkChanged { online: bool, wifi: bool },
     /// `behavior`: `steer` or `interrupt` while a turn runs.
     /// `message_id`: the id the host echoes the message back with, so the
     /// copy shown at once is not shown twice.
@@ -699,6 +707,18 @@ pub enum Event {
     Notice(String),
 }
 
+/// Away from the foreground this long, the app's data is stale and its
+/// connection probably dead (`Command::Resume`).
+pub const LONG_AWAY: Duration = Duration::from_secs(10);
+
+/// `backoff` with jitter: between half of it and all of it, so devices that
+/// lost the same computer do not all knock again at once.
+fn jittered(backoff: Duration) -> Duration {
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
+    let r = (nanos % 1000) as f64 / 1000.0;
+    backoff.mul_f64(0.5 + 0.5 * r)
+}
+
 /// Runs forever, reconnecting as needed. Ends when the UI drops its channels.
 pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver<Command>) {
     let mut open_agent: Option<String> = None;
@@ -756,8 +776,9 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
         if events.send(Event::Connecting { url: endpoint.url.clone() }).is_err() {
             return;
         }
+        let mut reached = false;
         let attempt = tokio::select! {
-            r = session(&endpoint, &events, &mut commands, &mut open_agent, &mut diff_cwd) => Some(r),
+            r = session(&endpoint, &events, &mut commands, &mut open_agent, &mut diff_cwd, &mut reached) => Some(r),
             _ = switch_signal().notified() => None,
         };
         let result = match attempt {
@@ -803,6 +824,13 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
             }
         };
         lan_index = 0;
+        // A session that worked and dropped: again at once (a moment for
+        // what dropped it to pass), not after the waits of earlier failures.
+        if reached {
+            backoff = Duration::from_millis(250);
+        } else {
+            backoff = jittered(backoff);
+        }
         trace(&format!("lost: {reason}; next attempt in {} ms", backoff.as_millis()));
         if events.send(Event::Disconnected { reason, retry_in: backoff }).is_err() {
             return;
@@ -846,16 +874,23 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
                     // Back in the foreground: now, and the waits from the
                     // start again (they grew while the system kept the
                     // network from the app).
-                    Some(Command::Resume) => {
+                    Some(Command::Resume { .. }) => {
                         backoff = Duration::from_millis(500);
                         lan_index = 0;
                         break;
                     }
+                    // Back online, or on another network: try now.
+                    Some(Command::NetworkChanged { online: true, .. }) => {
+                        backoff = Duration::from_millis(500);
+                        lan_index = 0;
+                        break;
+                    }
+                    Some(Command::NetworkChanged { online: false, .. }) => {}
                     Some(_) => { let _ = events.send(Event::Notice("Not connected to the service".into())); }
                 },
             }
         }
-        backoff = (backoff * 2).min(Duration::from_secs(30));
+        backoff = (backoff * 2).clamp(Duration::from_secs(1), Duration::from_secs(30));
     }
 }
 
@@ -1106,6 +1141,7 @@ async fn session(
     commands: &mut UnboundedReceiver<Command>,
     open_agent: &mut Option<String>,
     diff_cwd: &mut Option<String>,
+    reached: &mut bool,
 ) -> Result<Exit, String> {
     let mut diff_sub: Option<String> = None;
     // Terminal output arrives in binary frames addressed by slot.
@@ -1187,11 +1223,18 @@ async fn session(
     // Back in the foreground: a connection heard from within this is taken
     // as alive; else it has `RESUME_ANSWER` to answer a ping.
     const RESUME_QUIET: Duration = Duration::from_secs(3);
+    // Off the LAN one lost packet can hold a live socket up for a second.
     const RESUME_ANSWER: Duration = Duration::from_millis(2500);
+    const LAN_ANSWER: Duration = Duration::from_millis(2000);
+    // After long away pooled sockets are often dead: a new one is cheaper
+    // than the wait.
+    const LONG_AWAY_ANSWER: Duration = Duration::from_millis(1500);
     let mut last_frame = rt::Instant::now();
     // Back in the foreground with a connection silent for a while: it has
     // until this to answer a ping.
     let mut check_at: Option<rt::Instant> = None;
+    // The wait of the probe under way.
+    let mut probing = RESUME_ANSWER;
     let mut lan_check = rt::interval_at(
         rt::Instant::now() + Duration::from_secs(5),
         Duration::from_secs(15),
@@ -1218,7 +1261,7 @@ async fn session(
                 let now = rt::Instant::now();
                 if at > now { at - now } else { Duration::ZERO }
             })), if check_at.is_some() => {
-                if last_frame.elapsed() >= RESUME_ANSWER {
+                if last_frame.elapsed() >= probing {
                     return Ok(Exit::Stale);
                 }
                 check_at = None;
@@ -1237,14 +1280,37 @@ async fn session(
                     let _ = tx.sink.send(Message::Close(None)).await;
                     return Ok(Exit::Switch(next));
                 }
-                if let Command::Resume = cmd {
-                    // Heard from lately: alive. Else a ping, and a short wait
-                    // for anything at all.
-                    if connected && last_frame.elapsed() > RESUME_QUIET && check_at.is_none() {
+                // Back in the foreground, or on another network: is the
+                // connection still there? Heard from lately (after a short
+                // while away): alive. Else a ping, and a short wait for
+                // anything at all, shorter after long away or on the LAN
+                // (as t3code's connection supervisor waits).
+                let probe = match &cmd {
+                    Command::Resume { away } => Some(*away >= LONG_AWAY),
+                    // The LAN's bridge is not reached off Wi-Fi.
+                    Command::NetworkChanged { wifi: false, .. } if endpoint.is_lan() => return Ok(Exit::Stale),
+                    Command::NetworkChanged { online: true, .. } => Some(false),
+                    Command::NetworkChanged { .. } => None,
+                    _ => None,
+                };
+                if matches!(cmd, Command::Resume { .. } | Command::NetworkChanged { .. }) {
+                    if let Some(long) = probe
+                        && connected
+                        && (long || last_frame.elapsed() > RESUME_QUIET)
+                        && check_at.is_none()
+                    {
                         if send(&mut tx, &json!({ "type": "ping" })).await.is_err() {
                             return Ok(Exit::Stale);
                         }
-                        check_at = Some(rt::Instant::now() + RESUME_ANSWER);
+                        let wait = if long {
+                            LONG_AWAY_ANSWER
+                        } else if endpoint.is_lan() || endpoint.via() == Via::Local {
+                            LAN_ANSWER
+                        } else {
+                            RESUME_ANSWER
+                        };
+                        probing = wait;
+                        check_at = Some(rt::Instant::now() + wait);
                     }
                     continue;
                 }
@@ -1423,6 +1489,7 @@ async fn session(
                 if !connected {
                     if kind == "status" && payload.get("status").and_then(Value::as_str) == Some("server_info") {
                         connected = true;
+                        *reached = true;
                         remember_route(if endpoint.is_lan() { Route::Lan } else if endpoint.relay.is_some() { Route::Relay } else { Route::Direct });
                         let field = |k| payload.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
                         trace(&format!("connected to {} ({}) via {via:?} in {} ms", field("hostname"), field("version"), started.elapsed().as_millis()));
@@ -1631,7 +1698,7 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
     match cmd {
         Command::Open(id) => timeline_requests(&id, pending),
         // Sent by the session itself, with its binary frames.
-        Command::Upload { .. } | Command::Download { .. } | Command::Reconnect | Command::Resume | Command::AskPictures { .. } | Command::HostUsage | Command::PushRegister { .. } => vec![],
+        Command::Upload { .. } | Command::Download { .. } | Command::Reconnect | Command::Resume { .. } | Command::NetworkChanged { .. } | Command::AskPictures { .. } | Command::HostUsage | Command::PushRegister { .. } => vec![],
         Command::Send { agent_id, text, behavior, images, attachments, message_id } => {
             let mut msg = json!({
                 "type": "send_agent_message_request",

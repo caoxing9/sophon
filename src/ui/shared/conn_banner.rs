@@ -22,11 +22,15 @@ pub(crate) enum Banner {
     Down { retry_in: Option<i64> },
     /// Back, and how.
     Back(Option<Via>),
+    /// The device itself has no network: nothing to retry until it has.
+    NoNetwork,
 }
 
-/// The strip for `conn` and `p` at `now` (ms), if any.
-pub(crate) fn banner_of(conn: &Conn, p: &ConnProgress, now: i64) -> Option<Banner> {
+/// The strip for `conn` and `p` at `now` (ms), if any; `online`: whether
+/// the device has a network.
+pub(crate) fn banner_of(conn: &Conn, p: &ConnProgress, now: i64, online: bool) -> Option<Banner> {
     match conn {
+        _ if !online => Some(Banner::NoNetwork),
         Conn::Connected { .. } => p.connected_until.filter(|u| *u > now).map(|_| Banner::Back(p.via)),
         Conn::Down(_) if p.stage.is_none() => {
             let left = p.retry_at.map(|at| (at - now + 999) / 1000).filter(|s| *s > 0);
@@ -65,12 +69,13 @@ pub(crate) fn words(b: &Banner) -> String {
         Banner::Back(Some(Via::Lan)) => t("Connected · over the local network").to_owned(),
         Banner::Back(Some(Via::Relay)) => t("Connected · through the relay").to_owned(),
         Banner::Back(_) => t("Connected").to_owned(),
+        Banner::NoNetwork => t("This device is offline · reconnects when it is back").to_owned(),
     }
 }
 
 /// The strip itself: nothing while connected and quiet.
 pub(crate) fn conn_banner() -> impl IntoElement {
-    let banner = computed(|| banner_of(&store::conn(), &store::conn_progress(), store::conn_clock().max(store::now_ms())));
+    let banner = computed(|| banner_of(&store::conn(), &store::conn_progress(), store::conn_clock().max(store::now_ms()), store::network_online()));
     // Its kind, not its words, decides what is built: the words change
     // every second while the strip stays.
     let kind = computed(move || {
@@ -79,6 +84,7 @@ pub(crate) fn conn_banner() -> impl IntoElement {
             Some(Banner::Working { .. }) => 1,
             Some(Banner::Down { .. }) => 2,
             Some(Banner::Back(_)) => 3,
+            Some(Banner::NoNetwork) => 4,
         })
     });
     let said = move || banner.with(|b| b.as_ref().map(words).unwrap_or_default());
@@ -126,6 +132,7 @@ pub(crate) fn conn_banner() -> impl IntoElement {
                     };
                     strip(SUCCESS).child(icon(glyph, 14.0).text_color(SUCCESS)).child(words(SUCCESS)).into_element()
                 }
+                4 => strip(FG_MUTED).child(icon(Icon::CircleAlert, 14.0).text_color(FG_MUTED)).child(words(FG_MUTED)).into_element(),
                 _ => view().into_element(),
             }
         }))
@@ -144,28 +151,35 @@ mod tests {
     fn a_quick_attempt_shows_nothing_a_slow_one_its_step_and_time() {
         let reaching = Some(Stage::Reaching(Via::Relay));
         let conn = Conn::Connecting(String::new());
-        assert_eq!(banner_of(&conn, &progress(reaching, Some(1000)), 1000 + store::CONN_QUIET_MS - 1), None);
-        assert_eq!(banner_of(&conn, &progress(reaching, Some(1000)), 1000 + store::CONN_QUIET_MS), Some(Banner::Working { stage: reaching, secs: None }));
-        assert_eq!(banner_of(&conn, &progress(reaching, Some(1000)), 1000 + 4200), Some(Banner::Working { stage: reaching, secs: Some(4) }));
+        assert_eq!(banner_of(&conn, &progress(reaching, Some(1000)), 1000 + store::CONN_QUIET_MS - 1, true), None);
+        assert_eq!(banner_of(&conn, &progress(reaching, Some(1000)), 1000 + store::CONN_QUIET_MS, true), Some(Banner::Working { stage: reaching, secs: None }));
+        assert_eq!(banner_of(&conn, &progress(reaching, Some(1000)), 1000 + 4200, true), Some(Banner::Working { stage: reaching, secs: Some(4) }));
     }
 
     #[test]
     fn a_failure_counts_down_to_the_next_attempt() {
         let conn = Conn::Down("x".into());
         let p = ConnProgress { retry_at: Some(10_000), since: Some(0), ..Default::default() };
-        assert_eq!(banner_of(&conn, &p, 7_100), Some(Banner::Down { retry_in: Some(3) }));
-        assert_eq!(banner_of(&conn, &p, 10_000), Some(Banner::Down { retry_in: None }));
+        assert_eq!(banner_of(&conn, &p, 7_100, true), Some(Banner::Down { retry_in: Some(3) }));
+        assert_eq!(banner_of(&conn, &p, 10_000, true), Some(Banner::Down { retry_in: None }));
         // The next attempt under way: its step, not the failure.
         let trying = ConnProgress { stage: Some(Stage::Finding), ..p };
-        assert!(matches!(banner_of(&conn, &trying, 11_000), Some(Banner::Working { .. })));
+        assert!(matches!(banner_of(&conn, &trying, 11_000, true), Some(Banner::Working { .. })));
     }
 
     #[test]
     fn back_is_said_for_a_moment_with_its_route() {
         let conn = Conn::Connected { hostname: String::new(), version: String::new(), url: String::new() };
         let p = ConnProgress { via: Some(Via::Lan), connected_until: Some(5_000), ..Default::default() };
-        assert_eq!(banner_of(&conn, &p, 4_000), Some(Banner::Back(Some(Via::Lan))));
-        assert_eq!(banner_of(&conn, &p, 5_000), None);
-        assert_eq!(banner_of(&conn, &ConnProgress::default(), 0), None);
+        assert_eq!(banner_of(&conn, &p, 4_000, true), Some(Banner::Back(Some(Via::Lan))));
+        assert_eq!(banner_of(&conn, &p, 5_000, true), None);
+        assert_eq!(banner_of(&conn, &ConnProgress::default(), 0, true), None);
+    }
+
+    #[test]
+    fn an_offline_device_says_so_not_that_the_computer_is_gone() {
+        let down = ConnProgress { retry_at: Some(10_000), since: Some(0), ..Default::default() };
+        assert_eq!(banner_of(&Conn::Down("x".into()), &down, 1_000, false), Some(Banner::NoNetwork));
+        assert_eq!(banner_of(&Conn::Connecting(String::new()), &ConnProgress::default(), 0, false), Some(Banner::NoNetwork));
     }
 }

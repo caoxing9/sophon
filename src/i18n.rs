@@ -572,6 +572,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Connected · over the local network", "已连接 · 局域网"),
     ("Connected · through the relay", "已连接 · 中转服务器"),
     ("Retry now", "立即重试"),
+    ("This device is offline · reconnects when it is back", "手机没有网络 · 联网后自动重连"),
     ("Nothing to paste", "剪贴板里没有可粘贴的内容"),
     ("Connect", "连接"),
     ("Neither the LAN bridge nor the relay is available: turn on Remote relay in Settings", "局域网桥接和中转都不可用，请在设置中开启远程中转"),

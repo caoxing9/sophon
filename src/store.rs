@@ -4861,16 +4861,53 @@ pub(crate) fn push_act(act: crate::daemon::push::Act) {
 /// after the ping timeout or the wait between attempts.
 pub(crate) fn watch_resume() {
     thread_local! {
-        static AWAY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        /// When the app left the foreground (ms), while it is away.
+        static AWAY_SINCE: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
     }
     effect(|| {
         let active = lifecycle_active();
         if !active {
-            AWAY.with(|a| a.set(true));
-        } else if AWAY.with(|a| a.replace(false)) {
-            untracked(|| send(Command::Resume));
+            AWAY_SINCE.with(|a| {
+                if a.get().is_none() {
+                    a.set(Some(now_ms()));
+                }
+            });
+        } else if let Some(since) = AWAY_SINCE.with(|a| a.take()) {
+            let away = std::time::Duration::from_millis((now_ms() - since).max(0) as u64);
+            untracked(|| send(Command::Resume { away }));
         }
     });
+}
+
+/// The device's network (`platform::network`): `None` until it is known,
+/// or where there is no monitor.
+#[derive(Clone, Copy, Default, PartialEq)]
+struct Network(Option<bool>);
+
+/// Whether the device has a network; `true` when unknown.
+pub(crate) fn network_online() -> bool {
+    global::<Network>().with(|n| n.0 != Some(false))
+}
+
+/// The device's network as it changes: the connection checks itself or
+/// tries again at once when it does (`Command::NetworkChanged`), and the
+/// strip says when the device is offline.
+pub(crate) fn watch_network() {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    if let Some(mut changes) = crate::platform::network::watch() {
+        spawn_detached(async move {
+            let mut last: Option<crate::platform::network::NetState> = None;
+            while let Some(state) = changes.recv().await {
+                global::<Network>().set(Network(Some(state.online)));
+                // The first is how it is, not a change.
+                if last.is_some_and(|l| l != state) {
+                    log::info!("network changed: {state:?}");
+                    send(Command::NetworkChanged { online: state.online, wifi: state.wifi });
+                }
+                last = Some(state);
+            }
+        });
+    }
 }
 
 fn lifecycle_active() -> bool {
