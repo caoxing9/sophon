@@ -86,7 +86,9 @@ pub(crate) fn home() -> impl IntoElement {
                         .flex_1()
                         .child(large_header(
                             t("Projects"),
-                            view().flex_row().items_center().gap(sp(S2)).child(host_chip()).child(round_button(Icon::Plus, t("Add project"), || {
+                            view().flex_row().items_center().gap(sp(S2)).child(host_chip()).child(round_button(Icon::GitPullRequest, t("Pull requests"), || {
+                                super::push(super::Route::Inbox)
+                            })).child(round_button(Icon::Plus, t("Add project"), || {
                                 show_sheet(None, vec![
                                     SheetItem::new(t("Add a folder of the computer"), || super::push(super::Route::AddProject)).icon(Icon::FolderPlus),
                                 ])

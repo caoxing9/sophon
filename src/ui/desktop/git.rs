@@ -53,8 +53,13 @@ fn pr_badge(pr: crate::daemon::connection::PullRequest) -> impl IntoElement {
     };
     let url = pr.url.clone();
     nsh_base::button()
-        .on_press(move || {
-            let _ = open_url(url.clone());
+        // Its page here (summary, code, checks, merge); GitHub's when the
+        // address is not GitHub's.
+        .on_press(move || match crate::github::of_url(&url) {
+            Some((repo, number)) => store::open_pull_request(&repo, number, store::selected_id()),
+            None => {
+                let _ = open_url(url.clone());
+            }
         })
         .flex_row()
         .items_center()
