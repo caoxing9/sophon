@@ -16,6 +16,8 @@ pub(crate) mod ios_push;
 pub(crate) mod ios_scanner;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) mod pdf;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub(crate) mod network;
 
 /// The PDF view's name (`nsh_core::element::native`).
 #[cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(dead_code))]

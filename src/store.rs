@@ -1055,6 +1055,60 @@ pub(crate) fn conn() -> Conn {
     global::<ConnState>().with(|c| c.0.clone())
 }
 
+/// What the connection is doing, for the UI to say (`ui::shared::conn_
+/// banner`): the step under way, the route, since when it has been out
+/// (all attempts of one outage together), when the next attempt starts,
+/// and until when "Connected" is said once it is back. Times in ms.
+#[derive(Clone, Default, PartialEq)]
+pub(crate) struct ConnProgress {
+    pub(crate) stage: Option<crate::daemon::connection::Stage>,
+    pub(crate) via: Option<crate::daemon::connection::Via>,
+    pub(crate) since: Option<i64>,
+    pub(crate) retry_at: Option<i64>,
+    pub(crate) connected_until: Option<i64>,
+}
+
+/// How long an attempt goes unsaid: one that ends within it shows nothing
+/// (no strip flashing on and off at each start).
+pub(crate) const CONN_QUIET_MS: i64 = 600;
+
+pub(crate) fn conn_progress() -> ConnProgress {
+    global::<ConnProgress>().with(Clone::clone)
+}
+
+pub(crate) fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
+}
+
+/// The clock the connection's strip counts with: moved every half second
+/// while it has something to count (an attempt, a wait, "Connected").
+#[derive(Clone, Copy, Default, PartialEq)]
+struct ConnClock(i64);
+
+pub(crate) fn conn_clock() -> i64 {
+    global::<ConnClock>().with(|c| c.0)
+}
+
+pub(crate) fn watch_conn_clock() {
+    fn again() {
+        set_timeout(std::time::Duration::from_millis(500), || {
+            let now = now_ms();
+            let counting = !matches!(conn(), Conn::Connected { .. }) || global::<ConnProgress>().with_untracked(|p| p.connected_until.is_some_and(|u| u > now - 1000));
+            if counting {
+                global::<ConnClock>().set(ConnClock(now));
+            }
+            again();
+        });
+    }
+    Owner::detached().run(again);
+}
+
+/// The next attempt now, not after the wait.
+pub(crate) fn retry_now() {
+    global::<ConnProgress>().update(|p| p.retry_at = None);
+    send(Command::Reconnect);
+}
+
 pub(crate) fn screen() -> Screen {
     global::<Nav>().with(|n| n.screen.clone())
 }
@@ -4802,6 +4856,60 @@ pub(crate) fn push_act(act: crate::daemon::push::Act) {
     }
 }
 
+/// Back in the foreground after being away: the connection is checked at
+/// once, or tried again now if it was down (`Command::Resume`), instead of
+/// after the ping timeout or the wait between attempts.
+pub(crate) fn watch_resume() {
+    thread_local! {
+        /// When the app left the foreground (ms), while it is away.
+        static AWAY_SINCE: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
+    }
+    effect(|| {
+        let active = lifecycle_active();
+        if !active {
+            AWAY_SINCE.with(|a| {
+                if a.get().is_none() {
+                    a.set(Some(now_ms()));
+                }
+            });
+        } else if let Some(since) = AWAY_SINCE.with(|a| a.take()) {
+            let away = std::time::Duration::from_millis((now_ms() - since).max(0) as u64);
+            untracked(|| send(Command::Resume { away }));
+        }
+    });
+}
+
+/// The device's network (`platform::network`): `None` until it is known,
+/// or where there is no monitor.
+#[derive(Clone, Copy, Default, PartialEq)]
+struct Network(Option<bool>);
+
+/// Whether the device has a network; `true` when unknown.
+pub(crate) fn network_online() -> bool {
+    global::<Network>().with(|n| n.0 != Some(false))
+}
+
+/// The device's network as it changes: the connection checks itself or
+/// tries again at once when it does (`Command::NetworkChanged`), and the
+/// strip says when the device is offline.
+pub(crate) fn watch_network() {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    if let Some(mut changes) = crate::platform::network::watch() {
+        spawn_detached(async move {
+            let mut last: Option<crate::platform::network::NetState> = None;
+            while let Some(state) = changes.recv().await {
+                global::<Network>().set(Network(Some(state.online)));
+                // The first is how it is, not a change.
+                if last.is_some_and(|l| l != state) {
+                    log::info!("network changed: {state:?}");
+                    send(Command::NetworkChanged { online: state.online, wifi: state.wifi });
+                }
+                last = Some(state);
+            }
+        });
+    }
+}
+
 fn lifecycle_active() -> bool {
     matches!(lifecycle(), nsh_core::element::Lifecycle::Active)
 }
@@ -5186,7 +5294,25 @@ pub(crate) fn apply(event: Event) {
                 c.0 = Conn::Connecting(url);
             }
         }),
+        Event::Stage(stage) => global::<ConnProgress>().update(|p| {
+            use crate::daemon::connection::Stage;
+            if let Stage::Reaching(via) | Stage::Securing(via) | Stage::Greeting(via) = stage {
+                p.via = Some(via);
+            }
+            p.stage = Some(stage);
+            p.since.get_or_insert_with(now_ms);
+            p.retry_at = None;
+        }),
         Event::Connected { hostname, version } => {
+            // Said once it is back, if the wait was long enough to be shown.
+            global::<ConnProgress>().update(|p| {
+                let now = now_ms();
+                let shown = p.since.is_some_and(|s| now - s >= CONN_QUIET_MS);
+                p.connected_until = shown.then_some(now + 1800);
+                p.since = None;
+                p.stage = None;
+                p.retry_at = None;
+            });
             // This computer may send no push notifications: it says when
             // asked, and is asked each time the phone reaches one.
             global::<PushState>().update(|p| p.served = false);
@@ -5205,7 +5331,14 @@ pub(crate) fn apply(event: Event) {
                 notify(t("The service restarted").into());
             }
         }
-        Event::Disconnected { reason } => {
+        Event::Disconnected { reason, retry_in } => {
+            global::<ConnProgress>().update(|p| {
+                let now = now_ms();
+                p.since.get_or_insert(now);
+                p.stage = None;
+                p.connected_until = None;
+                p.retry_at = Some(now + retry_in.as_millis() as i64);
+            });
             // The answers to an import under way are lost with the session:
             // what is left of it is given up, not to wait on them for ever.
             if importing() {

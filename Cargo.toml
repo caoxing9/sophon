@@ -53,6 +53,8 @@ nsh-platform-ios = { git = "https://github.com/caoxing9/nsh", rev = "05b351c64b5
 objc2 = "0.6.5"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSString", "NSObject"] }
 objc2-ui-kit = { version = "0.3.2", default-features = false, features = ["std", "objc2-quartz-core", "UIView", "UIResponder"] }
+# The network path monitor's handler (`platform::network`; already in the tree through nsh-platform-ios).
+block2 = "0.6.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nsh-platform-linux = { git = "https://github.com/caoxing9/nsh", rev = "05b351c64b538a86b1261800d1ce287490690fba", default-features = false }
