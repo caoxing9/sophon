@@ -194,6 +194,27 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                                     .active(|s| s.opacity(0.6))
                                     .child(icon(Icon::Plus, 18.0).text_color(FG)),
                             )
+                            // Paste at hand while typing: the editor offers no
+                            // Paste of the system's on a long press.
+                            .child(when(|| global::<PasteReady>().with(|p| p.0), move || {
+                                nsh_base::button()
+                                    .on_press(move || {
+                                        let Some(key) = key.get_untracked() else { return };
+                                        global::<PasteReady>().set(PasteReady(false));
+                                        paste_into(key);
+                                    })
+                                    .accessibility_label(t("Paste"))
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(5.0))
+                                    .h(px(36.0))
+                                    .px(px(12.0))
+                                    .rounded(px(10.0))
+                                    .bg(tint(FG, 0.07))
+                                    .active(|s| s.opacity(0.6))
+                                    .child(icon(Icon::ClipboardPaste, 15.0).text_color(FG))
+                                    .child(text(t("Paste")).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)))
+                            }))
                             .child(
                                 nsh_base::button()
                                     .on_press(move || options_sheet(live))
@@ -342,6 +363,8 @@ fn editor(
                 .accessibility_label(SharedString::from(t("Message")))
                 .on_change(move |_: &_| changed())
                 .on_selection_change(move |_: &_| doc.bump())
+                .on_focus(|| composer_focused(true))
+                .on_blur(|| composer_focused(false))
                 .on_paste_files({
                     let key = key.clone();
                     move |p: &RichEditorPastedFiles| attach_pasted(&key, p)
@@ -1175,6 +1198,33 @@ fn mic_button(doc: Doc) -> impl IntoElement {
 /// Cmd+V / Ctrl+V of files: chips at the caret: images (a screenshot) as images, other files uploaded to the
 /// host, and files copied in Finder read and uploaded too (the host may be
 /// another computer). Text pastes into the editor itself.
+/// The phone's composer has the keyboard and the clipboard holds text or a
+/// picture: its Paste button shows (`composer_focused`).
+#[derive(Clone, Copy, Default, PartialEq)]
+struct PasteReady(bool);
+
+/// The composer took the keyboard (or gave it up). On the phone, whether
+/// the clipboard has something is asked then (asking does not show the
+/// system's paste notice; reading it would).
+fn composer_focused(on: bool) {
+    if !MOBILE {
+        return;
+    }
+    if !on {
+        // A moment later: a press on Paste blurs the editor before it lands.
+        set_timeout(std::time::Duration::from_millis(400), || {
+            if !composer_doc::any_focused() {
+                global::<PasteReady>().set(PasteReady(false));
+            }
+        });
+        return;
+    }
+    store::spawn_detached(async {
+        let ready = clipboard_has_string().await || clipboard_has_image().await;
+        global::<PasteReady>().set(PasteReady(ready));
+    });
+}
+
 /// The phone's Paste (the attach sheet's first item). The composer's
 /// editor draws its text itself over an input the system's edit menu does
 /// not reach, so a long press offers no Paste there. A picture on the
