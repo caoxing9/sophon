@@ -225,6 +225,31 @@ pub(crate) fn local_day(at: i64, offset: &dyn Fn(i64) -> i64) -> i64 {
     (at + offset(at)).div_euclid(86_400)
 }
 
+/// What `entries` cost in the local calendar month of `now` (a space's
+/// monthly cap). Duplicates count once, as [`aggregate`] counts them; an
+/// unpriced model costs nothing here.
+pub(crate) fn month_cost<'a>(entries: impl IntoIterator<Item = &'a Entry>, now: i64, offset: &dyn Fn(i64) -> i64) -> f64 {
+    let (year, month, _) = civil(local_day(now, offset));
+    let mut keyed: HashMap<u64, &Entry> = HashMap::new();
+    let mut loose: Vec<&Entry> = vec![];
+    for e in entries {
+        let (y, m, _) = civil(local_day(e.at, offset));
+        if (y, m) != (year, month) || e.at > now + 86_400 {
+            continue;
+        }
+        match e.key {
+            Some(k) => {
+                let slot = keyed.entry(k).or_insert(e);
+                if e.tokens.output > slot.tokens.output {
+                    *slot = e;
+                }
+            }
+            None => loose.push(e),
+        }
+    }
+    keyed.into_values().chain(loose).filter_map(|e| price::cost(&e.model, &e.tokens)).sum()
+}
+
 /// The report over `entries` at `now`. Duplicates (same key) count once:
 /// the copy with the most output, as a streamed message's earlier copies
 /// can hold partial counts.
@@ -357,6 +382,23 @@ pub(crate) fn dollars(v: f64) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_month_s_cost_counts_this_calendar_month_once() {
+        let utc = |_: i64| 0;
+        let day = 86_400;
+        // 2026-11-16 12:00 UTC.
+        let now = 1_794_830_400;
+        let model = "claude-opus-5-5";
+        let tokens = Tokens { input: 1_000_000, ..Default::default() };
+        let e = |at: i64, key: Option<u64>| Entry { at, source: Source::Claude, model: model.into(), tokens, key };
+        let one = price::cost(model, &tokens).unwrap_or(0.0);
+        let entries = [e(now - day, Some(1)), e(now - day, Some(1)), e(now - 20 * day, None), e(now - 2 * day, None)];
+        // The 1st key once, the one two days ago; not the one in October.
+        let (y, m, d) = civil(local_day(now, &utc));
+        assert_eq!((y, m, d), (2026, 11, 16));
+        assert!((month_cost(entries.iter(), now, &utc) - 2.0 * one).abs() < 1e-9);
+    }
     use super::*;
 
     fn entry(at: i64, model: &str, output: u64, key: Option<u64>) -> Entry {
