@@ -1026,13 +1026,12 @@ async fn lan_now(r: &RemoteHost) -> Option<String> {
 }
 
 /// Whether a start goes to the relay without looking for the LAN first:
-/// on a Wi-Fi (maybe the computer's) it is looked for; on cellular alone
-/// it is not there; not knowing, as the last session went.
+/// as the last session went (the relay when it was the relay: connected
+/// at once; the session then looks for the LAN within seconds and moves
+/// to it, the steadier way, if it answers); and always on cellular alone,
+/// where the computer's LAN is not.
 fn skip_lan(on_wifi: Option<bool>, last: Option<Route>) -> bool {
-    match on_wifi {
-        Some(wifi) => !wifi,
-        None => last == Some(Route::Relay),
-    }
+    on_wifi == Some(false) || last == Some(Route::Relay)
 }
 
 /// How a session last reached the current host.
@@ -3348,15 +3347,15 @@ fn client_id() -> String {
 #[cfg(test)]
 mod tests {
 
-    /// On the same Wi-Fi as the computer the LAN comes first, even after
-    /// the relay was last; on cellular the relay at once.
+    /// A start goes the way the last one did (the session moves to the
+    /// LAN after, when it answers); on cellular alone, the relay at once.
     #[test]
-    fn the_lan_is_looked_for_first_on_wi_fi() {
-        assert!(!skip_lan(Some(true), Some(Route::Relay)));
+    fn a_start_goes_the_last_way_and_never_looks_for_the_lan_on_cellular() {
+        assert!(skip_lan(Some(true), Some(Route::Relay)), "the relay first, the LAN found after");
+        assert!(!skip_lan(Some(true), Some(Route::Lan)));
         assert!(!skip_lan(Some(true), None));
-        assert!(skip_lan(Some(false), Some(Route::Lan)));
+        assert!(skip_lan(Some(false), Some(Route::Lan)), "no LAN of the computer's on cellular");
         assert!(skip_lan(None, Some(Route::Relay)));
-        assert!(!skip_lan(None, Some(Route::Lan)));
         assert!(!skip_lan(None, None));
     }
     #[test]
