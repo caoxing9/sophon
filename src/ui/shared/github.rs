@@ -51,6 +51,31 @@ fn message(words: impl Into<SharedString>) -> View {
     view().py(sp(S8)).items_center().child(text(words.into()).text_size(tx(TEXT_BASE)).text_color(FG_MUTED).text_center())
 }
 
+/// What the inbox shows the first time it is asked for: rows as its own
+/// will be, their words still grey bars.
+fn skeleton() -> View {
+    let bar = |w: f32, h: f32| view().w(px(w)).h(px(h)).rounded(px(R_FULL)).bg(tint(FG, 0.08));
+    let mut c = card();
+    for (i, w) in [240.0, 190.0, 260.0, 170.0, 220.0].into_iter().enumerate() {
+        c = c.child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap(sp(S3))
+                .px(sp(S4))
+                .py(sp(S3))
+                .when(i > 0, |v| v.border_t(px(1.0)).border_color(BORDER))
+                .child(view().w(px(16.0)).h(px(16.0)).rounded(px(R_FULL)).bg(tint(FG, 0.08)))
+                .child(view().flex_1().min_w(px(0.0)).gap(px(6.0)).child(bar(w, 12.0)).child(bar(140.0, 9.0))),
+        );
+    }
+    view()
+        .gap(sp(S2))
+        .label(t("Loading pull requests…"))
+        .child(bar(160.0, 12.0))
+        .child(c)
+}
+
 fn failure(words: String) -> View {
     view()
         .py(sp(S6))
@@ -91,7 +116,7 @@ pub(crate) fn inbox_list(open: impl Fn(InboxItem) + Clone + 'static) -> impl Int
             let f = filter.get();
             let open = open.clone();
             Some(untracked(move || match answer {
-                None if busy => message(t("Loading pull requests…")).into_element(),
+                None if busy => skeleton().into_element(),
                 None => message(t("Pull requests show here")).into_element(),
                 Some(Err(e)) => failure(e).into_element(),
                 Some(Ok(v)) => {

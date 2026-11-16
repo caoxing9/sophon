@@ -257,6 +257,10 @@ fn github_answered(key: String, result: Result<serde_json::Value, String>) {
             github_fetch(crate::github::Op::McpStatus { cwd });
         }
     }
+    if key.starts_with("inbox:") && result.is_ok() {
+        let (key, value) = (key.clone(), result.clone());
+        std::thread::spawn(move || save_inbox(&key, value));
+    }
     global::<GitHubState>().update(|g| {
         g.loading.remove(&key);
         // An action that failed keeps the pull request shown: its error is
@@ -311,6 +315,57 @@ pub(crate) fn inbox_limit(state: &'static str) -> u32 {
     global::<InboxLimits>().with(|l| l.0.get(state).copied().unwrap_or(crate::github::INBOX_PAGE))
 }
 
+/// Where the inbox's last answers are kept, by state: shown at once the
+/// next time (the app's start too), while they are asked for again.
+fn inbox_cache_path() -> std::path::PathBuf {
+    crate::daemon::data_dir().join("github-inbox.json")
+}
+
+fn save_inbox(key: &str, value: Result<serde_json::Value, String>) {
+    let Ok(value) = value else { return };
+    let path = inbox_cache_path();
+    let mut all = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    all.insert(key.to_owned(), value);
+    let _ = std::fs::create_dir_all(crate::daemon::data_dir());
+    let _ = std::fs::write(path, serde_json::Value::Object(all).to_string());
+}
+
+/// The inbox was opened: what was kept shows at once, the filter's state is
+/// asked for again, then (once a run) the other states, so a switch to one
+/// shows it at once.
+pub(crate) fn inbox_opened() {
+    #[derive(Clone, Copy, Default)]
+    struct Prefetched(bool);
+    let empty = global::<GitHubState>().with_untracked(|g| !g.data.keys().any(|k| k.starts_with("inbox:")));
+    if empty
+        && let Some(kept) = std::fs::read_to_string(inbox_cache_path())
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .and_then(|v| v.as_object().cloned())
+    {
+        global::<GitHubState>().update(|g| {
+            for (k, v) in kept {
+                if k.starts_with("inbox:") {
+                    g.data.entry(k).or_insert(Ok(v));
+                }
+            }
+        });
+    }
+    refresh_inbox();
+    if !global::<Prefetched>().with_untracked(|p| p.0) {
+        global::<Prefetched>().set(Prefetched(true));
+        let current = global::<InboxFilter>().with_untracked(|f| f.state);
+        for state in ["open", "merged", "closed"].into_iter().filter(|s| *s != current) {
+            let limit = untracked(|| inbox_limit(state));
+            github_fetch(crate::github::Op::Inbox { roots: project_roots(), state: state.to_owned(), limit });
+        }
+    }
+}
+
 /// Asks for the inbox (in its filter's state) again.
 pub(crate) fn refresh_inbox() {
     let state = global::<InboxFilter>().with_untracked(|f| f.state);
@@ -341,7 +396,7 @@ pub(crate) fn refresh_pull_request(repo: &str, number: u64) {
 pub(crate) fn open_inbox() {
     global::<Nav>().update(|n| n.screen = Screen::Inbox);
     send(Command::WatchDiff(None));
-    refresh_inbox();
+    inbox_opened();
 }
 
 /// The desktop's page of a pull request.
