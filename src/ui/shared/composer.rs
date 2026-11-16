@@ -252,7 +252,11 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         // read as one piece, not a pill under a card.
         .rounded(px(16.0))
         .border_color(move || if over.get() { ACCENT.into() } else { glass_edge() })
-        .child(editor(doc, text_value, placeholder, TEXT_CONTENT, 220.0, changed).mx(sp(S4)).mt(px(14.0)).mb(sp(S1)))
+        // Room on the right for the context's ring when it shows.
+        .child(editor(doc, text_value, placeholder, TEXT_CONTENT, 220.0, changed).ml(sp(S4)).mr(px(if live { 40.0 } else { S4 })).mt(px(14.0)).mb(sp(S1)))
+        // How full the agent's context is, in the card's corner (as
+        // monocode's); the plan's limits are the status bar's.
+        .child(when(move || live, context_ring))
         .child(
             view()
                 .flex_row()
@@ -763,23 +767,15 @@ fn model_picker(live: bool) -> impl IntoElement {
 }
 
 /// The status bar under the desktop's conversation (as monocode's): the
-/// provider's mark, then three meters, each a ring, a word and a
-/// percentage, to be read at a glance: how full the open agent's context
-/// is, and how much of its provider's 5-hour and weekly limits is used,
-/// with the time until each starts again; and a refresh. Amber from 80%,
+/// provider's mark, then its 5-hour and weekly limits, each a ring, a word
+/// and a percentage with the time until it starts again; and a refresh.
+/// (The context is the composer's: `context_ring`.) Amber from 80%,
 /// red from 90%; a meter opens the usage page. One with nothing to say is
 /// left out. `live`: the open agent's (else a new conversation's).
 pub(crate) fn usage_bar(live: bool) -> impl IntoElement {
     let readings = computed(move || {
         let now = crate::usage::now();
         let mut out: Vec<(&'static str, f64, Option<i64>)> = Vec::new();
-        if live
-            && let Some(a) = store::selected_agent()
-            && let (Some(used), Some(max)) = (a.context_used, a.context_max)
-            && max > 0
-        {
-            out.push((t("Context"), used as f64 / max as f64 * 100.0, None));
-        }
         let provider = store::controls(live).provider;
         if let Some(p) = store::usage().and_then(|l| l.into_iter().find(|p| p.id == provider)) {
             for (word, length) in [(t("5h"), 5 * 3600), (t("Week"), 7 * 86_400)] {
@@ -822,6 +818,43 @@ pub(crate) fn usage_bar(live: bool) -> impl IntoElement {
                 row = row.child(meter);
             }
             row.child(icon_btn(Icon::RotateCw, Sz::Sm, t("Refresh"), store::refresh_usage)).into_element()
+        }))
+    }))
+}
+
+/// The open agent's context as a ring in the composer's corner; under the
+/// pointer, how full it is in words and tokens (`14% context used`,
+/// `140K / 1M tokens`). Amber from 80%, red from 90%.
+fn context_ring() -> impl IntoElement {
+    use nsh_core::element::Interactive as _;
+    let usage = computed(|| store::selected_agent().and_then(|a| Some((a.context_used?, a.context_max.filter(|m| *m > 0)?))));
+    view().absolute().top(px(10.0)).right(px(12.0)).child(dynamic(move || {
+        let (used, max) = usage.get()?;
+        let pct = used as f64 / max as f64 * 100.0;
+        Some(untracked(move || {
+            let tip = view()
+                .gap(px(2.0))
+                .px(sp(S3))
+                .py(sp(S2))
+                .rounded(px(R_LG))
+                .bg(SURFACE0)
+                .border_1()
+                .border_color(BORDER)
+                .child(text(tf("{}% context used", &[&format!("{:.0}", pct.clamp(0.0, 100.0))])).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)))
+                .child(
+                    text(tf("{} / {} tokens", &[&crate::usage::compact(used), &crate::usage::compact(max)]))
+                        .text_size(tx(TEXT_XS))
+                        .text_color(FG_MUTED),
+                );
+            view().tooltip(tip.into_element()).child(button()
+                .accessibility_label(tf("{}% context used", &[&format!("{:.0}", pct.clamp(0.0, 100.0))]))
+                .w(px(22.0))
+                .h(px(22.0))
+                .items_center()
+                .justify_center()
+                .rounded(px(R_FULL))
+                .hover(|s| s.bg(highlight()))
+                .child(ring(pct).w(px(16.0)).h(px(16.0)).text_color(meter_tone(pct))))
         }))
     }))
 }
