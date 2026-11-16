@@ -48,6 +48,9 @@ pub enum Command {
     /// Asks the host's Sophon for its session-log statistics (a phone has
     /// no logs of its own).
     HostUsage,
+    /// Asks the host's Sophon to do `op` with its `gh` (`crate::github`):
+    /// answered by [`Event::GitHub`].
+    GitHub(crate::github::Op),
     /// Tells the host's Sophon this device wants push notifications
     /// (`docs/push.md`): its id, Apple's token for it (empty: no longer),
     /// which of Apple's servers knows the token, its language, and
@@ -619,6 +622,8 @@ pub enum Event {
     Connecting { url: String },
     /// A step of the attempt under way.
     Stage(Stage),
+    /// The answer to [`Command::GitHub`]: by the op's key.
+    GitHub { key: String, result: Result<serde_json::Value, String> },
     Connected { hostname: String, version: String },
     /// `retry_in`: the wait before the next attempt.
     Disconnected { reason: String, retry_in: Duration },
@@ -865,6 +870,9 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
                     }
                     // Asked while away: no answer, said so (no notice).
                     Some(Command::HostUsage) => { let _ = events.send(Event::HostUsage(None)); }
+                    Some(Command::GitHub(op)) => {
+                        let _ = events.send(Event::GitHub { key: op.key(), result: Err("Not connected to the computer".into()) });
+                    }
                     Some(Command::AskPictures { .. } | Command::PushRegister { .. }) => {}
                     // Just started: try now, then again soon.
                     Some(Command::Reconnect) => {
@@ -1324,6 +1332,15 @@ async fn session(
                     }
                     continue;
                 }
+                if let Command::GitHub(op) = &cmd {
+                    // Only the host's Sophon (its bridge) runs gh.
+                    if connected && endpoint.bridge_token.is_some() {
+                        send(&mut tx, &json!({ "type": "sophon_github_request", "key": op.key(), "request": op.to_json() })).await?;
+                    } else if events.send(Event::GitHub { key: op.key(), result: Err("GitHub needs Sophon on the computer (pair with it there)".into()) }).is_err() {
+                        return Ok(Exit::UiGone);
+                    }
+                    continue;
+                }
                 if let Command::HostUsage = &cmd {
                     if connected && endpoint.bridge_token.is_some() {
                         send(&mut tx, &json!({ "type": "sophon_usage_request" })).await?;
@@ -1456,6 +1473,17 @@ async fn session(
                     Some("session") => {}
                     Some("sophon_usage") => {
                         if events.send(Event::HostUsage(msg.get("report").cloned())).is_err() {
+                            return Ok(Exit::UiGone);
+                        }
+                        continue;
+                    }
+                    Some("sophon_github") => {
+                        let key = msg.get("key").and_then(Value::as_str).unwrap_or_default().to_owned();
+                        let result = match msg.get("ok").and_then(Value::as_bool) {
+                            Some(true) => Ok(msg.get("data").cloned().unwrap_or(Value::Null)),
+                            _ => Err(msg.get("error").and_then(Value::as_str).unwrap_or("GitHub failed").to_owned()),
+                        };
+                        if events.send(Event::GitHub { key, result }).is_err() {
                             return Ok(Exit::UiGone);
                         }
                         continue;
@@ -1698,7 +1726,7 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
     match cmd {
         Command::Open(id) => timeline_requests(&id, pending),
         // Sent by the session itself, with its binary frames.
-        Command::Upload { .. } | Command::Download { .. } | Command::Reconnect | Command::Resume { .. } | Command::NetworkChanged { .. } | Command::AskPictures { .. } | Command::HostUsage | Command::PushRegister { .. } => vec![],
+        Command::Upload { .. } | Command::Download { .. } | Command::Reconnect | Command::Resume { .. } | Command::NetworkChanged { .. } | Command::GitHub(_) | Command::AskPictures { .. } | Command::HostUsage | Command::PushRegister { .. } => vec![],
         Command::Send { agent_id, text, behavior, images, attachments, message_id } => {
             let mut msg = json!({
                 "type": "send_agent_message_request",

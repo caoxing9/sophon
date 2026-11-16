@@ -27,7 +27,8 @@ pub(crate) fn sidebar() -> View {
                 }))
                 .child(nav_item(Icon::History, t("History"), || store::screen() == Screen::History, store::open_history))
                 .child(nav_item(Icon::Search, t("Search"), || false, || store::open_modal(store::Modal::Palette)))
-                .child(nav_item(Icon::CalendarClock, t("Schedules"), || store::screen() == Screen::Schedules, store::open_schedules)),
+                .child(nav_item(Icon::CalendarClock, t("Schedules"), || store::screen() == Screen::Schedules, store::open_schedules))
+                .child(nav_item(Icon::GitPullRequest, t("Pull requests"), || matches!(store::screen(), Screen::Inbox | Screen::PullRequest { .. }), store::open_inbox)),
         )
         // A Mac that runs no agents of its own, connected nowhere yet: how to
         // reach one, in place of a list it has none of.

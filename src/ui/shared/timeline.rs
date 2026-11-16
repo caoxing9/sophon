@@ -268,6 +268,9 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                         .child(copy_area(text_view()
                     // A link opens in the browser (or the app it belongs to).
                     .links(nsh_base::TextViewLinks::Open)
+                    // A copy button on each code block (under the pointer on the
+                    // desktop, always on the phone).
+                    .code_block_actions(vec![nsh_base::TextViewCodeAction::new("copy").with_label(crate::i18n::t("Copy"))])
 // While searching, the words found are marked in the
                     // text itself, not only the message they are in.
                     .markdown(move || {
@@ -443,6 +446,15 @@ pub(crate) fn mark_matches(markdown: &str, query: &str) -> String {
 /// pointer; a message from the host's history has the names alone.
 /// Where another conversation's words begin in a message that refers to
 /// it (`store::conversation_context`).
+/// A user message as copied: what was written, without another
+/// conversation's words sent along with it (`store::conversation_context`).
+fn message_words(text: &str) -> String {
+    match text.find(CONTEXT_MARK) {
+        Some(at) => text[..at].trim_end().to_owned(),
+        None => text.to_owned(),
+    }
+}
+
 /// Text chosen in the conversation is what ⌘C copies. The composer keeps
 /// the keyboard through clicks elsewhere (as a desktop field does), and
 /// with it the Edit menu's Copy, which then copied nothing: it gives the
@@ -600,7 +612,12 @@ fn tool_icon(kind: &str, name: &str) -> Icon {
 /// A user message's actions on the phone: copy it, or rewind to it.
 fn message_sheet(item: Memo<Option<Item>>) {
     let Some(Item::User { text: body, message_id, .. }) = item.get_untracked() else { return };
-    let mut items = vec![SheetItem::new(t("Copy"), move || set_clipboard(body.clone())).icon(Icon::Copy)];
+    let words = message_words(&body);
+    let mut items = vec![SheetItem::new(t("Copy"), move || {
+        set_clipboard(words.clone());
+        store::notify(t("Copied").into());
+    })
+    .icon(Icon::Copy)];
     if let Some(id) = message_id {
         let (a, b, c) = (id.clone(), id.clone(), id);
         items.push(SheetItem::new(t("Rewind conversation to here"), move || store::rewind(&a, "conversation")).icon(Icon::Undo2));
@@ -616,6 +633,53 @@ fn user_actions(item: Memo<Option<Item>>) -> View {
         Some(Item::User { message_id: Some(id), .. }) => Some(id),
         _ => None,
     });
+    // The desktop: Copy, always, and the rewinds when the host knows the
+    // message. The phone copies from the bubble's own sheet.
+    if !MOBILE {
+        let body = computed(move || match item.get() {
+            Some(Item::User { text, .. }) => Some(message_words(&text)),
+            _ => None,
+        });
+        return view().absolute().bottom(px(-12.0)).right(px(-4.0)).child(dynamic(move || {
+            let body = body.get()?;
+            let id = id.get();
+            Some(untracked(move || {
+                let disc = |glyph: Icon, label: &'static str| {
+                    view()
+                        .w(px(22.0))
+                        .h(px(22.0))
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(R_FULL))
+                        .bg(SURFACE0)
+                        .border_1()
+                        .border_color(BORDER)
+                        .label(label)
+                        .child(icon(glyph, 12.0).text_color(FG_MUTED))
+                };
+                let mut row = view().flex_row().gap(px(4.0)).child(
+                    nsh_base::button()
+                        .on_press(move || {
+                            set_clipboard(body.clone());
+                            store::notify(t("Copied").into());
+                        })
+                        .child(disc(Icon::Copy, t("Copy"))),
+                );
+                if let Some(id) = id {
+                    let (a, b, c) = (id.clone(), id.clone(), id);
+                    row = row.child(
+                        dropdown(disc(Icon::Ellipsis, t("Message actions")))
+                            .align(nsh_core::overlay::Align::End)
+                            .child(menu_heading(t("Rewind to here")))
+                            .child(menu_row(t("Conversation only"), Some(Icon::Undo2), None, false, move || store::rewind(&a, "conversation")))
+                            .child(menu_row(t("Files only"), Some(Icon::FileText), None, false, move || store::rewind(&b, "files")))
+                            .child(menu_row(t("Conversation and files"), Some(Icon::RotateCw), None, false, move || store::rewind(&c, "both"))),
+                    );
+                }
+                row.into_element()
+            }))
+        }));
+    }
     view().absolute().bottom(px(-12.0)).right(px(-4.0)).child(dynamic(move || {
         let id = id.get()?;
         Some(untracked(move || {
@@ -1018,6 +1082,9 @@ fn plan_card(p: Permission, plan: String) -> View {
                 text_view()
                     // A link opens in the browser (or the app it belongs to).
                     .links(nsh_base::TextViewLinks::Open)
+                    // A copy button on each code block (under the pointer on the
+                    // desktop, always on the phone).
+                    .code_block_actions(vec![nsh_base::TextViewCodeAction::new("copy").with_label(crate::i18n::t("Copy"))])
 .markdown(move || Some(SharedString::from(plan.clone())))
                     .selectable(true)
                     .gap_2()
@@ -1301,6 +1368,9 @@ fn static_row(item: Item) -> AnyElement {
         Item::Assistant { text: t } => copy_area(text_view()
             // A link opens in the browser (or the app it belongs to).
             .links(nsh_base::TextViewLinks::Open)
+                    // A copy button on each code block (under the pointer on the
+                    // desktop, always on the phone).
+                    .code_block_actions(vec![nsh_base::TextViewCodeAction::new("copy").with_label(crate::i18n::t("Copy"))])
 .markdown(move || Some(SharedString::from(t.clone())))
             .selectable(true)
             .gap_3()
@@ -1546,5 +1616,16 @@ mod find_tests {
         assert_eq!(mark_matches("a test\n```\ntest()\n```\ntest", "test"), "a <mark>test</mark>\n```\ntest()\n```\n<mark>test</mark>");
         assert_eq!(mark_matches("nothing here", "zzz"), "nothing here");
         assert_eq!(mark_matches("same", " "), "same");
+    }
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::{CONTEXT_MARK, message_words};
+
+    #[test]
+    fn a_copied_message_leaves_another_conversation_s_words_out() {
+        assert_eq!(message_words("fix the tab bar"), "fix the tab bar");
+        assert_eq!(message_words(&format!("look at this{CONTEXT_MARK}other\" said …")), "look at this");
     }
 }

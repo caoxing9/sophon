@@ -37,6 +37,11 @@ pub(crate) enum Screen {
     Schedules,
     Usage,
     Workspace(String),
+    /// The open pull requests that involve the user (`crate::github`).
+    Inbox,
+    /// One pull request; `agent`: the conversation it was opened from,
+    /// which "Fix with agent" writes to.
+    PullRequest { repo: String, number: u64, agent: Option<String> },
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -175,6 +180,175 @@ pub(crate) fn save_project_config() {
         Ok(config) => send(Command::WriteProjectConfig { root: c.root, config, revision: c.revision }),
         Err(e) => global::<ProjectConfig>().update(|c| c.error = Some(format!("Not valid JSON: {e}"))),
     }
+}
+
+// ------------------------------------------------------------------ GitHub
+
+/// GitHub's answers (`crate::github`) by their op's key, and the keys being
+/// asked for now.
+#[derive(Clone, Default)]
+struct GitHubState {
+    data: HashMap<String, Result<serde_json::Value, String>>,
+    loading: std::collections::HashSet<String>,
+}
+
+/// The last answer kept for `key` (it stays while it is asked again).
+pub(crate) fn github(key: &str) -> Option<Result<serde_json::Value, String>> {
+    global::<GitHubState>().with(|g| g.data.get(key).cloned())
+}
+
+pub(crate) fn github_loading(key: &str) -> bool {
+    global::<GitHubState>().with(|g| g.loading.contains(key))
+}
+
+/// Asks GitHub for `op`: with this Mac's `gh` when its service is this
+/// Mac's, else through the computer's Sophon.
+pub(crate) fn github_fetch(op: crate::github::Op) {
+    let key = op.key();
+    global::<GitHubState>().update(|g| {
+        g.loading.insert(key.clone());
+    });
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+    if is_desktop() && on_this_mac() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::github::run(&op));
+        });
+        spawn_detached(async move {
+            let result = rx.await.unwrap_or_else(|_| Err("GitHub failed".into()));
+            github_answered(key, result);
+        });
+        return;
+    }
+    send(Command::GitHub(op));
+}
+
+fn github_answered(key: String, result: Result<serde_json::Value, String>) {
+    global::<GitHubState>().update(|g| {
+        g.loading.remove(&key);
+        // An action that failed keeps the pull request shown: its error is
+        // said, the pull request as it was stays.
+        match (&result, g.data.get(&key)) {
+            (Err(e), Some(Ok(_))) => notify(e.clone()),
+            _ => {
+                g.data.insert(key, result);
+            }
+        }
+    });
+}
+
+/// The project folders here, for the inbox to match to repositories.
+fn project_roots() -> Vec<String> {
+    projects().into_iter().map(|p| p.root_path).filter(|r| !r.is_empty()).collect()
+}
+
+/// The inbox's filter: a state of `github::STATES`, and drafts alone
+/// (of the open ones).
+#[derive(Clone, PartialEq)]
+pub(crate) struct InboxFilter {
+    pub(crate) state: &'static str,
+    pub(crate) drafts: bool,
+}
+
+impl Default for InboxFilter {
+    fn default() -> Self {
+        Self { state: "open", drafts: false }
+    }
+}
+
+pub(crate) fn inbox_filter() -> InboxFilter {
+    global::<InboxFilter>().with(Clone::clone)
+}
+
+/// Shows the inbox's pull requests in `state` (asked for the first time),
+/// drafts alone with `drafts`.
+pub(crate) fn set_inbox_filter(state: &'static str, drafts: bool) {
+    global::<InboxFilter>().set(InboxFilter { state, drafts });
+    if github(&format!("inbox:{state}")).is_none() {
+        refresh_inbox();
+    }
+}
+
+/// How many of each state's pull requests are asked for ("Load more").
+#[derive(Clone, Default)]
+struct InboxLimits(HashMap<&'static str, u32>);
+
+/// How many of `state`'s pull requests are asked for.
+pub(crate) fn inbox_limit(state: &'static str) -> u32 {
+    global::<InboxLimits>().with(|l| l.0.get(state).copied().unwrap_or(crate::github::INBOX_PAGE))
+}
+
+/// Asks for the inbox (in its filter's state) again.
+pub(crate) fn refresh_inbox() {
+    let state = global::<InboxFilter>().with_untracked(|f| f.state);
+    let limit = untracked(|| inbox_limit(state));
+    github_fetch(crate::github::Op::Inbox { roots: project_roots(), state: state.to_owned(), limit });
+}
+
+/// The next page of the filter's state.
+pub(crate) fn inbox_load_more() {
+    use crate::github::{INBOX_MAX, INBOX_PAGE};
+    let state = global::<InboxFilter>().with_untracked(|f| f.state);
+    global::<InboxLimits>().update(|l| {
+        let n = l.0.entry(state).or_insert(INBOX_PAGE);
+        *n = (*n + INBOX_PAGE).min(INBOX_MAX);
+    });
+    refresh_inbox();
+}
+
+/// Asks for pull request `repo#number` and its checks again (its diff when
+/// its Code is opened).
+pub(crate) fn refresh_pull_request(repo: &str, number: u64) {
+    use crate::github::Op;
+    github_fetch(Op::View { repo: repo.to_owned(), number });
+    github_fetch(Op::Checks { repo: repo.to_owned(), number });
+}
+
+/// The desktop's inbox.
+pub(crate) fn open_inbox() {
+    global::<Nav>().update(|n| n.screen = Screen::Inbox);
+    send(Command::WatchDiff(None));
+    refresh_inbox();
+}
+
+/// The desktop's page of a pull request.
+pub(crate) fn open_pull_request(repo: &str, number: u64, agent: Option<String>) {
+    global::<Nav>().update(|n| n.screen = Screen::PullRequest { repo: repo.to_owned(), number, agent });
+    send(Command::WatchDiff(None));
+    refresh_pull_request(repo, number);
+}
+
+/// Does `action` (`crate::github::ACTIONS`) to the pull request; its
+/// page shows it as it is after.
+pub(crate) fn pull_request_act(repo: &str, number: u64, action: &str) {
+    github_fetch(crate::github::Op::Act { repo: repo.to_owned(), number, action: action.to_owned() });
+    // What its checks and the inbox say may change with it.
+    let (repo, number) = (repo.to_owned(), number);
+    set_timeout(std::time::Duration::from_secs(4), move || {
+        github_fetch(crate::github::Op::Checks { repo, number });
+        if global::<GitHubState>().with_untracked(|g| g.data.keys().any(|k| k.starts_with("inbox:"))) {
+            refresh_inbox();
+        }
+    });
+}
+
+/// "Fix with agent": the prompt goes into the composer of the conversation
+/// the pull request was opened from, or of a new conversation in `root`,
+/// to read and send. Where it went: `Some(workspace)` for a conversation
+/// (the phone opens it), `None` for the new conversation's form.
+pub(crate) fn fix_with_agent(prompt: String, agent: Option<&str>, root: Option<&str>) -> Option<String> {
+    if let Some(a) = agent.and_then(self::agent) {
+        set_draft(&a.id, &prompt);
+        let ws = a.workspace_id.clone()?;
+        if is_desktop() {
+            open_workspace(&ws);
+            open_tab(Tab::Agent(a.id.clone()));
+        }
+        return Some(ws);
+    }
+    open_new_workspace(root.map(str::to_owned));
+    edit_form(|f| f.prompt = prompt);
+    None
 }
 
 pub(crate) fn open_usage() {
@@ -5313,6 +5487,7 @@ pub(crate) fn apply(event: Event) {
                 c.0 = Conn::Connecting(url);
             }
         }),
+        Event::GitHub { key, result } => github_answered(key, result),
         Event::Stage(stage) => global::<ConnProgress>().update(|p| {
             use crate::daemon::connection::Stage;
             if let Stage::Reaching(via) | Stage::Securing(via) | Stage::Greeting(via) = stage {

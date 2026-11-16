@@ -260,6 +260,8 @@ enum Main {
     Schedules,
     Usage,
     Workspace,
+    Inbox,
+    PullRequest,
 }
 
 /// The main surface: the open screen, and the notice over its foot.
@@ -272,6 +274,8 @@ fn main(compact: bool) -> impl IntoElement {
         Screen::Schedules => Main::Schedules,
         Screen::Usage => Main::Usage,
         Screen::Workspace(_) => Main::Workspace,
+        Screen::Inbox => Main::Inbox,
+        Screen::PullRequest { .. } => Main::PullRequest,
     });
     view()
         .flex_1()
@@ -286,6 +290,8 @@ fn main(compact: bool) -> impl IntoElement {
                 Main::Schedules => schedules::schedules(compact).into_element(),
                 Main::Usage => crate::ui::shared::usage::usage_page(compact).into_element(),
                 Main::Workspace => workspace::workspace(compact).into_element(),
+                Main::Inbox => crate::ui::shared::github::inbox_page().into_element(),
+                Main::PullRequest => crate::ui::shared::github::pull_request_screen().into_element(),
             }))
         }))
         .child(notice::notice_bar())
