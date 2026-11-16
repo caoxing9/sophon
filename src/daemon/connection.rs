@@ -742,6 +742,9 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
     // On Wi-Fi now (the device's network, `platform::network`): the LAN
     // first; off it, the relay at once. `None`: not known.
     let mut on_wifi: Option<bool> = None;
+    // The session through the relay just found the LAN bridge answering:
+    // the next attempt goes there, whatever the last route was.
+    let mut lan_answered = false;
     // The host whose kept lists the UI has been given.
     let mut shown: Option<String> = None;
     loop {
@@ -771,7 +774,7 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
                 if let Some(now) = crate::platform::network::on_wifi() {
                     on_wifi = Some(now);
                 }
-                let away = lan_index == 0 && has_relay(r) && skip_lan(on_wifi, last_route());
+                let away = lan_index == 0 && has_relay(r) && skip_lan(on_wifi, last_route(), std::mem::take(&mut lan_answered));
                 let found = if lan_index == 0 && !away && has_lan(r) {
                     if events.send(Event::Stage(Stage::Finding)).is_err() {
                         return;
@@ -819,7 +822,9 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
                 continue;
             }
             Ok(Exit::Lan) => {
+                trace("the LAN bridge answers: moving to it from the relay");
                 lan_index = 0;
+                lan_answered = true;
                 backoff = Duration::from_secs(1);
                 continue;
             }
@@ -1029,9 +1034,11 @@ async fn lan_now(r: &RemoteHost) -> Option<String> {
 /// as the last session went (the relay when it was the relay: connected
 /// at once; the session then looks for the LAN within seconds and moves
 /// to it, the steadier way, if it answers); and always on cellular alone,
-/// where the computer's LAN is not.
-fn skip_lan(on_wifi: Option<bool>, last: Option<Route>) -> bool {
-    on_wifi == Some(false) || last == Some(Route::Relay)
+/// where the computer's LAN is not. Never when the LAN was just found
+/// answering (`lan_answered`): that is the move to it, which the last
+/// route (the relay it leaves) must not send back.
+fn skip_lan(on_wifi: Option<bool>, last: Option<Route>, lan_answered: bool) -> bool {
+    !lan_answered && (on_wifi == Some(false) || last == Some(Route::Relay))
 }
 
 /// How a session last reached the current host.
@@ -3351,12 +3358,21 @@ mod tests {
     /// LAN after, when it answers); on cellular alone, the relay at once.
     #[test]
     fn a_start_goes_the_last_way_and_never_looks_for_the_lan_on_cellular() {
-        assert!(skip_lan(Some(true), Some(Route::Relay)), "the relay first, the LAN found after");
-        assert!(!skip_lan(Some(true), Some(Route::Lan)));
-        assert!(!skip_lan(Some(true), None));
-        assert!(skip_lan(Some(false), Some(Route::Lan)), "no LAN of the computer's on cellular");
-        assert!(skip_lan(None, Some(Route::Relay)));
-        assert!(!skip_lan(None, None));
+        assert!(skip_lan(Some(true), Some(Route::Relay), false), "the relay first, the LAN found after");
+        assert!(!skip_lan(Some(true), Some(Route::Lan), false));
+        assert!(!skip_lan(Some(true), None, false));
+        assert!(skip_lan(Some(false), Some(Route::Lan), false), "no LAN of the computer's on cellular");
+        assert!(skip_lan(None, Some(Route::Relay), false));
+        assert!(!skip_lan(None, None, false));
+    }
+
+    /// The session through the relay found the LAN answering: the next
+    /// attempt is the LAN, though the relay was the last route. (It went
+    /// back to the relay, found the LAN again 15 s later, and so on.)
+    #[test]
+    fn the_lan_found_from_the_relay_is_moved_to() {
+        assert!(!skip_lan(Some(true), Some(Route::Relay), true));
+        assert!(!skip_lan(None, Some(Route::Relay), true));
     }
     #[test]
     fn file_frames_follow_the_protocol() {
