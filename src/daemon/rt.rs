@@ -46,6 +46,11 @@ impl Interval {
         }
         self.next = (self.next + self.period).max(Instant::now());
     }
+
+    /// The next tick now, not at its time.
+    pub fn fire_now(&mut self) {
+        self.next = Instant::now();
+    }
 }
 
 pub fn interval_at(start: Instant, period: Duration) -> Interval {

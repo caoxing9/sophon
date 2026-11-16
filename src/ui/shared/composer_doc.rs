@@ -283,11 +283,6 @@ pub(crate) fn existing(key: &str) -> Option<EditorSession> {
     SESSIONS.with_borrow(|m| m.get(key).cloned())
 }
 
-/// Whether a composer has the keyboard.
-pub(crate) fn any_focused() -> bool {
-    SESSIONS.with_borrow(|m| m.values().any(EditorSession::is_focused))
-}
-
 /// Every composer gives up the keyboard (a selection elsewhere is to be
 /// copied).
 pub(crate) fn blur_all() {

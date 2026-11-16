@@ -1,6 +1,8 @@
 //! An agent's conversation: user bubbles, Markdown replies, tool calls,
 //! thinking, todos, errors; pending permissions above the composer.
 
+// Presses and long presses on plain views (the phone's bubbles).
+use nsh_core::element::Interactive as _;
 use crate::i18n::{t, tf};
 use nsh_base::{MarkdownOptions, text_view};
 use nsh_core::{
@@ -79,6 +81,8 @@ pub(crate) fn timeline() -> impl IntoElement {
                 // its keeping the end in place (`store::set_group_open`).
                 .event_throttle(100.0)
                 .on_scroll(|e: &ScrollEvent| store::set_timeline_scroll(e.offset.y.0, e.content_size.height.0, e.size.height.0))
+                // A drag is the user's, whatever the content does meanwhile.
+                .on_scroll_drag_start(|_: &nsh_core::Point<nsh_core::Points>| store::timeline_scrolled_by_user())
                 .content_padding_top(sp(S4))
                 // The phone's composer floats over the end; the desktop's
                 // sits below the list.
@@ -231,15 +235,24 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
             Some(untracked(move || match kind {
                 // The phone: no button on the bubble; a tap opens its
                 // actions, copying among them.
-                RowKind::User if MOBILE => user_row(item, nsh_base::button()
-                    .px(px(14.0))
-                    .py(px(9.0))
-                    .rounded(px(18.0))
-                    .bg(tint(ACCENT, 0.10))
-                    .active(|s| s.opacity(0.7))
-                    .on_press(move || message_sheet(item))
-                    .accessibility_label(t("Message actions"))
-                    .child(user_text(item, false)))
+                RowKind::User if MOBILE => user_row(item, view().child(dynamic(move || {
+                    let selecting = index.get().is_some() && selecting_text() == index.get();
+                    Some(untracked(move || {
+                        let bubble = view().px(px(14.0)).py(px(9.0)).rounded(px(18.0)).bg(tint(ACCENT, 0.10));
+                        if selecting {
+                            select_in_place(bubble.child(user_text(item, true))).items_end().into_element()
+                        } else {
+                            bubble
+                                .active(|s| s.opacity(0.7))
+                                .on_press(move || message_sheet(item, index.get_untracked()))
+                                // As other chat apps: a long press, the message's actions.
+                                .on_long_press(move |_: &nsh_core::element::PressEvent| message_sheet(item, index.get_untracked()))
+                                .label(t("Message actions"))
+                                .child(user_text(item, false))
+                                .into_element()
+                        }
+                    }))
+                })))
                     .into_element(),
                 // The desktop: its actions show while the pointer is on it.
                 RowKind::User => {
@@ -260,6 +273,32 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                 // A copy button floats at its corner: under the pointer on
                 // the desktop, always on the phone (no pointer, and a press
                 // there selects).
+                // The phone: no button on the reply; a long press opens its
+                // actions (copy, select text), as other chat apps do.
+                RowKind::Assistant if MOBILE => view().child(dynamic(move || {
+                    let selecting = index.get().is_some() && selecting_text() == index.get();
+                    Some(untracked(move || {
+                        let reply = text_view()
+                            .links(nsh_base::TextViewLinks::Open)
+                            .code_block_actions(vec![nsh_base::TextViewCodeAction::new("copy").with_label(crate::i18n::t("Copy"))])
+                            .markdown(move || Some(SharedString::from(text_of())))
+                            .options(move || MarkdownOptions { streaming: streaming.get(), ..MarkdownOptions::default() })
+                            .gap_3()
+                            .text_size(tx(TEXT_CONTENT))
+                            .line_height(px(24.0))
+                            .text_color(FG);
+                        if selecting {
+                            select_in_place(view().child(reply)).into_element()
+                        } else {
+                            view()
+                                .on_long_press(move |_: &nsh_core::element::PressEvent| reply_sheet(text_of(), index.get_untracked()))
+                                .label(t("Message actions"))
+                                .child(reply)
+                                .into_element()
+                        }
+                    }))
+                }))
+                    .into_element(),
                 RowKind::Assistant => {
                     let hover = signal(false);
                     view()
@@ -291,9 +330,9 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                                 .right(px(0.0))
                                 .rounded(px(R_MD))
                                 .bg(SURFACE0)
-                                .opacity(move || if !streaming.get() && (MOBILE || hover.get()) { 1.0_f32 } else { 0.0 })
+                                .opacity(move || if !streaming.get() && hover.get() { 1.0_f32 } else { 0.0 })
                                 .transition_opacity()
-                                .pointer_events(move || if !streaming.get() && (MOBILE || hover.get()) { nsh_core::PointerEvents::Auto } else { nsh_core::PointerEvents::None })
+                                .pointer_events(move || if !streaming.get() && hover.get() { nsh_core::PointerEvents::Auto } else { nsh_core::PointerEvents::None })
                                 .child(icon_btn(Icon::Copy, Sz::Sm, t("Copy"), move || {
                                     set_clipboard(text_of());
                                     store::notify(t("Copied").into());
@@ -609,15 +648,60 @@ fn tool_icon(kind: &str, name: &str) -> Icon {
     }
 }
 
-/// A user message's actions on the phone: copy it, or rewind to it.
-fn message_sheet(item: Memo<Option<Item>>) {
+/// The message selected in place on the phone (its item's index), after
+/// its "Select text": its words selectable where they are, all of them
+/// selected, until the selection is cleared or Done.
+#[derive(Clone, Copy, Default, PartialEq)]
+struct SelectingText(Option<usize>);
+
+fn selecting_text() -> Option<usize> {
+    global::<SelectingText>().get().0
+}
+
+fn select_text(index: Option<usize>) {
+    global::<SelectingText>().set(SelectingText(index));
+}
+
+/// A message being selected in place: `content` a selectable area, all of
+/// it selected as it shows (handles on its ends and the system's menu:
+/// Copy, Select All), and Done below. A tap that clears the selection is
+/// done too.
+fn select_in_place(content: View) -> View {
+    let area = element_ref();
+    let selected_once = signal(false);
+    let select = area.clone();
+    // Once its texts are laid out.
+    set_timeout(std::time::Duration::from_millis(120), move || select.command("selectAll", nsh_core::JsonValue::Null));
+    view()
+        .gap(px(6.0))
+        .child(
+            content
+                .selectable(true)
+                .element_ref(&area)
+                .on_text_selection_change(move |e: &nsh_core::element::TextSelectionEvent| {
+                    if !e.text.is_empty() {
+                        selected_once.set(true);
+                    } else if selected_once.get_untracked() {
+                        select_text(None);
+                    }
+                }),
+        )
+        .child(view().flex_row().justify_end().child(btn(t("Done"), Variant::Secondary, Sz::Sm, None, || select_text(None))))
+}
+
+/// A user message's actions on the phone: copy it, select in it, or rewind
+/// to it.
+fn message_sheet(item: Memo<Option<Item>>, index: Option<usize>) {
     let Some(Item::User { text: body, message_id, .. }) = item.get_untracked() else { return };
     let words = message_words(&body);
-    let mut items = vec![SheetItem::new(t("Copy"), move || {
-        set_clipboard(words.clone());
-        store::notify(t("Copied").into());
-    })
-    .icon(Icon::Copy)];
+    let mut items = vec![
+        SheetItem::new(t("Copy"), move || {
+            set_clipboard(words.clone());
+            store::notify(t("Copied").into());
+        })
+        .icon(Icon::Copy),
+        SheetItem::new(t("Select text"), move || select_text(index)).icon(Icon::FileText),
+    ];
     if let Some(id) = message_id {
         let (a, b, c) = (id.clone(), id.clone(), id);
         items.push(SheetItem::new(t("Rewind conversation to here"), move || store::rewind(&a, "conversation")).icon(Icon::Undo2));
@@ -625,6 +709,22 @@ fn message_sheet(item: Memo<Option<Item>>) {
         items.push(SheetItem::new(t("Rewind both to here"), move || store::rewind(&c, "both")).icon(Icon::RotateCw));
     }
     show_sheet(None, items);
+}
+
+/// A reply's actions on the phone (a long press): copy it whole, or select
+/// part of it where it is.
+fn reply_sheet(body: String, index: Option<usize>) {
+    if body.trim().is_empty() {
+        return;
+    }
+    show_sheet(None, vec![
+        SheetItem::new(t("Copy"), move || {
+            set_clipboard(body.clone());
+            store::notify(t("Copied").into());
+        })
+        .icon(Icon::Copy),
+        SheetItem::new(t("Select text"), move || select_text(index)).icon(Icon::FileText),
+    ]);
 }
 
 /// Rewind from a user message (the message menu).

@@ -40,6 +40,19 @@ unsafe extern "C" {
     fn dispatch_get_global_queue(identifier: isize, flags: usize) -> *mut c_void;
 }
 
+/// The device's network as last seen: 0 not known, 1 on Wi-Fi (or wired),
+/// 2 not (cellular alone, or offline).
+static ON_WIFI: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Whether the device is on Wi-Fi (or wired) now; `None`: not known yet.
+pub(crate) fn on_wifi() -> Option<bool> {
+    match ON_WIFI.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => Some(true),
+        2 => Some(false),
+        _ => None,
+    }
+}
+
 static RECEIVER: OnceLock<std::sync::Mutex<Option<mpsc::UnboundedReceiver<NetState>>>> = OnceLock::new();
 
 /// Starts the monitor (once): the device's network as it is, then each
@@ -61,6 +74,7 @@ pub(crate) fn watch() -> Option<mpsc::UnboundedReceiver<NetState>> {
                         cellular: nw_path_uses_interface_type(path, CELLULAR),
                     }
                 };
+                ON_WIFI.store(if state.online && state.wifi { 1 } else { 2 }, std::sync::atomic::Ordering::Relaxed);
                 let _ = tx.send(state);
             });
             // SAFETY: the documented calls; the monitor lives as long as the

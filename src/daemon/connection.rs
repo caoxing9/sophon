@@ -35,7 +35,13 @@ pub enum Command {
     /// The device's network changed (`platform::network`): back online, or
     /// another interface. Online, a wait between attempts ends now and a
     /// live connection is checked; off Wi-Fi, a LAN connection is dropped.
-    NetworkChanged { online: bool, wifi: bool },
+    NetworkChanged {
+        online: bool,
+        wifi: bool,
+        /// The network as it is at the start, not a change: kept (the LAN is
+        /// looked for first on Wi-Fi), nothing checked.
+        first: bool,
+    },
     /// `behavior`: `steer` or `interrupt` while a turn runs.
     /// `message_id`: the id the host echoes the message back with, so the
     /// copy shown at once is not shown twice.
@@ -733,6 +739,12 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
     // LAN does not answer (away from home), the LAN again after that.
     let mut lan_index = 0usize;
     let mut backoff = Duration::from_secs(1);
+    // On Wi-Fi now (the device's network, `platform::network`): the LAN
+    // first; off it, the relay at once. `None`: not known.
+    let mut on_wifi: Option<bool> = None;
+    // The session through the relay just found the LAN bridge answering:
+    // the next attempt goes there, whatever the last route was.
+    let mut lan_answered = false;
     // The host whose kept lists the UI has been given.
     let mut shown: Option<String> = None;
     loop {
@@ -756,7 +768,13 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
                 // Through the relay last time (away from home): the relay
                 // at once, not after the LAN's look; the session moves to
                 // the LAN within seconds if it answers after all.
-                let away = lan_index == 0 && has_relay(r) && last_route() == Some(Route::Relay);
+                // As the device's network is now (read where it is kept,
+                // before any command says it).
+                #[cfg(any(target_os = "macos", target_os = "ios"))]
+                if let Some(now) = crate::platform::network::on_wifi() {
+                    on_wifi = Some(now);
+                }
+                let away = lan_index == 0 && has_relay(r) && skip_lan(on_wifi, last_route(), std::mem::take(&mut lan_answered));
                 let found = if lan_index == 0 && !away && has_lan(r) {
                     if events.send(Event::Stage(Stage::Finding)).is_err() {
                         return;
@@ -783,7 +801,7 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
         }
         let mut reached = false;
         let attempt = tokio::select! {
-            r = session(&endpoint, &events, &mut commands, &mut open_agent, &mut diff_cwd, &mut reached) => Some(r),
+            r = session(&endpoint, &events, &mut commands, &mut open_agent, &mut diff_cwd, &mut reached, &mut on_wifi) => Some(r),
             _ = switch_signal().notified() => None,
         };
         let result = match attempt {
@@ -804,7 +822,9 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
                 continue;
             }
             Ok(Exit::Lan) => {
+                trace("the LAN bridge answers: moving to it from the relay");
                 lan_index = 0;
+                lan_answered = true;
                 backoff = Duration::from_secs(1);
                 continue;
             }
@@ -887,13 +907,15 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
                         lan_index = 0;
                         break;
                     }
+                    Some(Command::NetworkChanged { wifi, first: true, .. }) => on_wifi = Some(wifi),
                     // Back online, or on another network: try now.
-                    Some(Command::NetworkChanged { online: true, .. }) => {
+                    Some(Command::NetworkChanged { online: true, wifi, .. }) => {
+                        on_wifi = Some(wifi);
                         backoff = Duration::from_millis(500);
                         lan_index = 0;
                         break;
                     }
-                    Some(Command::NetworkChanged { online: false, .. }) => {}
+                    Some(Command::NetworkChanged { wifi, .. }) => on_wifi = Some(wifi),
                     Some(_) => { let _ = events.send(Event::Notice("Not connected to the service".into())); }
                 },
             }
@@ -1006,6 +1028,17 @@ async fn lan_now(r: &RemoteHost) -> Option<String> {
         }
     }
     None
+}
+
+/// Whether a start goes to the relay without looking for the LAN first:
+/// as the last session went (the relay when it was the relay: connected
+/// at once; the session then looks for the LAN within seconds and moves
+/// to it, the steadier way, if it answers); and always on cellular alone,
+/// where the computer's LAN is not. Never when the LAN was just found
+/// answering (`lan_answered`): that is the move to it, which the last
+/// route (the relay it leaves) must not send back.
+fn skip_lan(on_wifi: Option<bool>, last: Option<Route>, lan_answered: bool) -> bool {
+    !lan_answered && (on_wifi == Some(false) || last == Some(Route::Relay))
 }
 
 /// How a session last reached the current host.
@@ -1150,6 +1183,7 @@ async fn session(
     open_agent: &mut Option<String>,
     diff_cwd: &mut Option<String>,
     reached: &mut bool,
+    on_wifi: &mut Option<bool>,
 ) -> Result<Exit, String> {
     let mut diff_sub: Option<String> = None;
     // Terminal output arrives in binary frames addressed by slot.
@@ -1243,8 +1277,10 @@ async fn session(
     let mut check_at: Option<rt::Instant> = None;
     // The wait of the probe under way.
     let mut probing = RESUME_ANSWER;
+    // Through the relay with a LAN bridge to find: looked for soon after
+    // (on the computer's Wi-Fi it answers at once), then every 15 s.
     let mut lan_check = rt::interval_at(
-        rt::Instant::now() + Duration::from_secs(5),
+        rt::Instant::now() + Duration::from_secs(2),
         Duration::from_secs(15),
     );
 
@@ -1253,7 +1289,8 @@ async fn session(
             _ = &mut hello_deadline, if !connected => {
                 return Err("The daemon did not answer the handshake".into());
             }
-            _ = lan_check.tick(), if connected && (!endpoint.lan_probe.is_empty() || endpoint.lan_key.is_some()) => {
+            // Not on cellular alone: no LAN of the computer's there.
+            _ = lan_check.tick(), if connected && *on_wifi != Some(false) && (!endpoint.lan_probe.is_empty() || endpoint.lan_key.is_some()) => {
                 let found = match &endpoint.lan_key {
                     Some(key) => find_key(key.clone(), Duration::from_millis(1000)).await,
                     None => None,
@@ -1293,7 +1330,16 @@ async fn session(
                 // while away): alive. Else a ping, and a short wait for
                 // anything at all, shorter after long away or on the LAN
                 // (as t3code's connection supervisor waits).
+                if let Command::NetworkChanged { wifi, .. } = &cmd {
+                    *on_wifi = Some(*wifi);
+                    // On a Wi-Fi through the relay: the computer may be on
+                    // it; looked for now, and moved to if it answers.
+                    if *wifi && !endpoint.is_lan() && (!endpoint.lan_probe.is_empty() || endpoint.lan_key.is_some()) {
+                        lan_check.fire_now();
+                    }
+                }
                 let probe = match &cmd {
+                    Command::NetworkChanged { first: true, .. } => None,
                     Command::Resume { away } => Some(*away >= LONG_AWAY),
                     // The LAN's bridge is not reached off Wi-Fi.
                     Command::NetworkChanged { wifi: false, .. } if endpoint.is_lan() => return Ok(Exit::Stale),
@@ -3307,6 +3353,27 @@ fn client_id() -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// A start goes the way the last one did (the session moves to the
+    /// LAN after, when it answers); on cellular alone, the relay at once.
+    #[test]
+    fn a_start_goes_the_last_way_and_never_looks_for_the_lan_on_cellular() {
+        assert!(skip_lan(Some(true), Some(Route::Relay), false), "the relay first, the LAN found after");
+        assert!(!skip_lan(Some(true), Some(Route::Lan), false));
+        assert!(!skip_lan(Some(true), None, false));
+        assert!(skip_lan(Some(false), Some(Route::Lan), false), "no LAN of the computer's on cellular");
+        assert!(skip_lan(None, Some(Route::Relay), false));
+        assert!(!skip_lan(None, None, false));
+    }
+
+    /// The session through the relay found the LAN answering: the next
+    /// attempt is the LAN, though the relay was the last route. (It went
+    /// back to the relay, found the LAN again 15 s later, and so on.)
+    #[test]
+    fn the_lan_found_from_the_relay_is_moved_to() {
+        assert!(!skip_lan(Some(true), Some(Route::Relay), true));
+        assert!(!skip_lan(None, Some(Route::Relay), true));
+    }
     #[test]
     fn file_frames_follow_the_protocol() {
         let bytes = vec![7u8; FILE_CHUNK_BYTES + 3];
