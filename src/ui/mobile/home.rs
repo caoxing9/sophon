@@ -78,6 +78,7 @@ pub(crate) fn home() -> impl IntoElement {
                                 store::open_modal(store::Modal::ReportIssue)
                             })),
                         ))
+                        .child(crate::ui::shared::conn_banner::conn_banner())
                         .child(search_field(query, t("Search conversations")))
                         .child(chats(query))
                         .into_element(),
@@ -91,6 +92,7 @@ pub(crate) fn home() -> impl IntoElement {
                                 ])
                             })),
                         ))
+                        .child(crate::ui::shared::conn_banner::conn_banner())
                         .child(search_field(query, t("Search projects")))
                         .child(projects(query, false))
                         .into_element(),
@@ -169,7 +171,11 @@ fn host_chip() -> impl IntoElement {
     button()
         .on_press(move || {
             let status = match conn.get_untracked() {
-                Conn::Connected { .. } => t("Connected").to_owned(),
+                Conn::Connected { .. } => match store::conn_progress().via {
+                    Some(crate::daemon::connection::Via::Lan) => t("Connected · over the local network").to_owned(),
+                    Some(crate::daemon::connection::Via::Relay) => t("Connected · through the relay").to_owned(),
+                    _ => t("Connected").to_owned(),
+                },
                 Conn::Down(_) => t("Offline").to_owned(),
                 _ => t("Connecting…").to_owned(),
             };
@@ -205,6 +211,16 @@ fn host_chip() -> impl IntoElement {
         .active(|s| s.opacity(0.7))
         .child(crate::ui::shared::conn_mark())
         .child(text(move || name.get()).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).number_of_lines(1).flex_shrink(1.0))
+        // How it is reached, once it is: the local network or the relay.
+        .child(dynamic(move || {
+            use crate::daemon::connection::Via;
+            let glyph = match (conn.get(), store::conn_progress().via) {
+                (Conn::Connected { .. }, Some(Via::Lan)) => Icon::Wifi,
+                (Conn::Connected { .. }, Some(Via::Relay)) => Icon::Cloud,
+                _ => return None,
+            };
+            Some(untracked(move || icon(glyph, 12.0).text_color(FG_MUTED).into_element()))
+        }))
         .child(icon(Icon::ChevronDown, 12.0).text_color(FG_MUTED))
 }
 

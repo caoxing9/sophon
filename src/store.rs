@@ -1055,6 +1055,60 @@ pub(crate) fn conn() -> Conn {
     global::<ConnState>().with(|c| c.0.clone())
 }
 
+/// What the connection is doing, for the UI to say (`ui::shared::conn_
+/// banner`): the step under way, the route, since when it has been out
+/// (all attempts of one outage together), when the next attempt starts,
+/// and until when "Connected" is said once it is back. Times in ms.
+#[derive(Clone, Default, PartialEq)]
+pub(crate) struct ConnProgress {
+    pub(crate) stage: Option<crate::daemon::connection::Stage>,
+    pub(crate) via: Option<crate::daemon::connection::Via>,
+    pub(crate) since: Option<i64>,
+    pub(crate) retry_at: Option<i64>,
+    pub(crate) connected_until: Option<i64>,
+}
+
+/// How long an attempt goes unsaid: one that ends within it shows nothing
+/// (no strip flashing on and off at each start).
+pub(crate) const CONN_QUIET_MS: i64 = 600;
+
+pub(crate) fn conn_progress() -> ConnProgress {
+    global::<ConnProgress>().with(Clone::clone)
+}
+
+pub(crate) fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
+}
+
+/// The clock the connection's strip counts with: moved every half second
+/// while it has something to count (an attempt, a wait, "Connected").
+#[derive(Clone, Copy, Default, PartialEq)]
+struct ConnClock(i64);
+
+pub(crate) fn conn_clock() -> i64 {
+    global::<ConnClock>().with(|c| c.0)
+}
+
+pub(crate) fn watch_conn_clock() {
+    fn again() {
+        set_timeout(std::time::Duration::from_millis(500), || {
+            let now = now_ms();
+            let counting = !matches!(conn(), Conn::Connected { .. }) || global::<ConnProgress>().with_untracked(|p| p.connected_until.is_some_and(|u| u > now - 1000));
+            if counting {
+                global::<ConnClock>().set(ConnClock(now));
+            }
+            again();
+        });
+    }
+    Owner::detached().run(again);
+}
+
+/// The next attempt now, not after the wait.
+pub(crate) fn retry_now() {
+    global::<ConnProgress>().update(|p| p.retry_at = None);
+    send(Command::Reconnect);
+}
+
 pub(crate) fn screen() -> Screen {
     global::<Nav>().with(|n| n.screen.clone())
 }
@@ -5203,7 +5257,25 @@ pub(crate) fn apply(event: Event) {
                 c.0 = Conn::Connecting(url);
             }
         }),
+        Event::Stage(stage) => global::<ConnProgress>().update(|p| {
+            use crate::daemon::connection::Stage;
+            if let Stage::Reaching(via) | Stage::Securing(via) | Stage::Greeting(via) = stage {
+                p.via = Some(via);
+            }
+            p.stage = Some(stage);
+            p.since.get_or_insert_with(now_ms);
+            p.retry_at = None;
+        }),
         Event::Connected { hostname, version } => {
+            // Said once it is back, if the wait was long enough to be shown.
+            global::<ConnProgress>().update(|p| {
+                let now = now_ms();
+                let shown = p.since.is_some_and(|s| now - s >= CONN_QUIET_MS);
+                p.connected_until = shown.then_some(now + 1800);
+                p.since = None;
+                p.stage = None;
+                p.retry_at = None;
+            });
             // This computer may send no push notifications: it says when
             // asked, and is asked each time the phone reaches one.
             global::<PushState>().update(|p| p.served = false);
@@ -5222,7 +5294,14 @@ pub(crate) fn apply(event: Event) {
                 notify(t("The service restarted").into());
             }
         }
-        Event::Disconnected { reason } => {
+        Event::Disconnected { reason, retry_in } => {
+            global::<ConnProgress>().update(|p| {
+                let now = now_ms();
+                p.since.get_or_insert(now);
+                p.stage = None;
+                p.connected_until = None;
+                p.retry_at = Some(now + retry_in.as_millis() as i64);
+            });
             // The answers to an import under way are lost with the session:
             // what is left of it is given up, not to wait on them for ever.
             if importing() {

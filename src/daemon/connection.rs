@@ -580,11 +580,40 @@ pub struct CreateAgent {
 }
 
 /// What the daemon told us, decoded for the UI.
+/// How a session reaches its host.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Via {
+    /// The service on this computer.
+    Local,
+    /// The paired computer's bridge on this network.
+    Lan,
+    /// Through the relay server.
+    Relay,
+    /// A host's address as given.
+    Direct,
+}
+
+/// Where a connection attempt is, for the UI to say.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Stage {
+    /// Looking for the computer on this network.
+    Finding,
+    /// Opening the socket.
+    Reaching(Via),
+    /// The end-to-end handshake (LAN bridge, relay).
+    Securing(Via),
+    /// Waiting for the service's welcome.
+    Greeting(Via),
+}
+
 #[derive(Debug, Clone)]
 pub enum Event {
     Connecting { url: String },
+    /// A step of the attempt under way.
+    Stage(Stage),
     Connected { hostname: String, version: String },
-    Disconnected { reason: String },
+    /// `retry_in`: the wait before the next attempt.
+    Disconnected { reason: String, retry_in: Duration },
     ProjectsReset(Vec<Project>),
     ProjectUpsert(Project),
     ProjectRemove(String),
@@ -703,7 +732,17 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
                 // at once, not after the LAN's look; the session moves to
                 // the LAN within seconds if it answers after all.
                 let away = lan_index == 0 && has_relay(r) && last_route() == Some(Route::Relay);
-                let found = if lan_index == 0 && !away { lan_now(r).await } else { None };
+                let found = if lan_index == 0 && !away && has_lan(r) {
+                    if events.send(Event::Stage(Stage::Finding)).is_err() {
+                        return;
+                    }
+                    let started = rt::Instant::now();
+                    let found = lan_now(r).await;
+                    trace(&format!("LAN look: {} in {} ms", if found.is_some() { "found" } else { "nothing" }, started.elapsed().as_millis()));
+                    found
+                } else {
+                    None
+                };
                 if lan_index == 0 && found.is_none() && has_relay(r) {
                     lan_index = usize::MAX;
                 }
@@ -765,7 +804,7 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
         };
         lan_index = 0;
         trace(&format!("lost: {reason}; next attempt in {} ms", backoff.as_millis()));
-        if events.send(Event::Disconnected { reason }).is_err() {
+        if events.send(Event::Disconnected { reason, retry_in: backoff }).is_err() {
             return;
         }
         // Keep the latest open request while waiting, so a click during an
@@ -874,6 +913,11 @@ fn endpoint_for(r: &RemoteHost, lan_index: usize, found: Option<String>) -> Endp
         }
     }
     Endpoint { url: r.ws_url(), local_credential: None, password: r.password.clone(), relay: None, bridge_token: None, lan_probe: vec![], lan_key: None }
+}
+
+/// Whether a saved host has a LAN bridge to look for.
+fn has_lan(r: &RemoteHost) -> bool {
+    super::relay::PairingLink::parse(&r.url).is_some_and(|l| l.lan.is_some())
 }
 
 /// A paired host's bridge on this network now, found by its key.
@@ -1069,6 +1113,11 @@ async fn session(
     let mut utf8_tails: HashMap<String, Vec<u8>> = HashMap::new();
     // Downloads under way: their bytes so far, by request id.
     let mut downloads: HashMap<String, Vec<u8>> = HashMap::new();
+    let via = endpoint.via();
+    let started = rt::Instant::now();
+    if events.send(Event::Stage(Stage::Reaching(via))).is_err() {
+        return Ok(Exit::UiGone);
+    }
     let (sink, mut rx) = rt::timeout(
         Duration::from_secs(if endpoint.is_lan() { 3 } else { 10 }),
         rt::connect(endpoint.url.as_str()),
@@ -1076,12 +1125,17 @@ async fn session(
     .await
     .ok_or_else(|| "Timed out connecting to the daemon".to_owned())?
     .map_err(|e| format!("Cannot reach the Sophon service at {}: {e}", endpoint.url))?;
+    trace(&format!("{via:?}: socket open in {} ms", started.elapsed().as_millis()));
     let mut tx = Out { sink, seal: None };
     // Through the relay: the end-to-end handshake first, then every frame
     // is sealed for the daemon and opened from it.
     let mut unseal: Option<super::relay::Receiver> = None;
     if let Some(offer) = &endpoint.relay {
+        if events.send(Event::Stage(Stage::Securing(via))).is_err() {
+            return Ok(Exit::UiGone);
+        }
         let (sender, receiver) = relay_handshake(offer, &mut tx, &mut rx).await?;
+        trace(&format!("{via:?}: handshake done at {} ms", started.elapsed().as_millis()));
         tx.seal = Some(sender);
         unseal = Some(receiver);
         if let Some(token) = &endpoint.bridge_token {
@@ -1114,6 +1168,9 @@ async fn session(
         hello["auth"] = json!({ "kind": "password", "password": password });
     }
     send(&mut tx, &hello).await?;
+    if events.send(Event::Stage(Stage::Greeting(via))).is_err() {
+        return Ok(Exit::UiGone);
+    }
 
     let mut pending: HashMap<String, Pending> = HashMap::new();
     let mut connected = false;
@@ -1368,7 +1425,7 @@ async fn session(
                         connected = true;
                         remember_route(if endpoint.is_lan() { Route::Lan } else if endpoint.relay.is_some() { Route::Relay } else { Route::Direct });
                         let field = |k| payload.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
-                        trace(&format!("connected to {} ({})", field("hostname"), field("version")));
+                        trace(&format!("connected to {} ({}) via {via:?} in {} ms", field("hostname"), field("version"), started.elapsed().as_millis()));
                         if events.send(Event::Connected { hostname: field("hostname"), version: field("version") }).is_err() {
                             return Ok(Exit::UiGone);
                         }
@@ -3038,6 +3095,19 @@ impl Endpoint {
     pub fn is_lan(&self) -> bool {
         self.relay.as_ref().is_some_and(|r| r.server_id == "bridge")
     }
+
+    /// How it reaches its host.
+    pub fn via(&self) -> Via {
+        if self.local_credential.is_some() {
+            Via::Local
+        } else if self.is_lan() {
+            Via::Lan
+        } else if self.relay.is_some() {
+            Via::Relay
+        } else {
+            Via::Direct
+        }
+    }
 }
 
 /// The relay this Mac's service registers with (`daemon.relay.endpoint` in
@@ -3265,7 +3335,7 @@ mod tests {
                             println!("agents through the relay: {}", a.len());
                             break;
                         }
-                        Event::Disconnected { reason } => println!("disconnected: {reason}"),
+                        Event::Disconnected { reason, .. } => println!("disconnected: {reason}"),
                         _ => {}
                     },
                 }
@@ -3677,7 +3747,7 @@ mod tests {
                         Event::Connecting { url } => { println!("connecting: {url}"); via_lan = !url.contains("127.0.0.1"); }
                         Event::Connected { hostname, .. } => println!("connected via LAN bridge={via_lan}: {hostname}"),
                         Event::AgentsReset(a) if via_lan => { println!("agents through the bridge: {}", a.len()); break; }
-                        Event::Disconnected { reason } => println!("disconnected: {reason}"),
+                        Event::Disconnected { reason, .. } => println!("disconnected: {reason}"),
                         _ => {}
                     },
                 }

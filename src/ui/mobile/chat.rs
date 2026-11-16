@@ -76,7 +76,7 @@ fn body() -> impl IntoElement {
         // Over the keyboard while it shows: the composer rides just above
         // it; the home indicator's room otherwise.
         .pb(move || Length::from(px(keyboard_height().0.max(safe_area().bottom.0))))
-        .child(offline_banner())
+        .child(crate::ui::shared::conn_banner::conn_banner())
         .child(dynamic(move || {
             let p = pane.get();
             Some(untracked(move || match p {
@@ -153,34 +153,6 @@ fn agent_sheet() {
     }
     items.push(SheetItem::destructive(t("Archive agent"), move || store::archive_agent(&archive)).icon(Icon::Archive));
     show_sheet(Some(a.title.clone()), items);
-}
-
-/// While the computer is out of reach: a strip over the conversation, so
-/// nothing looks sent that is not.
-fn offline_banner() -> impl IntoElement {
-    let conn = computed(store::conn);
-    let down = computed(move || !matches!(conn.get(), Conn::Connected { .. }));
-    when(down, move || {
-        view()
-            .flex_row()
-            .items_center()
-            .justify_center()
-            .gap(sp(S2))
-            .h(px(28.0))
-            .mx(sp(S3))
-            .mt(sp(S1))
-            .rounded(px(R_FULL))
-            .bg(tint(WARNING, 0.14))
-            .child(icon(Icon::RotateCw, 13.0).text_color(WARNING))
-            .child(
-                text(move || match conn.get() {
-                    Conn::Down(_) => t("Can't reach the computer · retrying").to_owned(),
-                    _ => t("Reconnecting…").to_owned(),
-                })
-                .text_size(tx(TEXT_SM))
-                .text_color(WARNING),
-            )
-    })
 }
 
 /// A sub-agent's work, read only, over the conversation that started it.

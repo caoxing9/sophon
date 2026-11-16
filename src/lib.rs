@@ -115,6 +115,7 @@ pub fn App() -> impl IntoElement {
     }
     store::watch_limits();
     store::watch_resume();
+    store::watch_conn_clock();
     // (The phone asks in `start_push`, and for Apple's token after.)
     #[cfg(not(target_os = "ios"))]
     let _ = request_notification_permission();
