@@ -672,6 +672,22 @@ pub(crate) fn terminal_resize(id: &str, rows: u16, cols: u16) {
     send(Command::TerminalResize { terminal_id: id.to_owned(), rows, cols });
 }
 
+/// What the next terminal made is to run, typed in once its shell is up
+/// (a slash command done in `claude`, `slash::Native::Terminal`).
+#[derive(Clone, Default)]
+struct TerminalLine(Option<String>);
+
+/// A new terminal of the service in the open workspace, running `line`
+/// (the computer's own: on a Mac followed from elsewhere).
+pub(crate) fn run_in_workspace_terminal(line: String) {
+    if current_workspace().is_none() {
+        notify(t("Open a workspace to run it in a terminal").into());
+        return;
+    }
+    global::<TerminalLine>().set(TerminalLine(Some(line)));
+    new_terminal();
+}
+
 pub(crate) fn new_terminal() {
     if let Some(w) = current_workspace() {
         send(Command::CreateTerminal { cwd: w.directory, workspace_id: w.id });
@@ -5745,6 +5761,12 @@ pub(crate) fn apply(event: Event) {
         }),
         Event::TerminalCreated(info) => {
             let id = info.id.clone();
+            // A command waiting for it: typed in once its shell has started.
+            if let Some(line) = global::<TerminalLine>().with_untracked(|l| l.0.clone()) {
+                global::<TerminalLine>().set(TerminalLine(None));
+                let to = id.clone();
+                set_timeout(std::time::Duration::from_millis(700), move || terminal_input(&to, &line));
+            }
             global::<Terminals>().update(|t| {
                 if !t.list.iter().any(|x| x.id == info.id) {
                     t.list.push(info);
