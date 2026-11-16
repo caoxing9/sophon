@@ -19,16 +19,19 @@ use serde_json::{Value, json};
 #[cfg_attr(any(target_os = "ios", target_os = "android", target_arch = "wasm32"), allow(dead_code))]
 pub(crate) const MAX_DIFF_BYTES: usize = 2 * 1024 * 1024;
 
+/// The inbox's states: open, merged, or closed without being merged.
+pub(crate) const STATES: [&str; 3] = ["open", "merged", "closed"];
+
 /// The actions a pull request takes.
 pub(crate) const ACTIONS: [&str; 7] = ["merge", "squash", "rebase", "draft", "ready", "close", "reopen"];
 
 /// What is asked of GitHub.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Op {
-    /// The open pull requests that involve the user; `roots`: the projects'
-    /// folders here, matched to their repositories (a pull request of one
-    /// of them can be worked on in it).
-    Inbox { roots: Vec<String> },
+    /// The pull requests that involve the user in `state` (of
+    /// [`STATES`]); `roots`: the projects' folders here, matched to their
+    /// repositories (a pull request of one of them can be worked on in it).
+    Inbox { roots: Vec<String>, state: String },
     View { repo: String, number: u64 },
     Diff { repo: String, number: u64 },
     Checks { repo: String, number: u64 },
@@ -56,7 +59,7 @@ impl Op {
     /// Where its answer is kept (the views read it by this).
     pub fn key(&self) -> String {
         match self {
-            Op::Inbox { .. } => "inbox".into(),
+            Op::Inbox { state, .. } => format!("inbox:{state}"),
             Op::View { repo, number } => format!("view:{repo}#{number}"),
             Op::Diff { repo, number } => format!("diff:{repo}#{number}"),
             Op::Checks { repo, number } => format!("checks:{repo}#{number}"),
@@ -67,7 +70,7 @@ impl Op {
 
     pub fn to_json(&self) -> Value {
         match self {
-            Op::Inbox { roots } => json!({ "op": "inbox", "roots": roots }),
+            Op::Inbox { roots, state } => json!({ "op": "inbox", "roots": roots, "state": state }),
             Op::View { repo, number } => json!({ "op": "view", "repo": repo, "number": number }),
             Op::Diff { repo, number } => json!({ "op": "diff", "repo": repo, "number": number }),
             Op::Checks { repo, number } => json!({ "op": "checks", "repo": repo, "number": number }),
@@ -88,9 +91,17 @@ impl Op {
             Ok((repo, number))
         };
         match s("op").as_str() {
-            "inbox" => Ok(Op::Inbox {
-                roots: v.get("roots").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).take(200).map(str::to_owned).collect(),
-            }),
+            "inbox" => {
+                // Before states: the open ones.
+                let state = Some(s("state")).filter(|s| !s.is_empty()).unwrap_or_else(|| "open".into());
+                if !STATES.contains(&state.as_str()) {
+                    return Err("Unknown state".into());
+                }
+                Ok(Op::Inbox {
+                    roots: v.get("roots").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).take(200).map(str::to_owned).collect(),
+                    state,
+                })
+            }
             "view" => pr().map(|(repo, number)| Op::View { repo, number }),
             "diff" => pr().map(|(repo, number)| Op::Diff { repo, number }),
             "checks" => pr().map(|(repo, number)| Op::Checks { repo, number }),
@@ -328,9 +339,16 @@ pub(crate) fn repo_of_remote(remote: &str) -> Option<String> {
 pub(crate) fn run(op: &Op) -> Result<Value, String> {
     let s = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
     match op {
-        Op::Inbox { roots } => {
+        Op::Inbox { roots, state } => {
             let fields = "number,title,repository,updatedAt,isDraft,author,url";
-            let involved = gh_json(&["search", "prs", "--state", "open", "--involves", "@me", "--sort", "updated", "--limit", "60", "--json", fields])?;
+            let mut args = vec!["search", "prs", "--involves", "@me", "--sort", "updated", "--limit", "80", "--json", fields];
+            match state.as_str() {
+                "merged" => args.push("--merged"),
+                // Closed without being merged.
+                "closed" => args.extend(["--state", "closed", "--", "-is:merged"]),
+                _ => args.extend(["--state", "open"]),
+            }
+            let involved = gh_json(&args)?;
             // Asked to review: marked (a second, small search).
             let asked = gh_json(&["search", "prs", "--state", "open", "--review-requested", "@me", "--limit", "60", "--json", "number,repository"]).unwrap_or(Value::Null);
             let asked: Vec<(String, u64)> = asked
@@ -466,8 +484,11 @@ mod tests {
             Op::from_json(&json!({ "op": "act", "repo": "a/b", "number": 1, "action": "squash" })),
             Ok(Op::Act { repo: "a/b".into(), number: 1, action: "squash".into() })
         );
-        let op = Op::Inbox { roots: vec!["/Users/me/sophon".into()] };
+        let op = Op::Inbox { roots: vec!["/Users/me/sophon".into()], state: "merged".into() };
         assert_eq!(Op::from_json(&op.to_json()), Ok(op));
+        assert!(Op::from_json(&json!({ "op": "inbox", "state": "deleted" })).is_err());
+        // From before states: the open ones.
+        assert_eq!(Op::from_json(&json!({ "op": "inbox" })), Ok(Op::Inbox { roots: vec![], state: "open".into() }));
     }
 
     #[test]
@@ -518,7 +539,10 @@ mod live {
         assert!(diff["patch"].as_str().unwrap().starts_with("diff --git"));
         let checks = checks_of(&run(&Op::Checks { repo: "caoxing9/sophon".into(), number: 61 }).unwrap());
         eprintln!("{:?}", checks.iter().map(|c| (&c.name, c.state)).collect::<Vec<_>>());
-        let inbox = Inbox::from_json(&run(&Op::Inbox { roots: vec![env!("CARGO_MANIFEST_DIR").into()] }).unwrap());
+        let inbox = Inbox::from_json(&run(&Op::Inbox { roots: vec![env!("CARGO_MANIFEST_DIR").into()], state: "open".into() }).unwrap());
+        let merged = Inbox::from_json(&run(&Op::Inbox { roots: vec![], state: "merged".into() }).unwrap());
+        let closed = Inbox::from_json(&run(&Op::Inbox { roots: vec![], state: "closed".into() }).unwrap());
+        eprintln!("{} merged, {} closed", merged.items.len(), closed.items.len());
         eprintln!("{} open, local {:?}", inbox.items.len(), inbox.local);
         assert_eq!(inbox.local_of("caoxing9/sophon").is_some(), true);
     }

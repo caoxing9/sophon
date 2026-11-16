@@ -62,39 +62,111 @@ fn failure(words: String) -> View {
 
 // ------------------------------------------------------------------- inbox
 
-/// The inbox's list: the open pull requests that involve the user, the
-/// ones asking for a review first. `open`: a press, with the project folder
-/// here of its repository if there is one.
+/// The inbox's list: the pull requests that involve the user in the
+/// filter's state (open, drafts, merged, closed), by repository, the
+/// projects here first, and in each the ones asking for a review first.
+/// `open`: a press.
 pub(crate) fn inbox_list(open: impl Fn(InboxItem) + Clone + 'static) -> impl IntoElement {
-    let answer = computed(|| store::github("inbox"));
-    let loading = computed(|| store::github_loading("inbox"));
-    view().child(dynamic(move || {
-        let answer = answer.get();
-        let busy = loading.get();
-        let open = open.clone();
-        Some(untracked(move || match answer {
-            None if busy => message(t("Loading pull requests…")).into_element(),
-            None => message(t("Pull requests show here")).into_element(),
-            Some(Err(e)) => failure(e).into_element(),
-            Some(Ok(v)) => {
-                let inbox = Inbox::from_json(&v);
-                if inbox.items.is_empty() {
-                    return message(t("No open pull requests involve you")).into_element();
+    let filter = computed(store::inbox_filter);
+    let key = computed(move || format!("inbox:{}", filter.get().state));
+    let answer = computed(move || store::github(&key.get()));
+    let loading = computed(move || store::github_loading(&key.get()));
+    view()
+        .gap(sp(S4))
+        .child(
+            view().flex_row().child(segmented(
+                vec![
+                    (("open", false), t("Open").into()),
+                    (("open", true), t("Draft").into()),
+                    (("merged", false), t("Merged").into()),
+                    (("closed", false), t("Closed").into()),
+                ],
+                move || filter.with(|f| (f.state, f.drafts)),
+                |(state, drafts): (&'static str, bool)| store::set_inbox_filter(state, drafts),
+            )),
+        )
+        .child(dynamic(move || {
+            let answer = answer.get();
+            let busy = loading.get();
+            let f = filter.get();
+            let open = open.clone();
+            Some(untracked(move || match answer {
+                None if busy => message(t("Loading pull requests…")).into_element(),
+                None => message(t("Pull requests show here")).into_element(),
+                Some(Err(e)) => failure(e).into_element(),
+                Some(Ok(v)) => {
+                    let inbox = Inbox::from_json(&v);
+                    let items: Vec<InboxItem> = inbox.items.iter().filter(|i| !f.drafts || i.draft).cloned().collect();
+                    if items.is_empty() {
+                        return message(match (f.state, f.drafts) {
+                            (_, true) => t("No drafts"),
+                            ("merged", _) => t("No merged pull requests"),
+                            ("closed", _) => t("No closed pull requests"),
+                            _ => t("No open pull requests involve you"),
+                        })
+                        .into_element();
+                    }
+                    let tone = match f.state {
+                        "merged" => DOT_RUNNING,
+                        "closed" => DANGER,
+                        _ => SUCCESS,
+                    };
+                    let mut list = view().gap(sp(S6));
+                    for (repo, group) in by_repository(&inbox, items) {
+                        let local = inbox.local_of(&repo).map(|p| p.rsplit('/').next().unwrap_or(p).to_owned());
+                        let mut c = card();
+                        for (i, item) in group.iter().cloned().enumerate() {
+                            c = c.child(inbox_row(item, i > 0, tone, open.clone()));
+                        }
+                        list = list.child(view().gap(sp(S2)).child(group_head(&repo, local, group.len())).child(c));
+                    }
+                    list.into_element()
                 }
-                let mut items = inbox.items.clone();
-                items.sort_by(|a, b| b.review_requested.cmp(&a.review_requested).then(b.updated_at.cmp(&a.updated_at)));
-                let mut c = card();
-                for (i, item) in items.into_iter().enumerate() {
-                    c = c.child(inbox_row(item, i > 0, open.clone()));
-                }
-                c.into_element()
-            }
+            }))
         }))
-    }))
 }
 
-fn inbox_row(item: InboxItem, divider: bool, open: impl Fn(InboxItem) + 'static) -> impl IntoElement {
-    let tone = if item.draft { FG_MUTED } else { SUCCESS };
+/// The pull requests by repository: the repositories with a project here
+/// first, then by their latest; in each, the ones asking for a review
+/// first, then the latest.
+pub(crate) fn by_repository(inbox: &Inbox, mut items: Vec<InboxItem>) -> Vec<(String, Vec<InboxItem>)> {
+    items.sort_by(|a, b| b.review_requested.cmp(&a.review_requested).then(b.updated_at.cmp(&a.updated_at)));
+    let mut groups: Vec<(String, Vec<InboxItem>)> = Vec::new();
+    for item in items {
+        match groups.iter_mut().find(|(r, _)| *r == item.repo) {
+            Some((_, g)) => g.push(item),
+            None => groups.push((item.repo.clone(), vec![item])),
+        }
+    }
+    let latest = |g: &[InboxItem]| g.iter().map(|i| i.updated_at.clone()).max().unwrap_or_default();
+    groups.sort_by(|(ra, a), (rb, b)| {
+        let (la, lb) = (inbox.local_of(ra).is_some(), inbox.local_of(rb).is_some());
+        lb.cmp(&la).then(latest(b).cmp(&latest(a)))
+    });
+    groups
+}
+
+/// A repository's heading: its project here by name (else the
+/// repository), the repository after it, and how many.
+fn group_head(repo: &str, local: Option<String>, count: usize) -> View {
+    let (name, rest) = match local {
+        Some(n) if !repo.ends_with(&format!("/{n}")) => (n, repo.to_owned()),
+        Some(n) => (n, repo.to_owned()),
+        None => (repo.to_owned(), String::new()),
+    };
+    view()
+        .flex_row()
+        .items_center()
+        .gap(sp(S2))
+        .px(sp(S1))
+        .child(icon(if rest.is_empty() { Icon::GitPullRequest } else { Icon::Folder }, 14.0).text_color(FG_MUTED))
+        .child(text(name).text_size(tx(TEXT_SM)).font_weight(FontWeight(600)))
+        .when(!rest.is_empty(), |v| v.child(text(rest).text_size(tx(TEXT_XS)).text_color(FG_FAINT)))
+        .child(text(count.to_string()).text_size(tx(TEXT_XS)).text_color(FG_FAINT))
+}
+
+fn inbox_row(item: InboxItem, divider: bool, tone: AdaptiveColor, open: impl Fn(InboxItem) + 'static) -> impl IntoElement {
+    let tone = if item.draft { FG_MUTED } else { tone };
     let pressed = item.clone();
     button()
         .on_press(move || open(pressed.clone()))
@@ -114,7 +186,7 @@ fn inbox_row(item: InboxItem, divider: bool, open: impl Fn(InboxItem) + 'static)
                 .gap(px(2.0))
                 .child(text(item.title.clone()).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)).number_of_lines(1))
                 .child(
-                    text(format!("{} #{} · {} · {}", item.repo, item.number, item.author, ago(&item.updated_at)))
+                    text(format!("#{} · {} · {}", item.number, item.author, ago(&item.updated_at)))
                         .text_size(tx(TEXT_XS))
                         .text_color(FG_MUTED)
                         .number_of_lines(1),
@@ -157,8 +229,10 @@ enum PrTab {
 
 /// The project folder here of `repo`, as the inbox found it.
 fn local_root(repo: &str) -> Option<String> {
-    let v = store::github("inbox")?.ok()?;
-    Inbox::from_json(&v).local_of(repo).map(str::to_owned)
+    crate::github::STATES.iter().find_map(|state| {
+        let v = store::github(&format!("inbox:{state}"))?.ok()?;
+        Inbox::from_json(&v).local_of(repo).map(str::to_owned)
+    })
 }
 
 /// The desktop's pull request screen (`Screen::PullRequest`).
@@ -522,4 +596,32 @@ fn check_row(c: Check, divider: bool) -> impl IntoElement {
         )
         .child(text(word).text_size(tx(TEXT_XS)).text_color(tone))
         .when(!c.url.is_empty(), |v| v.child(icon(Icon::ExternalLink, 12.0).text_color(FG_FAINT)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::by_repository;
+    use crate::github::{Inbox, InboxItem};
+
+    fn item(repo: &str, number: u64, updated: &str, review: bool) -> InboxItem {
+        InboxItem { repo: repo.into(), number, title: String::new(), url: String::new(), draft: false, author: String::new(), updated_at: updated.into(), review_requested: review }
+    }
+
+    #[test]
+    fn pull_requests_group_by_repository_projects_here_first() {
+        let inbox = Inbox { items: vec![], local: vec![("caoxing9/sophon".into(), "/Users/me/sophon".into())] };
+        let items = vec![
+            item("teableio/teable-ee", 1, "2026-11-16T05:00:00Z", false),
+            item("caoxing9/sophon", 61, "2026-11-16T02:00:00Z", false),
+            item("teableio/teable-ee", 2, "2026-11-10T00:00:00Z", true),
+            item("caoxing9/sophon", 63, "2026-11-16T04:00:00Z", false),
+        ];
+        let groups = by_repository(&inbox, items);
+        let shape: Vec<(String, Vec<u64>)> = groups.into_iter().map(|(r, g)| (r, g.iter().map(|i| i.number).collect())).collect();
+        assert_eq!(shape, vec![
+            ("caoxing9/sophon".to_owned(), vec![63, 61]),
+            // Asked to review first, though older.
+            ("teableio/teable-ee".to_owned(), vec![2, 1]),
+        ]);
+    }
 }

@@ -242,9 +242,37 @@ fn project_roots() -> Vec<String> {
     projects().into_iter().map(|p| p.root_path).filter(|r| !r.is_empty()).collect()
 }
 
-/// Asks for the inbox again.
+/// The inbox's filter: a state of `github::STATES`, and drafts alone
+/// (of the open ones).
+#[derive(Clone, PartialEq)]
+pub(crate) struct InboxFilter {
+    pub(crate) state: &'static str,
+    pub(crate) drafts: bool,
+}
+
+impl Default for InboxFilter {
+    fn default() -> Self {
+        Self { state: "open", drafts: false }
+    }
+}
+
+pub(crate) fn inbox_filter() -> InboxFilter {
+    global::<InboxFilter>().with(Clone::clone)
+}
+
+/// Shows the inbox's pull requests in `state` (asked for the first time),
+/// drafts alone with `drafts`.
+pub(crate) fn set_inbox_filter(state: &'static str, drafts: bool) {
+    global::<InboxFilter>().set(InboxFilter { state, drafts });
+    if github(&format!("inbox:{state}")).is_none() {
+        refresh_inbox();
+    }
+}
+
+/// Asks for the inbox (in its filter's state) again.
 pub(crate) fn refresh_inbox() {
-    github_fetch(crate::github::Op::Inbox { roots: project_roots() });
+    let state = global::<InboxFilter>().with_untracked(|f| f.state);
+    github_fetch(crate::github::Op::Inbox { roots: project_roots(), state: state.to_owned() });
 }
 
 /// Asks for pull request `repo#number` and its checks again (its diff when
@@ -277,7 +305,7 @@ pub(crate) fn pull_request_act(repo: &str, number: u64, action: &str) {
     let (repo, number) = (repo.to_owned(), number);
     set_timeout(std::time::Duration::from_secs(4), move || {
         github_fetch(crate::github::Op::Checks { repo, number });
-        if global::<GitHubState>().with_untracked(|g| g.data.contains_key("inbox")) {
+        if global::<GitHubState>().with_untracked(|g| g.data.keys().any(|k| k.starts_with("inbox:"))) {
             refresh_inbox();
         }
     });
