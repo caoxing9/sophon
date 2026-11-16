@@ -392,6 +392,50 @@ pub(crate) fn refresh_pull_request(repo: &str, number: u64) {
     github_fetch(Op::Checks { repo: repo.to_owned(), number });
 }
 
+/// The pull requests of the open conversation: its branch's, then the ones
+/// it links to, the last linked first (at most 20).
+pub(crate) fn conversation_prs() -> Vec<(String, u64)> {
+    let mut out: Vec<(String, u64)> = vec![];
+    if let Some(pr) = git().pr.and_then(|p| crate::github::of_url(&p.url)) {
+        out.push(pr);
+    }
+    let found: Vec<(String, u64)> = global::<Timeline>().with(|t| {
+        let mut found = vec![];
+        for item in t.items.iter().rev() {
+            let text = match item {
+                Item::User { text, .. } | Item::Assistant { text } => std::borrow::Cow::Borrowed(text.as_str()),
+                Item::Tool { detail, .. } => std::borrow::Cow::Owned(detail.to_string()),
+                _ => continue,
+            };
+            if !text.contains("github.com/") {
+                continue;
+            }
+            let mut here = crate::github::mentioned(&text);
+            here.reverse();
+            found.extend(here);
+        }
+        found
+    });
+    for pr in found {
+        if !out.contains(&pr) {
+            out.push(pr);
+        }
+    }
+    out.truncate(20);
+    out
+}
+
+/// Asks for each of `prs` not yet known nor being asked for.
+pub(crate) fn fetch_prs(prs: &[(String, u64)]) {
+    for (repo, number) in prs {
+        let op = crate::github::Op::View { repo: repo.clone(), number: *number };
+        let key = op.key();
+        if github(&key).is_none() && !github_loading(&key) {
+            github_fetch(op);
+        }
+    }
+}
+
 /// The desktop's inbox.
 pub(crate) fn open_inbox() {
     global::<Nav>().update(|n| n.screen = Screen::Inbox);
@@ -877,6 +921,8 @@ pub(crate) enum ExplorerTab {
     Changes,
     Files,
     Commits,
+    /// The conversation's pull requests.
+    PullRequests,
 }
 
 #[derive(Clone, Debug, PartialEq)]
