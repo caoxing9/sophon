@@ -424,6 +424,7 @@ fn run_native(native: crate::slash::Native, live: bool) {
         Native::Config => store::open_settings(),
         Native::Memory if MOBILE => store::notify(t("CLAUDE.md is in the conversation's files").into()),
         Native::Memory => store::open_file("CLAUDE.md"),
+        Native::Mcp => store::open_mcp(),
         // The phone has no terminal: run on the computer.
         Native::Terminal(cmd) if MOBILE => store::notify(tf("Run “claude /{}” in a terminal on the computer", &[cmd])),
         // This Mac's: a Terminal window in the project. Another computer's:

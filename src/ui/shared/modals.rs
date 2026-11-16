@@ -290,6 +290,7 @@ fn body(m: Modal) -> View {
                 store::remove_host(&id);
                 store::close_modal();
             }))),
+        Modal::Mcp { cwd } => mcp_panel(cwd),
         Modal::Commit => commit(),
         Modal::ReportIssue => report_issue(),
         Modal::Palette | Modal::ChangedFiles => view(),
@@ -411,6 +412,101 @@ fn rename(title: &'static str, current: String, apply: impl Fn(&str) + Clone + '
                 .auto_focus(true),
         )
         .child(actions(btn(t("Save"), Variant::Primary, Sz::Md, None, save)))
+}
+
+/// `/mcp`: Claude Code's MCP servers for the project, each with its state
+/// and tools; Sign in on one that asks for it (its page opens in the
+/// computer's browser, and the list is read again once it is done). A
+/// server signed in to is there for the conversations started after.
+fn mcp_panel(cwd: String) -> View {
+    use crate::mcp::{State, servers_of};
+    let key = crate::github::Op::McpStatus { cwd: cwd.clone() }.key();
+    let (k1, k2) = (key.clone(), key);
+    let answer = computed(move || store::github(&k1));
+    let loading = computed(move || store::github_loading(&k2));
+    let refresh_cwd = cwd.clone();
+    sheet(t("MCP servers"))
+        .w(px(560.0))
+        .child(text(cwd.clone()).text_size(tx(TEXT_XS)).text_color(FG_FAINT).number_of_lines(1))
+        .child(view().child(dynamic(move || {
+            let answer = answer.get();
+            let busy = loading.get();
+            // The sign-ins under way: read here, so a press shows at once.
+            let signing_now = store::github_loading_with("mcp:signin:");
+            let cwd = cwd.clone();
+            Some(untracked(move || match answer {
+                None => view().py(sp(S6)).items_center().gap(sp(S2)).child(eclipse(20.0)).child(text(t("Asking Claude Code…")).text_size(tx(TEXT_SM)).text_color(FG_MUTED)).into_element(),
+                Some(Err(e)) => text(e).text_size(tx(TEXT_SM)).text_color(DANGER).into_element(),
+                Some(Ok(v)) => {
+                    let list = servers_of(&v);
+                    if list.is_empty() {
+                        return text(t("No MCP servers: add one with claude mcp add, or a plugin")).text_size(tx(TEXT_SM)).text_color(FG_MUTED).into_element();
+                    }
+                    let mut c = card();
+                    for (i, s) in list.into_iter().enumerate() {
+                        let (word, tone) = match s.state {
+                            State::Connected => (t("Connected"), SUCCESS),
+                            State::NeedsAuth => (t("Needs sign-in"), WARNING),
+                            State::Failed => (t("Failed"), DANGER),
+                            State::Pending => (t("Connecting…"), FG_MUTED),
+                            State::Disabled => (t("Disabled"), FG_FAINT),
+                        };
+                        let detail = match (&s.error, s.tools) {
+                            (Some(e), _) => e.clone(),
+                            (None, Some(n)) => tf("{} tools", &[&n.to_string()]),
+                            (None, None) => s.target.clone(),
+                        };
+                        let signing = signing_now.iter().any(|k| *k == format!("mcp:signin:{}", s.name));
+                        let mut right = view().flex_row().items_center().gap(sp(S2)).child(text(word).text_size(tx(TEXT_XS)).text_color(tone));
+                        if s.state == State::NeedsAuth {
+                            right = if signing {
+                                right.child(eclipse(14.0)).child(text(t("Waiting for the browser…")).text_size(tx(TEXT_XS)).text_color(FG_MUTED))
+                            } else if MOBILE {
+                                right.child(text(t("Sign in on the computer")).text_size(tx(TEXT_XS)).text_color(FG_FAINT))
+                            } else {
+                                let (cwd, name) = (cwd.clone(), s.name.clone());
+                                right.child(btn(t("Sign in"), Variant::Primary, Sz::Sm, None, move || store::mcp_sign_in(&cwd, &name)))
+                            };
+                        }
+                        c = c.child(
+                            view()
+                                .flex_row()
+                                .items_center()
+                                .gap(sp(S3))
+                                .px(sp(S4))
+                                .py(sp(S3))
+                                .when(i > 0, |v| v.border_t(px(1.0)).border_color(BORDER))
+                                .child(view().w(px(8.0)).h(px(8.0)).rounded(px(R_FULL)).bg(tone))
+                                .child(
+                                    view()
+                                        .flex_1()
+                                        .min_w(px(0.0))
+                                        .child(text(s.label()).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)).number_of_lines(1))
+                                        .child(text(if s.scope.is_empty() { detail } else { format!("{} · {detail}", s.scope) }).text_size(tx(TEXT_XS)).text_color(FG_MUTED).number_of_lines(1)),
+                                )
+                                .child(right),
+                        );
+                    }
+                    let _ = busy;
+                    c.into_element()
+                }
+            }))
+        })))
+        .child(text(t("A server signed in to is there for conversations started after: start a new one to use it.")).text_size(tx(TEXT_SM)).line_height(px(19.0)).text_color(FG_MUTED))
+        .child(
+            view()
+                .flex_row()
+                .justify_end()
+                .gap(sp(S2))
+                .child(btn(t("Refresh"), Variant::Secondary, Sz::Md, Some(Icon::RotateCw), move || {
+                    store::github_fetch(crate::github::Op::McpStatus { cwd: refresh_cwd.clone() })
+                }))
+                .child(btn(t("New conversation"), Variant::Secondary, Sz::Md, Some(Icon::SquarePen), || {
+                    store::close_modal();
+                    store::open_tab(store::Tab::Draft);
+                }))
+                .child(btn(t("Done"), Variant::Primary, Sz::Md, None, store::close_modal)),
+        )
 }
 
 /// The versions and system an issue is reported from: nothing of the

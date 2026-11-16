@@ -27,12 +27,14 @@ pub(crate) enum Native {
     Config,
     /// The project's `CLAUDE.md`.
     Memory,
+    /// The MCP servers, and signing in to them (`mcp`).
+    Mcp,
     /// A terminal on the computer running `claude /<command>`.
     Terminal(&'static str),
 }
 
 /// The commands that open Claude Code's own screens, done in a terminal.
-const IN_TERMINAL: [&str; 9] = ["mcp", "agents", "hooks", "plugin", "plugins", "login", "logout", "doctor", "install-github-app"];
+const IN_TERMINAL: [&str; 8] = ["agents", "hooks", "plugin", "plugins", "login", "logout", "doctor", "install-github-app"];
 
 /// The commands with no place in Sophon (its own terminal, editor and
 /// window take care of them).
@@ -59,6 +61,7 @@ pub(crate) fn native(text: &str) -> Option<Native> {
         "status" => Native::Status,
         "config" | "settings" => Native::Config,
         "memory" => Native::Memory,
+        "mcp" => Native::Mcp,
         other => Native::Terminal(IN_TERMINAL.iter().copied().find(|c| *c == other)?),
     })
 }
@@ -95,7 +98,8 @@ mod tests {
     #[test]
     fn interactive_commands_are_sophon_s_the_rest_go_to_the_agent() {
         assert_eq!(native("/model"), Some(Native::Model));
-        assert_eq!(native("  /MCP  "), Some(Native::Terminal("mcp")));
+        assert_eq!(native("  /MCP  "), Some(Native::Mcp));
+        assert_eq!(native("/hooks"), Some(Native::Terminal("hooks")));
         assert_eq!(native("/clear"), Some(Native::Clear));
         assert_eq!(native("/permissions"), Some(Native::Permissions));
         assert_eq!(native("/memory"), Some(Native::Memory));
@@ -113,7 +117,8 @@ mod tests {
     fn some_commands_leave_the_suggestions_and_others_say_where_they_open() {
         assert!(hidden("vim") && hidden("terminal-setup") && !hidden("compact"));
         assert!(hint("compact").is_none());
-        assert!(hint("mcp").is_some() && hint("model").is_some());
+        assert_eq!(hint("mcp"), Some(crate::i18n::t("Opens in Sophon")));
+        assert!(hint("hooks").is_some() && hint("model").is_some());
         assert_eq!(terminal_line("mcp"), "claude /mcp\r");
         assert_eq!(terminal_command("/Users/me/it's", "mcp"), "cd '/Users/me/it'\\''s' && claude /mcp");
     }
