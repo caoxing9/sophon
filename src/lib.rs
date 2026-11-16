@@ -25,6 +25,7 @@ mod lan;
 mod platform;
 mod prompt_link;
 mod sent_pictures;
+mod space_limits;
 mod spaces;
 mod store;
 mod models;
@@ -107,6 +108,9 @@ pub fn App() -> impl IntoElement {
         // A Mac that only connects to others runs none of this side.
         store::start_bridge();
         store::start_spaces();
+        // Shared spaces' monthly caps, measured every five minutes.
+        #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+        space_limits::start();
         store::watch_keep_awake();
         #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
         follow::start();

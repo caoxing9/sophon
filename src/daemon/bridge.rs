@@ -438,6 +438,35 @@ fn authorize(token: &str, said: &str) -> Option<(String, Option<String>, Option<
     .flatten()
 }
 
+/// The answer to a device's request a capped space does not take: sending
+/// a message or starting a conversation, in shared space `space` past its
+/// monthly cap (`space_limits`). `None`: it passes.
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+fn capped_refusal(text: &str, space: Option<&str>) -> Option<String> {
+    if !(text.contains("send_agent_message_request") || text.contains("create_agent_request")) || !crate::space_limits::over(space) {
+        return None;
+    }
+    capped_answer(text, space.and_then(crate::space_limits::spend))
+}
+
+/// The refusal of `text` (a session request), as the service's own errors
+/// come: an `rpc_error` with the request's id.
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+fn capped_answer(text: &str, spend: Option<crate::space_limits::Spend>) -> Option<String> {
+    let v: Value = serde_json::from_str(text).ok()?;
+    let message = v.get("message")?;
+    let kind = message.get("type").and_then(Value::as_str)?;
+    if kind != "send_agent_message_request" && kind != "create_agent_request" {
+        return None;
+    }
+    let id = message.get("requestId").cloned().unwrap_or(Value::Null);
+    let error = match spend {
+        Some(s) => format!("This space has used its monthly limit (${:.2} of ${:.2}). Ask its owner to raise it, or wait for next month.", s.spent, s.cap),
+        None => "This space has used its monthly limit.".to_owned(),
+    };
+    Some(json!({ "type": "session", "message": { "type": "rpc_error", "payload": { "requestId": id, "error": error } } }).to_string())
+}
+
 /// Every pairing token good now: the QR's, the spaces' and the devices'.
 fn good_tokens() -> Vec<String> {
     with(|s| std::iter::once(s.token.clone()).chain(s.space_tokens.iter().map(|(_, t)| t.clone())).chain(s.devices.iter().map(|d| d.token.clone())).collect()).unwrap_or_default()
@@ -716,6 +745,15 @@ async fn forward<S: AsyncRead + AsyncWrite + Unpin>(
                     plain = Message::Text(v.to_string());
                 }
                 if let Message::Close(_) = plain { break; }
+                // A shared space past its monthly cap: no message sent, no
+                // conversation started (said to the device, which shows it).
+                #[cfg(not(any(target_os = "ios", target_os = "android")))]
+                if let Message::Text(t) = &plain
+                    && let Some(refusal) = capped_refusal(t.as_str(), space.as_deref())
+                {
+                    let _ = own_tx.send(refusal);
+                    continue;
+                }
                 // The pictures of the messages that pass are kept here (the
                 // service's history has their text alone), and given back
                 // to a device that asks: one that did not send them, or
@@ -904,6 +942,22 @@ pub fn request_pair(addr: &str, key: [u8; 32], device: &str, on_code: impl FnOnc
 
 #[cfg(test)]
 mod tests {
+
+    /// A capped space answers a send or a new conversation with the
+    /// service's own error, by the request's id; anything else passes.
+    #[test]
+    fn a_capped_space_refuses_sends_with_an_rpc_error() {
+        let spend = Some(crate::space_limits::Spend { spent: 51.2, cap: 50.0 });
+        let send = json!({ "type": "session", "message": { "type": "send_agent_message_request", "requestId": "r1", "agentId": "a" } }).to_string();
+        let answer: Value = serde_json::from_str(&capped_answer(&send, spend).unwrap()).unwrap();
+        assert_eq!(answer["message"]["type"], "rpc_error");
+        assert_eq!(answer["message"]["payload"]["requestId"], "r1");
+        assert!(answer["message"]["payload"]["error"].as_str().unwrap().contains("$51.20 of $50.00"));
+        let fetch = json!({ "type": "session", "message": { "type": "fetch_agents_request", "requestId": "r2" } }).to_string();
+        assert_eq!(capped_answer(&fetch, spend), None);
+        // The first space is never capped.
+        assert_eq!(capped_refusal(&send, None), None);
+    }
     use super::*;
 
     /// A bridge of its own (its own data folder, not the user's): a phone

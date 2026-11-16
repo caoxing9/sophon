@@ -115,9 +115,20 @@ fn spaces_card() -> impl IntoElement {
                 let here = current.as_deref() == Some(h.id.as_str());
                 let (rename_id, rename_name) = (h.id.clone(), h.label());
                 let (remove_id, remove_name, remove_folder) = (h.id.clone(), h.label(), short(&folder));
+                let (cap_home, cap_name) = (folder.to_string_lossy().into_owned(), h.label());
+                // Its month against its cap, when it has one.
+                let mut details = detail(&folder, crate::spaces::port_of(&folder), crate::spaces::running(&folder));
+                if let Some(s) = crate::space_limits::spend(&cap_home) {
+                    details.push_str(&format!(" · {}", tf("${} of ${} this month", &[&format!("{:.2}", s.spent), &format!("{:.0}", s.cap)])));
+                    if s.over() {
+                        details.push_str(&format!(" · {}", t("limit reached")));
+                    }
+                } else if let Some(cap) = crate::space_limits::caps().get(&cap_home) {
+                    details.push_str(&format!(" · {}", tf("limit ${} a month", &[&format!("{cap:.0}")])));
+                }
                 c = c.child(row(
                     h.label(),
-                    detail(&folder, crate::spaces::port_of(&folder), crate::spaces::running(&folder)),
+                    details,
                     view()
                         .flex_row()
                         .items_center()
@@ -125,6 +136,9 @@ fn spaces_card() -> impl IntoElement {
                         .child(switch_btn(Some(h.id.clone()), here))
                         .child(icon_btn(Icon::Pencil, Sz::Sm, t("Rename"), move || {
                             store::open_modal(store::Modal::RenameHost { id: rename_id.clone(), name: rename_name.clone() })
+                        }))
+                        .child(icon_btn(Icon::Activity, Sz::Sm, t("Monthly limit"), move || {
+                            store::open_modal(store::Modal::SpaceCap { home: cap_home.clone(), name: cap_name.clone() })
                         }))
                         .child(icon_btn(Icon::Trash2, Sz::Sm, t("Remove space"), move || {
                             store::open_modal(store::Modal::RemoveSpace { id: remove_id.clone(), name: remove_name.clone(), folder: remove_folder.clone() })

@@ -290,6 +290,7 @@ fn body(m: Modal) -> View {
                 store::remove_host(&id);
                 store::close_modal();
             }))),
+        Modal::SpaceCap { home, name } => space_cap(home, name),
         Modal::Commit => commit(),
         Modal::ReportIssue => report_issue(),
         Modal::Palette | Modal::ChangedFiles => view(),
@@ -411,6 +412,74 @@ fn rename(title: &'static str, current: String, apply: impl Fn(&str) + Clone + '
                 .auto_focus(true),
         )
         .child(actions(btn(t("Save"), Variant::Primary, Sz::Md, None, save)))
+}
+
+/// A shared space's monthly cap: USD a month, or none. Past it, the
+/// devices that reach the space through this Mac send nothing there until
+/// the next month (`space_limits`).
+fn space_cap(home: String, name: String) -> View {
+    let (current, spend) = (crate::space_limits::caps().get(&home).copied(), crate::space_limits::spend(&home));
+    let value = signal(current.map(|c| format!("{c}")).unwrap_or_default());
+    let error = signal(None::<&'static str>);
+    let apply = move |cap: Option<f64>| {
+        crate::space_limits::set_cap(&home, cap);
+        store::close_modal();
+    };
+    let save = {
+        let apply = apply.clone();
+        move || {
+            let text = value.get_untracked();
+            match text.trim().trim_start_matches('$').parse::<f64>() {
+                Ok(c) if c.is_finite() && c > 0.0 => apply(Some(c)),
+                _ => error.set(Some(t("A limit is an amount of dollars, more than 0"))),
+            }
+        }
+    };
+    let save2 = save.clone();
+    let spent = spend.map(|s| tf("Used this month: ${}", &[&format!("{:.2}", s.spent)]));
+    let mut primary = view().flex_row().justify_end().gap(sp(S2));
+    if current.is_some() {
+        let lift = apply.clone();
+        primary = primary.child(btn(t("Remove limit"), Variant::Secondary, Sz::Md, None, move || lift(None)));
+    }
+    sheet(&tf("Monthly limit of “{}”", &[&name]))
+        .child(
+            text(t("What the conversations of this space may cost a calendar month, at API list prices. Past it, the devices it is shared with cannot send messages or start conversations there until the next month; reading stays, and this Mac is not limited."))
+                .text_size(tx(TEXT_SM))
+                .line_height(px(19.0))
+                .text_color(FG_MUTED),
+        )
+        .when_some(spent, |v, s| v.child(text(s).text_size(tx(TEXT_SM))))
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap(sp(S2))
+                .child(text("$").text_size(tx(TEXT_BASE)).text_color(FG_MUTED))
+                .child(
+                    field()
+                        .value(move || value.get())
+                        .on_change(move |v: &str| {
+                            value.set(v.to_owned());
+                            error.set(None);
+                        })
+                        .on_submit(move |_: &str| save2())
+                        .placeholder(t("e.g. 50"))
+                        .auto_focus(true)
+                        .flex_1(),
+                )
+                .child(text(t("a month")).text_size(tx(TEXT_SM)).text_color(FG_MUTED)),
+        )
+        .child(when(move || error.with(Option::is_some), move || text(move || error.get().unwrap_or_default()).text_size(tx(TEXT_SM)).text_color(DANGER)))
+        .child(
+            view()
+                .flex_row()
+                .justify_end()
+                .gap(sp(S2))
+                .child(btn(t("Cancel"), Variant::Secondary, Sz::Md, None, store::close_modal))
+                .child(primary)
+                .child(btn(t("Save"), Variant::Primary, Sz::Md, None, save)),
+        )
 }
 
 /// The versions and system an issue is reported from: nothing of the
