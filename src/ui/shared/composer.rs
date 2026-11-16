@@ -308,10 +308,9 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
 
                 )
                 .child(mic_button(doc))
-                .child(model_picker(live))
-                .child(limits_chip(live)),
+                .child(model_picker(live)),
                 )
-                .child(view().flex_shrink_0().child(disc(running, busy, empty, submit))),
+                .child(view().flex_shrink_0().flex_row().items_center().gap(sp(S2)).child(meters(live)).child(disc(running, busy, empty, submit))),
         ))
         .into_element()
 }
@@ -786,45 +785,105 @@ fn model_picker(live: bool) -> impl IntoElement {
     super::model_picker::model_picker(live, name)
 }
 
-/// The plan limits of the composer's provider, after its model: how much
-/// of each window is used and when it starts again, in the warning's
-/// colour from 80% and the danger's from 90%. A press opens the usage
-/// page. Nothing while the provider reports none.
-fn limits_chip(live: bool) -> impl IntoElement {
-    use crate::usage::{self, local_offset};
-    dynamic(move || {
+/// Three meters beside the send button, each a ring, a word and a
+/// percentage, to be read at a glance: how full the open agent's context
+/// is, and how much of its provider's 5-hour and weekly limits is used.
+/// Amber from 80%, red from 90%; a press opens the usage page. A meter with
+/// nothing to say is left out.
+fn meters(live: bool) -> impl IntoElement {
+    let readings = computed(move || {
+        let mut out: Vec<(&'static str, f64, Option<String>)> = Vec::new();
+        if live
+            && let Some(a) = store::selected_agent()
+            && let (Some(used), Some(max)) = (a.context_used, a.context_max)
+            && max > 0
+        {
+            out.push((t("Context"), used as f64 / max as f64 * 100.0, None));
+        }
         let provider = store::controls(live).provider;
-        let p = store::usage()?.into_iter().find(|p| p.id == provider)?;
-        let windows: Vec<_> = p.windows.into_iter().filter_map(|w| Some((w.used?, w))).collect();
-        if windows.is_empty() {
+        if let Some(p) = store::usage().and_then(|l| l.into_iter().find(|p| p.id == provider)) {
+            for (word, length) in [(t("5h"), 5 * 3600), (t("Week"), 7 * 86_400)] {
+                if let Some((pct, resets)) = limit_window(&p.windows, length) {
+                    out.push((word, pct, resets));
+                }
+            }
+        }
+        out
+    });
+    view().child(dynamic(move || {
+        let list = readings.get();
+        if list.is_empty() {
             return None;
         }
-        let mut chip = button()
-            .on_press(store::open_usage)
-            .accessibility_label(t("Usage"))
-            .flex_row()
-            .items_center()
-            .gap(sp(S2))
-            .h(sp(CONTROL_SM))
-            .px(sp(S2))
-            .min_w(px(0.0))
-            .flex_shrink(1.0)
-            .rounded(px(R_FULL))
-            .hover(|s| s.bg(highlight()));
-        for (i, (used, w)) in windows.into_iter().enumerate() {
-            let tone = if used >= 90.0 { DANGER } else if used >= 80.0 { WARNING } else { FG_MUTED };
-            let mut words = format!("{} {used:.0}%", w.label);
-            if let Some(at) = w.resets_at.as_deref().and_then(usage::parse::rfc3339) {
-                words.push_str(" · ");
-                words.push_str(&tf("Resets {}", &[&usage::time_label(at, &local_offset)]));
+        Some(untracked(move || {
+            let mut row = button()
+                .on_press(store::open_usage)
+                .accessibility_label(t("Usage"))
+                .flex_row()
+                .items_center()
+                .gap(sp(S3))
+                .h(sp(CONTROL_SM))
+                .px(sp(S2))
+                .rounded(px(R_FULL))
+                .hover(|s| s.bg(highlight()));
+            for (word, pct, resets) in list {
+                let tone = meter_tone(pct);
+                let mut meter = view()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(4.0))
+                    .child(ring(pct).text_color(tone))
+                    .child(text(word).text_size(tx(TEXT_XS)).text_color(FG_MUTED))
+                    .child(text(format!("{:.0}%", pct.clamp(0.0, 100.0))).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(tone));
+                if let Some(at) = resets {
+                    meter = meter.label(tf("Resets {}", &[&at]));
+                }
+                row = row.child(meter);
             }
-            if i > 0 {
-                chip = chip.child(text("|").text_size(tx(TEXT_XS)).text_color(FG_FAINT));
-            }
-            chip = chip.child(text(words).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(tone).number_of_lines(1));
-        }
-        Some(chip)
-    })
+            row
+        }))
+    }))
+}
+
+/// The used percentage of the provider's window of `length` seconds (the
+/// one for every model, not one model's own), and when it resets.
+fn limit_window(windows: &[crate::daemon::connection::UsageWindow], length: i64) -> Option<(f64, Option<String>)> {
+    use crate::usage::{self, limits};
+    windows
+        .iter()
+        .filter(|w| w.used.is_some() && limits::window_length(&w.id, &w.label) == Some(length))
+        // The shortest id is the unscoped one (`weekly`, not `weekly_model_…`).
+        .min_by_key(|w| w.id.len())
+        .map(|w| {
+            let resets = w.resets_at.as_deref().and_then(usage::parse::rfc3339).map(|at| usage::time_label(at, &usage::local_offset));
+            (w.used.unwrap_or(0.0), resets)
+        })
+}
+
+fn meter_tone(pct: f64) -> AdaptiveColor {
+    if pct >= 90.0 {
+        DANGER
+    } else if pct >= 80.0 {
+        WARNING
+    } else {
+        FG_MUTED
+    }
+}
+
+/// A 14-point ring filled to `pct`, in the text color (its track a faint
+/// one of the same).
+fn ring(pct: f64) -> nsh_core::element::Svg {
+    let markup = ring_markup(pct);
+    svg(move || nsh_core::element::ImageSrc::svg_markup(&markup)).w(px(14.0)).h(px(14.0)).flex_shrink_0()
+}
+
+fn ring_markup(pct: f64) -> String {
+    let r = 6.0_f64;
+    let c = 2.0 * std::f64::consts::PI * r;
+    let on = c * pct.clamp(0.0, 100.0) / 100.0;
+    format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="{r}" fill="none" stroke="currentColor" stroke-opacity="0.22" stroke-width="2.5"/><circle cx="8" cy="8" r="{r}" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="{on:.2} {c:.2}" transform="rotate(-90 8 8)"/></svg>"#
+    )
 }
 
 pub(crate) fn thinking_options(live: bool) -> Vec<crate::daemon::model::Opt> {
@@ -1415,5 +1474,33 @@ mod paste_tests {
         assert_eq!(data_uri("data:text/plain;base64,aGk="), None);
         assert_eq!(data_uri("data:image/png,raw"), None);
         assert_eq!(data_uri("file:///tmp/x.png"), None);
+    }
+}
+
+#[cfg(test)]
+mod meter_tests {
+    use super::{limit_window, ring_markup};
+    use crate::daemon::connection::UsageWindow;
+
+    fn w(id: &str, label: &str, used: Option<f64>) -> UsageWindow {
+        UsageWindow { id: id.into(), label: label.into(), used, resets_at: None }
+    }
+
+    #[test]
+    fn the_5h_and_weekly_meters_take_the_provider_s_own_windows() {
+        let claude = [w("five_hour", "Session", Some(42.0)), w("weekly_model_fable", "Weekly · Fable", Some(86.0)), w("weekly", "Weekly", Some(55.0))];
+        assert_eq!(limit_window(&claude, 5 * 3600).map(|x| x.0), Some(42.0));
+        // The weekly for every model, not one model's own.
+        assert_eq!(limit_window(&claude, 7 * 86_400).map(|x| x.0), Some(55.0));
+        // Nothing reported: no meter.
+        assert_eq!(limit_window(&[w("weekly", "Weekly", None)], 7 * 86_400), None);
+        assert_eq!(limit_window(&[w("credits", "Credits", Some(3.0))], 5 * 3600), None);
+    }
+
+    #[test]
+    fn a_ring_is_filled_to_its_percentage() {
+        assert!(ring_markup(0.0).contains("stroke-dasharray=\"0.00 "));
+        assert!(ring_markup(50.0).contains("stroke-dasharray=\"18.85 37.70\""));
+        assert!(ring_markup(150.0).contains("stroke-dasharray=\"37.70 37.70\""));
     }
 }
