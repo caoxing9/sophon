@@ -290,6 +290,7 @@ fn body(m: Modal) -> View {
                 store::remove_host(&id);
                 store::close_modal();
             }))),
+        Modal::DeviceFolder { id, name, folder } => device_folder(id, name, folder),
         Modal::Commit => commit(),
         Modal::ReportIssue => report_issue(),
         Modal::Palette | Modal::ChangedFiles => view(),
@@ -411,6 +412,34 @@ fn rename(title: &'static str, current: String, apply: impl Fn(&str) + Clone + '
                 .auto_focus(true),
         )
         .child(actions(btn(t("Save"), Variant::Primary, Sz::Md, None, save)))
+}
+
+/// Keeps a paired device to one folder of this Mac: picked in its folders;
+/// or lets it use all of them again.
+fn device_folder(id: String, name: String, folder: Option<String>) -> View {
+    let (pick_id, all_id) = (id.clone(), id);
+    let mut v = sheet(&tf("Folder of “{}”", &[&name]))
+        .w(px(560.0))
+        .child(
+            text(t("The device sees and uses only this folder: its projects, conversations and files. Requests for anything outside it are refused. It keeps the device's view to the folder; an agent's own commands still run as you on this Mac."))
+                .text_size(tx(TEXT_SM))
+                .line_height(px(19.0))
+                .text_color(FG_MUTED),
+        );
+    if let Some(f) = &folder {
+        v = v.child(text(tf("Now: {}", &[f])).text_size(tx(TEXT_SM)));
+    }
+    v = v.child(host_folders("Keep it to “{}”", move |path| {
+        crate::lan::set_folder(&pick_id, Some(path));
+        store::close_modal();
+    }));
+    if folder.is_some() {
+        v = v.child(view().flex_row().justify_end().child(btn(t("Allow all folders"), Variant::Secondary, Sz::Md, None, move || {
+            crate::lan::set_folder(&all_id, None);
+            store::close_modal();
+        })));
+    }
+    v
 }
 
 /// The versions and system an issue is reported from: nothing of the

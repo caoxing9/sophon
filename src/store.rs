@@ -1000,6 +1000,8 @@ pub(crate) enum Modal {
     RenameMySpace { name: String },
     /// Removes a space on this Mac (its service stops; its folder stays).
     RemoveSpace { id: String, name: String, folder: String },
+    /// The one folder a paired device may use (`folder_scope`).
+    DeviceFolder { id: String, name: String, folder: Option<String> },
     ArchiveWorkspace { id: String, name: String },
     Commit,
     /// Reporting an issue on GitHub (`feedback`).

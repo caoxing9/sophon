@@ -18,6 +18,7 @@ mod elsewhere;
 mod feedback;
 mod github;
 mod fold;
+mod folder_scope;
 #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 mod follow;
 mod i18n;

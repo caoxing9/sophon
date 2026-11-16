@@ -67,6 +67,8 @@ pub(crate) struct Paired {
     pub(crate) name: String,
     /// The space it joined, by name; `None`: the first.
     pub(crate) space: Option<String>,
+    /// The one folder it may use; `None`: all.
+    pub(crate) folder: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -104,7 +106,7 @@ fn refresh() {
             .into_iter()
             .map(|c| Connected { conn: c.conn, device: shown(c.device), device_id: c.device_id, space: name_of(c.space), relayed: c.relayed })
             .collect();
-        let paired = bridge::devices().into_iter().map(|d| Paired { id: d.id, name: d.name, space: name_of(d.space) }).collect();
+        let paired = bridge::devices().into_iter().map(|d| Paired { id: d.id, name: d.name, space: name_of(d.space), folder: d.folder }).collect();
         global::<Devices>().set(Devices { connected, paired });
     }
 }
@@ -118,6 +120,15 @@ pub(crate) fn disconnect(conn: u64) {
     #[cfg(not(target_arch = "wasm32"))]
     crate::daemon::bridge::disconnect(conn);
     let _ = conn;
+}
+
+/// Keeps paired device `id` to `folder` (`None`: all of this Mac).
+pub(crate) fn set_folder(id: &str, folder: Option<String>) {
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::daemon::bridge::set_folder(id, folder);
+    #[cfg(target_arch = "wasm32")]
+    let _ = (id, folder);
+    refresh();
 }
 
 pub(crate) fn revoke(id: &str) {
