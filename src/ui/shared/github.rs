@@ -120,6 +120,17 @@ pub(crate) fn inbox_list(open: impl Fn(InboxItem) + Clone + 'static) -> impl Int
                         }
                         list = list.child(view().gap(sp(S2)).child(group_head(&repo, local, group.len())).child(c));
                     }
+                    // As many as asked for: there may be more.
+                    let limit = store::inbox_limit(f.state);
+                    if inbox.items.len() as u32 >= limit && limit < crate::github::INBOX_MAX {
+                        list = list.child(view().items_center().child(btn(
+                            if busy { t("Loading…") } else { t("Load more") },
+                            Variant::Secondary,
+                            Sz::Md,
+                            None,
+                            store::inbox_load_more,
+                        )));
+                    }
                     list.into_element()
                 }
             }))

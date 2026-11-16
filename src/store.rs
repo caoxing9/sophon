@@ -269,10 +269,31 @@ pub(crate) fn set_inbox_filter(state: &'static str, drafts: bool) {
     }
 }
 
+/// How many of each state's pull requests are asked for ("Load more").
+#[derive(Clone, Default)]
+struct InboxLimits(HashMap<&'static str, u32>);
+
+/// How many of `state`'s pull requests are asked for.
+pub(crate) fn inbox_limit(state: &'static str) -> u32 {
+    global::<InboxLimits>().with(|l| l.0.get(state).copied().unwrap_or(crate::github::INBOX_PAGE))
+}
+
 /// Asks for the inbox (in its filter's state) again.
 pub(crate) fn refresh_inbox() {
     let state = global::<InboxFilter>().with_untracked(|f| f.state);
-    github_fetch(crate::github::Op::Inbox { roots: project_roots(), state: state.to_owned() });
+    let limit = untracked(|| inbox_limit(state));
+    github_fetch(crate::github::Op::Inbox { roots: project_roots(), state: state.to_owned(), limit });
+}
+
+/// The next page of the filter's state.
+pub(crate) fn inbox_load_more() {
+    use crate::github::{INBOX_MAX, INBOX_PAGE};
+    let state = global::<InboxFilter>().with_untracked(|f| f.state);
+    global::<InboxLimits>().update(|l| {
+        let n = l.0.entry(state).or_insert(INBOX_PAGE);
+        *n = (*n + INBOX_PAGE).min(INBOX_MAX);
+    });
+    refresh_inbox();
 }
 
 /// Asks for pull request `repo#number` and its checks again (its diff when

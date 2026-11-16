@@ -19,6 +19,10 @@ use serde_json::{Value, json};
 #[cfg_attr(any(target_os = "ios", target_os = "android", target_arch = "wasm32"), allow(dead_code))]
 pub(crate) const MAX_DIFF_BYTES: usize = 2 * 1024 * 1024;
 
+/// The inbox's pull requests asked for at a time, and at most.
+pub(crate) const INBOX_PAGE: u32 = 80;
+pub(crate) const INBOX_MAX: u32 = 500;
+
 /// The inbox's states: open, merged, or closed without being merged.
 pub(crate) const STATES: [&str; 3] = ["open", "merged", "closed"];
 
@@ -31,7 +35,8 @@ pub enum Op {
     /// The pull requests that involve the user in `state` (of
     /// [`STATES`]); `roots`: the projects' folders here, matched to their
     /// repositories (a pull request of one of them can be worked on in it).
-    Inbox { roots: Vec<String>, state: String },
+    /// `limit`: how many, the newest (`INBOX_PAGE` more each "Load more").
+    Inbox { roots: Vec<String>, state: String, limit: u32 },
     View { repo: String, number: u64 },
     Diff { repo: String, number: u64 },
     Checks { repo: String, number: u64 },
@@ -70,7 +75,7 @@ impl Op {
 
     pub fn to_json(&self) -> Value {
         match self {
-            Op::Inbox { roots, state } => json!({ "op": "inbox", "roots": roots, "state": state }),
+            Op::Inbox { roots, state, limit } => json!({ "op": "inbox", "roots": roots, "state": state, "limit": limit }),
             Op::View { repo, number } => json!({ "op": "view", "repo": repo, "number": number }),
             Op::Diff { repo, number } => json!({ "op": "diff", "repo": repo, "number": number }),
             Op::Checks { repo, number } => json!({ "op": "checks", "repo": repo, "number": number }),
@@ -97,9 +102,11 @@ impl Op {
                 if !STATES.contains(&state.as_str()) {
                     return Err("Unknown state".into());
                 }
+                let limit = v.get("limit").and_then(Value::as_u64).map_or(INBOX_PAGE, |l| (l as u32).clamp(1, INBOX_MAX));
                 Ok(Op::Inbox {
                     roots: v.get("roots").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).take(200).map(str::to_owned).collect(),
                     state,
+                    limit,
                 })
             }
             "view" => pr().map(|(repo, number)| Op::View { repo, number }),
@@ -339,9 +346,10 @@ pub(crate) fn repo_of_remote(remote: &str) -> Option<String> {
 pub(crate) fn run(op: &Op) -> Result<Value, String> {
     let s = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
     match op {
-        Op::Inbox { roots, state } => {
+        Op::Inbox { roots, state, limit } => {
             let fields = "number,title,repository,updatedAt,isDraft,author,url";
-            let mut args = vec!["search", "prs", "--involves", "@me", "--sort", "updated", "--limit", "80", "--json", fields];
+            let limit = limit.to_string();
+            let mut args = vec!["search", "prs", "--involves", "@me", "--sort", "updated", "--limit", &limit, "--json", fields];
             match state.as_str() {
                 "merged" => args.push("--merged"),
                 // Closed without being merged.
@@ -484,11 +492,13 @@ mod tests {
             Op::from_json(&json!({ "op": "act", "repo": "a/b", "number": 1, "action": "squash" })),
             Ok(Op::Act { repo: "a/b".into(), number: 1, action: "squash".into() })
         );
-        let op = Op::Inbox { roots: vec!["/Users/me/sophon".into()], state: "merged".into() };
+        let op = Op::Inbox { roots: vec!["/Users/me/sophon".into()], state: "merged".into(), limit: 160 };
         assert_eq!(Op::from_json(&op.to_json()), Ok(op));
         assert!(Op::from_json(&json!({ "op": "inbox", "state": "deleted" })).is_err());
         // From before states: the open ones.
-        assert_eq!(Op::from_json(&json!({ "op": "inbox" })), Ok(Op::Inbox { roots: vec![], state: "open".into() }));
+        assert_eq!(Op::from_json(&json!({ "op": "inbox" })), Ok(Op::Inbox { roots: vec![], state: "open".into(), limit: INBOX_PAGE }));
+        // A limit past the most is the most.
+        assert!(matches!(Op::from_json(&json!({ "op": "inbox", "limit": 100000 })), Ok(Op::Inbox { limit: INBOX_MAX, .. })));
     }
 
     #[test]
@@ -539,9 +549,9 @@ mod live {
         assert!(diff["patch"].as_str().unwrap().starts_with("diff --git"));
         let checks = checks_of(&run(&Op::Checks { repo: "caoxing9/sophon".into(), number: 61 }).unwrap());
         eprintln!("{:?}", checks.iter().map(|c| (&c.name, c.state)).collect::<Vec<_>>());
-        let inbox = Inbox::from_json(&run(&Op::Inbox { roots: vec![env!("CARGO_MANIFEST_DIR").into()], state: "open".into() }).unwrap());
-        let merged = Inbox::from_json(&run(&Op::Inbox { roots: vec![], state: "merged".into() }).unwrap());
-        let closed = Inbox::from_json(&run(&Op::Inbox { roots: vec![], state: "closed".into() }).unwrap());
+        let inbox = Inbox::from_json(&run(&Op::Inbox { roots: vec![env!("CARGO_MANIFEST_DIR").into()], state: "open".into(), limit: INBOX_PAGE }).unwrap());
+        let merged = Inbox::from_json(&run(&Op::Inbox { roots: vec![], state: "merged".into(), limit: 120 }).unwrap());
+        let closed = Inbox::from_json(&run(&Op::Inbox { roots: vec![], state: "closed".into(), limit: INBOX_PAGE }).unwrap());
         eprintln!("{} merged, {} closed", merged.items.len(), closed.items.len());
         eprintln!("{} open, local {:?}", inbox.items.len(), inbox.local);
         assert_eq!(inbox.local_of("caoxing9/sophon").is_some(), true);
