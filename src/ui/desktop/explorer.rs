@@ -754,36 +754,85 @@ fn comment_shell() -> View {
 }
 
 /// The conversation's pull requests (`store::conversation_prs`), each as
-/// GitHub says it now, asked for while the tab shows; a press opens its
-/// page.
+/// GitHub says it now, asked for while the tab shows: a list to filter
+/// (all, not merged, merged); a press opens one in place, its checks and
+/// description under it, as the other one closes.
 fn prs_view(tab: Memo<ExplorerTab>) -> View {
     let prs = computed(move || if tab.get() == ExplorerTab::PullRequests { store::conversation_prs() } else { vec![] });
-    view().flex_1().child(dynamic(move || {
-        let list = prs.get();
-        untracked(|| store::fetch_prs(&list));
-        Some(untracked(move || {
-            if list.is_empty() {
-                return empty_state(Icon::GitPullRequest, t("No pull requests here"), t("The branch's pull request and the ones this conversation links to show here")).into_element();
+    // 0 all, 1 not merged (open), 2 merged.
+    let filter = signal(0u8);
+    let opened: Signal<Option<(String, u64)>> = signal(None);
+    let shown = computed(move || {
+        let f = filter.get();
+        prs.get()
+            .into_iter()
+            .filter(|(repo, number)| {
+                if f == 0 {
+                    return true;
+                }
+                let d = store::github(&format!("view:{repo}#{number}")).and_then(Result::ok).map(|v| crate::github::Detail::from_json(&v));
+                match (f, d) {
+                    (1, Some(d)) => d.open(),
+                    (2, Some(d)) => d.merged(),
+                    _ => false,
+                }
+            })
+            .collect::<Vec<_>>()
+    });
+    view()
+        .flex_1()
+        .child(dynamic(move || {
+            let all = prs.get();
+            untracked(|| store::fetch_prs(&all));
+            // The first opens by itself (the branch's, else the last linked).
+            if opened.get_untracked().is_none() && let Some(first) = all.first() {
+                opened.set(Some(first.clone()));
             }
-            let mut rows = view().gap(px(2.0)).py(sp(S1));
-            for (repo, number) in list {
-                rows = rows.child(pr_row(repo, number));
+            if all.is_empty() {
+                return Some(empty_state(Icon::GitPullRequest, t("No pull requests here"), t("The branch's pull request and the ones this conversation links to show here")).into_element());
             }
-            scroll().flex_1().child(rows).into_element()
+            Some(untracked(move || {
+                view()
+                    .flex_1()
+                    .child(view().flex_row().px(sp(S3)).pt(sp(S1)).pb(sp(S2)).child(segmented(
+                        vec![(0u8, t("All").into()), (1, t("Not merged").into()), (2, t("Merged").into())],
+                        move || filter.get(),
+                        move |f: u8| filter.set(f),
+                    )))
+                    .child(scroll().flex_1().child(dynamic(move || {
+                        let list = shown.get();
+                        let open = opened.get();
+                        Some(untracked(move || {
+                            if list.is_empty() {
+                                return view().py(sp(S8)).items_center().child(text(t("None of them")).text_size(tx(TEXT_SM)).text_color(FG_MUTED)).into_element();
+                            }
+                            let mut rows = view().gap(px(2.0)).pb(sp(S4));
+                            for pr in list {
+                                let here = open.as_ref() == Some(&pr);
+                                rows = rows.child(pr_row(pr.0.clone(), pr.1, here, opened));
+                                if here {
+                                    rows = rows.child(crate::ui::shared::github::panel_pull_request(pr.0, pr.1));
+                                }
+                            }
+                            rows.into_element()
+                        }))
+                    })))
+                    .into_element()
+            }))
         }))
-    }))
 }
 
-fn pr_row(repo: String, number: u64) -> impl IntoElement {
+fn pr_row(repo: String, number: u64, open: bool, opened: Signal<Option<(String, u64)>>) -> impl IntoElement {
     let key = format!("view:{repo}#{number}");
     let answer = computed(move || store::github(&key));
-    let (r, n) = (repo.clone(), number);
+    let pr = (repo.clone(), number);
     nsh_base::button()
-        .on_press(move || store::open_pull_request(&r, n, store::selected_id()))
+        .on_press(move || opened.set(if open { Some((String::new(), 0)) } else { Some(pr.clone()) }))
         .mx(sp(S2))
         .px(sp(S2))
         .py(px(7.0))
         .rounded(px(R_LG))
+        .when(open, |v| v.bg(highlight()))
         .hover(|s| s.bg(highlight()))
         .flex_row()
         .items_start()
@@ -815,7 +864,7 @@ fn pr_row(repo: String, number: u64) -> impl IntoElement {
                             .child(if title.is_empty() {
                                 view().h(px(12.0)).mt(px(3.0)).w(px(150.0)).rounded(px(R_FULL)).bg(tint(FG, 0.08)).into_element()
                             } else {
-                                text(title).text_size(tx(TEXT_BASE)).number_of_lines(2).into_element()
+                                text(title).text_size(tx(TEXT_BASE)).number_of_lines(if open { 0 } else { 2 }).into_element()
                             })
                             .child(
                                 view()
@@ -827,6 +876,7 @@ fn pr_row(repo: String, number: u64) -> impl IntoElement {
                                     .when(!state.is_empty(), |v| v.child(text(state).text_size(tx(TEXT_XS)).font_weight(FontWeight(500)).text_color(tone))),
                             ),
                     )
+                    .child(view().pt(px(3.0)).child(icon(if open { Icon::ChevronDown } else { Icon::ChevronRight }, 13.0).text_color(FG_FAINT)))
                     .into_element()
             }))
         }))
