@@ -4809,7 +4809,26 @@ fn push_limits(list: &[crate::daemon::connection::ProviderUsage]) {
 /// after: the composer shows them (`composer::limits_chip`), and on this
 /// Mac the paired phones hear of one near its end (`push_limits`), with
 /// the usage page closed.
+/// The clock the status bar's times left read: moved each minute.
+#[derive(Clone, Copy, Default, PartialEq)]
+struct Minute(i64);
+
+pub(crate) fn minute() -> i64 {
+    global::<Minute>().with(|m| m.0)
+}
+
+fn watch_minute() {
+    fn again() {
+        set_timeout(std::time::Duration::from_secs(60), || {
+            global::<Minute>().set(Minute(crate::usage::now()));
+            again();
+        });
+    }
+    Owner::detached().run(again);
+}
+
 pub(crate) fn watch_limits() {
+    watch_minute();
     effect(|| {
         let url = match conn() {
             Conn::Connected { url, .. } => Some(url),

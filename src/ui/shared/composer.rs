@@ -220,6 +220,9 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                                     ),
                             )
                             .child(view().flex_1())
+                            // The context, beside Send (a press opens the
+                            // usage page; the phone has no pointer to rest).
+                            .child(when(move || live, context_meter_ring))
                             .child(disc(running, busy, empty, submit)),
                     )
                     // While it listens, the whole card is the listening:
@@ -772,7 +775,8 @@ fn model_picker(live: bool) -> impl IntoElement {
 /// left out. `live`: the open agent's (else a new conversation's).
 pub(crate) fn usage_bar(live: bool) -> impl IntoElement {
     let readings = computed(move || {
-        let now = crate::usage::now();
+        // The time left moves on each minute.
+        let now = store::minute().max(crate::usage::now());
         let mut out: Vec<(&'static str, f64, Option<i64>)> = Vec::new();
         let provider = store::controls(live).provider;
         if let Some(p) = store::usage().and_then(|l| l.into_iter().find(|p| p.id == provider)) {
@@ -1076,36 +1080,6 @@ fn pick_files_into(key: String) {
             insert_file(&key, f.name.clone(), f.mime.clone(), f.data.bytes().to_vec());
         }
     });
-}
-
-/// How full the agent's context window is, and what it cost.
-pub(crate) fn context_meter() -> impl IntoElement {
-    let usage = computed(|| store::selected_agent().map(|a| (a.context_used, a.context_max, a.cost_usd)));
-    view().child(dynamic(move || {
-        let (Some(used), Some(max), cost) = usage.get()? else { return None };
-        if max == 0 {
-            return None;
-        }
-        let pct = (used as f64 / max as f64 * 100.0).round() as u32;
-        let tone = if pct >= 85 { DANGER } else if pct >= 65 { WARNING } else { FG_MUTED };
-        Some(untracked(move || {
-            let label = match cost {
-                Some(c) if c > 0.0 => format!("{pct}% · ${c:.2}"),
-                _ => format!("{pct}%"),
-            };
-            view()
-                .flex_row()
-                .items_center()
-                .gap(px(6.0))
-                .px(sp(S2))
-                .child(
-                    view().w(px(28.0)).h(px(4.0)).rounded(px(R_FULL)).bg(SURFACE3).child(
-                        view().h_full().w(relative((pct.min(100) as f32) / 100.0)).rounded(px(R_FULL)).bg(tone),
-                    ),
-                )
-                .child(text(label).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(tone))
-        }))
-    }))
 }
 
 #[derive(Clone, Default)]
