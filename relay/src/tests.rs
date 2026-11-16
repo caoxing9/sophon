@@ -132,3 +132,20 @@ async fn requests_that_are_neither_service_are_refused() {
         assert_eq!(refused(&addr, path).await, 400, "{path}");
     }
 }
+
+/// A phone whose computer does not open its data socket: the control socket
+/// is told again after a few seconds, then closed as dead, so the computer
+/// connects again instead of the phone waiting on it.
+#[tokio::test]
+async fn a_silent_control_socket_is_nudged_then_closed() {
+    let addr = start_relay().await;
+    let mut control = connect(&addr, "/ws?serverId=mac&role=server&v=2").await;
+    assert_eq!(next_json(&mut control).await["type"], "sync");
+    let _phone = connect(&addr, "/ws?serverId=mac&role=client&connectionId=c1&v=2").await;
+    assert_eq!(next_json(&mut control).await, serde_json::json!({ "type": "connected", "connectionId": "c1" }));
+    let started = tokio::time::Instant::now();
+    assert_eq!(next_json(&mut control).await, serde_json::json!({ "type": "sync", "connectionIds": ["c1"] }));
+    assert!(started.elapsed() >= NUDGE_SYNC - Duration::from_millis(200));
+    assert_eq!(next_close(&mut control).await, 1011);
+    assert!(started.elapsed() < NUDGE_SYNC + NUDGE_CLOSE + Duration::from_secs(1));
+}

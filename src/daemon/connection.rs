@@ -23,6 +23,11 @@ pub enum Command {
     /// Try the service again now, not after the wait between attempts
     /// (the app just started it).
     Reconnect,
+    /// The app is back in the foreground. Away, the system may have cut the
+    /// connection without a word: one silent since is checked at once (a
+    /// ping, a short wait) instead of after the ping timeout, and a wait
+    /// between attempts ends now.
+    Resume,
     /// `behavior`: `steer` or `interrupt` while a turn runs.
     /// `message_id`: the id the host echoes the message back with, so the
     /// copy shown at once is not shown twice.
@@ -694,7 +699,11 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
                 // first, before the addresses pairing gave. Away from it
                 // (nothing answers) the relay at once, not after each
                 // address has timed out in turn.
-                let found = if lan_index == 0 { lan_now(r).await } else { None };
+                // Through the relay last time (away from home): the relay
+                // at once, not after the LAN's look; the session moves to
+                // the LAN within seconds if it answers after all.
+                let away = lan_index == 0 && has_relay(r) && last_route() == Some(Route::Relay);
+                let found = if lan_index == 0 && !away { lan_now(r).await } else { None };
                 if lan_index == 0 && found.is_none() && has_relay(r) {
                     lan_index = usize::MAX;
                 }
@@ -730,6 +739,12 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
                 continue;
             }
             Ok(Exit::Lan) => {
+                lan_index = 0;
+                backoff = Duration::from_secs(1);
+                continue;
+            }
+            Ok(Exit::Stale) => {
+                trace("the connection did not answer after the app came back: connecting again");
                 lan_index = 0;
                 backoff = Duration::from_secs(1);
                 continue;
@@ -787,6 +802,14 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
                     // Just started: try now, then again soon.
                     Some(Command::Reconnect) => {
                         backoff = Duration::from_millis(250);
+                        break;
+                    }
+                    // Back in the foreground: now, and the waits from the
+                    // start again (they grew while the system kept the
+                    // network from the app).
+                    Some(Command::Resume) => {
+                        backoff = Duration::from_millis(500);
+                        lan_index = 0;
                         break;
                     }
                     Some(_) => { let _ = events.send(Event::Notice("Not connected to the service".into())); }
@@ -866,11 +889,60 @@ async fn lan_now(r: &RemoteHost) -> Option<String> {
     let addrs: Vec<String> = addrs.split(',').filter(|a| !a.is_empty()).map(str::to_owned).collect();
     let named = find_key(B64.encode(key), Duration::from_millis(900));
     let answering = async {
-        let probes = addrs.iter().map(|a| async move { rt::reachable(a, Duration::from_millis(800)).await.then(|| a.clone()) });
-        futures_util::future::join_all(probes).await.into_iter().flatten().next()
+        let mut probes: futures_util::stream::FuturesUnordered<_> =
+            addrs.iter().map(|a| async move { rt::reachable(a, Duration::from_millis(800)).await.then(|| a.clone()) }).collect();
+        while let Some(found) = futures_util::StreamExt::next(&mut probes).await {
+            if found.is_some() {
+                return found;
+            }
+        }
+        None
     };
-    let (named, answering) = tokio::join!(named, answering);
-    named.or(answering)
+    // The first to find it: Bonjour or an address that answers. Not both
+    // waited for (an address that does not answer takes its whole wait).
+    tokio::pin!(named, answering);
+    let (mut named_done, mut answering_done) = (false, false);
+    while !(named_done && answering_done) {
+        tokio::select! {
+            found = &mut named, if !named_done => {
+                if found.is_some() {
+                    return found;
+                }
+                named_done = true;
+            }
+            found = &mut answering, if !answering_done => {
+                if found.is_some() {
+                    return found;
+                }
+                answering_done = true;
+            }
+        }
+    }
+    None
+}
+
+/// How a session last reached the current host.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Route {
+    Lan,
+    Relay,
+    Direct,
+}
+
+/// Kept with the host's lists: the next start goes the same way first.
+fn remember_route(route: Route) {
+    if last_route() != Some(route) {
+        super::cache::save("route", &json!({ "route": format!("{route:?}") }));
+    }
+}
+
+fn last_route() -> Option<Route> {
+    match super::cache::load("route")?.get("route")?.as_str()? {
+        "Lan" => Some(Route::Lan),
+        "Relay" => Some(Route::Relay),
+        "Direct" => Some(Route::Direct),
+        _ => None,
+    }
 }
 
 /// The lists this device kept of the current host, as the events its
@@ -935,6 +1007,9 @@ enum Exit {
     Switch(Option<RemoteHost>),
     /// The LAN bridge answers: leave the relay for it.
     Lan,
+    /// Back in the foreground, the connection did not answer: a new one at
+    /// once.
+    Stale,
 }
 
 /// What a request was for, so its response can be routed.
@@ -1052,7 +1127,14 @@ async fn session(
     // this is dead (a relay that dropped it, a phone back from sleep), and
     // the session ends so the loop reconnects instead of sending into it.
     const SILENCE: Duration = Duration::from_secs(25);
+    // Back in the foreground: a connection heard from within this is taken
+    // as alive; else it has `RESUME_ANSWER` to answer a ping.
+    const RESUME_QUIET: Duration = Duration::from_secs(3);
+    const RESUME_ANSWER: Duration = Duration::from_millis(2500);
     let mut last_frame = rt::Instant::now();
+    // Back in the foreground with a connection silent for a while: it has
+    // until this to answer a ping.
+    let mut check_at: Option<rt::Instant> = None;
     let mut lan_check = rt::interval_at(
         rt::Instant::now() + Duration::from_secs(5),
         Duration::from_secs(15),
@@ -1075,6 +1157,15 @@ async fn session(
                     }
                 }
             }
+            _ = rt::sleep(check_at.map_or(Duration::ZERO, |at| {
+                let now = rt::Instant::now();
+                if at > now { at - now } else { Duration::ZERO }
+            })), if check_at.is_some() => {
+                if last_frame.elapsed() >= RESUME_ANSWER {
+                    return Ok(Exit::Stale);
+                }
+                check_at = None;
+            }
             _ = ping.tick(), if connected => {
                 if last_frame.elapsed() > SILENCE {
                     return Err("The connection timed out".into());
@@ -1088,6 +1179,17 @@ async fn session(
                     // bridge, its device list) hears it go at once.
                     let _ = tx.sink.send(Message::Close(None)).await;
                     return Ok(Exit::Switch(next));
+                }
+                if let Command::Resume = cmd {
+                    // Heard from lately: alive. Else a ping, and a short wait
+                    // for anything at all.
+                    if connected && last_frame.elapsed() > RESUME_QUIET && check_at.is_none() {
+                        if send(&mut tx, &json!({ "type": "ping" })).await.is_err() {
+                            return Ok(Exit::Stale);
+                        }
+                        check_at = Some(rt::Instant::now() + RESUME_ANSWER);
+                    }
+                    continue;
                 }
                 if let Command::Open(id) = &cmd {
                     *open_agent = Some(id.clone());
@@ -1264,6 +1366,7 @@ async fn session(
                 if !connected {
                     if kind == "status" && payload.get("status").and_then(Value::as_str) == Some("server_info") {
                         connected = true;
+                        remember_route(if endpoint.is_lan() { Route::Lan } else if endpoint.relay.is_some() { Route::Relay } else { Route::Direct });
                         let field = |k| payload.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
                         trace(&format!("connected to {} ({})", field("hostname"), field("version")));
                         if events.send(Event::Connected { hostname: field("hostname"), version: field("version") }).is_err() {
@@ -1471,7 +1574,7 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
     match cmd {
         Command::Open(id) => timeline_requests(&id, pending),
         // Sent by the session itself, with its binary frames.
-        Command::Upload { .. } | Command::Download { .. } | Command::Reconnect | Command::AskPictures { .. } | Command::HostUsage | Command::PushRegister { .. } => vec![],
+        Command::Upload { .. } | Command::Download { .. } | Command::Reconnect | Command::Resume | Command::AskPictures { .. } | Command::HostUsage | Command::PushRegister { .. } => vec![],
         Command::Send { agent_id, text, behavior, images, attachments, message_id } => {
             let mut msg = json!({
                 "type": "send_agent_message_request",

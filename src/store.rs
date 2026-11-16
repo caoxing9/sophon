@@ -4802,6 +4802,23 @@ pub(crate) fn push_act(act: crate::daemon::push::Act) {
     }
 }
 
+/// Back in the foreground after being away: the connection is checked at
+/// once, or tried again now if it was down (`Command::Resume`), instead of
+/// after the ping timeout or the wait between attempts.
+pub(crate) fn watch_resume() {
+    thread_local! {
+        static AWAY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    effect(|| {
+        let active = lifecycle_active();
+        if !active {
+            AWAY.with(|a| a.set(true));
+        } else if AWAY.with(|a| a.replace(false)) {
+            untracked(|| send(Command::Resume));
+        }
+    });
+}
+
 fn lifecycle_active() -> bool {
     matches!(lifecycle(), nsh_core::element::Lifecycle::Active)
 }

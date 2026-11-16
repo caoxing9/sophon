@@ -56,6 +56,14 @@ use tokio_tungstenite::tungstenite::{
 /// Client frames kept for a connection whose data socket is not there yet.
 const BUFFER: usize = 200;
 
+/// A phone waiting this long for the service's data socket: the control
+/// socket is told the connections again (it may have missed the first).
+const NUDGE_SYNC: Duration = Duration::from_secs(3);
+/// Waiting this much longer: the control socket is taken as dead (a
+/// computer that slept, a network that changed under it) and closed, so the
+/// service connects again at once instead of the phone waiting on it.
+const NUDGE_CLOSE: Duration = Duration::from_secs(3);
+
 type Tx = mpsc::UnboundedSender<Message>;
 
 #[derive(Clone, PartialEq, Debug)]
@@ -341,7 +349,7 @@ fn nudge(state: Shared, server_id: String, conn: String) {
             let s = state.lock().unwrap();
             s.rooms.get(&server_id).is_some_and(|r| r.clients.get(&conn).is_some_and(|c| !c.is_empty()) && !r.data.contains_key(&conn))
         };
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        tokio::time::sleep(NUDGE_SYNC).await;
         if !waiting(&state) {
             return;
         }
@@ -352,7 +360,7 @@ fn nudge(state: Shared, server_id: String, conn: String) {
                 room.notify_control(json!({ "type": "sync", "connectionIds": ids }));
             }
         }
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        tokio::time::sleep(NUDGE_CLOSE).await;
         if !waiting(&state) {
             return;
         }
