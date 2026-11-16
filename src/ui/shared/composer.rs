@@ -252,11 +252,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         // read as one piece, not a pill under a card.
         .rounded(px(16.0))
         .border_color(move || if over.get() { ACCENT.into() } else { glass_edge() })
-        // Room on the right for the context's ring when it shows.
-        .child(editor(doc, text_value, placeholder, TEXT_CONTENT, 220.0, changed).ml(sp(S4)).mr(px(if live { 40.0 } else { S4 })).mt(px(14.0)).mb(sp(S1)))
-        // How full the agent's context is, in the card's corner (as
-        // monocode's); the plan's limits are the status bar's.
-        .child(when(move || live, context_ring))
+        .child(editor(doc, text_value, placeholder, TEXT_CONTENT, 220.0, changed).mx(sp(S4)).mt(px(14.0)).mb(sp(S1)))
         .child(
             view()
                 .flex_row()
@@ -293,7 +289,9 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                 .child(mic_button(doc))
                 .child(model_picker(live)),
                 )
-                .child(view().flex_shrink_0().child(disc(running, busy, empty, submit))),
+                // How full the agent's context is, beside Send; the plan's
+                // limits are the status bar's.
+                .child(view().flex_shrink_0().flex_row().items_center().gap(sp(S2)).child(when(move || live, context_meter_ring)).child(disc(running, busy, empty, submit))),
         ))
         .into_element()
 }
@@ -769,7 +767,7 @@ fn model_picker(live: bool) -> impl IntoElement {
 /// The status bar under the desktop's conversation (as monocode's): the
 /// provider's mark, then its 5-hour and weekly limits, each a ring, a word
 /// and a percentage with the time until it starts again; and a refresh.
-/// (The context is the composer's: `context_ring`.) Amber from 80%,
+/// (The context is the composer's, beside Send: `context_meter_ring`.) Amber from 80%,
 /// red from 90%; a meter opens the usage page. One with nothing to say is
 /// left out. `live`: the open agent's (else a new conversation's).
 pub(crate) fn usage_bar(live: bool) -> impl IntoElement {
@@ -822,41 +820,73 @@ pub(crate) fn usage_bar(live: bool) -> impl IntoElement {
     }))
 }
 
-/// The open agent's context as a ring in the composer's corner; under the
-/// pointer, how full it is in words and tokens (`14% context used`,
-/// `140K / 1M tokens`). Amber from 80%, red from 90%.
-fn context_ring() -> impl IntoElement {
+/// The open agent's context beside Send: a ring and its percentage; under
+/// the pointer, a card: "Context", "6% used", a bar, and the tokens
+/// (`6.1万 / 100万`, `61K / 1M`). Amber from 80%, red from 90%.
+fn context_meter_ring() -> impl IntoElement {
     use nsh_core::element::Interactive as _;
     let usage = computed(|| store::selected_agent().and_then(|a| Some((a.context_used?, a.context_max.filter(|m| *m > 0)?))));
-    view().absolute().top(px(10.0)).right(px(12.0)).child(dynamic(move || {
+    view().child(dynamic(move || {
         let (used, max) = usage.get()?;
-        let pct = used as f64 / max as f64 * 100.0;
+        let pct = (used as f64 / max as f64 * 100.0).clamp(0.0, 100.0);
+        let tone = meter_tone(pct);
         Some(untracked(move || {
             let tip = view()
-                .gap(px(2.0))
-                .px(sp(S3))
-                .py(sp(S2))
+                .w(px(260.0))
+                .gap(sp(S2))
+                .px(sp(S4))
+                .py(sp(S3))
                 .rounded(px(R_LG))
                 .bg(SURFACE0)
                 .border_1()
                 .border_color(BORDER)
-                .child(text(tf("{}% context used", &[&format!("{:.0}", pct.clamp(0.0, 100.0))])).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)))
                 .child(
-                    text(tf("{} / {} tokens", &[&crate::usage::compact(used), &crate::usage::compact(max)]))
-                        .text_size(tx(TEXT_XS))
-                        .text_color(FG_MUTED),
-                );
-            view().tooltip(tip.into_element()).child(button()
-                .accessibility_label(tf("{}% context used", &[&format!("{:.0}", pct.clamp(0.0, 100.0))]))
-                .w(px(22.0))
-                .h(px(22.0))
-                .items_center()
-                .justify_center()
-                .rounded(px(R_FULL))
-                .hover(|s| s.bg(highlight()))
-                .child(ring(pct).w(px(16.0)).h(px(16.0)).text_color(meter_tone(pct))))
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .child(text(t("Context")).text_size(tx(TEXT_SM)).font_weight(FontWeight(600)).flex_1())
+                        .child(text(tf("{}% used", &[&format!("{pct:.0}")])).text_size(tx(TEXT_XS)).text_color(FG_MUTED)),
+                )
+                .child(
+                    view()
+                        .h(px(5.0))
+                        .rounded(px(R_FULL))
+                        .bg(SURFACE3)
+                        .child(view().h_full().w(relative((pct / 100.0) as f32)).rounded(px(R_FULL)).bg(if pct >= 80.0 { tone } else { FG_MUTED })),
+                )
+                .child(text(format!("{} / {}", tokens(used), tokens(max))).text_size(tx(TEXT_XS)).text_color(FG_MUTED));
+            view().tooltip(tip.into_element()).child(
+                button()
+                    .on_press(store::open_usage)
+                    .accessibility_label(tf("{}% context used", &[&format!("{pct:.0}")]))
+                    .flex_row()
+                    .items_center()
+                    .gap(px(5.0))
+                    .h(px(28.0))
+                    .px(px(6.0))
+                    .rounded(px(R_FULL))
+                    .hover(|s| s.bg(highlight()))
+                    .child(ring(pct).text_color(tone))
+                    .child(text(format!("{pct:.0}%")).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(tone)),
+            )
         }))
     }))
+}
+
+/// A count of tokens, short, as the language writes it: `6.1万` / `100万`,
+/// `61K` / `1M`.
+fn tokens(n: u64) -> String {
+    tokens_in(n, crate::i18n::is_zh())
+}
+
+fn tokens_in(n: u64, zh: bool) -> String {
+    if zh && n >= 10_000 {
+        let w = n as f64 / 10_000.0;
+        let s = if w >= 100.0 { format!("{w:.0}") } else { format!("{w:.1}") };
+        format!("{}万", s.trim_end_matches(".0"))
+    } else {
+        crate::usage::compact(n)
+    }
 }
 
 /// Seconds until a reset, short: `7h 38m`, `2d 3h`, `12m`.
@@ -1494,6 +1524,13 @@ mod meter_tests {
         // Nothing reported: no meter.
         assert_eq!(limit_window(&[w("weekly", "Weekly", None)], 7 * 86_400), None);
         assert_eq!(limit_window(&[w("credits", "Credits", Some(3.0))], 5 * 3600), None);
+    }
+
+    #[test]
+    fn tokens_read_as_the_language_writes_them() {
+        use super::tokens_in;
+        assert_eq!((tokens_in(61_234, true), tokens_in(1_000_000, true), tokens_in(140_000, true), tokens_in(9_500, true)), ("6.1万".into(), "100万".into(), "14万".into(), crate::usage::compact(9_500)));
+        assert_eq!(tokens_in(61_234, false), crate::usage::compact(61_234));
     }
 
     #[test]

@@ -572,6 +572,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Connected · over the local network", "已连接 · 局域网"),
     ("Connected · through the relay", "已连接 · 中转服务器"),
     ("Retry now", "立即重试"),
+    ("{}% used", "已使用 {}%"),
     ("{} / {} tokens", "{} / {} tokens"),
     ("{}% context used", "已用 {}% 上下文"),
     ("No usage reported yet", "还没有用量数据"),
