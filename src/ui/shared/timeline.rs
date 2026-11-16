@@ -81,6 +81,8 @@ pub(crate) fn timeline() -> impl IntoElement {
                 // its keeping the end in place (`store::set_group_open`).
                 .event_throttle(100.0)
                 .on_scroll(|e: &ScrollEvent| store::set_timeline_scroll(e.offset.y.0, e.content_size.height.0, e.size.height.0))
+                // A drag is the user's, whatever the content does meanwhile.
+                .on_scroll_drag_start(|_: &nsh_core::Point<nsh_core::Points>| store::timeline_scrolled_by_user())
                 .content_padding_top(sp(S4))
                 // The phone's composer floats over the end; the desktop's
                 // sits below the list.

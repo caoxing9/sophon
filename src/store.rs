@@ -1681,27 +1681,49 @@ pub(crate) fn group_summary(start: usize, end: usize) -> crate::fold::Summary {
 pub(crate) fn set_timeline_scroll(offset: f32, content: f32, height: f32) {
     let from_end = content - offset - height;
     TIMELINE_FROM_END.with(|d| d.set(from_end));
-    // Scrolling now (not the list settling as it opens): the jumps show
-    // until it has been still a moment.
-    let settling = TIMELINE_OPENED.with(|o| o.get().is_some_and(|at| at.elapsed() < std::time::Duration::from_millis(1200)));
-    if !settling {
-        let n = TIMELINE_SCROLLS.with(|c| {
-            c.set(c.get() + 1);
-            c.get()
-        });
-        if !global::<TimelineScrolling>().with_untracked(|s| s.0) {
-            global::<TimelineScrolling>().set(TimelineScrolling(true));
+    // The content grew or shrank (a reply streaming, a group opened, a
+    // page measured): the scroll that comes with it, and for a moment
+    // after, is the list's own, not the user's.
+    let now = std::time::Instant::now();
+    let own = TIMELINE_CONTENT.with(|c| {
+        let (last, changed) = c.get();
+        if (content - last).abs() > 0.5 {
+            c.set((content, Some(now)));
+            return true;
         }
-        set_timeout(std::time::Duration::from_millis(1500), move || {
-            if TIMELINE_SCROLLS.with(std::cell::Cell::get) == n {
-                global::<TimelineScrolling>().set(TimelineScrolling(false));
-            }
-        });
+        changed.is_some_and(|at| now.duration_since(at) < std::time::Duration::from_millis(400))
+    });
+    // Scrolling now (not the list settling as it opens, nor following its
+    // content): the jumps show until it has been still a moment.
+    let settling = TIMELINE_OPENED.with(|o| o.get().is_some_and(|at| at.elapsed() < std::time::Duration::from_millis(1200)));
+    if !settling && !own {
+        timeline_scrolled_by_user();
     }
-    let ends = TimelineEnds { away_from_start: offset > height || jumping_start(), away_from_end: from_end > height };
+    // Shown past a screen from an end, hidden within 0.7 of one: no
+    // flicker at the edge as the content moves.
+    let before = global::<TimelineEnds>().with_untracked(|e| *e);
+    let past = |was: bool, distance: f32| if was { distance > height * 0.7 } else { distance > height };
+    let ends = TimelineEnds { away_from_start: past(before.away_from_start, offset) || jumping_start(), away_from_end: past(before.away_from_end, from_end) };
     if global::<TimelineEnds>().with_untracked(|e| *e != ends) {
         global::<TimelineEnds>().set(ends);
     }
+}
+
+/// The user scrolls the conversation (a scroll of theirs, or a drag
+/// started): the jumps show until it has been still a moment.
+pub(crate) fn timeline_scrolled_by_user() {
+    let n = TIMELINE_SCROLLS.with(|c| {
+        c.set(c.get() + 1);
+        c.get()
+    });
+    if !global::<TimelineScrolling>().with_untracked(|s| s.0) {
+        global::<TimelineScrolling>().set(TimelineScrolling(true));
+    }
+    set_timeout(std::time::Duration::from_millis(1500), move || {
+        if TIMELINE_SCROLLS.with(std::cell::Cell::get) == n {
+            global::<TimelineScrolling>().set(TimelineScrolling(false));
+        }
+    });
 }
 
 /// How far the conversation's list is from its ends: more than a screen.
@@ -5316,6 +5338,10 @@ thread_local! {
     static TIMELINE_OPENED: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
     /// Counts scroll events, so only the last one's timer ends `TimelineScrolling`.
     static TIMELINE_SCROLLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// The list's content height as last seen, and when it last changed:
+    /// a scroll then is the list keeping its end in place (or settling),
+    /// not the user's.
+    static TIMELINE_CONTENT: std::cell::Cell<(f32, Option<std::time::Instant>)> = const { std::cell::Cell::new((0.0, None)) };
 }
 
 pub(crate) fn set_timeline_list(list: ElementRef) {
