@@ -5147,10 +5147,15 @@ pub(crate) fn watch_network() {
             let mut last: Option<crate::platform::network::NetState> = None;
             while let Some(state) = changes.recv().await {
                 global::<Network>().set(Network(Some(state.online)));
-                // The first is how it is, not a change.
-                if last.is_some_and(|l| l != state) {
-                    log::info!("network changed: {state:?}");
-                    send(Command::NetworkChanged { online: state.online, wifi: state.wifi });
+                // The first is how it is, not a change: said, so the LAN is
+                // looked for first on Wi-Fi.
+                match last {
+                    None => send(Command::NetworkChanged { online: state.online, wifi: state.wifi, first: true }),
+                    Some(l) if l != state => {
+                        log::info!("network changed: {state:?}");
+                        send(Command::NetworkChanged { online: state.online, wifi: state.wifi, first: false });
+                    }
+                    _ => {}
                 }
                 last = Some(state);
             }
