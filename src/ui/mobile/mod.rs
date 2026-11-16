@@ -43,8 +43,6 @@ pub(crate) enum Route {
     Subagent(String, String),
     /// The open pull requests that involve the user.
     Inbox,
-    /// A message's words, whole and selectable (its "Select text").
-    SelectText(String),
     /// A pull request (repository, number), and the conversation it was
     /// opened from.
     PullRequest(String, u64, Option<String>),
@@ -62,7 +60,6 @@ impl Route {
             Route::File(p) => format!("file:{p}"),
             Route::Subagent(_, id) => format!("sub:{id}"),
             Route::Inbox => "inbox".into(),
-            Route::SelectText(_) => "select-text".into(),
             Route::PullRequest(repo, number, _) => format!("pr:{repo}#{number}"),
         }
     }
@@ -216,7 +213,6 @@ fn stack() -> impl IntoElement {
                     Route::File(path) => files::file_page(path.clone()),
                     Route::Subagent(parent, id) => chat::subagent_page(parent.clone(), id.clone()),
                     Route::Inbox => github::inbox_page(),
-                    Route::SelectText(words) => chat::select_text_page(words.clone()),
                     Route::PullRequest(repo, number, agent) => github::pull_request_page(repo.clone(), *number, agent.clone()),
                 };
                 page.on_dismiss(move || popped(&gone))

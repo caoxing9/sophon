@@ -165,30 +165,6 @@ fn agent_sheet() {
     show_sheet(Some(a.title.clone()), items);
 }
 
-/// A message's "Select text": its words whole, large and selectable, to
-/// take part of them (the system's selection, its Copy); Copy all above.
-pub(crate) fn select_text_page(words: String) -> Screen {
-    let all = words.clone();
-    nav_page().key("select-text").header_visible(false).title(t("Select text")).child(
-        view()
-            .flex_1()
-            .child(top_bar(
-                text(t("Select text")).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)),
-                glass_group().child(header_button(Icon::Copy, t("Copy all"), move || {
-                    set_clipboard(all.clone());
-                    store::notify(t("Copied").into());
-                })),
-            ))
-            .child(
-                scroll().flex_1().child(
-                    view().px_safe_area().px(sp(S4)).pt(sp(S3)).pb_safe_area().pb(sp(S8)).child(
-                        text(words).text_size(tx(TEXT_LG)).line_height(px(28.0)).text_color(FG).selectable(true),
-                    ),
-                ),
-            ),
-    )
-}
-
 /// A sub-agent's work, read only, over the conversation that started it.
 pub(crate) fn subagent_page(parent: String, id: String) -> Screen {
     let (p2, i2) = (parent.clone(), id.clone());
