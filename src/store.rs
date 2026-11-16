@@ -197,6 +197,11 @@ pub(crate) fn github(key: &str) -> Option<Result<serde_json::Value, String>> {
     global::<GitHubState>().with(|g| g.data.get(key).cloned())
 }
 
+/// The keys being asked for now that start with `prefix`.
+pub(crate) fn github_loading_with(prefix: &str) -> Vec<String> {
+    global::<GitHubState>().with(|g| g.loading.iter().filter(|k| k.starts_with(prefix)).cloned().collect())
+}
+
 pub(crate) fn github_loading(key: &str) -> bool {
     global::<GitHubState>().with(|g| g.loading.contains(key))
 }
@@ -223,7 +228,35 @@ pub(crate) fn github_fetch(op: crate::github::Op) {
     send(Command::GitHub(op));
 }
 
+/// `/mcp`: the MCP servers of the open workspace (or the new
+/// conversation's folder), asked for now.
+pub(crate) fn open_mcp() {
+    let cwd = current_workspace().map(|w| w.directory).filter(|d| !d.is_empty()).or_else(|| Some(form().path).filter(|p| !p.is_empty()));
+    let Some(cwd) = cwd else {
+        notify(t("Open a workspace to see its MCP servers").into());
+        return;
+    };
+    github_fetch(crate::github::Op::McpStatus { cwd: cwd.clone() });
+    open_modal(Modal::Mcp { cwd });
+}
+
+/// Signs in to MCP server `server` (its page opens in the computer's
+/// browser); the servers are asked for again once it is done.
+pub(crate) fn mcp_sign_in(cwd: &str, server: &str) {
+    github_fetch(crate::github::Op::McpSignIn { cwd: cwd.to_owned(), server: server.to_owned() });
+}
+
 fn github_answered(key: String, result: Result<serde_json::Value, String>) {
+    // A sign-in done: said, and the servers asked for again.
+    if let Some(server) = key.strip_prefix("mcp:signin:") {
+        match &result {
+            Ok(_) => notify(tf("Signed in to {}. A new conversation has it.", &[server])),
+            Err(e) => notify(e.clone()),
+        }
+        if let Some(Modal::Mcp { cwd }) = modal() {
+            github_fetch(crate::github::Op::McpStatus { cwd });
+        }
+    }
     global::<GitHubState>().update(|g| {
         g.loading.remove(&key);
         // An action that failed keeps the pull request shown: its error is
@@ -672,6 +705,22 @@ pub(crate) fn terminal_resize(id: &str, rows: u16, cols: u16) {
     send(Command::TerminalResize { terminal_id: id.to_owned(), rows, cols });
 }
 
+/// What the next terminal made is to run, typed in once its shell is up
+/// (a slash command done in `claude`, `slash::Native::Terminal`).
+#[derive(Clone, Default)]
+struct TerminalLine(Option<String>);
+
+/// A new terminal of the service in the open workspace, running `line`
+/// (the computer's own: on a Mac followed from elsewhere).
+pub(crate) fn run_in_workspace_terminal(line: String) {
+    if current_workspace().is_none() {
+        notify(t("Open a workspace to run it in a terminal").into());
+        return;
+    }
+    global::<TerminalLine>().set(TerminalLine(Some(line)));
+    new_terminal();
+}
+
 pub(crate) fn new_terminal() {
     if let Some(w) = current_workspace() {
         send(Command::CreateTerminal { cwd: w.directory, workspace_id: w.id });
@@ -1000,6 +1049,12 @@ pub(crate) enum Modal {
     RenameMySpace { name: String },
     /// Removes a space on this Mac (its service stops; its folder stays).
     RemoveSpace { id: String, name: String, folder: String },
+    /// Claude Code's MCP servers of the project in `cwd` (`/mcp`).
+    Mcp { cwd: String },
+    /// The one folder a paired device may use (`folder_scope`).
+    DeviceFolder { id: String, name: String, folder: Option<String> },
+    /// A shared space's monthly spending cap (`space_limits`), by its home.
+    SpaceCap { home: String, name: String },
     ArchiveWorkspace { id: String, name: String },
     Commit,
     /// Reporting an issue on GitHub (`feedback`).
@@ -5745,6 +5800,12 @@ pub(crate) fn apply(event: Event) {
         }),
         Event::TerminalCreated(info) => {
             let id = info.id.clone();
+            // A command waiting for it: typed in once its shell has started.
+            if let Some(line) = global::<TerminalLine>().with_untracked(|l| l.0.clone()) {
+                global::<TerminalLine>().set(TerminalLine(None));
+                let to = id.clone();
+                set_timeout(std::time::Duration::from_millis(700), move || terminal_input(&to, &line));
+            }
             global::<Terminals>().update(|t| {
                 if !t.list.iter().any(|x| x.id == info.id) {
                     t.list.push(info);

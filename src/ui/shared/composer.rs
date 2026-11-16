@@ -112,6 +112,13 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
             }
         }
         store::sync_attachments(&out.attachments);
+        // One of Claude Code's interactive commands: Sophon's to do, not
+        // the headless agent's (`slash`).
+        if let Some(native) = crate::slash::native(&out.message) {
+            set_text("");
+            run_native(native, live);
+            return;
+        }
         match target {
             Target::Agent => {
                 if let Some(id) = store::selected_id()
@@ -401,6 +408,47 @@ fn settings_summary(live: bool) -> String {
 }
 
 /// The agent's settings, as a sheet: each opens its choices.
+/// Does what an interactive command of Claude Code does, Sophon's way.
+fn run_native(native: crate::slash::Native, live: bool) {
+    use crate::slash::Native;
+    match native {
+        Native::Model => model_sheet(live),
+        Native::Permissions => options_sheet(live),
+        Native::Clear => store::open_tab(store::Tab::Draft),
+        Native::Resume if MOBILE => store::go_home(),
+        Native::Resume => store::open_history(),
+        Native::Usage if MOBILE => store::notify(t("Usage is on the home screen's Usage tab").into()),
+        Native::Usage => store::open_usage(),
+        Native::Status => store::notify(status_words(live)),
+        Native::Config if MOBILE => store::notify(t("Settings are on the home screen's Settings tab").into()),
+        Native::Config => store::open_settings(),
+        Native::Memory if MOBILE => store::notify(t("CLAUDE.md is in the conversation's files").into()),
+        Native::Memory => store::open_file("CLAUDE.md"),
+        Native::Mcp => store::open_mcp(),
+        // The phone has no terminal: run on the computer.
+        Native::Terminal(cmd) if MOBILE => store::notify(tf("Run “claude /{}” in a terminal on the computer", &[cmd])),
+        // This Mac's: a Terminal window in the project. Another computer's:
+        // a terminal of its service, in the workspace.
+        Native::Terminal(cmd) if cfg!(target_os = "macos") && store::on_this_mac() => match store::current_workspace() {
+            Some(w) => store::run_in_terminal(&crate::slash::terminal_command(&w.directory, cmd)),
+            None => store::notify(t("Open a workspace to run it in a terminal").into()),
+        },
+        Native::Terminal(cmd) => store::run_in_workspace_terminal(crate::slash::terminal_line(cmd)),
+    }
+}
+
+/// `/status`: the computer, its service, and the agent's model and mode.
+fn status_words(live: bool) -> String {
+    let host = match store::conn() {
+        store::Conn::Connected { hostname, version, .. } => format!("{hostname} · {}", tf("service {}", &[&version])),
+        _ => t("Not connected").to_owned(),
+    };
+    let c = store::controls(live);
+    let model = c.model.as_deref().map(model_name).unwrap_or_else(|| c.provider.clone());
+    let mode = c.mode.unwrap_or_default();
+    [host, model, mode].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ")
+}
+
 fn options_sheet(live: bool) {
     let c = store::controls(live);
     let provider = store::provider(&c.provider);
@@ -516,11 +564,17 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
                 let agent = store::selected_id()?;
                 store::commands(&agent)
                     .into_iter()
-                    .filter(|c| c.name.to_lowercase().starts_with(&prefix.to_lowercase()))
+                    .filter(|c| c.name.to_lowercase().starts_with(&prefix.to_lowercase()) && !crate::slash::hidden(&c.name))
                     .take(8)
                     .map(|c| {
                         let insert = format!("/{} ", c.name);
-                        (if c.skill { Icon::Sparkles } else { Icon::Slash }, format!("/{}", c.name), c.description, insert, false, true)
+                        // Where it opens, when Sophon does it.
+                        let detail = match crate::slash::hint(&c.name) {
+                            Some(h) if c.description.is_empty() => h.to_owned(),
+                            Some(h) => format!("{} · {h}", c.description),
+                            None => c.description,
+                        };
+                        (if c.skill { Icon::Sparkles } else { Icon::Slash }, format!("/{}", c.name), detail, insert, false, true)
                     })
                     .collect()
             }

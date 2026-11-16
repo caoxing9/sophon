@@ -41,6 +41,12 @@ pub enum Op {
     Diff { repo: String, number: u64 },
     Checks { repo: String, number: u64 },
     Act { repo: String, number: u64, action: String },
+    /// Claude Code's MCP servers of the sessions in `cwd` (`crate::mcp`;
+    /// they go by this channel, the computer's).
+    McpStatus { cwd: String },
+    /// Signing in to MCP server `server` for the sessions in `cwd`, in this
+    /// computer's browser.
+    McpSignIn { cwd: String, server: String },
 }
 
 /// `owner/name`, as GitHub writes them.
@@ -70,6 +76,8 @@ impl Op {
             Op::Checks { repo, number } => format!("checks:{repo}#{number}"),
             // Its answer is the pull request as it is after it.
             Op::Act { repo, number, .. } => format!("view:{repo}#{number}"),
+            Op::McpStatus { cwd } => format!("mcp:status:{cwd}"),
+            Op::McpSignIn { server, .. } => format!("mcp:signin:{server}"),
         }
     }
 
@@ -80,6 +88,8 @@ impl Op {
             Op::Diff { repo, number } => json!({ "op": "diff", "repo": repo, "number": number }),
             Op::Checks { repo, number } => json!({ "op": "checks", "repo": repo, "number": number }),
             Op::Act { repo, number, action } => json!({ "op": "act", "repo": repo, "number": number, "action": action }),
+            Op::McpStatus { cwd } => json!({ "op": "mcp_status", "cwd": cwd }),
+            Op::McpSignIn { cwd, server } => json!({ "op": "mcp_sign_in", "cwd": cwd, "server": server }),
         }
     }
 
@@ -119,6 +129,20 @@ impl Op {
                     return Err("Unknown action".into());
                 }
                 Ok(Op::Act { repo, number, action })
+            }
+            "mcp_status" | "mcp_sign_in" => {
+                let cwd = s("cwd");
+                if !cwd.starts_with('/') || cwd.split('/').any(|c| c == "..") {
+                    return Err("Not a folder".into());
+                }
+                if s("op") == "mcp_status" {
+                    return Ok(Op::McpStatus { cwd });
+                }
+                let server = s("server");
+                if !crate::mcp::valid_server(&server) {
+                    return Err("Not an MCP server".into());
+                }
+                Ok(Op::McpSignIn { cwd, server })
             }
             _ => Err("Unknown request".into()),
         }
@@ -413,6 +437,8 @@ pub(crate) fn run(op: &Op) -> Result<Value, String> {
             let checks: Vec<Value> = v.get("statusCheckRollup").and_then(Value::as_array).into_iter().flatten().map(check_json).collect();
             Ok(json!({ "checks": checks }))
         }
+        Op::McpStatus { cwd } => crate::mcp::status(cwd),
+        Op::McpSignIn { cwd, server } => crate::mcp::sign_in(cwd, server),
         Op::Act { repo, number, action } => {
             let n = number.to_string();
             let args: Vec<&str> = match action.as_str() {

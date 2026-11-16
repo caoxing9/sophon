@@ -57,6 +57,8 @@ pub struct Device {
     pub token: String,
     /// The space on this Mac it reaches (its Paseo home); `None`: the first.
     pub space: Option<String>,
+    /// The one folder of this Mac it may use (`folder_scope`); `None`: all.
+    pub folder: Option<String>,
 }
 
 /// Someone at this Mac allowed a pairing: the relay link to hand the phone
@@ -142,7 +144,7 @@ fn load_or_create() -> State {
         .flatten()
         .filter_map(|d| {
             let s = |k: &str| d.get(k).and_then(Value::as_str).map(str::to_owned);
-            Some(Device { id: s("id")?, name: s("name")?, token: s("token")?, space: s("space") })
+            Some(Device { id: s("id")?, name: s("name")?, token: s("token")?, space: s("space"), folder: s("folder").filter(|f| f.starts_with('/')) })
         })
         .collect();
     let space_tokens = v
@@ -170,7 +172,7 @@ fn load_or_create() -> State {
 fn save(s: &State) {
     let path = state_path();
     let _ = path.parent().map(std::fs::create_dir_all);
-    let devices: Vec<Value> = s.devices.iter().map(|d| json!({ "id": d.id, "name": d.name, "token": d.token, "space": d.space })).collect();
+    let devices: Vec<Value> = s.devices.iter().map(|d| json!({ "id": d.id, "name": d.name, "token": d.token, "space": d.space, "folder": d.folder })).collect();
     let space_tokens: serde_json::Map<String, Value> = s.space_tokens.iter().map(|(k, v)| (k.clone(), v.clone().into())).collect();
     let json = json!({
         "private": B64.encode(s.private),
@@ -302,6 +304,20 @@ fn forgotten_by(token: &str, device: &str) {
     if let Some(id) = own {
         revoke(&id);
     }
+}
+
+/// Keeps device `device_id` to `folder` (`None`: all of this Mac). It is
+/// cut off, and connects again under it.
+pub fn set_folder(device_id: &str, folder: Option<String>) {
+    let cut: Vec<Arc<Notify>> = with(|s| {
+        if let Some(d) = s.devices.iter_mut().find(|d| d.id == device_id) {
+            d.folder = folder.filter(|f| f.starts_with('/')).map(|f| if f.len() > 1 { f.trim_end_matches('/').to_owned() } else { f });
+        }
+        save(s);
+        s.conns.values().filter(|(c, _)| c.device_id.as_deref() == Some(device_id)).map(|(_, n)| n.clone()).collect()
+    })
+    .unwrap_or_default();
+    cut.iter().for_each(|n| n.notify_one());
 }
 
 /// Forgets every device and changes the QR's token: everything paired
@@ -436,6 +452,35 @@ fn authorize(token: &str, said: &str) -> Option<(String, Option<String>, Option<
         s.devices.iter().find(|d| d.token == token).map(|d| (d.name.clone(), Some(d.id.clone()), d.space.clone()))
     })
     .flatten()
+}
+
+/// The answer to a device's request a capped space does not take: sending
+/// a message or starting a conversation, in shared space `space` past its
+/// monthly cap (`space_limits`). `None`: it passes.
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+fn capped_refusal(text: &str, space: Option<&str>) -> Option<String> {
+    if !(text.contains("send_agent_message_request") || text.contains("create_agent_request")) || !crate::space_limits::over(space) {
+        return None;
+    }
+    capped_answer(text, space.and_then(crate::space_limits::spend))
+}
+
+/// The refusal of `text` (a session request), as the service's own errors
+/// come: an `rpc_error` with the request's id.
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+fn capped_answer(text: &str, spend: Option<crate::space_limits::Spend>) -> Option<String> {
+    let v: Value = serde_json::from_str(text).ok()?;
+    let message = v.get("message")?;
+    let kind = message.get("type").and_then(Value::as_str)?;
+    if kind != "send_agent_message_request" && kind != "create_agent_request" {
+        return None;
+    }
+    let id = message.get("requestId").cloned().unwrap_or(Value::Null);
+    let error = match spend {
+        Some(s) => format!("This space has used its monthly limit (${:.2} of ${:.2}). Ask its owner to raise it, or wait for next month.", s.spent, s.cap),
+        None => "This space has used its monthly limit.".to_owned(),
+    };
+    Some(json!({ "type": "session", "message": { "type": "rpc_error", "payload": { "requestId": id, "error": error } } }).to_string())
 }
 
 /// Every pairing token good now: the QR's, the spaces' and the devices'.
@@ -594,6 +639,9 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(phone: WebSocketStream<S>, rel
         _ => return Err("no pairing token".into()),
     };
 
+    // A device kept to a folder: as it is now (a change cuts it off, and it
+    // connects again under the new one).
+    let folder = device_id.as_ref().and_then(|id| with(|s| s.devices.iter().find(|d| d.id == *id).and_then(|d| d.folder.clone())).flatten());
     // Known now: reported while it stays, and cut off when asked.
     let cut = Arc::new(Notify::new());
     let conn = with(|s| {
@@ -604,7 +652,7 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(phone: WebSocketStream<S>, rel
     })
     .ok_or("no bridge")?;
     emit(BridgeEvent::Connected { conn, device });
-    let result = forward(&mut ptx, &mut prx, &mut seal, &mut unseal, &cut, space.as_deref(), &pairing).await;
+    let result = forward(&mut ptx, &mut prx, &mut seal, &mut unseal, &cut, space.as_deref(), &pairing, folder.as_deref()).await;
     with(|s| s.conns.remove(&conn));
     emit(BridgeEvent::Disconnected { conn });
     result
@@ -651,6 +699,7 @@ async fn pair<S: AsyncRead + AsyncWrite + Unpin>(device: &str, seal: &relay::Sen
             name: device.to_owned(),
             token: uuid::Uuid::new_v4().simple().to_string(),
             space: space.clone(),
+            folder: None,
         };
         s.devices.push(d.clone());
         save(s);
@@ -672,6 +721,7 @@ async fn forward<S: AsyncRead + AsyncWrite + Unpin>(
     cut: &Notify,
     space: Option<&str>,
     pairing: &str,
+    folder: Option<&str>,
 ) -> Result<(), String> {
     // 3. The space's service, and frames both ways.
     let endpoint = match space {
@@ -716,6 +766,22 @@ async fn forward<S: AsyncRead + AsyncWrite + Unpin>(
                     plain = Message::Text(v.to_string());
                 }
                 if let Message::Close(_) = plain { break; }
+                // A device kept to a folder asks for nothing outside it.
+                if let (Message::Text(t), Some(folder)) = (&plain, folder)
+                    && let Some(refusal) = crate::folder_scope::refuse(t.as_str(), folder)
+                {
+                    let _ = own_tx.send(refusal);
+                    continue;
+                }
+                // A shared space past its monthly cap: no message sent, no
+                // conversation started (said to the device, which shows it).
+                #[cfg(not(any(target_os = "ios", target_os = "android")))]
+                if let Message::Text(t) = &plain
+                    && let Some(refusal) = capped_refusal(t.as_str(), space.as_deref())
+                {
+                    let _ = own_tx.send(refusal);
+                    continue;
+                }
                 // The pictures of the messages that pass are kept here (the
                 // service's history has their text alone), and given back
                 // to a device that asks: one that did not send them, or
@@ -790,8 +856,15 @@ async fn forward<S: AsyncRead + AsyncWrite + Unpin>(
             }
             frame = drx.next() => {
                 let Some(Ok(frame)) = frame else { break };
-                let frame = from_ws(frame);
+                let mut frame = from_ws(frame);
                 if let Message::Close(_) = frame { break; }
+                // … and is told of nothing outside it.
+                if let (Message::Text(t), Some(folder)) = (&frame, folder) {
+                    match crate::folder_scope::scope(t.as_str(), folder) {
+                        Some(kept) => frame = Message::Text(kept),
+                        None => continue,
+                    }
+                }
                 let sealed = seal.seal(frame)?;
                 ptx.send(to_ws(sealed)).await.map_err(|e| e.to_string())?;
             }
@@ -904,6 +977,22 @@ pub fn request_pair(addr: &str, key: [u8; 32], device: &str, on_code: impl FnOnc
 
 #[cfg(test)]
 mod tests {
+
+    /// A capped space answers a send or a new conversation with the
+    /// service's own error, by the request's id; anything else passes.
+    #[test]
+    fn a_capped_space_refuses_sends_with_an_rpc_error() {
+        let spend = Some(crate::space_limits::Spend { spent: 51.2, cap: 50.0 });
+        let send = json!({ "type": "session", "message": { "type": "send_agent_message_request", "requestId": "r1", "agentId": "a" } }).to_string();
+        let answer: Value = serde_json::from_str(&capped_answer(&send, spend).unwrap()).unwrap();
+        assert_eq!(answer["message"]["type"], "rpc_error");
+        assert_eq!(answer["message"]["payload"]["requestId"], "r1");
+        assert!(answer["message"]["payload"]["error"].as_str().unwrap().contains("$51.20 of $50.00"));
+        let fetch = json!({ "type": "session", "message": { "type": "fetch_agents_request", "requestId": "r2" } }).to_string();
+        assert_eq!(capped_answer(&fetch, spend), None);
+        // The first space is never capped.
+        assert_eq!(capped_refusal(&send, None), None);
+    }
     use super::*;
 
     /// A bridge of its own (its own data folder, not the user's): a phone
