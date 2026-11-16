@@ -525,7 +525,9 @@ fn report_issue() -> View {
                 ),
         )
         .child(dynamic(move || {
-            Some(untracked(move || match filed.get() {
+            // Read outside `untracked`: the result must redraw this.
+            let filed = filed.get();
+            Some(untracked(move || match filed {
                 // Filed: where it is, and done.
                 Some(Ok(url)) => view()
                     .gap(sp(S3))
