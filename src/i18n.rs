@@ -572,6 +572,8 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Connected · over the local network", "已连接 · 局域网"),
     ("Connected · through the relay", "已连接 · 中转服务器"),
     ("Retry now", "立即重试"),
+    ("Copy all", "全部复制"),
+    ("Select text", "选取文字"),
     ("Limit to a folder…", "限定文件夹…"),
     ("Folder…", "文件夹…"),
     ("only {}", "仅限 {}"),
