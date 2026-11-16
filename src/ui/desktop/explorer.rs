@@ -95,6 +95,7 @@ pub(crate) fn explorer() -> View {
                     (ExplorerTab::Changes, t("Changes").into()),
                     (ExplorerTab::Files, t("Files").into()),
                     (ExplorerTab::Commits, t("Commits").into()),
+                    (ExplorerTab::PullRequests, "PR".into()),
                 ],
                 store::explorer_tab,
                 store::set_explorer_tab,
@@ -109,7 +110,7 @@ pub(crate) fn explorer() -> View {
                 view()
                     .flex_1()
                     .flex_row()
-                    .w(move || Length::from(px(width.get() * 3.0)))
+                    .w(move || Length::from(px(width.get() * 4.0)))
                     // Moved by its frame, not a transform, so the pages
                     // coming in are laid out where they show; the switch's
                     // layout spring (the thumb's) carries it.
@@ -118,12 +119,14 @@ pub(crate) fn explorer() -> View {
                             ExplorerTab::Changes => 0.0,
                             ExplorerTab::Files => 1.0,
                             ExplorerTab::Commits => 2.0,
+                            ExplorerTab::PullRequests => 3.0,
                         };
                         Length::from(px(-i * width.get()))
                     })
                     .child(view().w(page).child(changes_view().flex_1()))
                     .child(view().w(page).child(files_view().flex_1()))
-                    .child(view().w(page).child(commits_view().flex_1())),
+                    .child(view().w(page).child(commits_view().flex_1()))
+                    .child(view().w(page).child(prs_view(tab).flex_1())),
             ),
         )
 }
@@ -748,6 +751,85 @@ fn comment_shell() -> View {
         .border_1()
         .border_color(glass_edge())
         .shadow_sm()
+}
+
+/// The conversation's pull requests (`store::conversation_prs`), each as
+/// GitHub says it now, asked for while the tab shows; a press opens its
+/// page.
+fn prs_view(tab: Memo<ExplorerTab>) -> View {
+    let prs = computed(move || if tab.get() == ExplorerTab::PullRequests { store::conversation_prs() } else { vec![] });
+    view().flex_1().child(dynamic(move || {
+        let list = prs.get();
+        untracked(|| store::fetch_prs(&list));
+        Some(untracked(move || {
+            if list.is_empty() {
+                return empty_state(Icon::GitPullRequest, t("No pull requests here"), t("The branch's pull request and the ones this conversation links to show here")).into_element();
+            }
+            let mut rows = view().gap(px(2.0)).py(sp(S1));
+            for (repo, number) in list {
+                rows = rows.child(pr_row(repo, number));
+            }
+            scroll().flex_1().child(rows).into_element()
+        }))
+    }))
+}
+
+fn pr_row(repo: String, number: u64) -> impl IntoElement {
+    let key = format!("view:{repo}#{number}");
+    let answer = computed(move || store::github(&key));
+    let (r, n) = (repo.clone(), number);
+    nsh_base::button()
+        .on_press(move || store::open_pull_request(&r, n, store::selected_id()))
+        .mx(sp(S2))
+        .px(sp(S2))
+        .py(px(7.0))
+        .rounded(px(R_LG))
+        .hover(|s| s.bg(highlight()))
+        .flex_row()
+        .items_start()
+        .gap(sp(S2))
+        .child(dynamic(move || {
+            let d = answer.get().and_then(Result::ok).map(|v| crate::github::Detail::from_json(&v));
+            let repo = repo.clone();
+            Some(untracked(move || {
+                let (tone, state) = match &d {
+                    Some(d) if d.merged() => (DOT_RUNNING, t("Merged")),
+                    Some(d) if d.open() && d.draft => (FG_MUTED, t("Draft")),
+                    Some(d) if d.open() => (SUCCESS, if crate::i18n::is_zh() { "开启" } else { t("Open") }),
+                    Some(_) => (DANGER, t("Closed")),
+                    None => (FG_MUTED, ""),
+                };
+                let title = d.as_ref().map(|d| d.title.clone()).unwrap_or_default();
+                let repo_name = repo.rsplit('/').next().unwrap_or(&repo).to_owned();
+                view()
+                    .flex_row()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .gap(sp(S2))
+                    .child(view().pt(px(2.0)).child(icon(Icon::GitPullRequest, 15.0).text_color(tone)))
+                    .child(
+                        view()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .gap(px(3.0))
+                            .child(if title.is_empty() {
+                                view().h(px(12.0)).mt(px(3.0)).w(px(150.0)).rounded(px(R_FULL)).bg(tint(FG, 0.08)).into_element()
+                            } else {
+                                text(title).text_size(tx(TEXT_BASE)).number_of_lines(2).into_element()
+                            })
+                            .child(
+                                view()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(6.0))
+                                    .child(text(format!("#{number}")).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(FG_MUTED))
+                                    .child(text(repo_name).text_size(tx(TEXT_XS)).text_color(FG_MUTED).number_of_lines(1))
+                                    .when(!state.is_empty(), |v| v.child(text(state).text_size(tx(TEXT_XS)).font_weight(FontWeight(500)).text_color(tone))),
+                            ),
+                    )
+                    .into_element()
+            }))
+        }))
 }
 
 fn commits_view() -> View {
