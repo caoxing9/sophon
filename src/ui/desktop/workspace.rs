@@ -75,7 +75,13 @@ pub(crate) fn workspace(compact: bool) -> impl IntoElement {
                 .child(explorer::resize_handle())
                 .child(explorer::explorer().flex_1())
         }));
-    view().flex_1().child(top).child(when(store::terminal_panel_open, terminal::terminal_panel))
+    view()
+        .flex_1()
+        .child(top)
+        .child(when(store::terminal_panel_open, terminal::terminal_panel))
+        // At the window's foot (as monocode's): the context and the plan's
+        // limits.
+        .child(crate::ui::shared::composer::usage_bar(true))
 }
 
 fn header(compact: bool, explorer_shown: Memo<bool>) -> impl IntoElement {

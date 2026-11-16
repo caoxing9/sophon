@@ -241,6 +241,9 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                                     ),
                             )
                             .child(view().flex_1())
+                            // The context, beside Send (a press opens the
+                            // usage page; the phone has no pointer to rest).
+                            .child(when(move || live, context_meter_ring))
                             .child(disc(running, busy, empty, submit)),
                     )
                     // While it listens, the whole card is the listening:
@@ -310,7 +313,9 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                 .child(mic_button(doc))
                 .child(model_picker(live)),
                 )
-                .child(view().flex_shrink_0().flex_row().items_center().gap(sp(S2)).child(meters(live)).child(disc(running, busy, empty, submit))),
+                // How full the agent's context is, beside Send; the plan's
+                // limits are the status bar's.
+                .child(view().flex_shrink_0().flex_row().items_center().gap(sp(S2)).child(when(move || live, context_meter_ring)).child(disc(running, busy, empty, submit))),
         ))
         .into_element()
 }
@@ -785,69 +790,148 @@ fn model_picker(live: bool) -> impl IntoElement {
     super::model_picker::model_picker(live, name)
 }
 
-/// Three meters beside the send button, each a ring, a word and a
-/// percentage, to be read at a glance: how full the open agent's context
-/// is, and how much of its provider's 5-hour and weekly limits is used.
-/// Amber from 80%, red from 90%; a press opens the usage page. A meter with
-/// nothing to say is left out.
-fn meters(live: bool) -> impl IntoElement {
+/// The status bar under the desktop's conversation (as monocode's): the
+/// provider's mark, then its 5-hour and weekly limits, each a ring, a word
+/// and a percentage with the time until it starts again; and a refresh.
+/// (The context is the composer's, beside Send: `context_meter_ring`.) Amber from 80%,
+/// red from 90%; a meter opens the usage page. One with nothing to say is
+/// left out. `live`: the open agent's (else a new conversation's).
+pub(crate) fn usage_bar(live: bool) -> impl IntoElement {
     let readings = computed(move || {
-        let mut out: Vec<(&'static str, f64, Option<String>)> = Vec::new();
-        if live
-            && let Some(a) = store::selected_agent()
-            && let (Some(used), Some(max)) = (a.context_used, a.context_max)
-            && max > 0
-        {
-            out.push((t("Context"), used as f64 / max as f64 * 100.0, None));
-        }
+        // The time left moves on each minute.
+        let now = store::minute().max(crate::usage::now());
+        let mut out: Vec<(&'static str, f64, Option<i64>)> = Vec::new();
         let provider = store::controls(live).provider;
         if let Some(p) = store::usage().and_then(|l| l.into_iter().find(|p| p.id == provider)) {
             for (word, length) in [(t("5h"), 5 * 3600), (t("Week"), 7 * 86_400)] {
                 if let Some((pct, resets)) = limit_window(&p.windows, length) {
-                    out.push((word, pct, resets));
+                    out.push((word, pct, resets.map(|at| at - now)));
                 }
             }
         }
-        out
+        (provider, out)
     });
-    view().child(dynamic(move || {
-        let list = readings.get();
-        if list.is_empty() {
-            return None;
-        }
+    view().flex_row().items_center().h(px(30.0)).px(sp(S3)).gap(sp(S2)).border_t(px(1.0)).border_color(BORDER).child(dynamic(move || {
+        let (provider, list) = readings.get();
         Some(untracked(move || {
-            let mut row = button()
-                .on_press(store::open_usage)
-                .accessibility_label(t("Usage"))
-                .flex_row()
-                .items_center()
-                .gap(sp(S3))
-                .h(sp(CONTROL_SM))
-                .px(sp(S2))
-                .rounded(px(R_FULL))
-                .hover(|s| s.bg(highlight()));
-            for (word, pct, resets) in list {
+            let glyph = match provider.as_str() {
+                "codex" => Icon::Codex,
+                _ => Icon::Claude,
+            };
+            let mut row = view().flex_row().items_center().gap(sp(S4)).child(icon(glyph, 13.0).text_color(FG_MUTED));
+            if list.is_empty() {
+                row = row.child(text(t("No usage reported yet")).text_size(tx(TEXT_XS)).text_color(FG_FAINT));
+            }
+            for (word, pct, left) in list {
                 let tone = meter_tone(pct);
-                let mut meter = view()
+                let mut meter = button()
+                    .on_press(store::open_usage)
+                    .accessibility_label(t("Usage"))
                     .flex_row()
                     .items_center()
-                    .gap(px(4.0))
+                    .gap(px(5.0))
+                    .px(px(4.0))
+                    .h(px(22.0))
+                    .rounded(px(R_MD))
+                    .hover(|s| s.bg(highlight()))
                     .child(ring(pct).text_color(tone))
                     .child(text(word).text_size(tx(TEXT_XS)).text_color(FG_MUTED))
                     .child(text(format!("{:.0}%", pct.clamp(0.0, 100.0))).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(tone));
-                if let Some(at) = resets {
-                    meter = meter.label(tf("Resets {}", &[&at]));
+                if let Some(secs) = left.filter(|s| *s > 0) {
+                    meter = meter.child(text(time_left(secs)).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(FG_FAINT));
                 }
                 row = row.child(meter);
             }
-            row
+            row.child(icon_btn(Icon::RotateCw, Sz::Sm, t("Refresh"), store::refresh_usage)).into_element()
         }))
     }))
 }
 
+/// The open agent's context beside Send: a ring and its percentage; under
+/// the pointer, a card: "Context", "6% used", a bar, and the tokens
+/// (`6.1万 / 100万`, `61K / 1M`). Amber from 80%, red from 90%.
+fn context_meter_ring() -> impl IntoElement {
+    use nsh_core::element::Interactive as _;
+    let usage = computed(|| store::selected_agent().and_then(|a| Some((a.context_used?, a.context_max.filter(|m| *m > 0)?))));
+    view().child(dynamic(move || {
+        let (used, max) = usage.get()?;
+        let pct = (used as f64 / max as f64 * 100.0).clamp(0.0, 100.0);
+        let tone = meter_tone(pct);
+        Some(untracked(move || {
+            let tip = view()
+                .w(px(260.0))
+                .gap(sp(S2))
+                .px(sp(S4))
+                .py(sp(S3))
+                .rounded(px(R_LG))
+                .bg(SURFACE0)
+                .border_1()
+                .border_color(BORDER)
+                .child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .child(text(t("Context")).text_size(tx(TEXT_SM)).font_weight(FontWeight(600)).flex_1())
+                        .child(text(tf("{}% used", &[&format!("{pct:.0}")])).text_size(tx(TEXT_XS)).text_color(FG_MUTED)),
+                )
+                .child(
+                    view()
+                        .h(px(5.0))
+                        .rounded(px(R_FULL))
+                        .bg(SURFACE3)
+                        .child(view().h_full().w(relative((pct / 100.0) as f32)).rounded(px(R_FULL)).bg(if pct >= 80.0 { tone } else { FG_MUTED })),
+                )
+                .child(text(format!("{} / {}", tokens(used), tokens(max))).text_size(tx(TEXT_XS)).text_color(FG_MUTED));
+            view().tooltip(tip.into_element()).child(
+                button()
+                    .on_press(store::open_usage)
+                    .accessibility_label(tf("{}% context used", &[&format!("{pct:.0}")]))
+                    .flex_row()
+                    .items_center()
+                    .gap(px(5.0))
+                    .h(px(28.0))
+                    .px(px(6.0))
+                    .rounded(px(R_FULL))
+                    .hover(|s| s.bg(highlight()))
+                    .child(ring(pct).text_color(tone))
+                    .child(text(format!("{pct:.0}%")).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(tone)),
+            )
+        }))
+    }))
+}
+
+/// A count of tokens, short, as the language writes it: `6.1万` / `100万`,
+/// `61K` / `1M`.
+fn tokens(n: u64) -> String {
+    tokens_in(n, crate::i18n::is_zh())
+}
+
+fn tokens_in(n: u64, zh: bool) -> String {
+    if zh && n >= 10_000 {
+        let w = n as f64 / 10_000.0;
+        let s = if w >= 100.0 { format!("{w:.0}") } else { format!("{w:.1}") };
+        format!("{}万", s.trim_end_matches(".0"))
+    } else {
+        crate::usage::compact(n)
+    }
+}
+
+/// Seconds until a reset, short: `7h 38m`, `2d 3h`, `12m`.
+fn time_left(secs: i64) -> String {
+    let (d, h, m) = (secs / 86_400, secs % 86_400 / 3600, secs % 3600 / 60);
+    if d > 0 {
+        format!("{d}d {h}h")
+    } else if h > 0 {
+        format!("{h}h {m}m")
+    } else {
+        format!("{}m", m.max(1))
+    }
+}
+
 /// The used percentage of the provider's window of `length` seconds (the
-/// one for every model, not one model's own), and when it resets.
-fn limit_window(windows: &[crate::daemon::connection::UsageWindow], length: i64) -> Option<(f64, Option<String>)> {
+/// one for every model, not one model's own), and when it resets (Unix
+/// seconds).
+fn limit_window(windows: &[crate::daemon::connection::UsageWindow], length: i64) -> Option<(f64, Option<i64>)> {
     use crate::usage::{self, limits};
     windows
         .iter()
@@ -855,8 +939,7 @@ fn limit_window(windows: &[crate::daemon::connection::UsageWindow], length: i64)
         // The shortest id is the unscoped one (`weekly`, not `weekly_model_…`).
         .min_by_key(|w| w.id.len())
         .map(|w| {
-            let resets = w.resets_at.as_deref().and_then(usage::parse::rfc3339).map(|at| usage::time_label(at, &usage::local_offset));
-            (w.used.unwrap_or(0.0), resets)
+            (w.used.unwrap_or(0.0), w.resets_at.as_deref().and_then(usage::parse::rfc3339))
         })
 }
 
@@ -1020,36 +1103,6 @@ fn pick_files_into(key: String) {
             insert_file(&key, f.name.clone(), f.mime.clone(), f.data.bytes().to_vec());
         }
     });
-}
-
-/// How full the agent's context window is, and what it cost.
-pub(crate) fn context_meter() -> impl IntoElement {
-    let usage = computed(|| store::selected_agent().map(|a| (a.context_used, a.context_max, a.cost_usd)));
-    view().child(dynamic(move || {
-        let (Some(used), Some(max), cost) = usage.get()? else { return None };
-        if max == 0 {
-            return None;
-        }
-        let pct = (used as f64 / max as f64 * 100.0).round() as u32;
-        let tone = if pct >= 85 { DANGER } else if pct >= 65 { WARNING } else { FG_MUTED };
-        Some(untracked(move || {
-            let label = match cost {
-                Some(c) if c > 0.0 => format!("{pct}% · ${c:.2}"),
-                _ => format!("{pct}%"),
-            };
-            view()
-                .flex_row()
-                .items_center()
-                .gap(px(6.0))
-                .px(sp(S2))
-                .child(
-                    view().w(px(28.0)).h(px(4.0)).rounded(px(R_FULL)).bg(SURFACE3).child(
-                        view().h_full().w(relative((pct.min(100) as f32) / 100.0)).rounded(px(R_FULL)).bg(tone),
-                    ),
-                )
-                .child(text(label).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(tone))
-        }))
-    }))
 }
 
 #[derive(Clone, Default)]
@@ -1495,6 +1548,19 @@ mod meter_tests {
         // Nothing reported: no meter.
         assert_eq!(limit_window(&[w("weekly", "Weekly", None)], 7 * 86_400), None);
         assert_eq!(limit_window(&[w("credits", "Credits", Some(3.0))], 5 * 3600), None);
+    }
+
+    #[test]
+    fn tokens_read_as_the_language_writes_them() {
+        use super::tokens_in;
+        assert_eq!((tokens_in(61_234, true), tokens_in(1_000_000, true), tokens_in(140_000, true), tokens_in(9_500, true)), ("6.1万".into(), "100万".into(), "14万".into(), crate::usage::compact(9_500)));
+        assert_eq!(tokens_in(61_234, false), crate::usage::compact(61_234));
+    }
+
+    #[test]
+    fn the_time_left_is_short() {
+        use super::time_left;
+        assert_eq!((time_left(7 * 3600 + 38 * 60), time_left(2 * 86_400 + 3 * 3600 + 5), time_left(30), time_left(12 * 60)), ("7h 38m".into(), "2d 3h".into(), "1m".into(), "12m".into()));
     }
 
     #[test]
