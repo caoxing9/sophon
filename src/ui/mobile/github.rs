@@ -16,7 +16,7 @@ use crate::ui::kit::*;
 use crate::ui::shared::github::{inbox_list, pull_request};
 
 pub(crate) fn inbox_page() -> Screen {
-    store::refresh_inbox();
+    store::inbox_opened();
     nav_page().key("inbox").header_visible(false).title(t("Pull requests")).child(
         view()
             .flex_1()

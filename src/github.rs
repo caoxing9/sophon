@@ -380,9 +380,14 @@ pub(crate) fn run(op: &Op) -> Result<Value, String> {
                 "closed" => args.extend(["--state", "closed", "--", "-is:merged"]),
                 _ => args.extend(["--state", "open"]),
             }
+            // Asked to review: marked (a second, small search, at the same
+            // time; only open pull requests ask).
+            let open = !matches!(state.as_str(), "merged" | "closed");
+            let asked = open.then(|| {
+                std::thread::spawn(|| gh_json(&["search", "prs", "--state", "open", "--review-requested", "@me", "--limit", "60", "--json", "number,repository"]).unwrap_or(Value::Null))
+            });
             let involved = gh_json(&args)?;
-            // Asked to review: marked (a second, small search).
-            let asked = gh_json(&["search", "prs", "--state", "open", "--review-requested", "@me", "--limit", "60", "--json", "number,repository"]).unwrap_or(Value::Null);
+            let asked = asked.and_then(|h| h.join().ok()).unwrap_or(Value::Null);
             let asked: Vec<(String, u64)> = asked
                 .as_array()
                 .into_iter()
