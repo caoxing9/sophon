@@ -12,6 +12,7 @@
 mod add_project;
 mod changes;
 mod files;
+mod github;
 mod chat;
 mod connect;
 mod home;
@@ -40,6 +41,11 @@ pub(crate) enum Route {
     File(String),
     /// A sub-agent's timeline: (parent agent, sub-agent).
     Subagent(String, String),
+    /// The open pull requests that involve the user.
+    Inbox,
+    /// A pull request (repository, number), and the conversation it was
+    /// opened from.
+    PullRequest(String, u64, Option<String>),
 }
 
 impl Route {
@@ -53,6 +59,8 @@ impl Route {
             Route::Files(p) => format!("files:{p}"),
             Route::File(p) => format!("file:{p}"),
             Route::Subagent(_, id) => format!("sub:{id}"),
+            Route::Inbox => "inbox".into(),
+            Route::PullRequest(repo, number, _) => format!("pr:{repo}#{number}"),
         }
     }
 }
@@ -204,6 +212,8 @@ fn stack() -> impl IntoElement {
                     Route::Files(dir) => files::dir_page(dir.clone()),
                     Route::File(path) => files::file_page(path.clone()),
                     Route::Subagent(parent, id) => chat::subagent_page(parent.clone(), id.clone()),
+                    Route::Inbox => github::inbox_page(),
+                    Route::PullRequest(repo, number, agent) => github::pull_request_page(repo.clone(), *number, agent.clone()),
                 };
                 page.on_dismiss(move || popped(&gone))
             },

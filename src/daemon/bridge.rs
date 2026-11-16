@@ -721,7 +721,7 @@ async fn forward<S: AsyncRead + AsyncWrite + Unpin>(
                 // to a device that asks: one that did not send them, or
                 // has forgotten them.
                 if let Message::Text(t) = &plain
-                    && (t.as_str().contains("\"images\"") || t.as_str().contains("sophon_pictures_request") || t.as_str().contains("sophon_usage_request") || t.as_str().contains("sophon_push_register"))
+                    && (t.as_str().contains("\"images\"") || t.as_str().contains("sophon_pictures_request") || t.as_str().contains("sophon_usage_request") || t.as_str().contains("sophon_push_register") || t.as_str().contains("sophon_github_request"))
                     && let Ok(v) = serde_json::from_str::<Value>(t.as_str())
                 {
                     // This computer's session-log statistics, for a phone
@@ -736,6 +736,25 @@ async fn forward<S: AsyncRead + AsyncWrite + Unpin>(
                         });
                         #[cfg(any(target_os = "ios", target_os = "android"))]
                         let _ = own_tx.send(json!({ "type": "sophon_usage" }).to_string());
+                        continue;
+                    }
+                    // GitHub with this computer's gh (`crate::github`), for
+                    // a device away from it: on a thread of its own.
+                    if v.get("type").and_then(Value::as_str) == Some("sophon_github_request") {
+                        let own_tx = own_tx.clone();
+                        let key = v.get("key").and_then(Value::as_str).unwrap_or_default().to_owned();
+                        let op = crate::github::Op::from_json(v.get("request").unwrap_or(&Value::Null));
+                        let answer = move |result: Result<Value, String>| match result {
+                            Ok(data) => json!({ "type": "sophon_github", "key": key, "ok": true, "data": data }),
+                            Err(error) => json!({ "type": "sophon_github", "key": key, "ok": false, "error": error }),
+                        };
+                        #[cfg(not(any(target_os = "ios", target_os = "android")))]
+                        std::thread::spawn(move || {
+                            let result = op.and_then(|op| crate::github::run(&op));
+                            let _ = own_tx.send(answer(result).to_string());
+                        });
+                        #[cfg(any(target_os = "ios", target_os = "android"))]
+                        let _ = own_tx.send(answer(op.and(Err("Not a computer".into()))).to_string());
                         continue;
                     }
                     // The device wants push notifications (or no longer):

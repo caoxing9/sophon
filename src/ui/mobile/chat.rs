@@ -139,9 +139,19 @@ fn agent_sheet() {
             SheetItem::new(t("New agent"), || store::open_tab(Tab::Draft)).icon(Icon::SquarePen)
         },
         SheetItem::new(t("Browse files"), || push(Route::Files(".".into()))).icon(Icon::Folder),
+    ];
+    // The workspace's pull request, when it has one: its page here.
+    if let Some((repo, number)) = store::git().pr.and_then(|pr| crate::github::of_url(&pr.url)) {
+        let from = a.id.clone();
+        items.insert(1, SheetItem::new(crate::i18n::tf("Pull request #{}", &[&number.to_string()]), move || {
+            push(Route::PullRequest(repo.clone(), number, Some(from.clone())))
+        })
+        .icon(Icon::GitPullRequest));
+    }
+    items.extend([
         SheetItem::new(t("Fork into new agent"), store::fork_selected).icon(Icon::GitCompare),
         SheetItem::new(t("Rename"), move || store::open_modal(store::Modal::RenameAgent { id: rename.clone(), name: title.clone() })).icon(Icon::Pencil),
-    ];
+    ]);
     let subs = store::subagents(&a.id).len();
     if subs > 0 {
         let parent = a.id.clone();
