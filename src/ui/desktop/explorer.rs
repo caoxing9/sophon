@@ -942,10 +942,15 @@ fn prs_view(tab: Memo<ExplorerTab>) -> View {
                                 .on_press(move || opened.set(None))
                                 .flex_row()
                                 .items_center()
-                                .gap(px(4.0))
+                                .gap(px(2.0))
+                                // As wide as its words, not the pane: a
+                                // full-width bar outweighed the title.
+                                .self_start()
                                 .mx(sp(S2))
-                                .px(sp(S1))
-                                .h(px(28.0))
+                                .mb(sp(S1))
+                                .pl(px(2.0))
+                                .pr(sp(S2))
+                                .h(px(24.0))
                                 .rounded(px(R_MD))
                                 .hover(|s| s.bg(highlight()))
                                 .child(icon(Icon::ChevronLeft, 14.0).text_color(FG_MUTED))
