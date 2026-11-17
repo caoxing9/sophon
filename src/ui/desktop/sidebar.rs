@@ -30,9 +30,8 @@ pub(crate) fn sidebar() -> View {
                     nav_item(Icon::GitPullRequest, t("Pull requests"), || matches!(store::screen(), Screen::Inbox | Screen::PullRequest { .. }), store::open_inbox)
                         .child(when(|| store::desk_inbox_items().iter().any(store::inbox_unseen), || view().w(px(6.0)).h(px(6.0)).mr(px(4.0)).rounded(px(R_FULL)).bg(DOT_RUNNING))),
                 )
-                .child(nav_item(Icon::History, t("History"), || store::screen() == Screen::History, store::open_history))
                 .child(nav_item(Icon::CalendarClock, t("Schedules"), || store::screen() == Screen::Schedules, store::open_schedules))
-                .child(nav_item(Icon::Activity, t("Usage"), || store::screen() == Screen::Usage, store::open_usage)),
+                .child(more_menu()),
         )
         // The projects under a heading of their own, adding one beside it
         // (monocode's sidebar): "New workspace" above is the only other +.
@@ -205,6 +204,34 @@ fn nav_item(
         .active(|s| s.opacity(0.7))
         .child(icon(glyph, 16.0).text_color(FG_MUTED))
         .child(text(label).text_size(tx(TEXT_BASE)).text_color(FG).flex_1())
+}
+
+/// History and Usage, less often wanted, behind "More" (the row shows
+/// which one is open).
+fn more_menu() -> impl IntoElement {
+    let active = computed(|| matches!(store::screen(), Screen::History | Screen::Usage));
+    let width = (if window().width.0 < 600.0 { window().width.0 } else { store::sidebar_width() }) - 2.0 * S2;
+    dropdown_wide(
+        view()
+            .flex_row()
+            .items_center()
+            .gap(sp(S2))
+            .h(sp(CONTROL_MD))
+            .my(px(1.0))
+            .px(sp(S2))
+            .rounded(px(R_LG))
+            .bg(move || if active.get() { SIDEBAR_SELECTED } else { tint(SIDEBAR, 0.0) })
+            .hover(|s| s.bg(sidebar_hover()))
+            .child(icon(Icon::Ellipsis, 16.0).text_color(FG_MUTED))
+            .child(text(move || match store::screen() {
+                Screen::History => t("History"),
+                Screen::Usage => t("Usage"),
+                _ => t("More"),
+            }).text_size(tx(TEXT_BASE)).text_color(FG).flex_1()),
+        width,
+    )
+    .child(menu_row(t("History"), Some(Icon::History), None, false, store::open_history))
+    .child(menu_row(t("Usage"), Some(Icon::Activity), None, false, store::open_usage))
 }
 
 /// A row's shortcut, faint at its end.
