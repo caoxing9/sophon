@@ -5340,6 +5340,24 @@ pub(crate) fn answer_permission_with(
     send(Command::Permit { agent_id, permission_id: permission_id.to_owned(), allow, action_id, updated_input });
 }
 
+/// Sends the open conversation's last message again: after its turn
+/// failed, or while Claude Code waits to retry a failed request (which it
+/// interrupts). The text alone: pictures and files are not sent again.
+pub(crate) fn retry_last() {
+    let Some(agent) = selected_agent() else { return };
+    let text = global::<Timeline>().with_untracked(|t| {
+        if t.agent_id.as_deref() != Some(agent.id.as_str()) {
+            return None;
+        }
+        t.items.iter().rev().find_map(|i| match i {
+            Item::User { text, .. } if !text.trim().is_empty() => Some(text.clone()),
+            _ => None,
+        })
+    });
+    let Some(text) = text else { return };
+    deliver_with(&agent.id, &text, agent.is_running().then_some("interrupt"), vec![], vec![]);
+}
+
 pub(crate) fn stop_selected() {
     if let Some(id) = selected_id() {
         send(Command::Cancel(id));
@@ -5844,6 +5862,7 @@ pub(crate) fn apply(event: Event) {
             global::<Timeline>().update(|t| {
                 if t.agent_id.as_deref() == Some(agent_id.as_str()) {
                     opened = !t.loaded;
+                    crate::daemon::model::collapse_retries(&mut items);
                     carry_images(&t.items, &mut items);
                     crate::sent_pictures::restore(&mut items);
                     ask_pictures(&items, Some(&agent_id));
@@ -5890,6 +5909,7 @@ pub(crate) fn apply(event: Event) {
             global::<Timeline>().update(|t| {
             if t.agent_id.as_deref() == Some(agent_id.as_str()) {
                 let mut merged = items;
+                crate::daemon::model::collapse_retries(&mut merged);
                 crate::sent_pictures::restore(&mut merged);
                 ask_pictures(&merged, Some(&agent_id));
                 merged.append(&mut t.items);

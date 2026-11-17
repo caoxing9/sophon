@@ -32,6 +32,7 @@ enum RowKind {
     Todo,
     Error,
     Notice,
+    Retry,
 }
 
 impl RowKind {
@@ -44,6 +45,7 @@ impl RowKind {
             Item::Todo { .. } => Self::Todo,
             Item::Error { .. } => Self::Error,
             Item::Notice { .. } => Self::Notice,
+            Item::Retry { .. } => Self::Retry,
         }
     }
 }
@@ -196,11 +198,13 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
         }
         item.with(|i| i.as_ref().map(RowKind::of))
     });
-    let streaming = computed(move || running.get() && index.get().is_some_and(|i| i + 1 == store::item_count()));
+    let last = computed(move || index.get().is_some_and(|i| i + 1 == store::item_count()));
+    let streaming = computed(move || running.get() && last.get());
     let text_of = move || {
         item.with(|i| match i {
             Some(Item::User { text, .. } | Item::Assistant { text } | Item::Reasoning { text }) => text.clone(),
             Some(Item::Error { message } | Item::Notice { message }) => message.clone(),
+            Some(retry @ Item::Retry { .. }) => retry_words(retry, streaming.get()),
             _ => String::new(),
         })
     };
@@ -407,6 +411,23 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                     .child(
                         view().selectable(true).on_text_selection_change(take_copy).flex_1().child(text(text_of).text_size(tx(TEXT_BASE)).text_color(DANGER)),
                     )
+                    // The turn ended on it: its message sent again.
+                    .child(when(computed(move || last.get() && !running.get()), move || retry_button(DANGER)))
+                    .into_element(),
+                // Claude Code retrying a failed request: which attempt, why;
+                // the last message sent again at a press, not after the wait.
+                RowKind::Retry => view()
+                    .flex_row()
+                    .items_center()
+                    .gap(sp(S2))
+                    .px(sp(S3))
+                    .py(sp(S1))
+                    .min_h(px(34.0))
+                    .rounded(px(R_LG))
+                    .bg(tint(WARNING, 0.08))
+                    .child(icon(Icon::RotateCw, 14.0).text_color(WARNING))
+                    .child(text(text_of).text_size(tx(TEXT_SM)).text_color(WARNING).flex_1())
+                    .child(when(last, move || retry_button(WARNING)))
                     .into_element(),
                 RowKind::Notice => text(text_of)
                     .text_size(tx(TEXT_SM))
@@ -1491,10 +1512,45 @@ fn static_row(item: Item) -> AnyElement {
         Item::Reasoning { text: t } => text(t).text_size(px(13.0)).italic().number_of_lines(3).text_color(FG_MUTED).into_element(),
         Item::Error { message } => text(message).text_size(tx(TEXT_BASE)).text_color(DANGER).into_element(),
         Item::Notice { message } => text(message).text_size(tx(TEXT_SM)).text_color(FG_FAINT).into_element(),
+        retry @ Item::Retry { .. } => text(retry_words(&retry, false)).text_size(tx(TEXT_SM)).text_color(WARNING).into_element(),
         Item::Todo { lines } => text(lines.iter().map(|(d, t)| format!("{} {t}", if *d { "☑" } else { "☐" })).collect::<Vec<_>>().join("\n"))
             .text_size(tx(TEXT_BASE))
             .into_element(),
     }
+}
+
+/// What a retry row says: while Claude Code waits to try again, the
+/// attempt that failed, of how many, and why; afterwards, how many it took.
+fn retry_words(item: &Item, waiting: bool) -> String {
+    let Item::Retry { attempt, max, status, error, delay_ms } = item else { return String::new() };
+    let why = match status {
+        Some(s) => format!("{s} {error}"),
+        None => error.clone(),
+    };
+    let why = why.trim();
+    if waiting {
+        let secs = delay_ms.div_ceil(1000).max(1).to_string();
+        tf("Request failed ({}) · retrying {}/{} in {} s", &[&why, &attempt.to_string(), &max.to_string(), &secs])
+    } else {
+        tf("Request retried {} times ({})", &[&attempt.to_string(), &why])
+    }
+}
+
+/// Sends the last message again (interrupting a wait between retries).
+fn retry_button(tone: AdaptiveColor) -> impl IntoElement {
+    nsh_base::button()
+        .on_press(store::retry_last)
+        .accessibility_label(t("Retry"))
+        .flex_row()
+        .items_center()
+        .gap(sp(S1))
+        .px(sp(S2))
+        .h(px(26.0))
+        .rounded(px(R_FULL))
+        .bg(tint(tone, 0.16))
+        .active(|s| s.opacity(0.6))
+        .child(icon(Icon::RotateCw, 12.0).text_color(tone))
+        .child(text(t("Retry")).text_size(tx(TEXT_SM)).font_weight(FontWeight(600)).text_color(tone))
 }
 
 /// The find bar over the conversation (⌘F).
