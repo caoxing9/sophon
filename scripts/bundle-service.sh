@@ -70,4 +70,36 @@ rm -rf "$DEST"
 mkdir -p "$DEST"
 # Links kept as links (bin/paseo is one, into lib).
 cp -R "$BUILT/node" "$DEST/node"
+
+# Claude Code says when it retries a failed API request (`system` /
+# `api_retry`: the attempt, of how many, the wait, why); the service drops
+# it. Passed on as a notice Sophon reads (`daemon::model::retry_of`):
+#   API retry 3/10 · 529 overloaded_error · 12000 ms
+AGENT_JS="$DEST/node/lib/node_modules/@getpaseo/cli/node_modules/@getpaseo/server/dist/server/server/agent/providers/claude/agent.js"
+"$DEST/node/bin/node" - "$AGENT_JS" <<'JS'
+const fs = require("fs");
+const file = process.argv[2];
+const src = fs.readFileSync(file, "utf8");
+if (src.includes('"api_retry"')) process.exit(0);
+const anchor = '        if (message.subtype === "task_progress") {';
+if (src.split(anchor).length !== 2) {
+  console.error(`the service's Claude agent has changed: no single place for the retry notice in ${file}`);
+  process.exit(1);
+}
+const patch = `        if (message.subtype === "api_retry") {
+            const status = typeof message.error_status === "number" ? message.error_status : "-";
+            events.push({
+                type: "timeline",
+                provider: "claude",
+                item: {
+                    type: "notification",
+                    level: "warning",
+                    message: \`API retry \${message.attempt}/\${message.max_retries} · \${status} \${message.error ?? "unknown"} · \${message.retry_delay_ms} ms\`,
+                },
+            });
+            return;
+        }
+`;
+fs.writeFileSync(file, src.replace(anchor, patch + anchor));
+JS
 echo "service $SERVICE on Node $NODE: $(du -sh "$DEST" | cut -f1) in $DEST"

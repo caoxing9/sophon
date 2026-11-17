@@ -190,6 +190,8 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Restart to update", "重启以更新"),
     ("Later", "稍后"),
     ("Retry", "重试"),
+    ("Request failed ({}) · retrying {}/{} in {} s", "请求失败（{}）· 第 {}/{} 次重试，{} 秒后开始"),
+    ("Request retried {} times ({})", "请求重试了 {} 次（{}）"),
     ("Download", "下载"),
     ("No notes for this release", "这个版本没有更新说明"),
     ("Update the app", "更新应用"),
