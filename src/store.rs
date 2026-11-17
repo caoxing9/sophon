@@ -257,6 +257,10 @@ fn github_answered(key: String, result: Result<serde_json::Value, String>) {
             github_fetch(crate::github::Op::McpStatus { cwd });
         }
     }
+    if key.starts_with("inbox:") && result.is_ok() {
+        let (key, value) = (key.clone(), result.clone());
+        std::thread::spawn(move || save_inbox(&key, value));
+    }
     global::<GitHubState>().update(|g| {
         g.loading.remove(&key);
         // An action that failed keeps the pull request shown: its error is
@@ -309,6 +313,57 @@ struct InboxLimits(HashMap<&'static str, u32>);
 /// How many of `state`'s pull requests are asked for.
 pub(crate) fn inbox_limit(state: &'static str) -> u32 {
     global::<InboxLimits>().with(|l| l.0.get(state).copied().unwrap_or(crate::github::INBOX_PAGE))
+}
+
+/// Where the inbox's last answers are kept, by state: shown at once the
+/// next time (the app's start too), while they are asked for again.
+fn inbox_cache_path() -> std::path::PathBuf {
+    crate::daemon::data_dir().join("github-inbox.json")
+}
+
+fn save_inbox(key: &str, value: Result<serde_json::Value, String>) {
+    let Ok(value) = value else { return };
+    let path = inbox_cache_path();
+    let mut all = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    all.insert(key.to_owned(), value);
+    let _ = std::fs::create_dir_all(crate::daemon::data_dir());
+    let _ = std::fs::write(path, serde_json::Value::Object(all).to_string());
+}
+
+/// The inbox was opened: what was kept shows at once, the filter's state is
+/// asked for again, then (once a run) the other states, so a switch to one
+/// shows it at once.
+pub(crate) fn inbox_opened() {
+    #[derive(Clone, Copy, Default)]
+    struct Prefetched(bool);
+    let empty = global::<GitHubState>().with_untracked(|g| !g.data.keys().any(|k| k.starts_with("inbox:")));
+    if empty
+        && let Some(kept) = std::fs::read_to_string(inbox_cache_path())
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .and_then(|v| v.as_object().cloned())
+    {
+        global::<GitHubState>().update(|g| {
+            for (k, v) in kept {
+                if k.starts_with("inbox:") {
+                    g.data.entry(k).or_insert(Ok(v));
+                }
+            }
+        });
+    }
+    refresh_inbox();
+    if !global::<Prefetched>().with_untracked(|p| p.0) {
+        global::<Prefetched>().set(Prefetched(true));
+        let current = global::<InboxFilter>().with_untracked(|f| f.state);
+        for state in ["open", "merged", "closed"].into_iter().filter(|s| *s != current) {
+            let limit = untracked(|| inbox_limit(state));
+            github_fetch(crate::github::Op::Inbox { roots: project_roots(), state: state.to_owned(), limit });
+        }
+    }
 }
 
 /// Asks for the inbox (in its filter's state) again.
@@ -381,11 +436,191 @@ pub(crate) fn fetch_prs(prs: &[(String, u64)]) {
     }
 }
 
+/// The desktop inbox's filters, as monocode's: the states shown (none
+/// picked: all of them), the repositories hidden, how recent, only the
+/// ones asking for the user's review, and the words searched for.
+#[derive(Clone, PartialEq, Default)]
+pub(crate) struct DeskInbox {
+    /// Open, draft, merged, closed.
+    pub(crate) status: [bool; 4],
+    pub(crate) hidden: Vec<String>,
+    /// `all`, `day`, `week`, `month`.
+    pub(crate) time: &'static str,
+    pub(crate) review_only: bool,
+    pub(crate) query: String,
+}
+
+impl DeskInbox {
+    pub(crate) fn narrowed(&self) -> bool {
+        self.status.iter().any(|s| *s) || !self.hidden.is_empty() || !matches!(self.time, "" | "all") || self.review_only
+    }
+
+    /// The inbox's states to ask for.
+    pub(crate) fn states(&self) -> Vec<&'static str> {
+        let [open, draft, merged, closed] = self.status;
+        if !(open || draft || merged || closed) {
+            return crate::github::STATES.to_vec();
+        }
+        let mut out = vec![];
+        if open || draft {
+            out.push("open");
+        }
+        if merged {
+            out.push("merged");
+        }
+        if closed {
+            out.push("closed");
+        }
+        out
+    }
+
+    /// Whether `item` shows, updated `age` seconds ago (when known).
+    pub(crate) fn shows(&self, item: &crate::github::InboxItem, age: Option<i64>) -> bool {
+        let [open, draft, merged, closed] = self.status;
+        if open || draft || merged || closed {
+            let ok = match item.state.as_str() {
+                "merged" => merged,
+                "closed" => closed,
+                _ if item.draft => draft,
+                _ => open,
+            };
+            if !ok {
+                return false;
+            }
+        }
+        if self.hidden.iter().any(|r| r.eq_ignore_ascii_case(&item.repo)) || (self.review_only && !item.review_requested) {
+            return false;
+        }
+        let span = match self.time {
+            "day" => 86_400,
+            "week" => 7 * 86_400,
+            "month" => 30 * 86_400,
+            _ => 0,
+        };
+        if span > 0 && age.is_some_and(|a| a > span) {
+            return false;
+        }
+        let q = self.query.trim().to_lowercase();
+        q.is_empty() || item.title.to_lowercase().contains(&q) || item.repo.to_lowercase().contains(&q) || format!("#{}", item.number).contains(&q) || item.author.to_lowercase().contains(&q)
+    }
+}
+
+pub(crate) fn desk_inbox() -> DeskInbox {
+    global::<DeskInbox>().with(Clone::clone)
+}
+
+/// Changes the desktop inbox's filters; the states not yet known are asked
+/// for.
+pub(crate) fn set_desk_inbox(f: impl FnOnce(&mut DeskInbox)) {
+    global::<DeskInbox>().update(f);
+    let states = global::<DeskInbox>().with_untracked(DeskInbox::states);
+    for state in states {
+        if github(&format!("inbox:{state}")).is_none() && !github_loading(&format!("inbox:{state}")) {
+            let limit = untracked(|| inbox_limit(state));
+            github_fetch(crate::github::Op::Inbox { roots: project_roots(), state: state.to_owned(), limit });
+        }
+    }
+}
+
+/// The desktop inbox's pull requests: the states its filters ask for,
+/// together, the latest first (each once).
+pub(crate) fn desk_inbox_items() -> Vec<crate::github::InboxItem> {
+    let f = desk_inbox();
+    let mut items: Vec<crate::github::InboxItem> = vec![];
+    for state in f.states() {
+        if let Some(Ok(v)) = github(&format!("inbox:{state}")) {
+            for mut item in crate::github::Inbox::from_json(&v).items {
+                if item.state.is_empty() {
+                    item.state = state.to_owned();
+                }
+                if !items.iter().any(|i| i.repo == item.repo && i.number == item.number) {
+                    items.push(item);
+                }
+            }
+        }
+    }
+    items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    items
+}
+
+/// Asks for the desktop inbox's states again.
+pub(crate) fn refresh_desk_inbox() {
+    for state in desk_inbox().states() {
+        let limit = untracked(|| inbox_limit(state));
+        github_fetch(crate::github::Op::Inbox { roots: project_roots(), state: state.to_owned(), limit });
+    }
+}
+
+/// The pull requests the user has seen, as they were then (`updatedAt`):
+/// one updated since is new again (monocode's unread dot).
+#[derive(Clone, Default)]
+struct InboxSeen(Option<HashMap<String, String>>);
+
+fn seen_path() -> std::path::PathBuf {
+    crate::daemon::data_dir().join("github-seen.json")
+}
+
+fn with_seen<R>(f: impl FnOnce(&HashMap<String, String>) -> R) -> R {
+    if global::<InboxSeen>().with_untracked(|s| s.0.is_none()) {
+        let kept: HashMap<String, String> = std::fs::read_to_string(seen_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        global::<InboxSeen>().set(InboxSeen(Some(kept)));
+    }
+    global::<InboxSeen>().with(|s| f(s.0.as_ref().expect("loaded")))
+}
+
+/// Whether `item` changed since the user last saw it.
+pub(crate) fn inbox_unseen(item: &crate::github::InboxItem) -> bool {
+    let key = format!("{}#{}", item.repo, item.number);
+    with_seen(|m| m.get(&key).is_none_or(|at| *at < item.updated_at))
+}
+
+/// The user saw `items`, as they are now.
+pub(crate) fn mark_inbox_seen(items: &[crate::github::InboxItem]) {
+    with_seen(|_| ());
+    global::<InboxSeen>().update(|s| {
+        let m = s.0.get_or_insert_with(HashMap::new);
+        for item in items {
+            m.insert(format!("{}#{}", item.repo, item.number), item.updated_at.clone());
+        }
+        let text = serde_json::to_string(m).unwrap_or_default();
+        std::thread::spawn(move || {
+            let _ = std::fs::create_dir_all(crate::daemon::data_dir());
+            let _ = std::fs::write(seen_path(), text);
+        });
+    });
+}
+
+/// Comments `body` on pull request `repo#number`; its page shows it after.
+pub(crate) fn comment_on_pull_request(repo: &str, number: u64, body: &str) {
+    github_fetch(crate::github::Op::Comment { repo: repo.to_owned(), number, body: body.to_owned() });
+}
+
+/// The pull request picked in the desktop's inbox, shown beside its list.
+#[derive(Clone, Default, PartialEq)]
+struct InboxSelected(Option<(String, u64)>);
+
+pub(crate) fn inbox_selected() -> Option<(String, u64)> {
+    global::<InboxSelected>().with(|s| s.0.clone())
+}
+
+/// Shows pull request `repo#number` beside the inbox's list (asked for
+/// the first time).
+pub(crate) fn select_inbox(repo: &str, number: u64) {
+    let pr = (repo.to_owned(), number);
+    if global::<InboxSelected>().with_untracked(|s| s.0.as_ref() == Some(&pr)) {
+        return;
+    }
+    global::<InboxSelected>().set(InboxSelected(Some(pr)));
+    if github(&crate::github::Op::View { repo: repo.to_owned(), number }.key()).is_none() {
+        refresh_pull_request(repo, number);
+    }
+}
+
 /// The desktop's inbox.
 pub(crate) fn open_inbox() {
     global::<Nav>().update(|n| n.screen = Screen::Inbox);
     send(Command::WatchDiff(None));
-    refresh_inbox();
+    inbox_opened();
 }
 
 /// The desktop's page of a pull request.
