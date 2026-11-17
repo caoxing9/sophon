@@ -234,24 +234,149 @@ fn inbox_row(item: InboxItem, divider: bool, tone: AdaptiveColor, open: impl Fn(
 
 /// The desktop's inbox screen.
 pub(crate) fn inbox_page() -> impl IntoElement {
-    scroll().flex_1().child(
-        view()
-            .w_full()
-            .max_w(px(860.0))
-            .self_center()
-            .px(sp(S6))
-            .py(sp(S8))
-            .gap(sp(S6))
-            .child(
-                view()
-                    .flex_row()
-                    .items_center()
-                    .gap(sp(S2))
-                    .child(text(t("Pull requests")).text_size(tx(TEXT_2XL)).font_weight(FontWeight(500)).flex_1())
-                    .child(btn(t("Refresh"), Variant::Secondary, Sz::Md, Some(Icon::RotateCw), store::refresh_inbox)),
-            )
-            .child(inbox_list(|item: InboxItem| store::open_pull_request(&item.repo, item.number, None))),
-    )
+    let filter = computed(store::inbox_filter);
+    let key = computed(move || format!("inbox:{}", filter.get().state));
+    let answer = computed(move || store::github(&key.get()));
+    let loading = computed(move || store::github_loading(&key.get()));
+    let selected = computed(store::inbox_selected);
+    // The list's pull requests, the latest first.
+    let items = computed(move || {
+        let f = filter.get();
+        let mut items: Vec<InboxItem> = match answer.get() {
+            Some(Ok(v)) => Inbox::from_json(&v).items.into_iter().filter(|i| !f.drafts || i.draft).collect(),
+            _ => vec![],
+        };
+        items.sort_by(|a, b| b.review_requested.cmp(&a.review_requested).then(b.updated_at.cmp(&a.updated_at)));
+        items
+    });
+    view()
+        .flex_1()
+        .flex_row()
+        .min_h(px(0.0))
+        .child(
+            // The list.
+            view()
+                .w(px(360.0))
+                .flex_shrink_0()
+                .border_r(px(1.0))
+                .border_color(BORDER)
+                .child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap(sp(S2))
+                        .px(sp(S4))
+                        .pt(sp(S4))
+                        .pb(sp(S3))
+                        .child(text(t("Pull requests")).text_size(tx(TEXT_LG)).font_weight(FontWeight(600)).flex_1())
+                        .child(icon_btn(Icon::RotateCw, Sz::Sm, t("Refresh"), store::refresh_inbox)),
+                )
+                .child(view().flex_row().px(sp(S3)).pb(sp(S2)).child(segmented(
+                    vec![
+                        (("open", false), t("Open").into()),
+                        (("open", true), t("Draft").into()),
+                        (("merged", false), t("Merged").into()),
+                        (("closed", false), t("Closed").into()),
+                    ],
+                    move || filter.with(|f| (f.state, f.drafts)),
+                    |(state, drafts): (&'static str, bool)| store::set_inbox_filter(state, drafts),
+                )))
+                .child(dynamic(move || {
+                    let busy = loading.get();
+                    let answered = answer.with(Option::is_some);
+                    let failed = answer.with(|a| matches!(a, Some(Err(_))));
+                    let list = items.get();
+                    let current = selected.get();
+                    let f = filter.get();
+                    // The first is shown at once, as the list comes.
+                    if !list.is_empty() && !current.as_ref().is_some_and(|(r, n)| list.iter().any(|i| i.repo == *r && i.number == *n)) {
+                        let first = list[0].clone();
+                        untracked(move || store::select_inbox(&first.repo, first.number));
+                    }
+                    Some(untracked(move || {
+                        if !answered && busy {
+                            return view().px(sp(S2)).child(skeleton()).into_element();
+                        }
+                        if failed {
+                            if let Some(Some(Err(e))) = Some(answer.get_untracked()) {
+                                return failure(e).into_element();
+                            }
+                        }
+                        if list.is_empty() {
+                            return message(match (f.state, f.drafts) {
+                                (_, true) => t("No drafts"),
+                                ("merged", _) => t("No merged pull requests"),
+                                ("closed", _) => t("No closed pull requests"),
+                                _ => t("No open pull requests involve you"),
+                            })
+                            .into_element();
+                        }
+                        let tone = match f.state {
+                            "merged" => DOT_RUNNING,
+                            "closed" => DANGER,
+                            _ => SUCCESS,
+                        };
+                        let count = list.len() as u32;
+                        let mut col = view().gap(px(2.0)).px(sp(S2)).pb(sp(S4));
+                        for item in list {
+                            let on = current.as_ref().is_some_and(|(r, n)| *r == item.repo && *n == item.number);
+                            col = col.child(split_row(item, on, tone));
+                        }
+                        let limit = store::inbox_limit(f.state);
+                        if count >= limit && limit < crate::github::INBOX_MAX {
+                            col = col.child(view().items_center().pt(sp(S2)).child(btn(
+                                if busy { t("Loading…") } else { t("Load more") },
+                                Variant::Ghost,
+                                Sz::Sm,
+                                None,
+                                store::inbox_load_more,
+                            )));
+                        }
+                        scroll().flex_1().child(col).into_element()
+                    }))
+                })),
+        )
+        .child(
+            // The one picked.
+            view().flex_1().min_w(px(0.0)).px(sp(S6)).pt(sp(S4)).child(dynamic(move || {
+                let (repo, number) = selected.get()?;
+                Some(untracked(move || pull_request(repo, number, None, |_| {}).into_element()))
+            })),
+        )
+}
+
+/// A row of the inbox's list: number and when, the title, the repository.
+fn split_row(item: InboxItem, on: bool, tone: AdaptiveColor) -> impl IntoElement {
+    let tone = if item.draft { FG_MUTED } else { tone };
+    let (repo, number) = (item.repo.clone(), item.number);
+    button()
+        .on_press(move || store::select_inbox(&repo, number))
+        .px(sp(S3))
+        .py(px(9.0))
+        .gap(px(3.0))
+        .rounded(px(R_LG))
+        .when(on, |v| v.bg(highlight()))
+        .hover(|s| s.bg(highlight()))
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap(px(6.0))
+                .child(icon(Icon::GitPullRequest, 13.0).text_color(tone))
+                .child(text(format!("#{}", item.number)).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(FG_MUTED))
+                .child(view().flex_1())
+                .child(text(ago(&item.updated_at)).text_size(tx(TEXT_XS)).text_color(FG_FAINT)),
+        )
+        .child(text(item.title.clone()).text_size(tx(TEXT_SM)).font_weight(FontWeight(600)).number_of_lines(1))
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap(px(6.0))
+                .child(text(item.repo.clone()).text_size(tx(TEXT_XS)).text_color(FG_MUTED).number_of_lines(1).flex_1().min_w(px(0.0)))
+                .when(item.review_requested, |v| v.child(chip(t("Review requested"), WARNING)))
+                .when(item.draft, |v| v.child(chip(t("Draft"), FG_MUTED))),
+        )
 }
 
 // ------------------------------------------------------------ pull request

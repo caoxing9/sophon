@@ -392,6 +392,27 @@ pub(crate) fn refresh_pull_request(repo: &str, number: u64) {
     github_fetch(Op::Checks { repo: repo.to_owned(), number });
 }
 
+/// The pull request picked in the desktop's inbox, shown beside its list.
+#[derive(Clone, Default, PartialEq)]
+struct InboxSelected(Option<(String, u64)>);
+
+pub(crate) fn inbox_selected() -> Option<(String, u64)> {
+    global::<InboxSelected>().with(|s| s.0.clone())
+}
+
+/// Shows pull request `repo#number` beside the inbox's list (asked for
+/// the first time).
+pub(crate) fn select_inbox(repo: &str, number: u64) {
+    let pr = (repo.to_owned(), number);
+    if global::<InboxSelected>().with_untracked(|s| s.0.as_ref() == Some(&pr)) {
+        return;
+    }
+    global::<InboxSelected>().set(InboxSelected(Some(pr)));
+    if github(&crate::github::Op::View { repo: repo.to_owned(), number }.key()).is_none() {
+        refresh_pull_request(repo, number);
+    }
+}
+
 /// The desktop's inbox.
 pub(crate) fn open_inbox() {
     global::<Nav>().update(|n| n.screen = Screen::Inbox);
