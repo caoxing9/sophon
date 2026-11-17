@@ -1232,6 +1232,20 @@ pub(crate) fn toggle_explorer() {
     save_prefs();
 }
 
+/// The header's PR button: the side panel open on the repository's pull
+/// requests, or back to the changes when it already is.
+pub(crate) fn toggle_prs_panel() {
+    let showing = global::<Explorer>().with_untracked(|e| e.open && e.tab == ExplorerTab::PullRequests);
+    if showing {
+        set_explorer_tab(ExplorerTab::Changes);
+        return;
+    }
+    if !global::<Explorer>().with_untracked(|e| e.open) {
+        toggle_explorer();
+    }
+    set_explorer_tab(ExplorerTab::PullRequests);
+}
+
 pub(crate) fn explorer_tab() -> ExplorerTab {
     global::<Explorer>().with(|e| e.tab)
 }

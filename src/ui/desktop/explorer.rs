@@ -69,6 +69,9 @@ pub(crate) fn resize_handle() -> impl IntoElement {
 
 pub(crate) fn explorer() -> View {
     let tab = computed(store::explorer_tab);
+    // Only a switch to or from the pull requests redraws the head (the
+    // tabs' thumb slides between the others).
+    let on_prs = computed(move || tab.get() == ExplorerTab::PullRequests);
     let width = computed(store::explorer_width);
     let page = move || Length::from(px(width.get()));
     glass(view())
@@ -90,16 +93,34 @@ pub(crate) fn explorer() -> View {
                 .pt(sp(S2))
                 .pb(sp(S1))
                 .window_drag(true)
-                .child(segmented(
-                vec![
-                    (ExplorerTab::Changes, t("Changes").into()),
-                    (ExplorerTab::Files, t("Files").into()),
-                    (ExplorerTab::Commits, t("Commits").into()),
-                    (ExplorerTab::PullRequests, "PR".into()),
-                ],
-                store::explorer_tab,
-                store::set_explorer_tab,
-            ))
+                // The pull requests open from the header's button, with a
+                // title of their own here in place of the tabs.
+                .child(dynamic(move || {
+                    let prs = on_prs.get();
+                    Some(untracked(move || {
+                        if prs {
+                            view()
+                                .flex_row()
+                                .items_center()
+                                .gap(sp(S1))
+                                .child(icon_btn(Icon::ChevronLeft, Sz::Sm, t("Back"), || store::set_explorer_tab(ExplorerTab::Changes)))
+                                .child(icon(Icon::GitPullRequest, 14.0).text_color(FG_MUTED))
+                                .child(text(t("Pull requests")).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)))
+                                .into_element()
+                        } else {
+                            segmented(
+                                vec![
+                                    (ExplorerTab::Changes, t("Changes").into()),
+                                    (ExplorerTab::Files, t("Files").into()),
+                                    (ExplorerTab::Commits, t("Commits").into()),
+                                ],
+                                store::explorer_tab,
+                                store::set_explorer_tab,
+                            )
+                            .into_element()
+                        }
+                    }))
+                }))
                 .child(view().flex_1())
                 .child(icon_btn(Icon::PanelRight, Sz::Sm, t("Toggle explorer"), store::toggle_explorer)),
         )
