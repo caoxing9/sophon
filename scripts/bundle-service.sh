@@ -25,10 +25,19 @@ APP="${1:?usage: $0 path/to/Sophon.app}"
 
 # The Node runtime, and the service's version: the one Sophon is built against.
 NODE=v22.23.5
-SERVICE="${SOPHON_SERVICE_VERSION:-0.15.4}"
+SERVICE="${SOPHON_SERVICE_VERSION:-0.16.1}"
 case "$(uname -m)" in arm64) ARCH=arm64 ;; *) ARCH=x64 ;; esac
 
-BUILT="$ROOT/.nsh/service-$NODE-$SERVICE-$ARCH"
+# Sophon's changes to the service, compiled (service-patches/paseo-<version>.patch,
+# made from github.com/caoxing9/paseo): applied over the package from npm. A
+# version without one is the package as it is. Its contents name the build.
+PATCH="$ROOT/service-patches/paseo-$SERVICE.patch"
+PATCHED=""
+if [ -f "$PATCH" ]; then
+  PATCHED="-$(shasum -a 256 "$PATCH" | cut -c1-12)"
+fi
+
+BUILT="$ROOT/.nsh/service-$NODE-$SERVICE$PATCHED-$ARCH"
 if [ ! -x "$BUILT/node/bin/paseo" ]; then
   WORK="$BUILT.making"
   rm -rf "$WORK" "$BUILT"
@@ -45,6 +54,10 @@ if [ ! -x "$BUILT/node/bin/paseo" ]; then
   (cd "$WORK/node" && PATH="$WORK/node/bin:/usr/bin:/bin:/usr/sbin:/sbin" bin/npm install -g \
     --no-audit --no-fund --loglevel error --prefix "$WORK/node" "@getpaseo/cli@$SERVICE")
   [ -e "$WORK/node/bin/paseo" ] || { echo "the service's package installed no command line" >&2; exit 1; }
+  if [ -f "$PATCH" ]; then
+    patch -p1 --forward --batch -d "$WORK/node/lib/node_modules/@getpaseo/cli/node_modules/@getpaseo" < "$PATCH" \
+      || { echo "$PATCH does not apply to @getpaseo/cli@$SERVICE" >&2; exit 1; }
+  fi
 
   # What the service never runs.
   N="$WORK/node"

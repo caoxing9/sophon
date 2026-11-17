@@ -1578,6 +1578,10 @@ async fn session(
                         *reached = true;
                         remember_route(if endpoint.is_lan() { Route::Lan } else if endpoint.relay.is_some() { Route::Relay } else { Route::Direct });
                         let field = |k| payload.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
+                        HISTORY_SYNC.store(
+                            payload.pointer("/features/agentHistorySync").and_then(Value::as_bool) == Some(true),
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
                         trace(&format!("connected to {} ({}) via {via:?} in {} ms", field("hostname"), field("version"), started.elapsed().as_millis()));
                         if events.send(Event::Connected { hostname: field("hostname"), version: field("version") }).is_err() {
                             return Ok(Exit::UiGone);
@@ -2195,12 +2199,21 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
         Command::ScheduleRuns(id) => {
             vec![request(pending, Pending::ScheduleRuns(id.clone()), json!({ "type": "schedule/logs", "scheduleId": id }))]
         }
-        // The same request, asked quietly: the record is read again.
-        Command::Reload(agent_id) => vec![request(
-            pending,
-            Pending::Reload(agent_id.clone(), std::time::Instant::now()),
-            json!({ "type": "refresh_agent_request", "agentId": agent_id }),
-        )],
+        // The record is read again: only what was appended to it, by a
+        // service that can (`agent.history.sync`); else the whole of it,
+        // the conversation reloaded.
+        Command::Reload(agent_id) => {
+            let kind = if HISTORY_SYNC.load(std::sync::atomic::Ordering::Relaxed) {
+                "agent.history.sync.request"
+            } else {
+                "refresh_agent_request"
+            };
+            vec![request(
+                pending,
+                Pending::Reload(agent_id.clone(), std::time::Instant::now()),
+                json!({ "type": kind, "agentId": agent_id }),
+            )]
+        }
         Command::Unarchive(agent_id) => vec![request(
             pending,
             Pending::Other("restore the agent"),
@@ -2517,6 +2530,22 @@ fn handle(
             out
         }
         // Legacy create replies arrive as status payloads carrying the requestId.
+        "agent.history.sync.response" => {
+            if let Some(Pending::Reload(agent, since)) = request_id.and_then(|id| pending.remove(id)) {
+                let ms = since.elapsed().as_millis();
+                let s = |k: &str| payload.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
+                let n = |k: &str| payload.get(k).and_then(Value::as_u64).unwrap_or(0);
+                let (outcome, items, size) = (s("outcome"), n("appendedItems"), n("timelineSize"));
+                match payload.get("error").and_then(Value::as_str) {
+                    Some(error) => log::warn!("conversation {agent}: syncing its record failed after {ms} ms: {error}"),
+                    None if outcome == "reloaded" && ms >= 5000 => {
+                        log::warn!("conversation {agent} reloaded in {ms} ms ({size} timeline items): slow")
+                    }
+                    None => log::info!("conversation {agent} synced in {ms} ms: {outcome}, {items} new of {size} timeline items"),
+                }
+            }
+            vec![]
+        }
         "status" => {
             let status = payload.get("status").and_then(Value::as_str);
             // How long the service took to read a conversation again, and
@@ -3405,6 +3434,11 @@ pub fn discover_in(home: &std::path::Path) -> Endpoint {
     Endpoint { url: format!("ws://{listen}/ws"), local_credential, password: None, relay: None, bridge_token: None, lan_probe: vec![], lan_key: None }
 }
 
+/// Whether the service in use reads only what was appended to a
+/// conversation's record (`server_info.features.agentHistorySync`, Sophon's
+/// build of the service): set as each connection opens.
+static HISTORY_SYNC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// What arrives in a burst: a conversation's whole history sent again (its
 /// record read again, 4,444 messages and 7 MB for 2,816 items), which keeps
 /// the app busy and can look like a lost service. Said in the log once a
@@ -3868,6 +3902,78 @@ mod tests {
                 println!("{id} ready on {}, {models} models", bin.display());
                 assert!(models > 0);
             }
+        });
+    }
+
+    #[test]
+    fn a_record_is_synced_where_the_service_can_and_reloaded_where_not() {
+        use std::sync::atomic::Ordering;
+        let mut pending = HashMap::new();
+        let mut follow_ups = Vec::new();
+        HISTORY_SYNC.store(false, Ordering::Relaxed);
+        let sent = command_messages(Command::Reload("a1".into()), &mut pending);
+        assert_eq!(sent[0]["message"]["type"], "refresh_agent_request");
+        HISTORY_SYNC.store(true, Ordering::Relaxed);
+        let sent = command_messages(Command::Reload("a1".into()), &mut pending);
+        HISTORY_SYNC.store(false, Ordering::Relaxed);
+        let msg = &sent[0]["message"];
+        assert_eq!(msg["type"], "agent.history.sync.request");
+        assert_eq!(msg["agentId"], "a1");
+        let id = msg["requestId"].as_str().unwrap().to_owned();
+        let reply = json!({ "requestId": id, "agentId": "a1", "outcome": "appended", "appendedItems": 2, "timelineSize": 30, "error": null });
+        assert!(handle("agent.history.sync.response", &reply, &mut pending, None, &mut follow_ups).is_empty());
+        assert!(!pending.contains_key(&id), "the request is answered");
+    }
+
+    #[test]
+    #[ignore]
+    fn an_appended_turn_is_synced_live() {
+        // A service of its own (PASEO_LISTEN, PASEO_HOME, SOPHON_DATA_DIR)
+        // with an imported Claude conversation (SOPHON_TEST_AGENT) whose
+        // record is a copy (SOPHON_TEST_TRANSCRIPT, its last record's id in
+        // SOPHON_TEST_PARENT): a turn appended to it is read on its own when
+        // the service can (Sophon's build), and the log says so.
+        let listen = std::env::var("PASEO_LISTEN").expect("PASEO_LISTEN: a test service");
+        assert!(!listen.ends_with(":6767"), "not the user's own service");
+        let agent = std::env::var("SOPHON_TEST_AGENT").expect("SOPHON_TEST_AGENT");
+        let transcript = std::env::var("SOPHON_TEST_TRANSCRIPT").expect("SOPHON_TEST_TRANSCRIPT");
+        let parent = std::env::var("SOPHON_TEST_PARENT").expect("SOPHON_TEST_PARENT");
+        crate::applog::init();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let (ev_tx, mut ev_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+            tokio::spawn(run(ev_tx, cmd_rx));
+            loop {
+                if let Some(Event::Connected { .. }) = ev_rx.recv().await { break; }
+            }
+            cmd_tx.send(Command::Open(agent.clone())).unwrap();
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let turn = [
+                json!({ "type": "user", "uuid": "sophon-live-u", "parentUuid": parent, "message": { "role": "user", "content": "from a terminal" } }),
+                json!({ "type": "assistant", "uuid": "sophon-live-a", "parentUuid": "sophon-live-u", "message": { "role": "assistant", "content": "reply in the terminal" } }),
+            ];
+            let mut text = String::new();
+            for record in turn {
+                text.push_str(&record.to_string());
+                text.push('\n');
+            }
+            use std::io::Write;
+            std::fs::OpenOptions::new().append(true).open(&transcript).unwrap().write_all(text.as_bytes()).unwrap();
+            cmd_tx.send(Command::Reload(agent.clone())).unwrap();
+            let log = crate::applog::path();
+            let seen = tokio::time::timeout(Duration::from_secs(30), async {
+                loop {
+                    while ev_rx.try_recv().is_ok() {}
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    if std::fs::read_to_string(&log).is_ok_and(|t| t.contains("synced in")) { return; }
+                }
+            })
+            .await;
+            println!("{}", std::fs::read_to_string(&log).unwrap_or_default());
+            assert!(seen.is_ok(), "no sync in the log");
+            let log = std::fs::read_to_string(crate::applog::path()).unwrap();
+            assert!(log.contains("appended, 2 new"), "{log}");
         });
     }
 
