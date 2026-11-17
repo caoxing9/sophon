@@ -43,6 +43,8 @@ pub(crate) const DOT_SUCCESS: AdaptiveColor = pair(0x23a55a, 0x3ccf74);
 pub(crate) const DOT_RUNNING: AdaptiveColor = pair(0x3b82f6, 0x60a5fa);
 pub(crate) const DOT_WARNING: AdaptiveColor = pair(0xd48a1f, 0xf0a53a);
 pub(crate) const DOT_DANGER: AdaptiveColor = pair(0xe5484d, 0xff6b6b);
+/// A merged pull request's (GitHub's violet).
+pub(crate) const VIOLET: AdaptiveColor = pair(0x8250df, 0xa78bfa);
 pub(crate) const DOT_IDLE: AdaptiveColor = pair(0xb4b4be, 0x55555f);
 
 /// The hover / pressed / selected fill of chrome controls: translucent, so

@@ -24,9 +24,7 @@ pub(crate) fn resize_handle() -> impl IntoElement {
     let dragging = signal(false);
     let fold = store::EXPLORER_MIN - 60.0;
     view()
-        .w(px(8.0))
-        .ml(px(-4.0))
-        .mr(px(-4.0))
+        .w(px(10.0))
         .flex_shrink_0()
         .self_stretch()
         .items_center()
@@ -60,8 +58,8 @@ pub(crate) fn resize_handle() -> impl IntoElement {
         .on_responder_terminate(move |_: &ResponderEvent| dragging.set(false))
         .child(
             view()
-                .w(px(2.0))
-                .h(px(36.0))
+                .w(px(3.0))
+                .h(px(48.0))
                 .rounded(px(1.0))
                 .bg(move || tint(ACCENT, if dragging.get() { 0.9 } else if hover.get() { 0.5 } else { 0.0 })),
         )
@@ -69,6 +67,9 @@ pub(crate) fn resize_handle() -> impl IntoElement {
 
 pub(crate) fn explorer() -> View {
     let tab = computed(store::explorer_tab);
+    // Only a switch to or from the pull requests redraws the head (the
+    // tabs' thumb slides between the others).
+    let on_prs = computed(move || tab.get() == ExplorerTab::PullRequests);
     let width = computed(store::explorer_width);
     let page = move || Length::from(px(width.get()));
     glass(view())
@@ -90,16 +91,34 @@ pub(crate) fn explorer() -> View {
                 .pt(sp(S2))
                 .pb(sp(S1))
                 .window_drag(true)
-                .child(segmented(
-                vec![
-                    (ExplorerTab::Changes, t("Changes").into()),
-                    (ExplorerTab::Files, t("Files").into()),
-                    (ExplorerTab::Commits, t("Commits").into()),
-                    (ExplorerTab::PullRequests, "PR".into()),
-                ],
-                store::explorer_tab,
-                store::set_explorer_tab,
-            ))
+                // The pull requests open from the header's button, with a
+                // title of their own here in place of the tabs.
+                .child(dynamic(move || {
+                    let prs = on_prs.get();
+                    Some(untracked(move || {
+                        if prs {
+                            view()
+                                .flex_row()
+                                .items_center()
+                                .gap(sp(S1))
+                                .child(icon_btn(Icon::ChevronLeft, Sz::Sm, t("Back"), || store::set_explorer_tab(ExplorerTab::Changes)))
+                                .child(icon(Icon::GitPullRequest, 14.0).text_color(FG_MUTED))
+                                .child(text(t("Pull requests")).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)))
+                                .into_element()
+                        } else {
+                            segmented(
+                                vec![
+                                    (ExplorerTab::Changes, t("Changes").into()),
+                                    (ExplorerTab::Files, t("Files").into()),
+                                    (ExplorerTab::Commits, t("Commits").into()),
+                                ],
+                                store::explorer_tab,
+                                store::set_explorer_tab,
+                            )
+                            .into_element()
+                        }
+                    }))
+                }))
                 .child(view().flex_1())
                 .child(icon_btn(Icon::PanelRight, Sz::Sm, t("Toggle explorer"), store::toggle_explorer)),
         )
@@ -753,81 +772,215 @@ fn comment_shell() -> View {
         .shadow_sm()
 }
 
-/// The conversation's pull requests (`store::conversation_prs`), each as
-/// GitHub says it now, asked for while the tab shows: a list to filter
-/// (all, not merged, merged); a press opens one in place, its checks and
-/// description under it, as the other one closes.
+/// The pull requests of the open workspace's repository: the branch's and
+/// the ones this conversation links to first, then the latest. A search
+/// and a filter (states, this conversation's only) over them; a press
+/// opens one in place, its checks and description under it.
 fn prs_view(tab: Memo<ExplorerTab>) -> View {
-    let prs = computed(move || if tab.get() == ExplorerTab::PullRequests { store::conversation_prs() } else { vec![] });
-    // 0 all, 1 not merged (open), 2 merged.
-    let filter = signal(0u8);
+    let shown_tab = computed(move || tab.get() == ExplorerTab::PullRequests);
+    let dir = computed(store::workspace_dir);
+    let answer = computed(move || dir.get().and_then(|d| store::github(&format!("repo_prs:{d}"))));
+    let busy = computed(move || dir.get().is_some_and(|d| store::github_loading(&format!("repo_prs:{d}"))));
+    let related = computed(move || if shown_tab.get() { store::conversation_prs() } else { vec![] });
+    let query = signal(String::new());
+    // Open, draft, merged, closed; and this conversation's only.
+    let status = signal([false; 4]);
+    let mine = signal(false);
     let opened: Signal<Option<(String, u64)>> = signal(None);
-    let shown = computed(move || {
-        let f = filter.get();
-        prs.get()
+    // Another conversation's folder: back to its list.
+    effect(move || {
+        dir.get();
+        opened.set(None);
+    });
+    effect(move || {
+        if shown_tab.get() && dir.get().is_some() {
+            untracked(|| store::repo_prs(false));
+        }
+    });
+    let list = computed(move || {
+        let Some(Ok(v)) = answer.get() else { return (String::new(), vec![]) };
+        let (repo, items) = crate::github::repo_prs_of(&v);
+        let rel: Vec<u64> = related.get().into_iter().filter(|(r, _)| r.eq_ignore_ascii_case(&repo)).map(|(_, n)| n).collect();
+        let q = query.get().trim().to_lowercase();
+        let st = status.get();
+        let only_mine = mine.get();
+        let mut out: Vec<(crate::github::RepoPr, bool)> = items
             .into_iter()
-            .filter(|(repo, number)| {
-                if f == 0 {
-                    return true;
+            .map(|p| {
+                let r = rel.contains(&p.number);
+                (p, r)
+            })
+            .filter(|(p, r)| {
+                if only_mine && !r {
+                    return false;
                 }
-                let d = store::github(&format!("view:{repo}#{number}")).and_then(Result::ok).map(|v| crate::github::Detail::from_json(&v));
-                match (f, d) {
-                    (1, Some(d)) => d.open(),
-                    (2, Some(d)) => d.merged(),
-                    _ => false,
+                if st.iter().any(|x| *x) {
+                    let i = match p.state.as_str() {
+                        "merged" => 2,
+                        "closed" => 3,
+                        _ if p.draft => 1,
+                        _ => 0,
+                    };
+                    if !st[i] {
+                        return false;
+                    }
+                }
+                q.is_empty()
+                    || p.title.to_lowercase().contains(&q)
+                    || format!("#{}", p.number).contains(&q)
+                    || p.author.to_lowercase().contains(&q)
+                    || p.head.to_lowercase().contains(&q)
+            })
+            .collect();
+        // This conversation's first, in the order it names them.
+        out.sort_by_key(|(p, r)| if *r { rel.iter().position(|n| *n == p.number).unwrap_or(0) } else { usize::MAX });
+        (repo, out)
+    });
+    let narrowed = move || status.get().iter().any(|x| *x) || mine.get();
+    let filters = {
+        let item = move |label: &'static str, checked: Box<dyn Fn() -> bool>, on_press: Box<dyn Fn()>| {
+            let checked: std::rc::Rc<dyn Fn() -> bool> = checked.into();
+            let c = checked.clone();
+            nsh_base::button()
+                .on_press(move || on_press())
+                .flex_row()
+                .items_center()
+                .gap(sp(S2))
+                .h(px(28.0))
+                .px(sp(S2))
+                .rounded(px(R_MD))
+                .hover(|s| s.bg(highlight()))
+                .child(text(label).text_size(tx(13.0)).text_color(FG).flex_1())
+                .child(icon(Icon::Check, 14.0).text_color(FG).opacity(move || if c() { 1.0_f32 } else { 0.0 }))
+        };
+        let open = signal(false);
+        let mut col = view().p(px(4.0)).child(item(t("This conversation's"), Box::new(move || mine.get()), Box::new(move || mine.update(|m| *m = !*m))));
+        col = col.child(text(t("Status").to_uppercase()).text_size(tx(10.0)).font_weight(FontWeight(600)).text_color(FG_FAINT).px(sp(S2)).pt(sp(S2)).pb(px(2.0)));
+        for (i, word) in [t("Open"), t("Draft"), t("Merged"), t("Closed")].into_iter().enumerate() {
+            col = col.child(item(word, Box::new(move || status.get()[i]), Box::new(move || status.update(|s| s[i] = !s[i]))));
+        }
+        nsh_base::popover()
+            .open(move || Some(open.get()))
+            .on_open_change(move |e: &nsh_base::PopoverEvent| {
+                if let nsh_base::PopoverEvent::OpenChange(next, _) = e {
+                    open.set(*next);
                 }
             })
-            .collect::<Vec<_>>()
-    });
+            .align(nsh_core::overlay::Align::End)
+            .offset(px(4.0))
+            .popup_style(|s: nsh_core::element::StyleRefinement| s.bg(POPOVER).rounded(px(R_LG)).border_1().border_color(tint(FG, 0.10)).shadow_lg().w(px(200.0)))
+            .trigger(
+                view()
+                    .w(px(26.0))
+                    .h(px(26.0))
+                    .rounded(px(R_MD))
+                    .items_center()
+                    .justify_center()
+                    .bg(move || if narrowed() || open.get() { highlight() } else { tint(FG, 0.0) })
+                    .hover(|s| s.bg(highlight()))
+                    .label(t("Filter"))
+                    .child(icon(Icon::ListFilter, 13.0).text_color(move || if narrowed() { FG } else { FG_MUTED })),
+            )
+            .child(col)
+    };
     view()
         .flex_1()
-        .child(dynamic(move || {
-            let all = prs.get();
-            untracked(|| store::fetch_prs(&all));
-            // The first opens by itself (the branch's, else the last linked).
-            if opened.get_untracked().is_none() && let Some(first) = all.first() {
-                opened.set(Some(first.clone()));
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap(px(4.0))
+                .mx(sp(S3))
+                .mb(sp(S2))
+                .h(px(32.0))
+                .px(sp(S2))
+                .rounded(px(R_MD))
+                .bg(tint(FG, 0.05))
+                .child(icon(Icon::Search, 13.0).text_color(FG_FAINT))
+                .child(
+                    input()
+                        .flex_1()
+                        .h(px(28.0))
+                        .px(px(4.0))
+                        .text_size(tx(TEXT_SM))
+                        .text_color(FG)
+                        .caret_color(|| color(ACCENT))
+                        .placeholder(move || match answer.get() {
+                            Some(Ok(v)) => tf("Search {}", &[&crate::github::repo_prs_of(&v).0]),
+                            _ => t("Search pull requests").to_owned(),
+                        })
+                        .value(move || query.get())
+                        .on_change(move |v: &str| query.set(v.to_owned())),
+                )
+                .child(filters)
+                .child(
+                    nsh_base::button()
+                        .on_press(|| store::repo_prs(true))
+                        .w(px(26.0))
+                        .h(px(26.0))
+                        .rounded(px(R_MD))
+                        .items_center()
+                        .justify_center()
+                        .hover(|s| s.bg(highlight()))
+                        .accessibility_label(t("Refresh"))
+                        .child(dynamic(move || {
+                            let b = busy.get();
+                            Some(untracked(move || if b { eclipse(13.0).into_element() } else { icon(Icon::RotateCw, 13.0).text_color(FG_MUTED).into_element() }))
+                        })),
+                ),
+        )
+        .child(scroll().flex_1().child(dynamic(move || {
+            let state = answer.get();
+            let (repo, items) = list.get();
+            let open = opened.get().filter(|(_, n)| *n > 0);
+            // One pull request, alone: its level, back to the list above.
+            if let Some((r, n)) = open {
+                return Some(untracked(move || {
+                    view()
+                        .child(
+                            nsh_base::button()
+                                .on_press(move || opened.set(None))
+                                .flex_row()
+                                .items_center()
+                                .gap(px(4.0))
+                                .mx(sp(S2))
+                                .px(sp(S1))
+                                .h(px(28.0))
+                                .rounded(px(R_MD))
+                                .hover(|s| s.bg(highlight()))
+                                .child(icon(Icon::ChevronLeft, 14.0).text_color(FG_MUTED))
+                                .child(text(t("All pull requests")).text_size(tx(TEXT_SM)).text_color(FG_MUTED)),
+                        )
+                        .child(crate::ui::shared::github::panel_pull_request(r, n))
+                        .into_element()
+                }));
             }
-            if all.is_empty() {
-                return Some(empty_state(Icon::GitPullRequest, t("No pull requests here"), t("The branch's pull request and the ones this conversation links to show here")).into_element());
-            }
-            Some(untracked(move || {
-                view()
-                    .flex_1()
-                    .child(view().flex_row().px(sp(S3)).pt(sp(S1)).pb(sp(S2)).child(segmented(
-                        vec![(0u8, t("All").into()), (1, t("Not merged").into()), (2, t("Merged").into())],
-                        move || filter.get(),
-                        move |f: u8| filter.set(f),
-                    )))
-                    .child(scroll().flex_1().child(dynamic(move || {
-                        let list = shown.get();
-                        let open = opened.get();
-                        Some(untracked(move || {
-                            if list.is_empty() {
-                                return view().py(sp(S8)).items_center().child(text(t("None of them")).text_size(tx(TEXT_SM)).text_color(FG_MUTED)).into_element();
-                            }
-                            let mut rows = view().gap(px(2.0)).pb(sp(S4));
-                            for pr in list {
-                                let here = open.as_ref() == Some(&pr);
-                                rows = rows.child(pr_row(pr.0.clone(), pr.1, here, opened));
-                                if here {
-                                    rows = rows.child(crate::ui::shared::github::panel_pull_request(pr.0, pr.1));
-                                }
-                            }
-                            rows.into_element()
-                        }))
-                    })))
-                    .into_element()
+            Some(untracked(move || match state {
+                None if dir.get_untracked().is_none() => empty_state(Icon::GitPullRequest, t("No pull requests here"), t("Open a conversation in a GitHub repository to see its pull requests")).into_element(),
+                None => view().py(sp(S8)).items_center().child(eclipse(20.0)).into_element(),
+                Some(Err(e)) => empty_state(Icon::GitPullRequest, t("No pull requests here"), t("This folder has no GitHub remote")).child(text(e).text_size(tx(TEXT_XS)).text_color(FG_FAINT)).into_element(),
+                Some(Ok(_)) if items.is_empty() => view().py(sp(S8)).items_center().child(text(t("None of them")).text_size(tx(TEXT_SM)).text_color(FG_MUTED)).into_element(),
+                Some(Ok(_)) => {
+                    let mut rows = view().gap(px(2.0)).pb(sp(S4));
+                    for (p, rel) in items {
+                        rows = rows.child(pr_row(repo.clone(), p, rel, false, opened));
+                    }
+                    rows.into_element()
+                }
             }))
-        }))
+        })))
 }
 
-fn pr_row(repo: String, number: u64, open: bool, opened: Signal<Option<(String, u64)>>) -> impl IntoElement {
-    let key = format!("view:{repo}#{number}");
-    let answer = computed(move || store::github(&key));
-    let pr = (repo.clone(), number);
+fn pr_row(repo: String, p: crate::github::RepoPr, related: bool, open: bool, opened: Signal<Option<(String, u64)>>) -> impl IntoElement {
+    let (glyph, tone, state) = match p.state.as_str() {
+        "merged" => (Icon::GitMerge, VIOLET, t("Merged")),
+        "closed" => (Icon::GitPullRequestClosed, DANGER, t("Closed")),
+        _ if p.draft => (Icon::GitPullRequestDraft, FG_MUTED, t("Draft")),
+        _ => (Icon::GitPullRequest, SUCCESS, if crate::i18n::is_zh() { "开启" } else { t("Open") }),
+    };
+    let pr = (repo, p.number);
     nsh_base::button()
-        .on_press(move || opened.set(if open { Some((String::new(), 0)) } else { Some(pr.clone()) }))
+        .on_press(move || opened.set(Some(pr.clone())))
         .mx(sp(S2))
         .px(sp(S2))
         .py(px(7.0))
@@ -837,49 +990,35 @@ fn pr_row(repo: String, number: u64, open: bool, opened: Signal<Option<(String, 
         .flex_row()
         .items_start()
         .gap(sp(S2))
-        .child(dynamic(move || {
-            let d = answer.get().and_then(Result::ok).map(|v| crate::github::Detail::from_json(&v));
-            let repo = repo.clone();
-            Some(untracked(move || {
-                let (tone, state) = match &d {
-                    Some(d) if d.merged() => (DOT_RUNNING, t("Merged")),
-                    Some(d) if d.open() && d.draft => (FG_MUTED, t("Draft")),
-                    Some(d) if d.open() => (SUCCESS, if crate::i18n::is_zh() { "开启" } else { t("Open") }),
-                    Some(_) => (DANGER, t("Closed")),
-                    None => (FG_MUTED, ""),
-                };
-                let title = d.as_ref().map(|d| d.title.clone()).unwrap_or_default();
-                let repo_name = repo.rsplit('/').next().unwrap_or(&repo).to_owned();
-                view()
-                    .flex_row()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .gap(sp(S2))
-                    .child(view().pt(px(2.0)).child(icon(Icon::GitPullRequest, 15.0).text_color(tone)))
-                    .child(
-                        view()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .gap(px(3.0))
-                            .child(if title.is_empty() {
-                                view().h(px(12.0)).mt(px(3.0)).w(px(150.0)).rounded(px(R_FULL)).bg(tint(FG, 0.08)).into_element()
-                            } else {
-                                text(title).text_size(tx(TEXT_BASE)).number_of_lines(if open { 0 } else { 2 }).into_element()
-                            })
-                            .child(
+        .child(view().pt(px(2.0)).child(icon(glyph, 15.0).text_color(tone)))
+        .child(
+            view()
+                .flex_1()
+                .min_w(px(0.0))
+                .gap(px(3.0))
+                .child(text(p.title.clone()).text_size(tx(TEXT_BASE)).number_of_lines(if open { 0 } else { 2 }))
+                .child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(6.0))
+                        .child(text(format!("#{}", p.number)).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(FG_MUTED))
+                        .child(text(state).text_size(tx(TEXT_XS)).font_weight(FontWeight(500)).text_color(tone))
+                        .child(text(format!("{} · {}", p.author, crate::ui::mobile::time::ago(&p.updated_at))).text_size(tx(TEXT_XS)).text_color(FG_FAINT).number_of_lines(1).flex_1().min_w(px(0.0)))
+                        .when(related, |v| {
+                            v.child(
                                 view()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap(px(6.0))
-                                    .child(text(format!("#{number}")).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(FG_MUTED))
-                                    .child(text(repo_name).text_size(tx(TEXT_XS)).text_color(FG_MUTED).number_of_lines(1))
-                                    .when(!state.is_empty(), |v| v.child(text(state).text_size(tx(TEXT_XS)).font_weight(FontWeight(500)).text_color(tone))),
-                            ),
-                    )
-                    .child(view().pt(px(3.0)).child(icon(if open { Icon::ChevronDown } else { Icon::ChevronRight }, 13.0).text_color(FG_FAINT)))
-                    .into_element()
-            }))
-        }))
+                                    .px(px(6.0))
+                                    .h(px(16.0))
+                                    .rounded(px(R_FULL))
+                                    .bg(tint(ACCENT, 0.12))
+                                    .justify_center()
+                                    .child(text(t("This conversation")).text_size(tx(10.0)).text_color(ACCENT)),
+                            )
+                        }),
+                ),
+        )
+        .child(view().pt(px(3.0)).child(icon(Icon::ChevronRight, 13.0).text_color(FG_FAINT)))
 }
 
 fn commits_view() -> View {

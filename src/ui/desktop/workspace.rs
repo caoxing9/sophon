@@ -68,7 +68,7 @@ pub(crate) fn workspace(compact: bool) -> impl IntoElement {
                 .items_stretch()
                 .overflow_hidden()
                 .mt(move || Length::from(px(-bar.get().top.0)))
-                .w(move || Length::from(px(if show_explorer.get() { store::explorer_width() + 10.0 } else { 0.0 })))
+                .w(move || Length::from(px(if show_explorer.get() { store::explorer_width() + 20.0 } else { 0.0 })))
                 .opacity(move || if show_explorer.get() { 1.0_f32 } else { 0.0 })
                 .transition_opacity()
                 // Its left edge drags its width.
@@ -114,6 +114,22 @@ fn header(compact: bool, explorer_shown: Memo<bool>) -> impl IntoElement {
         .child(view().flex_1())
         .child(scripts_menu())
         .child(super::git::git_controls())
+        // The repository's pull requests, in the side panel.
+        .when(!compact, |v| {
+            v.child(
+                nsh_base::button()
+                    .on_press(store::toggle_prs_panel)
+                    .accessibility_label(t("Pull requests"))
+                    .w(px(28.0))
+                    .h(px(28.0))
+                    .rounded(px(R_MD))
+                    .items_center()
+                    .justify_center()
+                    .bg(|| if store::explorer_open() && store::explorer_tab() == store::ExplorerTab::PullRequests { highlight() } else { tint(FG, 0.0) })
+                    .hover(|s| s.bg(highlight()))
+                    .child(icon(Icon::GitPullRequest, 15.0).text_color(FG_MUTED)),
+            )
+        })
         // The terminal panel, as VS Code's ⌃` and ⌘J.
         .when(!compact, |v| v.child(icon_btn(Icon::PanelBottom, Sz::Sm, t("Toggle terminal  ⌃`"), store::toggle_terminal_panel)))
         // The explorer has its own toggle while it shows.

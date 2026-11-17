@@ -28,6 +28,37 @@ fn parse(s: &str) -> Option<i64> {
     Some(t)
 }
 
+/// Seconds since the epoch of RFC 3339 time `s`.
+pub(crate) fn epoch_of(s: &str) -> Option<i64> {
+    parse(s)
+}
+
+/// Now, in seconds since the epoch.
+pub(crate) fn now() -> i64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+}
+
+/// How long ago `s` was, as monocode says it ("5 minutes ago"); empty
+/// when it does not parse.
+pub(crate) fn ago_long(s: &str) -> String {
+    let Some(then) = parse(s) else { return String::new() };
+    let n = (now() - then).max(0);
+    let zh = crate::i18n::is_zh();
+    let (count, unit_en, unit_zh) = match n {
+        n if n < 60 => return if zh { "刚刚".into() } else { "just now".into() },
+        n if n < 3600 => (n / 60, "minute", "分钟"),
+        n if n < 86_400 => (n / 3600, "hour", "小时"),
+        n if n < 86_400 * 30 => (n / 86_400, "day", "天"),
+        n if n < 86_400 * 365 => (n / (86_400 * 30), "month", "个月"),
+        n => (n / (86_400 * 365), "year", "年"),
+    };
+    if zh {
+        format!("{count} {unit_zh}前")
+    } else {
+        format!("{count} {unit_en}{} ago", if count == 1 { "" } else { "s" })
+    }
+}
+
 /// How long ago `s` was, briefly; empty when it does not parse.
 pub(crate) fn ago(s: &str) -> String {
     let Some(then) = parse(s) else { return String::new() };

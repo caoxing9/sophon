@@ -12,8 +12,10 @@ async function newWorkspace(app: Awaited<ReturnType<typeof open>>) {
 
 test("shows the sidebar and its entry points", async () => {
   const app = await open(".", { width: 1100, height: 760 });
-  expect(app.texts()).toContain("Add project");
+  // Projects' + says what it does to the screen reader alone.
+  expect(app.count("label:Add project")).toBe(1);
   expect(app.texts()).toContain("New workspace");
+  expect(app.texts()).toContain("More");
 });
 
 test("opens the new workspace screen", async () => {
@@ -67,7 +69,10 @@ test("settings lists the agents with their add buttons", async () => {
 
 test("opens the usage page from the sidebar", async () => {
   const app = await open(".", { width: 1100, height: 760 });
-  await app.press("label:Usage");
+  // Behind More, with Pull requests and History.
+  await app.press("More >> nth=0");
+  await app.waitFor("text:Usage");
+  await app.press("Usage >> nth=0");
   await app.waitFor("text:This computer's sessions");
   expect(app.texts()).toContain("This computer's sessions");
   expect(app.texts()).toContain("Plan limits");
