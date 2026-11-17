@@ -502,7 +502,7 @@ fn trace(line: &str) {
 
 /// `line` without a pairing link's or an address's secrets: the value of
 /// each `lanKey=`, `token=`, `offer=` and `password=` becomes `***`.
-fn redact(line: &str) -> String {
+pub(crate) fn redact(line: &str) -> String {
     let mut out = line.to_owned();
     for key in ["lanKey=", "token=", "offer=", "password="] {
         let mut from = 0;
@@ -1173,6 +1173,8 @@ enum Pending {
     Import,
     Upload(String),
     Download(String),
+    /// A conversation's record being read again (`follow`): which, and since when.
+    Reload(String, std::time::Instant),
     Other(&'static str),
 }
 
@@ -1272,6 +1274,7 @@ async fn session(
     // than the wait.
     const LONG_AWAY_ANSWER: Duration = Duration::from_millis(1500);
     let mut last_frame = rt::Instant::now();
+    let mut flood = Flood::default();
     // Back in the foreground with a connection silent for a while: it has
     // until this to answer a ping.
     let mut check_at: Option<rt::Instant> = None;
@@ -1518,6 +1521,7 @@ async fn session(
                     // subscribe to either yet.
                     _ => continue,
                 };
+                flood.add(text.len());
                 let Ok(msg) = serde_json::from_str::<Value>(text.as_str()) else { continue };
                 match msg.get("type").and_then(Value::as_str) {
                     Some("hello.rejected") => {
@@ -2194,7 +2198,7 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
         // The same request, asked quietly: the record is read again.
         Command::Reload(agent_id) => vec![request(
             pending,
-            Pending::Optional,
+            Pending::Reload(agent_id.clone(), std::time::Instant::now()),
             json!({ "type": "refresh_agent_request", "agentId": agent_id }),
         )],
         Command::Unarchive(agent_id) => vec![request(
@@ -2396,6 +2400,11 @@ fn handle(
                     return vec![];
                 }
                 Some(Pending::Optional) => return vec![],
+                Some(Pending::Reload(agent, since)) => {
+                    let error = payload.get("error").and_then(Value::as_str).unwrap_or("request failed");
+                    log::warn!("conversation {agent}: reading it again failed after {} ms: {error}", since.elapsed().as_millis());
+                    return vec![];
+                }
                 // An agent with no sessions to list: none of its own.
                 Some(Pending::Recent(seq)) => return vec![Event::RecentSessions { seq, list: vec![] }],
                 // The page showed the change already: show the config as it is.
@@ -2435,7 +2444,7 @@ fn handle(
                 Some(Pending::Pairing) => {
                     return vec![Event::PairingOffer { url: None, relay_enabled: false, error: Some(error.to_owned()) }];
                 }
-                Some(Pending::Optional | Pending::Recent(_)) => "load",
+                Some(Pending::Optional | Pending::Recent(_) | Pending::Reload(..)) => "load",
                 Some(Pending::Git(action)) => return vec![Event::GitDone { cwd: String::new(), action, error: Some(error.to_owned()), url: None }],
                 Some(Pending::Write(_)) => "save the file",
                 Some(Pending::Suggest(_)) => "search files",
@@ -2510,6 +2519,20 @@ fn handle(
         // Legacy create replies arrive as status payloads carrying the requestId.
         "status" => {
             let status = payload.get("status").and_then(Value::as_str);
+            // How long the service took to read a conversation again, and
+            // how long it is: what a slow or stuck service comes down to.
+            if status == Some("agent_refreshed") {
+                if let Some(Pending::Reload(agent, since)) = request_id.and_then(|id| pending.remove(id)) {
+                    let items = payload.get("timelineSize").and_then(Value::as_u64).unwrap_or(0);
+                    let ms = since.elapsed().as_millis();
+                    if ms >= 5000 {
+                        log::warn!("conversation {agent} read again in {ms} ms ({items} timeline items): slow");
+                    } else {
+                        log::info!("conversation {agent} read again in {ms} ms ({items} timeline items)");
+                    }
+                }
+                return vec![];
+            }
             if !matches!(status, Some("agent_created" | "agent_resumed" | "agent_create_failed")) {
                 return vec![];
             }
@@ -3380,6 +3403,45 @@ pub fn discover_in(home: &std::path::Path) -> Endpoint {
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty());
     Endpoint { url: format!("ws://{listen}/ws"), local_credential, password: None, relay: None, bridge_token: None, lan_probe: vec![], lan_key: None }
+}
+
+/// What arrives in a burst: a conversation's whole history sent again (its
+/// record read again, 4,444 messages and 7 MB for 2,816 items), which keeps
+/// the app busy and can look like a lost service. Said in the log once a
+/// burst, with its size.
+#[derive(Default)]
+struct Flood {
+    since: Option<std::time::Instant>,
+    messages: u64,
+    bytes: u64,
+    said: bool,
+}
+
+impl Flood {
+    /// A burst: this many messages within [`Flood::WINDOW`].
+    const MESSAGES: u64 = 2000;
+    const WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
+
+    fn add(&mut self, bytes: usize) {
+        let now = std::time::Instant::now();
+        if self.since.is_none_or(|s| now.duration_since(s) > Self::WINDOW) {
+            if self.said {
+                log::warn!("burst over: {} messages, {:.1} MB in the last {} s", self.messages, self.bytes as f64 / 1e6, Self::WINDOW.as_secs());
+            }
+            *self = Flood { since: Some(now), ..Default::default() };
+        }
+        self.messages += 1;
+        self.bytes += bytes as u64;
+        if !self.said && self.messages >= Self::MESSAGES {
+            self.said = true;
+            log::warn!(
+                "a burst from the service: {} messages, {:.1} MB in {} ms (a conversation's history sent again?)",
+                self.messages,
+                self.bytes as f64 / 1e6,
+                self.since.map_or(0, |s| now.duration_since(s).as_millis())
+            );
+        }
+    }
 }
 
 /// A stable id, so a reconnect within the daemon's grace period resumes the

@@ -89,6 +89,15 @@ fn look() {
         // No answer (an older Claude Code, none installed): nothing known.
         let found = rx.recv().await.flatten().unwrap_or_default();
         if global::<Background>().with_untracked(|b| b.0 != found) {
+            let before = global::<Background>().with_untracked(|b| b.0.clone());
+            for s in found.difference(&before) {
+                if store::agents().iter().any(|a| a.session_id.as_deref() == Some(s.as_str())) {
+                    log::info!("Claude Code session {} runs in the background now: Sophon cannot send to its conversation until it is stopped", short(s));
+                }
+            }
+            for s in before.difference(&found) {
+                log::info!("Claude Code session {} no longer runs in the background", short(s));
+            }
             global::<Background>().set(Background(found));
         }
     });
@@ -116,12 +125,16 @@ pub(crate) fn close(session: &str) {
     store::spawn_detached(async move {
         match rx.recv().await {
             Some(Ok(())) => {
+                log::info!("claude stop {}: done", short(&session));
                 global::<Background>().update(|b| {
                     b.0.remove(&session);
                 });
                 store::notify(crate::i18n::t("Closed there: the conversation goes on here").to_owned());
             }
-            Some(Err(e)) => store::notify(crate::i18n::tf("Could not close it there: {}", &[&e])),
+            Some(Err(e)) => {
+                log::warn!("claude stop {}: {e}", short(&session));
+                store::notify(crate::i18n::tf("Could not close it there: {}", &[&e]));
+            }
             None => {}
         }
     });
