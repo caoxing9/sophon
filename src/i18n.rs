@@ -894,6 +894,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Model · {}", "模型 · {}"),
     ("New conversation", "新对话"),
     ("More", "更多"),
+    ("All pull requests", "全部 PR"),
     ("A new conversation in {}", "在 {} 里开始新对话"),
     ("Search workspaces", "搜索对话"),
     ("Relay server", "中转服务器"),

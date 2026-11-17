@@ -1194,17 +1194,29 @@ pub(crate) fn panel_pull_request(repo: String, number: u64) -> View {
     let busy = computed(move || store::github_loading(&view_key) || store::github_loading(&lk));
     let checks = computed(move || store::github(&ck).and_then(Result::ok).map(|v| crate::github::checks_of(&v)));
     let section = |words: &'static str| text(words).text_size(tx(TEXT_XS)).font_weight(FontWeight(500)).text_color(FG_MUTED).px(sp(S4)).pt(sp(S3)).pb(sp(S1));
-    view().mx(sp(S2)).mb(sp(S2)).pb(sp(S2)).border_b(px(1.0)).border_color(BORDER).child(dynamic(move || {
+    view().px(sp(S2)).pb(sp(S6)).child(dynamic(move || {
         let detail = detail.get();
-        let (repo, number) = (repo.clone(), number);
+        let repo = repo.clone();
         Some(untracked(move || match detail {
             None => view().py(sp(S4)).items_center().child(eclipse(20.0)).into_element(),
             Some(Err(e)) => failure(e).into_element(),
             Some(Ok(v)) => {
                 let d = Detail::from_json(&v);
-                let url = d.url.clone();
-                let (r, n) = (repo.clone(), number);
+                let (glyph, tone, state) = status_mark(&d.state, d.draft);
                 view()
+                    .child(
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(6.0))
+                            .px(sp(S2))
+                            .pt(sp(S2))
+                            .child(icon(glyph, 14.0).text_color(tone))
+                            .child(text(state).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(tone))
+                            .child(text(format!("#{}", d.number)).text_size(tx(TEXT_SM)).font_family(mono_font).text_color(FG_MUTED))
+                            .child(text(format!("· {}", d.author)).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1)),
+                    )
+                    .child(text(d.title.clone()).text_size(tx(TEXT_LG)).font_weight(FontWeight(600)).line_height(px(22.0)).selectable(true).px(sp(S2)).pt(px(6.0)))
                     .child(
                         view()
                             .flex_row()
@@ -1212,23 +1224,14 @@ pub(crate) fn panel_pull_request(repo: String, number: u64) -> View {
                             .flex_wrap()
                             .gap(sp(S2))
                             .px(sp(S2))
-                            .pt(sp(S1))
+                            .pt(px(6.0))
                             .child(text(format!("{} ← {}", d.base, d.head)).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(FG_MUTED).number_of_lines(1))
                             .child(text(format!("+{}", d.additions)).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(SUCCESS))
                             .child(text(format!("−{}", d.deletions)).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(DANGER))
                             .child(text(tf("{} files", &[&d.changed_files.to_string()])).text_size(tx(TEXT_XS)).text_color(FG_MUTED)),
                     )
-                    .child(
-                        view()
-                            .flex_row()
-                            .gap(sp(S2))
-                            .px(sp(S2))
-                            .pt(sp(S2))
-                            .child(btn(t("GitHub"), Variant::Secondary, Sz::Sm, Some(Icon::ExternalLink), move || {
-                                let _ = open_url(url.clone());
-                            }))
-                            .child(btn(if busy.get_untracked() { t("Loading…") } else { t("Refresh") }, Variant::Ghost, Sz::Sm, Some(Icon::RotateCw), move || store::refresh_pull_request(&r, n))),
-                    )
+                    // Merge, draft, close, ask, GitHub: as the inbox's.
+                    .child(view().px(sp(S2)).pt(sp(S3)).child(actions(&repo, &d, busy)))
                     .child(section(t("Checks")))
                     .child(dynamic(move || {
                         let list = checks.get();

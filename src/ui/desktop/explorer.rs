@@ -24,9 +24,7 @@ pub(crate) fn resize_handle() -> impl IntoElement {
     let dragging = signal(false);
     let fold = store::EXPLORER_MIN - 60.0;
     view()
-        .w(px(8.0))
-        .ml(px(-4.0))
-        .mr(px(-4.0))
+        .w(px(10.0))
         .flex_shrink_0()
         .self_stretch()
         .items_center()
@@ -60,8 +58,8 @@ pub(crate) fn resize_handle() -> impl IntoElement {
         .on_responder_terminate(move |_: &ResponderEvent| dragging.set(false))
         .child(
             view()
-                .w(px(2.0))
-                .h(px(36.0))
+                .w(px(3.0))
+                .h(px(48.0))
                 .rounded(px(1.0))
                 .bg(move || tint(ACCENT, if dragging.get() { 0.9 } else if hover.get() { 0.5 } else { 0.0 })),
         )
@@ -789,6 +787,11 @@ fn prs_view(tab: Memo<ExplorerTab>) -> View {
     let status = signal([false; 4]);
     let mine = signal(false);
     let opened: Signal<Option<(String, u64)>> = signal(None);
+    // Another conversation's folder: back to its list.
+    effect(move || {
+        dir.get();
+        opened.set(None);
+    });
     effect(move || {
         if shown_tab.get() && dir.get().is_some() {
             untracked(|| store::repo_prs(false));
@@ -929,11 +932,28 @@ fn prs_view(tab: Memo<ExplorerTab>) -> View {
         .child(scroll().flex_1().child(dynamic(move || {
             let state = answer.get();
             let (repo, items) = list.get();
-            let open = opened.get();
-            // The first opens by itself.
-            if open.is_none() && let Some((p, _)) = items.first() {
-                let first = (repo.clone(), p.number);
-                untracked(move || opened.set(Some(first)));
+            let open = opened.get().filter(|(_, n)| *n > 0);
+            // One pull request, alone: its level, back to the list above.
+            if let Some((r, n)) = open {
+                return Some(untracked(move || {
+                    view()
+                        .child(
+                            nsh_base::button()
+                                .on_press(move || opened.set(None))
+                                .flex_row()
+                                .items_center()
+                                .gap(px(4.0))
+                                .mx(sp(S2))
+                                .px(sp(S1))
+                                .h(px(28.0))
+                                .rounded(px(R_MD))
+                                .hover(|s| s.bg(highlight()))
+                                .child(icon(Icon::ChevronLeft, 14.0).text_color(FG_MUTED))
+                                .child(text(t("All pull requests")).text_size(tx(TEXT_SM)).text_color(FG_MUTED)),
+                        )
+                        .child(crate::ui::shared::github::panel_pull_request(r, n))
+                        .into_element()
+                }));
             }
             Some(untracked(move || match state {
                 None if dir.get_untracked().is_none() => empty_state(Icon::GitPullRequest, t("No pull requests here"), t("Open a conversation in a GitHub repository to see its pull requests")).into_element(),
@@ -943,12 +963,7 @@ fn prs_view(tab: Memo<ExplorerTab>) -> View {
                 Some(Ok(_)) => {
                     let mut rows = view().gap(px(2.0)).pb(sp(S4));
                     for (p, rel) in items {
-                        let here = open.as_ref() == Some(&(repo.clone(), p.number));
-                        let number = p.number;
-                        rows = rows.child(pr_row(repo.clone(), p, rel, here, opened));
-                        if here {
-                            rows = rows.child(crate::ui::shared::github::panel_pull_request(repo.clone(), number));
-                        }
+                        rows = rows.child(pr_row(repo.clone(), p, rel, false, opened));
                     }
                     rows.into_element()
                 }
@@ -965,7 +980,7 @@ fn pr_row(repo: String, p: crate::github::RepoPr, related: bool, open: bool, ope
     };
     let pr = (repo, p.number);
     nsh_base::button()
-        .on_press(move || opened.set(if open { Some((String::new(), 0)) } else { Some(pr.clone()) }))
+        .on_press(move || opened.set(Some(pr.clone())))
         .mx(sp(S2))
         .px(sp(S2))
         .py(px(7.0))
@@ -1003,7 +1018,7 @@ fn pr_row(repo: String, p: crate::github::RepoPr, related: bool, open: bool, ope
                         }),
                 ),
         )
-        .child(view().pt(px(3.0)).child(icon(if open { Icon::ChevronDown } else { Icon::ChevronRight }, 13.0).text_color(FG_FAINT)))
+        .child(view().pt(px(3.0)).child(icon(Icon::ChevronRight, 13.0).text_color(FG_FAINT)))
 }
 
 fn commits_view() -> View {

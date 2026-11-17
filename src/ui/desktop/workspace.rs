@@ -68,7 +68,7 @@ pub(crate) fn workspace(compact: bool) -> impl IntoElement {
                 .items_stretch()
                 .overflow_hidden()
                 .mt(move || Length::from(px(-bar.get().top.0)))
-                .w(move || Length::from(px(if show_explorer.get() { store::explorer_width() + 10.0 } else { 0.0 })))
+                .w(move || Length::from(px(if show_explorer.get() { store::explorer_width() + 20.0 } else { 0.0 })))
                 .opacity(move || if show_explorer.get() { 1.0_f32 } else { 0.0 })
                 .transition_opacity()
                 // Its left edge drags its width.
