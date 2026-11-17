@@ -26,10 +26,6 @@ pub(crate) fn sidebar() -> View {
                     store::open_new_workspace(None)
                 }))
                 .child(nav_item(Icon::Search, t("Search"), || false, || store::open_modal(store::Modal::Palette)).child(hint("⌘K")))
-                .child(
-                    nav_item(Icon::GitPullRequest, t("Pull requests"), || matches!(store::screen(), Screen::Inbox | Screen::PullRequest { .. }), store::open_inbox)
-                        .child(when(|| store::desk_inbox_items().iter().any(store::inbox_unseen), || view().w(px(6.0)).h(px(6.0)).mr(px(4.0)).rounded(px(R_FULL)).bg(DOT_RUNNING))),
-                )
                 .child(nav_item(Icon::CalendarClock, t("Schedules"), || store::screen() == Screen::Schedules, store::open_schedules))
                 .child(more_menu()),
         )
@@ -206,10 +202,10 @@ fn nav_item(
         .child(text(label).text_size(tx(TEXT_BASE)).text_color(FG).flex_1())
 }
 
-/// History and Usage, less often wanted, behind "More" (the row shows
-/// which one is open).
+/// Pull requests, History and Usage, less often wanted, behind "More" (the
+/// row shows which one is open, and a dot while a pull request is unseen).
 fn more_menu() -> impl IntoElement {
-    let active = computed(|| matches!(store::screen(), Screen::History | Screen::Usage));
+    let active = computed(|| matches!(store::screen(), Screen::Inbox | Screen::PullRequest { .. } | Screen::History | Screen::Usage));
     let width = (if window().width.0 < 600.0 { window().width.0 } else { store::sidebar_width() }) - 2.0 * S2;
     dropdown_wide(
         view()
@@ -224,12 +220,15 @@ fn more_menu() -> impl IntoElement {
             .hover(|s| s.bg(sidebar_hover()))
             .child(icon(Icon::Ellipsis, 16.0).text_color(FG_MUTED))
             .child(text(move || match store::screen() {
+                Screen::Inbox | Screen::PullRequest { .. } => t("Pull requests"),
                 Screen::History => t("History"),
                 Screen::Usage => t("Usage"),
                 _ => t("More"),
-            }).text_size(tx(TEXT_BASE)).text_color(FG).flex_1()),
+            }).text_size(tx(TEXT_BASE)).text_color(FG).flex_1())
+            .child(when(|| store::desk_inbox_items().iter().any(store::inbox_unseen), || view().w(px(6.0)).h(px(6.0)).mr(px(4.0)).rounded(px(R_FULL)).bg(DOT_RUNNING))),
         width,
     )
+    .child(menu_row(t("Pull requests"), Some(Icon::GitPullRequest), None, false, store::open_inbox))
     .child(menu_row(t("History"), Some(Icon::History), None, false, store::open_history))
     .child(menu_row(t("Usage"), Some(Icon::Activity), None, false, store::open_usage))
 }
