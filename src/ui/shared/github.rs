@@ -361,62 +361,121 @@ fn tool_button(glyph: Icon, label: &'static str, enabled: impl Fn() -> bool + Co
 }
 
 /// The inbox's filters (monocode's menu): the states, how recent, asked
-/// to review, and the repositories.
+/// to review, and the repositories. It stays open while things are picked.
 fn filters_menu(filters: Memo<store::DeskInbox>, all: Memo<Vec<InboxItem>>) -> impl IntoElement {
+    let open = signal(false);
     let active = move || filters.with(store::DeskInbox::narrowed);
-    let trigger = move || view()
-        .w(px(26.0))
-        .h(px(26.0))
-        .rounded(px(R_MD))
-        .items_center()
-        .justify_center()
-        .bg(move || if active() { highlight() } else { tint(FG, 0.0) })
-        .hover(|s| s.bg(highlight()))
-        .label(t("Filter inbox"))
-        .child(icon(Icon::ListFilter, 13.0).text_color(move || if active() { FG } else { FG_MUTED }));
-    dynamic(move || {
-        let f = filters.get();
-        let mut repos: Vec<String> = all.with(|l| l.iter().map(|i| i.repo.clone()).collect());
-        repos.sort();
-        repos.dedup();
-        Some(untracked(move || {
-            let mut m = dropdown(trigger()).child(menu_heading(t("Status")));
+    let repos = computed(move || {
+        let mut r: Vec<String> = all.with(|l| l.iter().map(|i| i.repo.clone()).collect());
+        r.sort_by_key(|x| x.to_lowercase());
+        r.dedup();
+        r
+    });
+    let section = |words: &'static str| {
+        text(words.to_uppercase()).text_size(tx(10.0)).font_weight(FontWeight(600)).text_color(FG_FAINT).px(sp(S2)).pt(sp(S2)).pb(px(2.0))
+    };
+    let item = |label: SharedString, checked: Box<dyn Fn() -> bool>, on_press: Box<dyn Fn()>| {
+        let checked: std::rc::Rc<dyn Fn() -> bool> = checked.into();
+        let c = checked.clone();
+        nsh_base::button()
+            .on_press(move || on_press())
+            .flex_row()
+            .items_center()
+            .gap(sp(S2))
+            .h(px(28.0))
+            .px(sp(S2))
+            .rounded(px(R_MD))
+            .hover(|s| s.bg(highlight()))
+            .child(text(label).text_size(tx(13.0)).text_color(FG).number_of_lines(1).flex_1().min_w(px(0.0)))
+            .child(icon(Icon::Check, 14.0).text_color(FG).opacity(move || if c() { 1.0_f32 } else { 0.0 }))
+    };
+    let divider = || view().h(px(1.0)).my(px(4.0)).bg(tint(FG, 0.08));
+    nsh_base::popover()
+        .open(move || Some(open.get()))
+        .on_open_change(move |e: &nsh_base::PopoverEvent| {
+            if let nsh_base::PopoverEvent::OpenChange(next, _) = e {
+                open.set(*next);
+            }
+        })
+        .align(nsh_core::overlay::Align::Start)
+        .offset(px(4.0))
+        .popup_style(|s: nsh_core::element::StyleRefinement| {
+            s.bg(POPOVER).rounded(px(R_LG)).border_1().border_color(tint(FG, 0.10)).shadow_lg().overflow_hidden().w(px(240.0))
+        })
+        .trigger(
+            view()
+                .w(px(26.0))
+                .h(px(26.0))
+                .rounded(px(R_MD))
+                .items_center()
+                .justify_center()
+                .bg(move || if active() || open.get() { highlight() } else { tint(FG, 0.0) })
+                .hover(|s| s.bg(highlight()))
+                .label(t("Filter inbox"))
+                .child(icon(Icon::ListFilter, 13.0).text_color(move || if active() { FG } else { FG_MUTED })),
+        )
+        .child(scroll().max_h(px(480.0)).child({
+            let mut col = view().p(px(4.0)).child(item(
+                t("Asks for my review").into(),
+                Box::new(move || filters.with(|f| f.review_only)),
+                Box::new(|| store::set_desk_inbox(|f| f.review_only = !f.review_only)),
+            ));
+            col = col.child(section(t("Status")));
             for (i, word) in [t("Open"), t("Draft"), t("Merged"), t("Closed")].into_iter().enumerate() {
-                m = m.child(menu_row(word, None, None, f.status[i], move || store::set_desk_inbox(|f| f.status[i] = !f.status[i])));
+                col = col.child(item(word.into(), Box::new(move || filters.with(|f| f.status[i])), Box::new(move || store::set_desk_inbox(|f| f.status[i] = !f.status[i]))));
             }
-            m = m.child(menu_divider()).child(menu_heading(t("Updated")));
+            col = col.child(section(t("Updated")));
             for (key, word) in [("all", t("Any time")), ("day", t("Today")), ("week", t("This week")), ("month", t("This month"))] {
-                let on = f.time == key || (key == "all" && f.time.is_empty());
-                m = m.child(menu_row(word, None, None, on, move || store::set_desk_inbox(|f| f.time = key)));
+                col = col.child(item(
+                    word.into(),
+                    Box::new(move || filters.with(|f| f.time == key || (key == "all" && f.time.is_empty()))),
+                    Box::new(move || store::set_desk_inbox(|f| f.time = key)),
+                ));
             }
-            m = m.child(menu_divider()).child(menu_row(t("Asks for my review"), None, None, f.review_only, || store::set_desk_inbox(|f| f.review_only = !f.review_only)));
-            if !repos.is_empty() {
-                m = m.child(menu_divider()).child(menu_heading(t("Repositories")));
-                for repo in repos {
-                    let shown = !f.hidden.iter().any(|h| h.eq_ignore_ascii_case(&repo));
-                    let r = repo.clone();
-                    m = m.child(menu_row(repo, None, None, shown, move || {
-                        let r = r.clone();
-                        store::set_desk_inbox(move |f| match f.hidden.iter().position(|h| h.eq_ignore_ascii_case(&r)) {
-                            Some(i) => {
-                                f.hidden.remove(i);
-                            }
-                            None => f.hidden.push(r),
+            col.child(dynamic(move || {
+                let list = repos.get();
+                Some(untracked(move || {
+                    if list.is_empty() {
+                        return view().into_element();
+                    }
+                    let mut v = view().child(section(t("Repositories")));
+                    for repo in list {
+                        let (a, b) = (repo.clone(), repo.clone());
+                        v = v.child(item(
+                            repo.into(),
+                            Box::new(move || filters.with(|f| !f.hidden.iter().any(|h| h.eq_ignore_ascii_case(&a)))),
+                            Box::new(move || {
+                                let r = b.clone();
+                                store::set_desk_inbox(move |f| match f.hidden.iter().position(|h| h.eq_ignore_ascii_case(&r)) {
+                                    Some(i) => {
+                                        f.hidden.remove(i);
+                                    }
+                                    None => f.hidden.push(r),
+                                })
+                            }),
+                        ));
+                    }
+                    v.into_element()
+                }))
+            }))
+            .child(when(active, move || {
+                view().child(divider()).child(
+                    nsh_base::button()
+                        .on_press(|| {
+                            store::set_desk_inbox(|f| {
+                                let query = std::mem::take(&mut f.query);
+                                *f = store::DeskInbox { query, ..Default::default() };
+                            })
                         })
-                    }));
-                }
-            }
-            if f.narrowed() {
-                m = m.child(menu_divider()).child(menu_row(t("Clear filters"), Some(Icon::X), None, false, || {
-                    store::set_desk_inbox(|f| {
-                        let query = std::mem::take(&mut f.query);
-                        *f = store::DeskInbox { query, ..Default::default() };
-                    })
-                }));
-            }
-            m.into_element()
+                        .h(px(28.0))
+                        .px(sp(S2))
+                        .rounded(px(R_MD))
+                        .justify_center()
+                        .hover(|s| s.bg(highlight()))
+                        .child(text(t("Clear filters")).text_size(tx(13.0)).text_color(FG_MUTED)),
+                )
+            }))
         }))
-    })
 }
 
 /// A pull request's state as monocode marks it: icon, color, word.
