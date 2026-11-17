@@ -1116,6 +1116,9 @@ fn code(repo: String, number: u64) -> View {
                     .flex_1()
                     .min_h(px(0.0))
                     .gap(sp(S2))
+                    .px(if MOBILE { px(0.0) } else { px(32.0) })
+                    .pt(px(16.0))
+                    .pb(px(16.0))
                     .when(truncated, |v| v.child(text(t("This diff is long and was cut: GitHub has all of it")).text_size(tx(TEXT_SM)).text_color(WARNING)))
                     .child(
                         diff_view()
@@ -1131,7 +1134,7 @@ fn code(repo: String, number: u64) -> View {
 }
 
 fn checks_tab(repo: String, d: Detail, checks: Memo<Option<Vec<Check>>>, agent: Option<String>, fixed: impl Fn(Option<String>) + Clone + 'static) -> View {
-    view().flex_1().min_h(px(0.0)).child(scroll().flex_1().child(view().pb(sp(S8)).gap(sp(S3)).child(dynamic(move || {
+    view().flex_1().min_h(px(0.0)).child(scroll().flex_1().child(view().px(if MOBILE { sp(S1) } else { px(32.0) }).pt(px(20.0)).pb(sp(S8)).gap(sp(S3)).child(dynamic(move || {
         let list = checks.get();
         let (repo, d, agent, fixed) = (repo.clone(), d.clone(), agent.clone(), fixed.clone());
         Some(untracked(move || {
