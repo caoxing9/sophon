@@ -187,6 +187,7 @@ fn nav_item(
     let active = computed(active);
     button()
         .on_press(on_press)
+        .accessibility_label(label)
         .flex_row()
         .items_center()
         .gap(sp(S2))
