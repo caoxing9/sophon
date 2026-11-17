@@ -425,14 +425,19 @@ pub(crate) fn conversation_prs() -> Vec<(String, u64)> {
     out
 }
 
-/// Asks for each of `prs` not yet known nor being asked for.
-pub(crate) fn fetch_prs(prs: &[(String, u64)]) {
-    for (repo, number) in prs {
-        let op = crate::github::Op::View { repo: repo.clone(), number: *number };
-        let key = op.key();
-        if github(&key).is_none() && !github_loading(&key) {
-            github_fetch(op);
-        }
+/// The open workspace's folder, as the side panel's PR tab reads its
+/// repository.
+pub(crate) fn workspace_dir() -> Option<String> {
+    current_workspace().map(|w| w.directory).filter(|d| !d.is_empty())
+}
+
+/// The pull requests of the open workspace's repository, asked for the
+/// first time.
+pub(crate) fn repo_prs(refresh: bool) {
+    let Some(cwd) = untracked(workspace_dir) else { return };
+    let key = format!("repo_prs:{cwd}");
+    if refresh || (github(&key).is_none() && !github_loading(&key)) {
+        github_fetch(crate::github::Op::RepoPrs { cwd });
     }
 }
 

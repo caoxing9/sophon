@@ -43,6 +43,9 @@ pub enum Op {
     Act { repo: String, number: u64, action: String },
     /// A comment on the pull request, by the signed-in user.
     Comment { repo: String, number: u64, body: String },
+    /// The pull requests of the GitHub repository of folder `cwd` (its
+    /// `origin`), the latest first, all states.
+    RepoPrs { cwd: String },
     /// Claude Code's MCP servers of the sessions in `cwd` (`crate::mcp`;
     /// they go by this channel, the computer's).
     McpStatus { cwd: String },
@@ -97,6 +100,7 @@ impl Op {
             // Its answer is the pull request as it is after it.
             Op::Act { repo, number, .. } => format!("view:{repo}#{number}"),
             Op::Comment { repo, number, .. } => format!("view:{repo}#{number}"),
+            Op::RepoPrs { cwd } => format!("repo_prs:{cwd}"),
             Op::McpStatus { cwd } => format!("mcp:status:{cwd}"),
             Op::McpSignIn { server, .. } => format!("mcp:signin:{server}"),
         }
@@ -110,6 +114,7 @@ impl Op {
             Op::Checks { repo, number } => json!({ "op": "checks", "repo": repo, "number": number }),
             Op::Act { repo, number, action } => json!({ "op": "act", "repo": repo, "number": number, "action": action }),
             Op::Comment { repo, number, body } => json!({ "op": "comment", "repo": repo, "number": number, "body": body }),
+            Op::RepoPrs { cwd } => json!({ "op": "repo_prs", "cwd": cwd }),
             Op::McpStatus { cwd } => json!({ "op": "mcp_status", "cwd": cwd }),
             Op::McpSignIn { cwd, server } => json!({ "op": "mcp_sign_in", "cwd": cwd, "server": server }),
         }
@@ -151,6 +156,13 @@ impl Op {
                     return Err("Unknown action".into());
                 }
                 Ok(Op::Act { repo, number, action })
+            }
+            "repo_prs" => {
+                let cwd = s("cwd");
+                if !cwd.starts_with('/') || cwd.split('/').any(|c| c == "..") {
+                    return Err("Not a folder".into());
+                }
+                Ok(Op::RepoPrs { cwd })
             }
             "comment" => {
                 let (repo, number) = pr()?;
@@ -240,6 +252,42 @@ impl Inbox {
     pub(crate) fn local_of(&self, repo: &str) -> Option<&str> {
         self.local.iter().find(|(r, _)| r.eq_ignore_ascii_case(repo)).map(|(_, p)| p.as_str())
     }
+}
+
+/// A pull request of a folder's repository (`Op::RepoPrs`).
+#[derive(Clone, Debug, PartialEq, Default)]
+pub(crate) struct RepoPr {
+    pub(crate) number: u64,
+    pub(crate) title: String,
+    /// `open`, `merged` or `closed`.
+    pub(crate) state: String,
+    pub(crate) draft: bool,
+    pub(crate) author: String,
+    pub(crate) updated_at: String,
+    pub(crate) head: String,
+}
+
+/// The repository and its pull requests of an `Op::RepoPrs` answer.
+pub(crate) fn repo_prs_of(v: &Value) -> (String, Vec<RepoPr>) {
+    let s = |x: &Value, k: &str| x.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
+    let items = v
+        .get("items")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|p| {
+            Some(RepoPr {
+                number: p.get("number")?.as_u64()?,
+                title: s(p, "title"),
+                state: s(p, "state"),
+                draft: p.get("draft").and_then(Value::as_bool).unwrap_or(false),
+                author: s(p, "author"),
+                updated_at: s(p, "updatedAt"),
+                head: s(p, "head"),
+            })
+        })
+        .collect();
+    (s(v, "repo"), items)
 }
 
 /// One pull request.
@@ -526,6 +574,28 @@ pub(crate) fn run(op: &Op) -> Result<Value, String> {
             gh(&args)?;
             // The pull request as it is now.
             view(repo, *number)
+        }
+        Op::RepoPrs { cwd } => {
+            let repo = repo_of_folder(cwd).ok_or("This folder has no GitHub remote")?;
+            let list = gh_json(&["pr", "list", "--repo", &repo, "--state", "all", "--limit", "60", "--json", "number,title,state,isDraft,author,updatedAt,headRefName,url"])?;
+            let items: Vec<Value> = list
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|p| {
+                    Some(json!({
+                        "number": p.get("number")?.as_u64()?,
+                        "title": s(p, "title"),
+                        "state": s(p, "state").to_ascii_lowercase(),
+                        "draft": p.get("isDraft").and_then(Value::as_bool).unwrap_or(false),
+                        "author": p.get("author").map(|a| s(a, "login")).unwrap_or_default(),
+                        "updatedAt": s(p, "updatedAt"),
+                        "head": s(p, "headRefName"),
+                        "url": s(p, "url"),
+                    }))
+                })
+                .collect();
+            Ok(json!({ "repo": repo, "items": items }))
         }
         Op::Comment { repo, number, body } => {
             gh(&["pr", "comment", &number.to_string(), "--repo", repo, "--body", body])?;
