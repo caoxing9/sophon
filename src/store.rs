@@ -3616,9 +3616,10 @@ pub(crate) fn copy_diagnostics() {
     notify(t("Diagnostics copied: paste them where you report the problem").into());
 }
 
-/// Opens the folder Sophon's logs are in (Finder).
-#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+/// Opens the folder Sophon's logs are in (Finder). Desktop only; the
+/// settings page that offers it is compiled for every target.
 pub(crate) fn open_logs() {
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
     let _ = open_path(crate::daemon::data_dir());
 }
 
