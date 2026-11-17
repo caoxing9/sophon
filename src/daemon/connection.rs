@@ -1339,6 +1339,14 @@ async fn session(
                     }
                 }
                 let probe = match &cmd {
+                    // This computer's own service: a loopback socket does
+                    // not die unheard (its end closing is read at once),
+                    // and a ping it is slow to answer only means it is busy
+                    // (an agent running many sub-agents); dropping it then
+                    // made it do the whole start over again (every list,
+                    // the open conversation's page). The ping timeout
+                    // still ends a service that hangs.
+                    _ if endpoint.via() == Via::Local => None,
                     Command::NetworkChanged { first: true, .. } => None,
                     Command::Resume { away } => Some(*away >= LONG_AWAY),
                     // The LAN's bridge is not reached off Wi-Fi.
@@ -1358,7 +1366,7 @@ async fn session(
                         }
                         let wait = if long {
                             LONG_AWAY_ANSWER
-                        } else if endpoint.is_lan() || endpoint.via() == Via::Local {
+                        } else if endpoint.is_lan() {
                             LAN_ANSWER
                         } else {
                             RESUME_ANSWER
@@ -1653,6 +1661,34 @@ fn tail_request(agent_id: &str, pending: &mut HashMap<String, Pending>) -> Value
     )
 }
 
+/// The kept page `kept` (ending at `from`) with `rows`, what came after it,
+/// joined on: the last [`TIMELINE_PAGE`] rows, and where they now begin
+/// and end. `None` when there is nothing to add, or the kept page is no
+/// longer the one asked after (another epoch, another end).
+fn extend_kept(kept: &Value, from: u64, epoch: &str, rows: &[Value]) -> Option<Value> {
+    let last = rows.last()?;
+    let end = last.get("seqEnd").or_else(|| last.get("seq"))?.as_u64()?;
+    let kept_end = kept.get("endCursor")?;
+    let kept_epoch = kept_end.get("epoch").or_else(|| kept.get("epoch"))?.as_str()?;
+    if kept_epoch != epoch || kept_end.get("seq")?.as_u64()? != from {
+        return None;
+    }
+    let mut entries = kept.get("entries")?.as_array()?.clone();
+    entries.extend_from_slice(rows);
+    let cut = entries.len().saturating_sub(TIMELINE_PAGE as usize);
+    let mut page = kept.clone();
+    if cut > 0 {
+        entries.drain(..cut);
+        let start = entries.first().and_then(|e| e.get("seqStart").or_else(|| e.get("seq"))).and_then(Value::as_u64)?;
+        page["startCursor"] = json!({ "epoch": epoch, "seq": start });
+        page["hasOlder"] = json!(true);
+    }
+    page["entries"] = Value::Array(entries);
+    page["endCursor"] = json!({ "epoch": epoch, "seq": end });
+    page["epoch"] = json!(epoch);
+    Some(page)
+}
+
 fn timeline_requests(agent_id: &str, pending: &mut HashMap<String, Pending>) -> Vec<Value> {
     // With a page kept on this device (shown already), only what came
     // after it; the host answers with the latest page instead when the
@@ -1740,7 +1776,11 @@ fn events_request(pending: &mut HashMap<String, Pending>, full: bool) -> Value {
 }
 
 fn startup_messages(open_agent: Option<&str>, pending: &mut HashMap<String, Pending>) -> Vec<Value> {
-    let mut out = vec![
+    // The conversation on screen first: the service answers in order, and
+    // behind the lists (hundreds of agents and workspaces, the providers)
+    // a busy one kept it waiting for seconds.
+    let mut out = open_agent.map(|id| timeline_requests(id, pending)).unwrap_or_default();
+    out.extend([
         events_request(pending, true),
         request(pending, Pending::Projects, json!({ "type": "project.list.request" })),
         request(
@@ -1755,10 +1795,7 @@ fn startup_messages(open_agent: Option<&str>, pending: &mut HashMap<String, Pend
         ),
         request(pending, Pending::Providers, json!({ "type": "get_providers_snapshot_request" })),
         request(pending, Pending::Optional, json!({ "type": "workspace.label.list.request" })),
-    ];
-    if let Some(id) = open_agent {
-        out.extend(timeline_requests(id, pending));
-    }
+    ]);
     out
 }
 
@@ -2532,6 +2569,14 @@ fn handle(
                     })
                     .collect();
                 out.push(Event::TimelineSynced { agent_id: agent_id.clone() });
+                // The kept page brought up to date too: else it stayed
+                // where it was first fetched, and a conversation followed
+                // for long (a turn running for an hour) asked again for
+                // its whole latest page at each opening or reconnection.
+                let name = super::cache::timeline_name(&agent_id);
+                if let Some(kept) = super::cache::load(&name).and_then(|kept| extend_kept(&kept, from, epoch, &rows)) {
+                    super::cache::save(&name, &kept);
+                }
                 if let Some(agent) = payload.get("agent").and_then(Agent::from_json) {
                     out.push(Event::AgentUpsert(agent));
                 }
@@ -3942,6 +3987,53 @@ mod tests {
         );
         assert!(matches!(&events[..], [Event::TimelineLive { agent_id, item: Item::Assistant { text }, .. }] if agent_id == "a1" && text == "hi"));
         assert!(follow.is_empty());
+    }
+
+    #[test]
+    fn startup_asks_the_open_conversation_first() {
+        let mut pending = HashMap::new();
+        let msgs = startup_messages(Some("a1"), &mut pending);
+        assert_eq!(msgs[0]["message"]["type"], "fetch_agent_timeline_request");
+        assert_eq!(msgs[0]["message"]["agentId"], "a1");
+        assert_eq!(msgs[1]["message"]["type"], "agent.timeline.set_subscription.request");
+        let none = startup_messages(None, &mut pending);
+        assert!(none.iter().all(|m| m["message"]["type"] != "fetch_agent_timeline_request"));
+    }
+
+    fn rows(seqs: std::ops::RangeInclusive<u64>) -> Vec<Value> {
+        seqs.map(|s| json!({"item": {"type": "assistant_message", "text": format!("m{s}")}, "seqStart": s, "seqEnd": s})).collect()
+    }
+
+    #[test]
+    fn a_kept_page_takes_what_came_after_it() {
+        let kept = json!({"epoch": "e1", "entries": rows(1..=3), "startCursor": {"epoch": "e1", "seq": 1}, "endCursor": {"epoch": "e1", "seq": 3}, "hasOlder": false});
+        let page = extend_kept(&kept, 3, "e1", &rows(4..=5)).unwrap();
+        assert_eq!(page["entries"].as_array().unwrap().len(), 5);
+        assert_eq!(page["endCursor"], json!({"epoch": "e1", "seq": 5}));
+        assert_eq!(page["hasOlder"], false);
+        let (items, older, cursor) = timeline_page(&page);
+        assert_eq!(items.len(), 5);
+        assert!(older.is_none());
+        assert_eq!(cursor, Some(("e1".to_owned(), 5)));
+    }
+
+    #[test]
+    fn a_kept_page_stays_a_page() {
+        let kept = json!({"epoch": "e1", "entries": rows(1..=40), "endCursor": {"epoch": "e1", "seq": 40}, "hasOlder": false});
+        let page = extend_kept(&kept, 40, "e1", &rows(41..=50)).unwrap();
+        let entries = page["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), TIMELINE_PAGE as usize);
+        assert_eq!(entries[0]["seqStart"], 11);
+        assert_eq!(page["startCursor"], json!({"epoch": "e1", "seq": 11}));
+        assert_eq!(page["hasOlder"], true);
+    }
+
+    #[test]
+    fn a_kept_page_another_than_asked_after_is_left() {
+        let kept = json!({"epoch": "e1", "entries": rows(1..=3), "endCursor": {"epoch": "e1", "seq": 3}});
+        assert!(extend_kept(&kept, 2, "e1", &rows(4..=4)).is_none());
+        assert!(extend_kept(&kept, 3, "e2", &rows(4..=4)).is_none());
+        assert!(extend_kept(&kept, 3, "e1", &[]).is_none());
     }
 
     #[test]
