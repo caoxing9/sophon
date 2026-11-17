@@ -632,9 +632,6 @@ pub(crate) fn pull_request(repo: String, number: u64, agent: Option<String>, fix
                             .border_color(BORDER)
                             .child(
                                 view()
-                                    .w_full()
-                                    .max_w(px(1024.0))
-                                    .self_center()
                                     .px(if MOBILE { sp(S1) } else { px(32.0) })
                                     .pt(px(20.0))
                                     .gap(px(10.0))
