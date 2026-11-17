@@ -1183,6 +1183,9 @@ fn checks_tab(repo: String, d: Detail, checks: Memo<Option<Vec<Check>>>, agent: 
 pub(crate) fn panel_pull_request(repo: String, number: u64) -> View {
     let view_key = Op::View { repo: repo.clone(), number }.key();
     let checks_key = Op::Checks { repo: repo.clone(), number }.key();
+    if store::github(&view_key).is_none() && !store::github_loading(&view_key) {
+        store::github_fetch(Op::View { repo: repo.clone(), number });
+    }
     if store::github(&checks_key).is_none() && !store::github_loading(&checks_key) {
         store::github_fetch(Op::Checks { repo: repo.clone(), number });
     }
