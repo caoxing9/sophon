@@ -41,6 +41,8 @@ pub enum Op {
     Diff { repo: String, number: u64 },
     Checks { repo: String, number: u64 },
     Act { repo: String, number: u64, action: String },
+    /// A comment on the pull request, by the signed-in user.
+    Comment { repo: String, number: u64, body: String },
     /// Claude Code's MCP servers of the sessions in `cwd` (`crate::mcp`;
     /// they go by this channel, the computer's).
     McpStatus { cwd: String },
@@ -94,6 +96,7 @@ impl Op {
             Op::Checks { repo, number } => format!("checks:{repo}#{number}"),
             // Its answer is the pull request as it is after it.
             Op::Act { repo, number, .. } => format!("view:{repo}#{number}"),
+            Op::Comment { repo, number, .. } => format!("view:{repo}#{number}"),
             Op::McpStatus { cwd } => format!("mcp:status:{cwd}"),
             Op::McpSignIn { server, .. } => format!("mcp:signin:{server}"),
         }
@@ -106,6 +109,7 @@ impl Op {
             Op::Diff { repo, number } => json!({ "op": "diff", "repo": repo, "number": number }),
             Op::Checks { repo, number } => json!({ "op": "checks", "repo": repo, "number": number }),
             Op::Act { repo, number, action } => json!({ "op": "act", "repo": repo, "number": number, "action": action }),
+            Op::Comment { repo, number, body } => json!({ "op": "comment", "repo": repo, "number": number, "body": body }),
             Op::McpStatus { cwd } => json!({ "op": "mcp_status", "cwd": cwd }),
             Op::McpSignIn { cwd, server } => json!({ "op": "mcp_sign_in", "cwd": cwd, "server": server }),
         }
@@ -148,6 +152,14 @@ impl Op {
                 }
                 Ok(Op::Act { repo, number, action })
             }
+            "comment" => {
+                let (repo, number) = pr()?;
+                let body = s("body");
+                if body.trim().is_empty() || body.len() > 65_536 {
+                    return Err("A comment says something, not too much".into());
+                }
+                Ok(Op::Comment { repo, number, body })
+            }
             "mcp_status" | "mcp_sign_in" => {
                 let cwd = s("cwd");
                 if !cwd.starts_with('/') || cwd.split('/').any(|c| c == "..") {
@@ -179,6 +191,10 @@ pub(crate) struct InboxItem {
     pub(crate) draft: bool,
     pub(crate) author: String,
     pub(crate) updated_at: String,
+    pub(crate) created_at: String,
+    /// `open`, `merged` or `closed` (the state it was asked for in).
+    pub(crate) state: String,
+    pub(crate) labels: Vec<String>,
     /// The user is asked to review it.
     pub(crate) review_requested: bool,
 }
@@ -209,6 +225,9 @@ impl Inbox {
                         draft: i.get("draft").and_then(Value::as_bool).unwrap_or(false),
                         author: s(i, "author"),
                         updated_at: s(i, "updatedAt"),
+                        created_at: s(i, "createdAt"),
+                        state: s(i, "state"),
+                        labels: i.get("labels").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect(),
                         review_requested: i.get("reviewRequested").and_then(Value::as_bool).unwrap_or(false),
                     })
                 })
@@ -244,6 +263,21 @@ pub(crate) struct Detail {
     pub(crate) mergeable: String,
     pub(crate) review_decision: String,
     pub(crate) labels: Vec<String>,
+    pub(crate) created_at: String,
+    pub(crate) assignees: Vec<String>,
+    /// Its conversation, oldest first.
+    pub(crate) comments: Vec<Comment>,
+}
+
+/// A comment on a pull request, or a review.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub(crate) struct Comment {
+    pub(crate) author: String,
+    pub(crate) body: String,
+    pub(crate) at: String,
+    /// A review's decision (`APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`);
+    /// empty for a comment.
+    pub(crate) review: String,
 }
 
 impl Detail {
@@ -267,6 +301,18 @@ impl Detail {
             mergeable: s("mergeable"),
             review_decision: s("reviewDecision"),
             labels: v.get("labels").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect(),
+            created_at: s("createdAt"),
+            assignees: v.get("assignees").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect(),
+            comments: v
+                .get("comments")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|c| {
+                    let s = |k: &str| c.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
+                    Comment { author: s("author"), body: s("body"), at: s("at"), review: s("review") }
+                })
+                .collect(),
         }
     }
 
@@ -389,7 +435,7 @@ pub(crate) fn run(op: &Op) -> Result<Value, String> {
     let s = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
     match op {
         Op::Inbox { roots, state, limit } => {
-            let fields = "number,title,repository,updatedAt,isDraft,author,url";
+            let fields = "number,title,repository,updatedAt,createdAt,isDraft,author,url,labels";
             let limit = limit.to_string();
             let mut args = vec!["search", "prs", "--involves", "@me", "--sort", "updated", "--limit", &limit, "--json", fields];
             match state.as_str() {
@@ -428,6 +474,9 @@ pub(crate) fn run(op: &Op) -> Result<Value, String> {
                         "draft": p.get("isDraft").and_then(Value::as_bool).unwrap_or(false),
                         "author": p.get("author").map(|a| s(a, "login")).unwrap_or_default(),
                         "updatedAt": s(p, "updatedAt"),
+                        "createdAt": s(p, "createdAt"),
+                        "state": state,
+                        "labels": names(p.get("labels")),
                         "reviewRequested": review_requested,
                     }))
                 })
@@ -478,12 +527,16 @@ pub(crate) fn run(op: &Op) -> Result<Value, String> {
             // The pull request as it is now.
             view(repo, *number)
         }
+        Op::Comment { repo, number, body } => {
+            gh(&["pr", "comment", &number.to_string(), "--repo", repo, "--body", body])?;
+            view(repo, *number)
+        }
     }
 }
 
 #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 fn view(repo: &str, number: u64) -> Result<Value, String> {
-    let fields = "number,title,state,isDraft,author,body,url,headRefName,baseRefName,updatedAt,additions,deletions,changedFiles,mergeable,reviewDecision,labels";
+    let fields = "number,title,state,isDraft,author,body,url,headRefName,baseRefName,updatedAt,createdAt,additions,deletions,changedFiles,mergeable,reviewDecision,labels,assignees,comments,reviews";
     let v = gh_json(&["pr", "view", &number.to_string(), "--repo", repo, "--json", fields])?;
     let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
     let n = |k: &str| v.get(k).and_then(Value::as_u64).unwrap_or(0);
@@ -503,8 +556,41 @@ fn view(repo: &str, number: u64) -> Result<Value, String> {
         "changedFiles": n("changedFiles"),
         "mergeable": s("mergeable"),
         "reviewDecision": s("reviewDecision"),
-        "labels": v.get("labels").and_then(Value::as_array).into_iter().flatten().filter_map(|l| l.get("name").and_then(Value::as_str)).collect::<Vec<_>>(),
+        "labels": names(v.get("labels")),
+        "createdAt": s("createdAt"),
+        "assignees": v.get("assignees").and_then(Value::as_array).into_iter().flatten().filter_map(|a| a.get("login").and_then(Value::as_str)).collect::<Vec<_>>(),
+        "comments": discussion(&v),
     }))
+}
+
+/// The names of a list of labels.
+#[cfg_attr(any(target_os = "ios", target_os = "android", target_arch = "wasm32"), allow(dead_code))]
+fn names(labels: Option<&Value>) -> Vec<String> {
+    labels.and_then(Value::as_array).into_iter().flatten().filter_map(|l| l.get("name").and_then(Value::as_str)).map(str::to_owned).collect()
+}
+
+/// A pull request's conversation: its comments and its reviews (those that
+/// say something, or decide), oldest first.
+#[cfg_attr(any(target_os = "ios", target_os = "android", target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn discussion(v: &Value) -> Vec<Value> {
+    let s = |x: &Value, k: &str| x.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
+    let login = |x: &Value| x.get("author").and_then(|a| a.get("login")).and_then(Value::as_str).unwrap_or_default().to_owned();
+    let mut out: Vec<Value> = v
+        .get("comments")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|c| json!({ "author": login(c), "body": s(c, "body"), "at": s(c, "createdAt"), "review": "" }))
+        .collect();
+    for r in v.get("reviews").and_then(Value::as_array).into_iter().flatten() {
+        let state = s(r, "state");
+        if s(r, "body").trim().is_empty() && !matches!(state.as_str(), "APPROVED" | "CHANGES_REQUESTED") {
+            continue;
+        }
+        out.push(json!({ "author": login(r), "body": s(r, "body"), "at": s(r, "submittedAt"), "review": state }));
+    }
+    out.sort_by(|a, b| s(a, "at").cmp(&s(b, "at")));
+    out
 }
 
 /// A row of `statusCheckRollup` (a check run or a commit status) as the
