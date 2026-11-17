@@ -22,7 +22,7 @@ pub(crate) fn sidebar() -> View {
                 // The space between the two groups, which the first
                 // project's own top margin no longer gives.
                 .pb(sp(S2))
-                .child(nav_item(Icon::SquarePen, t("New workspace"), || store::screen() == Screen::NewWorkspace, || {
+                .child(nav_item(Icon::SquarePen, t("New workspace"), || store::screen() == Screen::NewWorkspace && !store::form().scoped, || {
                     store::open_new_workspace(None)
                 }))
                 .child(nav_item(Icon::Search, t("Search"), || false, || store::open_modal(store::Modal::Palette)).child(hint("⌘K")))

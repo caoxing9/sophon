@@ -1546,6 +1546,9 @@ pub(crate) struct Form {
     pub(crate) context: Option<(serde_json::Value, String)>,
     /// The provider's features for a new agent, with the values chosen.
     pub(crate) features: Vec<crate::daemon::model::Feature>,
+    /// A new conversation in its project already (the project's + and
+    /// ⌘T): a blank chat, no pickers; else the New workspace screen.
+    pub(crate) scoped: bool,
 }
 
 thread_local! {
@@ -4614,6 +4617,37 @@ pub(crate) fn background(agent: &str) -> Vec<crate::daemon::connection::Backgrou
 
 pub(crate) fn stop_background(agent: &str, item: &str, token: &str) {
     send(Command::StopBackground { agent: agent.to_owned(), item: item.to_owned(), token: token.to_owned() });
+}
+
+/// A new conversation in project `path`, at once: a blank chat whose
+/// first message makes it (the project's + and ⌘T).
+pub(crate) fn new_chat_in(path: String) {
+    // Its project shows open, the new conversation's row in it.
+    let root = path.trim_end_matches('/').to_owned();
+    if let Some(p) = projects().into_iter().find(|p| p.root_path.trim_end_matches('/') == root)
+        && is_collapsed(&p.id)
+    {
+        toggle_collapsed(&p.id);
+    }
+    open_new_workspace(Some(path));
+    edit_form(|f| f.scoped = true);
+    // Ready to type in.
+    set_timeout(std::time::Duration::from_millis(80), || {
+        if let Some(session) = crate::ui::shared::composer_doc::existing("form") {
+            session.focus();
+        }
+    });
+}
+
+/// ⌘T: a new conversation in the open conversation's project, else the New
+/// workspace screen.
+pub(crate) fn new_chat_here() {
+    let root = current_workspace().map(|w| if w.project_root.is_empty() { w.directory } else { w.project_root }).filter(|r| !r.is_empty());
+    let scoped_path = form().scoped.then(|| form().path).filter(|_| screen() == Screen::NewWorkspace);
+    match root.or(scoped_path) {
+        Some(root) => new_chat_in(root),
+        None => open_new_workspace(None),
+    }
 }
 
 pub(crate) fn open_new_workspace(project_path: Option<String>) {
