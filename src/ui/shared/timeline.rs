@@ -1310,6 +1310,10 @@ fn question_card(p: Permission, questions: Vec<Question>) -> View {
         )
 }
 
+/// The most the sub-agents' rows take over the composer before they
+/// scroll: three 30pt rows and the gaps between them.
+const SUBAGENT_ROWS_MAX_H: f32 = 3.0 * 30.0 + 2.0 * 2.0;
+
 /// Sub-agents and background work of the open agent, as tracks above the
 /// composer.
 pub(crate) fn tracks() -> View {
@@ -1367,7 +1371,7 @@ pub(crate) fn tracks() -> View {
                 } else {
                     tf("Sub-agents · {}", &[&list.len().to_string()])
                 };
-                let mut c = card().mb(sp(S2)).px(sp(S3)).py(sp(S2)).gap(px(2.0)).child(
+                let c = card().mb(sp(S2)).px(sp(S3)).py(sp(S2)).gap(px(2.0)).child(
                     nsh_base::button()
                         .on_press(move || subs_open.set(Some(!open)))
                         .flex_row()
@@ -1379,7 +1383,11 @@ pub(crate) fn tracks() -> View {
                 if !open {
                     return c;
                 }
-                for s in list.clone() {
+                // Running ones first: past the height below, the rest scroll.
+                let mut list = list.clone();
+                list.sort_by_key(|s| s.status != "running");
+                let mut rows = view().gap(px(2.0));
+                for s in list {
                     let status = match s.status.as_str() {
                         "running" => Status::Running,
                         "failed" => Status::Failed,
@@ -1387,7 +1395,7 @@ pub(crate) fn tracks() -> View {
                         _ => Status::Idle,
                     };
                     let (parent, id) = (s.parent.clone(), s.id.clone());
-                    c = c.child(
+                    rows = rows.child(
                         nsh_base::button()
                             .on_press(move || store::open_tab(store::Tab::Subagent(parent.clone(), id.clone())))
                             .flex_row()
@@ -1402,7 +1410,9 @@ pub(crate) fn tracks() -> View {
                             .child(text(s.subtitle.clone()).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1).flex_1()),
                     );
                 }
-                c
+                // Three rows at most, so the fold above stays on screen
+                // however many there are.
+                c.child(scroll().max_h(px(SUBAGENT_ROWS_MAX_H)).child(rows))
             }))
         }))
         .child(dynamic(move || {
