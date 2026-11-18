@@ -1842,3 +1842,99 @@ async fn a_project_added_has_its_folder_s_workspace() {
     );
     service.cli("stop");
 }
+
+/// A conversation taken out of the archive comes back where a client can
+/// show it: its workspace was archived with it, and is listed again.
+#[tokio::test]
+async fn a_conversation_restored_brings_its_workspace_back() {
+    let service = Service(tempfile::tempdir().unwrap());
+    let folder = service.0.path().join("project");
+    fs::create_dir_all(&folder).unwrap();
+    let folder = fs::canonicalize(&folder).unwrap();
+    let at = "2026-11-12T08:58:53.000Z";
+    let conversation = |id: &str| {
+        json!({"id":id,"provider":"claude","cwd":folder,"workspaceId":"w1","status":"idle","title":id,
+            "archivedAt":at,"persistence":{},"createdAt":at,"updatedAt":at})
+    };
+    fs::write(
+        service.0.path().join("state.json"),
+        json!({
+            "projects":{"p1":{"projectId":"p1","projectRootPath":folder,"projectDisplayName":"project","projectKind":"directory"}},
+            "workspaces":{"w1":{"id":"w1","projectId":"p1","projectRootPath":folder,"workspaceDirectory":folder,
+                "name":"project","workspaceKind":"directory","archivedAt":at}},
+            "agents":{"kept":conversation("kept"),"other":conversation("other")}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    service.cli("start");
+    let mut socket = service.connect(true).await;
+    let ids = |reply: Value| -> Vec<String> {
+        reply["payload"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    // Archived: neither is listed, both are in the history.
+    assert!(ids(ask(&mut socket, json!({"type":"fetch_workspaces_request"})).await).is_empty());
+    assert!(ids(ask(&mut socket, json!({"type":"fetch_agents_request"})).await).is_empty());
+    assert_eq!(ids(ask(&mut socket, json!({"type":"fetch_agent_history_request"})).await).len(), 2);
+    let restored = ask(
+        &mut socket,
+        json!({"type":"refresh_agent_request","agentId":"kept","restore":true}),
+    )
+    .await;
+    assert!(restored["payload"]["agent"]["archivedAt"].is_null(), "{restored}");
+    assert_eq!(
+        ids(ask(&mut socket, json!({"type":"fetch_workspaces_request"})).await),
+        ["w1"]
+    );
+    // The one asked for, not the workspace's other conversations.
+    assert_eq!(
+        ids(ask(&mut socket, json!({"type":"fetch_agents_request"})).await),
+        ["kept"]
+    );
+    service.cli("stop");
+}
+
+/// Choosing a folder to add as a project: a folder that is no project yet
+/// says which folders it holds, and nothing of its files.
+#[tokio::test]
+async fn a_folder_that_is_no_project_lists_its_folders_alone() {
+    let service = Service(tempfile::tempdir().unwrap());
+    let outside = tempfile::tempdir().unwrap();
+    let outside = fs::canonicalize(outside.path()).unwrap();
+    fs::create_dir_all(outside.join("code")).unwrap();
+    fs::create_dir_all(outside.join("docs")).unwrap();
+    fs::write(outside.join("notes.txt"), "private").unwrap();
+    service.cli("start");
+    let mut socket = service.connect(true).await;
+    let listed = ask(
+        &mut socket,
+        json!({"type":"file_explorer_request","cwd":outside,"path":".","mode":"list"}),
+    )
+    .await;
+    assert_eq!(listed["type"], "file_explorer_response", "{listed}");
+    assert_eq!(listed["payload"]["cwd"], json!(outside));
+    let names: Vec<&str> = listed["payload"]["directory"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["code", "docs"]);
+    // Nothing else of it: not a file's text, not a folder under it by a
+    // path of the request's, not a change.
+    for refused in [
+        json!({"type":"file_explorer_request","cwd":outside,"path":"notes.txt","mode":"file"}),
+        json!({"type":"file_explorer_request","cwd":outside,"path":"code","mode":"list"}),
+        json!({"type":"fs.entry.create.request","cwd":outside,"path":".","name":"made","kind":"directory"}),
+    ] {
+        let reply = ask(&mut socket, refused.clone()).await;
+        assert_eq!(reply["type"], "rpc_error", "{refused} → {reply}");
+    }
+    assert!(!outside.join("made").exists());
+    service.cli("stop");
+}

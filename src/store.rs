@@ -3061,6 +3061,12 @@ pub(crate) fn switch_host(id: Option<String>) {
         global::<Diagnostics>().update(|d| *d = Diagnostics::default());
         global::<DaemonConfig>().update(|c| c.0 = None);
         global::<Nav>().update(|n| *n = Nav::default());
+        // The conversation that was open is the host's left behind: an
+        // answer or an event for it that comes late finds nothing to fill.
+        global::<Timeline>().update(|t| *t = Timeline::default());
+        // Its history page's list too: an entry of it opened here would
+        // be asked of a host that has no such conversation.
+        global::<HistoryState>().update(|h| *h = HistoryState { search: h.search.clone(), ..Default::default() });
         // The workspace open last is looked for in this host's too.
         global::<LastOpen>().update(|l| l.done = false);
     });
@@ -6175,10 +6181,18 @@ pub(crate) fn apply(event: Event) {
             prompt_links_known(|p| p.workspaces_known = true);
         }
         Event::WorkspaceUpsert(ws) => {
+            let id = ws.id.clone();
+            let new = global::<Workspaces>().with_untracked(|w| !w.0.iter().any(|x| x.id == id));
             global::<Workspaces>().update(|w| {
                 w.0.retain(|x| x.id != ws.id);
                 w.0.push(ws);
             });
+            // The workspace that is open, known only now (a conversation
+            // restored from the archive brings it back after it opens):
+            // its changes, git and terminals are watched from here.
+            if new && screen() == Screen::Workspace(id.clone()) {
+                watch_changes(&id);
+            }
             open_when_listed();
         }
         Event::WorkspaceRemove(id) => {
@@ -6290,6 +6304,25 @@ pub(crate) fn apply(event: Event) {
             });
             if opened {
                 scroll_timeline_end_after(&[30, 120, 250], false);
+            }
+        }
+        Event::TimelineFailed { agent_id, message } => {
+            // In the history's place when nothing of it shows; beside this
+            // device's copy when one does, which is still worth reading.
+            let mut beside = false;
+            global::<Timeline>().update(|t| {
+                if t.agent_id.as_deref() == Some(agent_id.as_str()) {
+                    if t.items.is_empty() {
+                        t.items = vec![Item::Error { message: message.clone() }];
+                    } else {
+                        beside = true;
+                    }
+                    t.loaded = true;
+                    t.syncing = false;
+                }
+            });
+            if beside {
+                notify(message);
             }
         }
         Event::TimelineSynced { agent_id } => global::<Timeline>().update(|t| {

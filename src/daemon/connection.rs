@@ -707,6 +707,10 @@ pub enum Event {
     /// already holds are not applied again.
     TimelineReset { agent_id: String, items: Vec<Item>, older: Option<Value>, cursor: Option<(String, u64)> },
     TimelineOlder { agent_id: String, items: Vec<Item>, older: Option<Value> },
+    /// The host could not give the conversation's history: said in its
+    /// place (or beside this device's copy, where one shows), so the view
+    /// is not left waiting on it.
+    TimelineFailed { agent_id: String, message: String },
     /// The conversation shown from this device's copy has everything the
     /// host has now (what came since arrived as `TimelineLive`).
     TimelineSynced { agent_id: String },
@@ -1209,6 +1213,9 @@ enum Pending {
     CreateTerminal,
     AttachTerminal,
     Explorer,
+    /// A folder's listing (`cwd`, `path`): refused, it is said where the
+    /// listing would show.
+    ListDir(String, String),
     Write(String),
     Git(&'static str),
     History(String),
@@ -1974,7 +1981,7 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
         }))],
         Command::ListDir { cwd, path } => vec![request(
             pending,
-            Pending::Explorer,
+            Pending::ListDir(cwd.clone(), path.clone()),
             json!({ "type": "file_explorer_request", "cwd": cwd, "path": path, "mode": "list" }),
         )],
         Command::ReadFile { cwd, path } => vec![request(
@@ -2520,6 +2527,18 @@ fn handle(
                 return vec![];
             }
             let error = payload.get("error").and_then(Value::as_str).unwrap_or("request failed");
+            // A folder's listing refused: said in the list's place (the
+            // folder picker, the file tree), which a notice alone left
+            // loading for ever.
+            if let Some(Pending::ListDir(cwd, path)) = &what {
+                return vec![Event::Dir { cwd: cwd.clone(), path: path.clone(), entries: vec![], error: Some(error.to_owned()) }];
+            }
+            // The conversation's page refused: said where the history
+            // would be. A notice alone left the conversation loading for
+            // ever, with nothing to say why once the notice had gone.
+            if let Some(Pending::Timeline(agent_id)) = &what {
+                return vec![Event::TimelineFailed { agent_id: agent_id.clone(), message: format!("Could not load history: {error}") }];
+            }
             let label = match what {
                 Some(Pending::CreateWorkspace | Pending::CreateAgent | Pending::Import) => {
                     return vec![Event::CreateFailed(error.to_owned())];
@@ -2530,7 +2549,7 @@ fn handle(
                 Some(Pending::Diff) => "load changes",
                 Some(Pending::CreateTerminal) => "open a terminal",
                 Some(Pending::AttachTerminal) => "attach the terminal",
-                Some(Pending::Explorer) => "read files",
+                Some(Pending::Explorer | Pending::ListDir(..)) => "read files",
                 Some(Pending::History(_)) => "load history",
                 Some(Pending::Schedules | Pending::ScheduleChange(_) | Pending::ScheduleRuns(_)) => "update schedules",
                 Some(Pending::Project) => "add the project",
@@ -2728,8 +2747,7 @@ fn handle(
                     return vec![Event::Notice(format!("Could not load earlier messages: {error}"))];
                 }
                 // Shown in place of the history, so the view never waits on it.
-                let message = format!("Could not load history: {error}");
-                return vec![Event::TimelineReset { agent_id, items: vec![Item::Error { message }], older: None, cursor: None }];
+                return vec![Event::TimelineFailed { agent_id, message: format!("Could not load history: {error}") }];
             }
             let (items, older, cursor) = timeline_page(payload);
             let mut out: Vec<Event> = vec![if older_page {
@@ -3686,6 +3704,34 @@ mod tests {
         let events = handle("rpc_error", &json!({ "requestId": id, "error": "nope" }), &mut pending, None, &mut follow_ups);
         assert!(matches!(&events[..], [Event::Notice(_)]));
         assert_eq!(follow_ups.pop().unwrap()["message"]["type"], "get_daemon_config_request");
+    }
+
+    #[test]
+    fn a_folder_the_host_will_not_list_says_so_in_the_list_s_place() {
+        let mut pending = HashMap::new();
+        let mut follow_ups = vec![];
+        let sent = command_messages(Command::ListDir { cwd: "/Users/someone".into(), path: ".".into() }, &mut pending);
+        let id = sent[0]["message"]["requestId"].as_str().unwrap().to_owned();
+        let events = handle("rpc_error", &json!({ "requestId": id, "error": "Unknown workspace directory" }), &mut pending, None, &mut follow_ups);
+        assert!(matches!(
+            &events[..],
+            [Event::Dir { cwd, path, entries, error: Some(error) }]
+                if cwd == "/Users/someone" && path == "." && entries.is_empty() && error == "Unknown workspace directory"
+        ));
+    }
+
+    #[test]
+    fn a_conversation_the_host_refuses_says_so_in_its_place() {
+        let mut pending = HashMap::new();
+        let mut follow_ups = vec![];
+        // No copy kept: the latest page is asked for, and refused.
+        let sent = tail_request("a1", &mut pending);
+        let id = sent["message"]["requestId"].as_str().unwrap().to_owned();
+        let events = handle("rpc_error", &json!({ "requestId": id, "error": "Unknown conversation" }), &mut pending, None, &mut follow_ups);
+        assert!(
+            matches!(&events[..], [Event::TimelineFailed { agent_id, message }] if agent_id == "a1" && message == "Could not load history: Unknown conversation"),
+        );
+        assert!(follow_ups.is_empty());
     }
 
     #[test]

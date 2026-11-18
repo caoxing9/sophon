@@ -1162,6 +1162,7 @@ fn answer(shared: &Shared, request: &Value, mut made: Option<Value>) -> Result<V
                     .filter(|value| !value.is_empty())
                     .map(str::to_owned)
             };
+            let mut restored = false;
             match kind {
                 "archive_agent_request" => {
                     agent["archivedAt"] = now();
@@ -1191,7 +1192,8 @@ fn answer(shared: &Shared, request: &Value, mut made: Option<Value>) -> Result<V
                 "clear_agent_attention" => agent["requiresAttention"] = json!(false),
                 "refresh_agent_request" => {
                     if request["restore"] == true {
-                        agent["archivedAt"] = Value::Null
+                        agent["archivedAt"] = Value::Null;
+                        restored = true;
                     }
                 }
                 _ => {
@@ -1208,7 +1210,33 @@ fn answer(shared: &Shared, request: &Value, mut made: Option<Value>) -> Result<V
                     }
                 }
             }
+            // A conversation taken out of the archive comes back with its
+            // workspace (and its project): archived with it, the workspace
+            // is listed to no client, and the conversation had nowhere to
+            // show. The workspace's other conversations stay archived.
+            let mut back = Vec::new();
+            if restored
+                && let Some(workspace) = host.state.agents[agent_id]["workspaceId"]
+                    .as_str()
+                    .and_then(|id| host.state.workspaces.get_mut(id))
+            {
+                if !workspace["archivedAt"].is_null() {
+                    workspace["archivedAt"] = Value::Null;
+                    back.push(("workspace_update", json!({"kind":"upsert","workspace":workspace})));
+                }
+                if let Some(project) = workspace["projectId"]
+                    .as_str()
+                    .and_then(|id| host.state.projects.get_mut(id))
+                    .filter(|project| !project["archivedAt"].is_null())
+                {
+                    project["archivedAt"] = Value::Null;
+                    back.insert(0, ("project.update", json!({"kind":"upsert","project":project})));
+                }
+            }
             host.persist().map_err(|error| error.to_string())?;
+            for (kind, payload) in back {
+                host.publish(kind, payload);
+            }
             host.update_agent(agent_id);
             json!({"agent":host.state.agents[agent_id]})
         }
@@ -1341,24 +1369,44 @@ fn answer(shared: &Shared, request: &Value, mut made: Option<Value>) -> Result<V
         }
         kind if kind == "file_explorer_request" || kind.starts_with("fs.") => {
             let cwd = text(request, "cwd")?;
-            if !host
+            let known = host
                 .state
                 .workspaces
                 .values()
                 .any(|workspace| workspace["workspaceDirectory"] == cwd)
-                && !host
+                || host
                     .state
                     .projects
                     .values()
-                    .any(|project| project["projectRootPath"] == cwd)
+                    .any(|project| project["projectRootPath"] == cwd);
+            if known {
+                crate::files::execute(std::path::Path::new(cwd), request).unwrap_or_else(|error| {
+                    json!({
+                    "cwd":cwd,"path":request["path"],"mode":request["mode"],"error":error.to_string(),
+                    "result":{"status":"error","error":error.to_string()}})
+                })
+            } else if kind == "file_explorer_request"
+                && request["mode"] == "list"
+                && request["path"].as_str().is_none_or(|path| path == ".")
+                && std::path::Path::new(cwd).is_absolute()
             {
+                // A folder that is no project yet: its folders alone, for
+                // the one who is choosing which to add as a project (the
+                // phone, a paired computer: they have no picker of this
+                // host's). No more than `directory_suggestions_request`
+                // already says of any folder; its files stay unread.
+                let mut listed = crate::files::execute(std::path::Path::new(cwd), request)
+                    .map_err(|error| error.to_string())?;
+                if let Some(entries) = listed
+                    .pointer_mut("/directory/entries")
+                    .and_then(Value::as_array_mut)
+                {
+                    entries.retain(|entry| entry["kind"] == "directory");
+                }
+                listed
+            } else {
                 return Err("Unknown workspace directory".into());
             }
-            crate::files::execute(std::path::Path::new(cwd), request).unwrap_or_else(|error| {
-                json!({
-                "cwd":cwd,"path":request["path"],"mode":request["mode"],"error":error.to_string(),
-                "result":{"status":"error","error":error.to_string()}})
-            })
         }
         "directory_suggestions_request" => crate::projects::suggestions(request)?,
         "workspace.label.list.request" => {
