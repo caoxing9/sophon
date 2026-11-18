@@ -1,6 +1,6 @@
 use crate::provider;
 use serde_json::{Value, json};
-use std::{io, process::Stdio, time::Duration};
+use std::{io, path::Path, process::Stdio, time::Duration};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::Command,
@@ -98,10 +98,12 @@ fn credits(summary: &Value) -> Value {
     json!({"provider":"codex","available":available,"expiresAt":options.first().map(|option|&option["expiresAt"]),"options":options})
 }
 
-pub async fn handle(request: &Value) -> Result<Value, String> {
-    match request["type"].as_str() {
-        Some("provider.usage.list.request") => {
-            let limits = codex("account/rateLimits/read", &Value::Null).await?;
+/// Codex's plan windows, as an entry of `provider.usage.list.response`;
+/// none where Codex is not installed.
+async fn codex_usage() -> Option<Value> {
+    provider::binary("codex")?;
+    Some(match codex("account/rateLimits/read", &Value::Null).await {
+        Ok(limits) => {
             let limits = &limits["rateLimits"];
             let mut windows = Vec::new();
             for (id, label) in [("primary", "Session"), ("secondary", "Weekly")] {
@@ -109,9 +111,36 @@ pub async fn handle(request: &Value) -> Result<Value, String> {
                     windows.push(json!({"id":id,"label":label,"usedPct":limits[id]["usedPercent"],"resetsAt":iso(&limits[id]["resetsAt"])}));
                 }
             }
-            Ok(
-                json!({"providers":[{"providerId":"codex","displayName":"Codex","planLabel":limits["planType"],"windows":windows}]}),
-            )
+            json!({"providerId":"codex","displayName":"Codex","planLabel":limits["planType"],"windows":windows})
+        }
+        Err(error) => json!({"providerId":"codex","displayName":"Codex","windows":[],"error":error}),
+    })
+}
+
+/// `home`: the service's, for the providers its settings name.
+pub async fn handle(request: &Value, home: &Path) -> Result<Value, String> {
+    match request["type"].as_str() {
+        // Each provider on its own: one that cannot be read says so in
+        // its entry, and the others are still told.
+        Some("provider.usage.list.request") => {
+            let config = crate::config::read(home).unwrap_or_else(|_| json!({}));
+            // Claude Code itself, and each account of it the settings add.
+            let mut claudes = vec!["claude".to_owned()];
+            for (name, settings) in config["providers"].as_object().into_iter().flatten() {
+                if name != "claude" && provider::family(name, settings) == Some("claude") {
+                    claudes.push(name.clone());
+                }
+            }
+            let claude = async {
+                let mut read = Vec::new();
+                for name in &claudes {
+                    read.extend(crate::claude_usage::read(name, &config["providers"][name]).await);
+                }
+                read
+            };
+            let (mut providers, codex) = tokio::join!(claude, codex_usage());
+            providers.extend(codex);
+            Ok(json!({"providers":providers}))
         }
         Some("provider.credits.list.request") => {
             if provider::binary("codex").is_none() {
@@ -166,5 +195,24 @@ mod tests {
         assert_eq!(available["available"], 2);
         assert_eq!(available["options"][0]["creditId"], "first");
         assert_eq!(available["options"][0]["count"], 2);
+    }
+
+    /// The whole answer on this host, with its own sign-ins: run by hand
+    /// (`cargo test -p sophon-service live_usage -- --ignored --nocapture`).
+    #[tokio::test]
+    #[ignore = "reads this host's Claude Code and Codex sign-ins and asks their services"]
+    async fn live_usage_lists_each_provider_signed_in_here() {
+        let home = tempfile::tempdir().unwrap();
+        let reply = handle(&json!({"type":"provider.usage.list.request"}), home.path()).await.unwrap();
+        for provider in reply["providers"].as_array().unwrap() {
+            let windows: Vec<String> = provider["windows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|window| format!("{} {}%", window["label"].as_str().unwrap_or_default(), window["usedPct"]))
+                .collect();
+            println!("{} ({}): {:?} error={}", provider["providerId"], provider["planLabel"], windows, provider["error"]);
+        }
+        assert!(reply["providers"].as_array().unwrap().iter().any(|provider| provider["providerId"] == "claude"));
     }
 }
