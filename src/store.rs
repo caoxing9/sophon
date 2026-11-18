@@ -41,6 +41,7 @@ pub(crate) enum Screen {
     Inbox,
     /// One pull request; `agent`: the conversation it was opened from,
     /// which "Fix with agent" writes to.
+    #[allow(dead_code)]
     PullRequest { repo: String, number: u64, agent: Option<String> },
 }
 
@@ -629,6 +630,9 @@ pub(crate) fn open_inbox() {
 }
 
 /// The desktop's page of a pull request.
+// The desktop's header no longer shows the branch's pull request, which
+// was the way to this screen; the phone has its own (a page it pushes).
+#[allow(dead_code)]
 pub(crate) fn open_pull_request(repo: &str, number: u64, agent: Option<String>) {
     global::<Nav>().update(|n| n.screen = Screen::PullRequest { repo: repo.to_owned(), number, agent });
     send(Command::WatchDiff(None));
@@ -678,7 +682,85 @@ pub(crate) fn open_usage() {
 /// session logs.
 pub(crate) fn refresh_usage() {
     send(Command::Usage);
+    send(Command::ResetCredits);
     refresh_local_usage();
+}
+
+// ------------------------------------------------------------------ resets
+
+/// The host's rate-limit reset credits, and the one being spent.
+#[derive(Clone, Default)]
+struct Resets {
+    /// `None` until asked; `Err` when the host cannot say (no plugin).
+    credits: Option<Result<Vec<crate::daemon::connection::ResetCredits>, String>>,
+    /// The provider whose reset is being spent.
+    using: Option<String>,
+    /// The attempt's name by (provider, credit): kept until it is answered,
+    /// so a retry after no answer is the same attempt, not a second credit.
+    attempts: HashMap<(String, Option<String>), String>,
+}
+
+/// The reset credits of `provider` (`codex`, `claude`), when it has any.
+pub(crate) fn reset_credits(provider: &str) -> Option<crate::daemon::connection::ResetCredits> {
+    global::<Resets>().with(|r| match &r.credits {
+        Some(Ok(list)) => list.iter().find(|c| c.provider == provider).cloned(),
+        _ => None,
+    })
+}
+
+/// Whether a reset of `provider` is being spent.
+pub(crate) fn using_reset(provider: &str) -> bool {
+    global::<Resets>().with(|r| r.using.as_deref() == Some(provider))
+}
+
+/// Asks to spend one of `provider`'s resets of the kind `option`: a
+/// confirmation first, since it spends a credit.
+pub(crate) fn confirm_reset(provider: &str, option: crate::daemon::connection::ResetOption) {
+    open_modal(Modal::UseReset { provider: provider.to_owned(), option });
+}
+
+/// Spends the reset (confirmed).
+pub(crate) fn use_reset(provider: &str, credit_id: Option<String>) {
+    let key = (provider.to_owned(), credit_id.clone());
+    let request_id = global::<Resets>().with_untracked(|r| r.attempts.get(&key).cloned()).unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
+    global::<Resets>().update(|r| {
+        r.using = Some(provider.to_owned());
+        r.attempts.insert(key, request_id.clone());
+    });
+    send(Command::UseReset { provider: provider.to_owned(), credit_id, request_id });
+}
+
+fn reset_used(provider: String, result: Result<String, String>) {
+    let name = if provider == "codex" { "Codex" } else { "Claude" };
+    // Answered: the next use is another attempt. Unanswered (no reply, not
+    // confirmed), kept: a retry asks about the same one.
+    let settled = match &result {
+        Ok(_) => true,
+        Err(e) => !e.contains("could not confirm") && !e.contains("did not answer") && !e.contains("timed out"),
+    };
+    global::<Resets>().update(|r| {
+        r.using = None;
+        if settled {
+            r.attempts.retain(|(p, _), _| *p != provider);
+        }
+    });
+    match result {
+        Ok(outcome) => {
+            let said = match outcome.as_str() {
+                "reset" => tf("{} limits reset", &[name]),
+                "nothing_to_reset" => tf("{} has nothing to reset right now; no credit was used", &[name]),
+                "already_redeemed" => tf("That {} reset was already used", &[name]),
+                "no_credit" => tf("{} has no reset credits left", &[name]),
+                _ => tf("{} answered: {}", &[name, &outcome]),
+            };
+            notify(said);
+            // The limits as they are now: the service may still report the
+            // reading from before for a moment, so once more a little later.
+            refresh_usage();
+            set_timeout(std::time::Duration::from_secs(3), refresh_usage);
+        }
+        Err(e) => notify(tf("Could not use the reset: {}", &[&e])),
+    }
 }
 
 /// The limit readings so far (`usage-history.json`), read on first use.
@@ -1356,6 +1438,8 @@ pub(crate) enum Modal {
     /// A shared space's monthly spending cap (`space_limits`), by its home.
     SpaceCap { home: String, name: String },
     ArchiveWorkspace { id: String, name: String },
+    /// Confirms spending one of a provider's rate-limit reset credits.
+    UseReset { provider: String, option: crate::daemon::connection::ResetOption },
     Commit,
     /// Reporting an issue on GitHub (`feedback`).
     ReportIssue,
@@ -1876,6 +1960,9 @@ pub(crate) enum Row {
 pub(crate) struct Group {
     pub(crate) project: Option<Project>,
     pub(crate) workspaces: Vec<Workspace>,
+    /// The pinned group's conversations pinned on their own (a workspace's
+    /// one of several), newest first; none in a project's group.
+    pub(crate) conversations: Vec<Agent>,
 }
 
 impl Group {
@@ -1914,13 +2001,21 @@ pub(crate) fn groups() -> Vec<Group> {
 
     let mut groups = Vec::new();
     let pinned: Vec<Workspace> = workspaces.iter().filter(|w| w.pinned).cloned().collect();
-    if !pinned.is_empty() {
-        groups.push(Group { project: None, workspaces: pinned });
+    let shown: std::collections::HashSet<&str> = workspaces.iter().map(|w| w.id.as_str()).collect();
+    let mut conversations: Vec<Agent> = global::<Agents>().with(|a| {
+        a.0.iter()
+            .filter(|a| is_pinned_conversation(a) && a.workspace_id.as_deref().is_some_and(|w| shown.contains(w)))
+            .cloned()
+            .collect()
+    });
+    conversations.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    if !pinned.is_empty() || !conversations.is_empty() {
+        groups.push(Group { project: None, workspaces: pinned, conversations });
     }
     for p in project_list {
         let mut ws: Vec<Workspace> = workspaces.iter().filter(|w| w.project_id == p.id && !w.pinned).cloned().collect();
         ws.sort_by(|a, b| b.activity_at.cmp(&a.activity_at));
-        groups.push(Group { project: Some(p), workspaces: ws });
+        groups.push(Group { project: Some(p), workspaces: ws, conversations: vec![] });
     }
     groups
 }
@@ -1930,7 +2025,7 @@ pub(crate) fn rows() -> Vec<Row> {
     let collapsed = global::<Collapsed>().with(|c| c.0.clone());
     let mut rows = Vec::new();
     for g in groups() {
-        let folded = g.project.as_ref().is_some_and(|p| collapsed.contains(&p.id));
+        let folded = collapsed.contains(&g.key());
         match g.project {
             None => rows.push(Row::Section("Pinned".into())),
             Some(p) => rows.push(Row::Project(p)),
@@ -3411,8 +3506,7 @@ pub(crate) fn set_appearance(appearance: nsh_core::platform::Appearance) {
 
 /// The service Sophon carries inside its own app bundle
 /// (`Sophon.app/Contents/Resources/service`, put there when the app is
-/// packaged: `scripts/bundle-service.sh`): a Node runtime and the service's
-/// package, so a Mac with only Sophon runs its agents. `SOPHON_SERVICE_DIR`
+/// packaged: `scripts/bundle-service.sh`). `SOPHON_SERVICE_DIR`
 /// names another copy (tests, a development build).
 #[cfg(not(target_arch = "wasm32"))]
 fn bundled_service_cli() -> Option<std::path::PathBuf> {
@@ -3420,30 +3514,20 @@ fn bundled_service_cli() -> Option<std::path::PathBuf> {
         Some(dir) => std::path::PathBuf::from(dir),
         None => std::env::current_exe().ok()?.parent()?.parent()?.join("Resources/service"),
     };
-    let cli = dir.join("node/bin/paseo");
+    let cli = dir.join("sophon-service");
     cli.is_file().then_some(cli)
 }
 
-/// The service's command line: the one Sophon carries (the version it is
-/// built against), else one installed on this Mac: on the PATH, or inside
-/// the Paseo app.
+/// Finds the bundled service, a sibling development build, or an installed service.
 pub(crate) fn service_cli() -> Option<std::path::PathBuf> {
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(cli) = bundled_service_cli() {
         return Some(cli);
     }
-    let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
-    let mut candidates: Vec<std::path::PathBuf> = std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).map(|d| d.join("paseo")).collect())
-        .unwrap_or_default();
-    candidates.extend([
-        "/opt/homebrew/bin/paseo".into(),
-        "/usr/local/bin/paseo".into(),
-        home.join(".local/bin/paseo"),
-        "/Applications/Paseo.app/Contents/Resources/bin/paseo".into(),
-        home.join("Applications/Paseo.app/Contents/Resources/bin/paseo"),
-    ]);
-    candidates.into_iter().find(|p| p.is_file())
+    std::env::current_exe().ok().and_then(|exe| exe.parent().map(|dir|dir.join("sophon-service")))
+        .filter(|cli| cli.is_file())
+        .or_else(|| std::env::split_paths(&std::env::var_os("PATH")?).filter(|dir| dir.is_absolute())
+            .map(|dir| dir.join("sophon-service")).find(|cli| cli.is_file()))
 }
 
 /// The `PATH` to run the service's command line with. The app, opened
@@ -3482,13 +3566,20 @@ pub(crate) fn service_path(cli: &std::path::Path) -> std::ffi::OsString {
     std::env::join_paths(dirs).unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default())
 }
 
+/// Whether this Mac's service is the one inside Sophon's own bundle: it
+/// updates with Sophon, so there is nothing to update apart.
+pub(crate) fn service_in_sophon() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    return bundled_service_cli().is_some();
+    #[cfg(target_arch = "wasm32")]
+    false
+}
+
 /// Whether this Mac's service comes with the desktop app (its updates come
 /// with the app's) rather than from npm, whose package the service can
 /// update itself.
 pub(crate) fn service_bundled() -> bool {
-    service_cli()
-        .and_then(|p| std::fs::canonicalize(p).ok())
-        .is_some_and(|p| !p.to_string_lossy().contains("node_modules"))
+    service_cli().is_some()
 }
 
 #[derive(Clone, Default, PartialEq)]
@@ -3629,9 +3720,8 @@ fn bundled_service_version() -> Option<String> {
     static VERSION: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     VERSION
         .get_or_init(|| {
-            let package = bundled_service_cli()?.parent()?.parent()?.join("lib/node_modules/@getpaseo/cli/package.json");
-            let package: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(package).ok()?).ok()?;
-            package["version"].as_str().map(str::to_owned)
+            let output = std::process::Command::new(bundled_service_cli()?).arg("--version").output().ok()?;
+            output.status.success().then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
         })
         .clone()
 }
@@ -3774,6 +3864,29 @@ pub(crate) fn steer_queued(agent_id: &str, index: usize) {
     deliver_with(agent_id, &m.text, running.then_some("steer"), m.images, m.attachments);
 }
 
+/// Takes queued message `index` back into the composer to be changed,
+/// before whatever is being written there; the rest stay queued. One
+/// with pictures or files stays where it is: those stand as chips in
+/// the composer's text, which only the composer that made them has.
+pub(crate) fn edit_queued(agent_id: &str, index: usize) {
+    let mut taken = None;
+    global::<Queues>().update(|q| {
+        if let Some(list) = q.0.get_mut(agent_id)
+            && list.get(index).is_some_and(|m| m.images.is_empty() && m.attachments.is_empty())
+        {
+            taken = Some(list.remove(index));
+        }
+    });
+    let Some(message) = taken else { return };
+    let mut text = message.text;
+    let writing = draft(agent_id);
+    if !writing.trim().is_empty() {
+        text.push('\n');
+        text.push_str(&writing);
+    }
+    set_draft(agent_id, &text);
+}
+
 pub(crate) fn unqueue(agent_id: &str, index: usize) {
     global::<Queues>().update(|q| {
         if let Some(list) = q.0.get_mut(agent_id)
@@ -3872,10 +3985,6 @@ pub(crate) fn add_project(path: &str) {
 
 pub(crate) fn create_project_dir(parent: &str, name: &str) {
     send(Command::CreateProjectDir { parent: parent.to_owned(), name: name.to_owned() });
-}
-
-pub(crate) fn clone_project(repo: &str, target: &str) {
-    send(Command::CloneProject { repo: repo.to_owned(), target: target.to_owned() });
 }
 
 pub(crate) fn rename_project(id: &str, name: &str) {
@@ -5927,6 +6036,21 @@ pub(crate) fn pin_workspace(id: &str, pinned: bool) {
     send(Command::PinWorkspace { workspace_id: id.to_owned(), pinned });
 }
 
+/// A conversation pinned on its own: listed under "Pinned", not under its
+/// workspace.
+pub(crate) fn is_pinned_conversation(a: &Agent) -> bool {
+    a.pinned && !a.archived && a.parent_id.is_none() && !is_hidden_run(a)
+}
+
+pub(crate) fn pin_agent(id: &str, pinned: bool) {
+    global::<Agents>().update(|list| {
+        if let Some(a) = list.0.iter_mut().find(|a| a.id == id) {
+            a.pinned = pinned;
+        }
+    });
+    send(Command::PinAgent { agent_id: id.to_owned(), pinned });
+}
+
 pub(crate) fn rename_workspace(id: &str, title: &str) {
     send(Command::RenameWorkspace { workspace_id: id.to_owned(), title: title.to_owned() });
 }
@@ -6017,6 +6141,8 @@ pub(crate) fn apply(event: Event) {
                 global::<Restarting>().set(Restarting(false));
                 notify(t("The service restarted").into());
             }
+            // Another host's credits are not this one's.
+            global::<Resets>().update(|r| *r = Resets::default());
         }
         Event::Disconnected { reason, retry_in } => {
             log_service_gone(&reason);
@@ -6417,6 +6543,8 @@ pub(crate) fn apply(event: Event) {
                 u.report = Some(report);
             }
         }),
+        Event::ResetCredits(result) => global::<Resets>().update(|r| r.credits = Some(result)),
+        Event::ResetUsed { provider, result } => reset_used(provider, result),
         Event::Usage(list) => {
             record_limits(&list);
             push_limits(&list);

@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [workspace]
-members = ["crates/nsh-ui"]
+members = ["crates/nsh-ui", "crates/sophon-service"]
 
 [dependencies]
 nsh-core = { git = "https://github.com/caoxing9/nsh", rev = "065a730183434b9aea63af9b40fecedb97bb8757" }

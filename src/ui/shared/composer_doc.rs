@@ -557,6 +557,24 @@ pub(crate) fn insert_mention(session: &EditorSession, from: usize, to: usize, pa
     dispatch(session, tr);
 }
 
+/// Puts `quote` (lines already marked `> `) at the top of the text, a
+/// blank line under it, the caret at the end: a message attached as context
+/// before what is being written.
+pub(crate) fn prepend_quote(session: &EditorSession, quote: &str) {
+    let state = session.state();
+    let size = state.doc().content().size();
+    let empty = outgoing(state.doc()).is_empty();
+    let mut tr = state.tr();
+    let to = if empty { size } else { 0 };
+    if tr.replace_with(0, to, paragraphs(state.schema(), &format!("{quote}\n"))).is_err() {
+        return;
+    }
+    let end = Selection::at_end(tr.doc());
+    tr.set_selection(end);
+    tr.scroll_into_view();
+    dispatch(session, tr);
+}
+
 /// Replaces `from..to` with `text`, the caret after it.
 pub(crate) fn replace_text(session: &EditorSession, from: usize, to: usize, text: &str) {
     let state = session.state();

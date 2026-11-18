@@ -1,6 +1,6 @@
 # Feature checklist
 
-Sophon's feature checklist against the daemon's protocol.
+Sophon's **client** feature checklist against the daemon's protocol. See the [native host](native-service.md) for the service implementation status.
 Each line: feature — daemon messages — priority/size. `[x]` done, `[~]` partial, `[ ]` todo.
 
 ## Navigation

@@ -1,6 +1,7 @@
 //! The open workspace's uncommitted changes, and one file's diff, unified,
-//! to read: pages pushed over the conversation. Reviewing, committing and
-//! pushing are the desktop's.
+//! to read; its pull request, with its checks and a merge: pages pushed
+//! over the conversation. Reviewing, committing and pushing are the
+//! desktop's.
 
 use crate::i18n::{t, tf};
 use nsh_base::{DiffLayout, button, diff_view};

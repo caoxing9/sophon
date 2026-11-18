@@ -16,7 +16,7 @@
 
 ---
 
-Sophon 基于 [Paseo](https://paseo.sh)：你的编程智能体（Claude Code、Codex 等）运行在电脑上的守护进程里，Sophon 是它们的窗口：
+Sophon 通过自带的 Rust 服务运行电脑上的 Claude Code 和 Codex。你可以
 在 Mac 或手机上启动智能体、跟进进度、审查改动、回答它们的提问，所有设备连的都是同一个守护进程。
 Sophon 用 Rust 和 [NSH](https://github.com/longbridge/nsh) 编写，在每个平台上都是真正的原生应用，不是网页套壳。
 
@@ -25,7 +25,7 @@ Sophon 用 Rust 和 [NSH](https://github.com/longbridge/nsh) 编写，在每个�
 
 ## 功能
 
-- **项目与工作区**：本地文件夹或 git worktree，新建分支，从 GitHub 克隆；置顶、重命名、归档
+- **项目与工作区**：本地文件夹或 git worktree，新建分支；置顶、重命名、归档
 - **智能体即标签页**：一个工作区多个智能体；切换模型、模式和思考深度；斜杠命令、`@` 引用文件、图片附件；排队、插话或打断
 - **实时时间线**：流式输出、工具调用、计划、权限与提问卡片、子智能体、后台任务，支持回退和分叉
 - **代码审查**：改动列表、并排/统一 diff、逐行评论发回给智能体；提交记录；提交、推送、拉取、合并、贮藏；创建和合并 PR 并查看检查状态
@@ -35,11 +35,23 @@ Sophon 用 Rust 和 [NSH](https://github.com/longbridge/nsh) 编写，在每个�
 - **键盘优先**：命令面板（⌘K）和快捷键，在输入框里打字时也能用；智能体需要你时发送桌面通知
 - **自动更新**：有新版本时侧边栏会出现更新按钮
 
-逐项的完成情况见 [docs/parity.md](docs/parity.md)。
+宿主服务的支持范围见[服务指南](docs/native-service.md)，客户端功能见[协议清单](docs/parity.md)。
 
 ## 安装
 
-需要在存放代码的电脑上运行守护进程（`paseo daemon start`），Sophon 会自动连上它。
+macOS 应用包自带 `sophon-service`，按需启动。源码开发时先运行 `cargo build -p sophon-service`，在存放代码的电脑上安装并登录要使用的 Agent CLI。智能体使用 CLI 自己的登录和配置，和在终端里直接运行 `claude`、`codex` 一致。
+
+### 会话存在哪里？
+
+项目、工作区和对话时间线保存在运行 `sophon-service` 的 Mac 上。iPhone 显示当前所选宿主的会话。切换宿主后，侧边栏会显示另一份列表；切回原宿主即可继续查看原来的对话。局域网直连和中继只是到达同一宿主的两条路径。
+
+| 宿主 | Mac 上的数据目录 |
+|---|---|
+| 使用 Paseo 的旧版 | `~/.paseo/` |
+| Rust 服务 | 默认 `~/.sophon/service/` |
+| 单独安装的本地测试版 | 可用 `SOPHON_SERVICE_HOME` 指定独立目录，例如 `~/.sophon-beta/service/` |
+
+**从 Paseo 迁移。** 先保留旧目录，再将项目、工作区和会话 ID 导入空的目标服务。提供商的本地会话仍在时，可以接着聊。迁移前的逐条消息和定时任务仍需通过旧宿主查看。[导入步骤](docs/native-service.md#导入旧数据)
 
 ### macOS（14 Sonoma 及以上，Apple 芯片）
 
@@ -69,21 +81,24 @@ curl -fsSL https://raw.githubusercontent.com/caoxing9/sophon/main/install.sh | s
 > ```
 
 **更新**：Sophon 启动后不久以及之后每 6 小时检查一次 GitHub Releases。有新版本时，侧边栏底部会出现
-*Update to x.y.z* 按钮，点一下即可下载、校验、替换并重启。也可以用 `brew upgrade --cask sophon`。
+*Update to x.y.z* 按钮，点一下即可下载、校验、替换并重启。Homebrew cask 安装的始终是最新版本，之后由应用自己更新（想从 Homebrew 更新可以用 `brew upgrade --cask --greedy sophon`）。
 
 ### iOS
 
-目前还没有 App Store 或 TestFlight 版本。每个版本都附带用于 iOS 模拟器的 `Sophon-<版本>-ios-simulator.zip`；
-想用免费 Apple ID 装到自己的 iPhone 上：在 Xcode 登录 Apple ID（*Settings → Accounts*），连上 iPhone，打开
+要从源码装到自己的 iPhone 上，在 Xcode 登录 Apple ID（*Settings → Accounts*），连上 iPhone，打开
 *开发者模式*（*设置 → 隐私与安全性*），准备好构建工具（见下文），然后运行
 
 ```sh
-scripts/ios-device.sh
+xcrun devicectl list devices
+SOPHON_DEVICE="<目标 iPhone 的 UDID>" scripts/ios-device.sh
 ```
 
 它会生成开发证书和描述文件，构建、签名并安装 Sophon。第一次需要在 iPhone 上信任你的 Apple ID
-（*设置 → 通用 → VPN与设备管理*）。免费签名 7 天有效，到期后再运行一次即可。在 Mac 上打开 Sophon 的
-*设置 → 配对设备*，用 iPhone 相机扫描二维码即可配对。
+（*设置 → 通用 → VPN与设备管理*）。免费签名 7 天有效，到期后再运行一次即可。
+
+**连接 Mac。** 在要连接的 Mac 应用中打开 *设置 → 配对设备*，用 iPhone 扫描二维码。正式版与 Beta 并排运行时，请扫对应版本的码。之后轻点手机首页的主机名称，即可从底部列表切换已配对的电脑。
+
+同一局域网可以直连。要从其他网络访问，请先在对应 Mac 应用的设置里填入自托管 `sophon-relay` 地址，再扫码，让配对链接带上中继信息。已有的 v2 中继可以继续使用。
 
 ## 从源码构建
 
@@ -114,7 +129,9 @@ nsh package --target ios-simulator --icon assets/app-icon/icon-ios-1024.png
 
 | 路径 | 内容 |
 |---|---|
-| `src/daemon/` | 与守护进程的连接：WebSocket 协议、中继端到端加密、供手机连接的局域网桥 |
+| `crates/sophon-service/` | 宿主服务（守护进程）：运行 Claude Code 和 Codex，保存会话，操作文件、Git 和终端 |
+| `relay/` | 中继服务：在手机和电脑之间转发端到端加密的连接，可自托管 |
+| `src/daemon/` | 客户端一侧与守护进程的连接：WebSocket 协议、中继端到端加密、供手机连接的局域网桥 |
 | `src/store.rs` | 用 signal 管理的 UI 状态 |
 | `src/ui/kit/` | 设计系统：控件、图标、菜单、设计变量 |
 | `src/ui/shared/` | 两端公用的组件：对话时间线、输入框、智能体页面、项目列表、弹窗、设置分区 |
@@ -136,12 +153,13 @@ git push origin main v0.2.0
 ```
 
 [发布工作流](.github/workflows/release.yml) 会构建 macOS 应用（Apple 芯片和 Intel）和 iOS 模拟器应用，发布 GitHub
-Release 和 `latest.json`（已安装的应用从这里获取更新），并更新 Homebrew cask。每个版本包含：
+Release 和 `latest.json`（已安装的应用从这里获取更新）。Homebrew cask 不再随版本改写，它按每个版本都带的固定文件名下载最新版本。每个版本包含：
 
 | 文件 | 用途 |
 |---|---|
 | `Sophon-<v>-macos-aarch64.dmg` | 手动安装 |
-| `Sophon-<v>-macos-aarch64.tar.gz` | 安装脚本、Homebrew 和应用内更新 |
+| `Sophon-<v>-macos-aarch64.tar.gz` | 安装脚本和应用内更新 |
+| `Sophon-macos-aarch64.tar.gz` | 同一个安装包，供 Homebrew cask 下载 |
 | `Sophon-<v>-ios-simulator.zip` | iOS 模拟器 |
 | `latest.json` | 更新源 |
 

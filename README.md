@@ -16,7 +16,7 @@
 
 ---
 
-Sophon is based on [Paseo](https://paseo.sh): your coding agents (Claude Code, Codex and others) run in its daemon on
+Sophon runs your coding agents (Claude Code and Codex) through its own Rust service on
 your computer, and Sophon is the window onto them: start agents, follow their work, review the diffs, answer their questions, from your
 Mac or from your phone, all talking to the same daemon. It is written in Rust with
 [NSH](https://github.com/longbridge/nsh), so it is a real native app on each platform, not a web view.
@@ -27,7 +27,7 @@ Mac or from your phone, all talking to the same daemon. It is written in Rust wi
 
 ## Features
 
-- **Projects and workspaces**: local folders or git worktrees, new branches, cloning from GitHub; pin, rename, archive
+- **Projects and workspaces**: local folders or git worktrees, new branches; pin, rename, archive
 - **Agents as tabs**: several agents per workspace; model, mode and thinking pickers; slash commands, `@` file mentions,
   image attachments; queue, steer or interrupt
 - **Live timeline**: streaming output, tool calls, plans, permission and question cards, sub-agents, background work,
@@ -44,12 +44,23 @@ Mac or from your phone, all talking to the same daemon. It is written in Rust wi
   when an agent needs you
 - **Self-updating**: a sidebar button appears when a new release is out
 
-What is done and what is still missing, item by item: [docs/parity.md](docs/parity.md).
+See the [native service guide](docs/native-service.md) for what the host service covers, and the [client checklist](docs/parity.md) for the client.
 
 ## Install
 
-You need the daemon running on the computer where your code lives (Sophon connects to it on its own once it is up:
-`paseo daemon start`).
+The macOS bundle includes `sophon-service` and starts it on demand. For a source checkout, build it alongside the app with `cargo build -p sophon-service`. Install and sign in to the provider CLI you want to use on the host computer. An agent runs on its CLI's own login and settings, as `claude` or `codex` would in a terminal.
+
+### Where are my conversations?
+
+The Mac running `sophon-service` keeps the projects, workspaces and conversation timelines. Your iPhone shows the conversations on the selected host. Switch back to the original host to see its history again. A LAN connection and a relay connection to the same host show the same conversations.
+
+| Host | Data directory on the Mac |
+|---|---|
+| Older builds using Paseo | `~/.paseo/` |
+| Rust service | `~/.sophon/service/` by default |
+| Side-by-side local beta | A separate directory set with `SOPHON_SERVICE_HOME`, for example `~/.sophon-beta/service/` |
+
+**Migrating from Paseo.** Keep the old directory and import projects, workspaces and session IDs into an empty destination. You can resume a conversation if the provider still has its local session. Use the old host to read messages and schedules from before the migration. [Import instructions](docs/native-service.md#导入旧数据)
 
 ### macOS (14 Sonoma or later, Apple silicon)
 
@@ -82,20 +93,24 @@ launch it afterwards.
 
 **Updates**: Sophon checks GitHub Releases shortly after launch and every 6 hours. When a newer version is out, an
 *Update to x.y.z* button appears at the bottom of the sidebar; one press downloads it, verifies its checksum, replaces
-the app and restarts it. `brew upgrade --cask sophon` works too.
+the app and restarts it. The cask installs whichever release is newest and leaves updating to the app (`brew upgrade --cask --greedy sophon` does it from Homebrew).
 
 ### iOS
 
-There is no App Store or TestFlight build yet. To run it on your own iPhone with a free Apple ID: sign in to Xcode (*Settings → Accounts*), plug in the
+To install from source on your own iPhone, sign in to Xcode (*Settings → Accounts*), plug in the
 iPhone, turn on *Developer Mode* (*Settings → Privacy & Security*), set up the build tools (below) and run
 
 ```sh
-scripts/ios-device.sh
+xcrun devicectl list devices
+SOPHON_DEVICE="<target iPhone UDID>" scripts/ios-device.sh
 ```
 
 It makes a development certificate and profile, builds and signs Sophon and installs it. The first time, trust your
 Apple ID on the iPhone (*Settings → General → VPN & Device Management*). Free signing lasts 7 days: run it again then.
-On the Mac, open *Settings → Pair a device* in Sophon and scan the QR code with the iPhone's camera.
+
+**Connect to your Mac.** Open *Settings → Pair a device* in the Mac app you want to reach and scan its QR code with your iPhone. If you run the stable and beta apps side by side, each has its own code. To switch between paired hosts, tap the host name on the phone's home screen and choose one from the bottom sheet.
+
+On the same LAN, the phone can connect directly. For access from another network, enter your self-hosted `sophon-relay` address in the Mac app's settings before scanning its QR code so the pairing link includes the relay. An existing v2 relay works with the Rust host.
 
 ## Build from source
 
@@ -126,7 +141,9 @@ nsh package --target ios-simulator --icon assets/app-icon/icon-ios-1024.png
 
 | Path | What it is |
 |---|---|
-| `src/daemon/` | The daemon connection: WebSocket protocol, relay end-to-end encryption, the LAN bridge for phones |
+| `crates/sophon-service/` | The host service (the daemon): runs Claude Code and Codex, keeps conversations, works on files, git and terminals |
+| `relay/` | The relay: forwards end-to-end encrypted connections between a phone and a computer; self-hostable |
+| `src/daemon/` | The client's side of the daemon connection: WebSocket protocol, relay end-to-end encryption, the LAN bridge for phones |
 | `src/store.rs` | UI state in signals |
 | `src/ui/kit/` | The design system: controls, icons, menus, tokens |
 | `src/ui/shared/` | Components both platforms use: the timeline, the composer, the agent pane, the project list, dialogs, settings sections |
@@ -148,13 +165,14 @@ The version is committed to `main` (`nsh.json`, `Cargo.toml`, `Cargo.lock`) befo
 build names itself what was released last and does not offer that release as an update. By hand,
 `scripts/release.sh patch|minor|major|<x.y.z>` opens a pull request that sets the version; merging it releases it.
 
-The [release workflow](.github/workflows/release.yml) builds the macOS app (Apple silicon), publishes the GitHub Release with `latest.json` (what installed apps update from), and updates the
-Homebrew cask. Each release has:
+The [release workflow](.github/workflows/release.yml) builds the macOS app (Apple silicon), publishes the GitHub Release with `latest.json` (what installed apps update from). The Homebrew cask is not
+rewritten: it downloads the newest release by a name every release carries. Each release has:
 
 | Asset | For |
 |---|---|
 | `Sophon-<v>-macos-aarch64.dmg` | Installing by hand |
-| `Sophon-<v>-macos-aarch64.tar.gz` | The installer, Homebrew and in-app updates |
+| `Sophon-<v>-macos-aarch64.tar.gz` | The installer and in-app updates |
+| `Sophon-macos-aarch64.tar.gz` | The same archive, for the Homebrew cask |
 | `latest.json` | The update feed |
 
 With App Store signing secrets set (`IOS_CERT_P12`, `IOS_CERT_PASSWORD`, `IOS_PROFILE`, `ASC_APP_ID`,

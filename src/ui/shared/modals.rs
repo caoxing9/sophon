@@ -389,6 +389,26 @@ fn body(m: Modal) -> View {
                 store::archive_workspace(&id);
                 store::close_modal();
             }))),
+        // Spending a reset credit cannot be undone: said, and asked first.
+        Modal::UseReset { provider, option } => {
+            let name = if provider == "codex" { "Codex" } else { "Claude" };
+            let mut body = String::new();
+            if let Some(d) = option.description.as_deref().filter(|d| !d.is_empty()) {
+                body.push_str(d);
+                body.push_str("\n\n");
+            }
+            body.push_str(&crate::i18n::tf("This uses 1 of your {} {} reset credits ({}). It cannot be undone.", &[
+                &option.count.to_string(),
+                name,
+                &option.label,
+            ]));
+            sheet(t("Use a reset credit?"))
+                .child(text(body).text_size(tx(TEXT_BASE)).line_height(px(20.0)).text_color(FG_MUTED))
+                .child(actions(btn(t("Use credit"), Variant::Primary, Sz::Md, None, move || {
+                    store::use_reset(&provider, option.credit_id.clone());
+                    store::close_modal();
+                })))
+        }
     }
 }
 
@@ -971,7 +991,6 @@ fn add_project() -> View {
     enum Mode {
         Open,
         Create,
-        Clone,
     }
     let mode = signal(Mode::Open);
     // Folders are the connected computer's: this Mac's through the system's
@@ -982,7 +1001,6 @@ fn add_project() -> View {
     // Another computer's folder for "where it goes" is being chosen.
     let choosing = signal(false);
     let name = signal(String::new());
-    let repo = signal(String::new());
     let pick_parent = move || {
         if !local {
             return choosing.set(true);
@@ -999,7 +1017,7 @@ fn add_project() -> View {
     sheet(t("Add project"))
         .w(px(520.0))
         .child(segmented(
-            vec![(Mode::Open, t("Existing folder").into()), (Mode::Create, t("New folder").into()), (Mode::Clone, t("Clone from GitHub").into())],
+            vec![(Mode::Open, t("Existing folder").into()), (Mode::Create, t("New folder").into())],
             move || mode.get(),
             move |m| mode.set(m),
         ))
@@ -1042,20 +1060,6 @@ fn add_project() -> View {
                             store::close_modal();
                         })
                         .disabled(move || name.with(|n| n.trim().is_empty())),
-                    )),
-                Mode::Clone => view()
-                    .gap(sp(S3))
-                    .child(field().value(move || repo.get()).on_change(move |v: &str| repo.set(v.to_owned())).placeholder(t("owner/repository")))
-                    .child(location_row(parent, pick_parent))
-                    .child(actions(
-                        btn(t("Clone"), Variant::Primary, Sz::Md, Some(Icon::GitBranch), move || {
-                            let r = repo.get_untracked();
-                            let folder = r.trim().rsplit('/').next().unwrap_or_default().trim_end_matches(".git").to_owned();
-                            let target = format!("{}/{}", parent.get_untracked().trim_end_matches('/'), folder);
-                            store::clone_project(r.trim(), &target);
-                            store::close_modal();
-                        })
-                        .disabled(move || repo.with(|r| !r.contains('/'))),
                     )),
             }))
         }))
@@ -1445,7 +1449,7 @@ fn fonts(mono: bool) -> View {
 
 fn project_settings(name: String) -> View {
     let cfg = computed(store::project_config);
-    sheet(&format!("{name} · paseo.json"))
+    sheet(&format!("{name} · sophon.json"))
         .w(px(680.0))
         .child(text(t("Setup and teardown scripts, services and other project settings, saved in the project")).text_size(tx(TEXT_SM)).text_color(FG_MUTED))
         .child(dynamic(move || {

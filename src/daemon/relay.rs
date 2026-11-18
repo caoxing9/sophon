@@ -28,7 +28,6 @@ const KIND_TEXT: u8 = 0x00;
 const KIND_BINARY: u8 = 0x01;
 const FIRST: u8 = 0x01;
 const FINAL: u8 = 0x02;
-pub const DEFAULT_RELAY: &str = "relay.paseo.sh:443";
 
 /// What pairing hands a client.
 #[derive(Debug, Clone, PartialEq)]
@@ -398,7 +397,7 @@ mod tests {
         let offer = RelayOffer {
             server_id: "srv".into(),
             daemon_key: kp.public.clone().try_into().unwrap(),
-            endpoint: DEFAULT_RELAY.into(),
+            endpoint: "relay.example:443".into(),
             use_tls: true,
             password: None,
         };
@@ -441,7 +440,7 @@ mod tests {
         let offer = RelayOffer {
             server_id: "srv".into(),
             daemon_key: *daemon_public.as_bytes(),
-            endpoint: DEFAULT_RELAY.into(),
+            endpoint: "relay.example:443".into(),
             use_tls: true,
             password: None,
         };

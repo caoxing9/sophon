@@ -337,6 +337,10 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                                 .opacity(move || if !streaming.get() && hover.get() { 1.0_f32 } else { 0.0 })
                                 .transition_opacity()
                                 .pointer_events(move || if !streaming.get() && hover.get() { nsh_core::PointerEvents::Auto } else { nsh_core::PointerEvents::None })
+                                .flex_row()
+                                .child(icon_btn(Icon::TextQuote, Sz::Sm, t("Attach as context"), move || {
+                                    crate::ui::shared::composer::attach_as_context(&text_of())
+                                }))
                                 .child(icon_btn(Icon::Copy, Sz::Sm, t("Copy"), move || {
                                     set_clipboard(text_of());
                                     store::notify(t("Copied").into());
@@ -715,6 +719,7 @@ fn select_in_place(content: View) -> View {
 fn message_sheet(item: Memo<Option<Item>>, index: Option<usize>) {
     let Some(Item::User { text: body, message_id, .. }) = item.get_untracked() else { return };
     let words = message_words(&body);
+    let quoted = words.clone();
     let mut items = vec![
         SheetItem::new(t("Copy"), move || {
             set_clipboard(words.clone());
@@ -722,6 +727,7 @@ fn message_sheet(item: Memo<Option<Item>>, index: Option<usize>) {
         })
         .icon(Icon::Copy),
         SheetItem::new(t("Select text"), move || select_text(index)).icon(Icon::FileText),
+        SheetItem::new(t("Attach as context"), move || crate::ui::shared::composer::attach_as_context(&quoted)).icon(Icon::TextQuote),
     ];
     if let Some(id) = message_id {
         let (a, b, c) = (id.clone(), id.clone(), id);
@@ -738,6 +744,7 @@ fn reply_sheet(body: String, index: Option<usize>) {
     if body.trim().is_empty() {
         return;
     }
+    let quoted = body.clone();
     show_sheet(None, vec![
         SheetItem::new(t("Copy"), move || {
             set_clipboard(body.clone());
@@ -745,6 +752,7 @@ fn reply_sheet(body: String, index: Option<usize>) {
         })
         .icon(Icon::Copy),
         SheetItem::new(t("Select text"), move || select_text(index)).icon(Icon::FileText),
+        SheetItem::new(t("Attach as context"), move || crate::ui::shared::composer::attach_as_context(&quoted)).icon(Icon::TextQuote),
     ]);
 }
 
@@ -1146,7 +1154,8 @@ fn action_buttons(p: &Permission) -> View {
     let mut primary_used = false;
     for act in p.actions.clone() {
         let id = pid.clone();
-        let label = if act.label.is_empty() { act.id.clone() } else { act.label.clone() };
+        // The host's own words for its answers, in the language shown.
+        let label = if act.label.is_empty() { act.id.clone() } else { crate::i18n::tr(&act.label) };
         let variant = if act.allow && !primary_used {
             primary_used = true;
             Variant::Primary

@@ -357,7 +357,66 @@ fn provider_card(p: &ProviderUsage, history: &limits::History) -> View {
         let points = history.windows.get(&store::limit_key(p, w)).map(Vec::as_slice).unwrap_or_default();
         c = c.child(window_row(w, points));
     }
-    c
+    c.child(resets_row(p.id.clone()))
+}
+
+/// The provider's banked reset credits, by kind, each with "Use" (which
+/// asks first): there only while it has some, or cannot say why not.
+fn resets_row(provider: String) -> View {
+    let credits = {
+        let provider = provider.clone();
+        computed(move || store::reset_credits(&provider))
+    };
+    let busy = {
+        let provider = provider.clone();
+        computed(move || store::using_reset(&provider))
+    };
+    view().child(dynamic(move || {
+        let c = credits.get()?;
+        if c.available == 0 && c.error.is_none() {
+            return None;
+        }
+        let provider = provider.clone();
+        Some(untracked(move || {
+            let mut col = view().gap(sp(S2)).pt(sp(S2)).border_t_1().border_color(tint(BORDER, 0.6));
+            if let Some(e) = c.error.clone() {
+                col = col.child(text(tf("Resets: {}", &[&e])).text_size(tx(TEXT_XS)).text_color(FG_FAINT));
+            }
+            for o in c.options.iter().filter(|o| o.count > 0).cloned() {
+                let expires = o
+                    .expires_at
+                    .as_deref()
+                    .and_then(usage::parse::rfc3339)
+                    .map(|at| tf("expires {}", &[&usage::time_label(at, &local_offset)]));
+                let (provider, option) = (provider.clone(), o.clone());
+                col = col.child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap(sp(S2))
+                        .child(icon(Icon::Ticket, 14.0).text_color(FG_MUTED))
+                        .child(
+                            view()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .child(text(format!("{} × {}", o.label, o.count)).text_size(tx(TEXT_SM)).number_of_lines(1))
+                                .when_some(expires, |v, e| v.child(text(e).text_size(tx(TEXT_XS)).text_color(FG_FAINT))),
+                        )
+                        .child(dynamic(move || {
+                            let busy = busy.get();
+                            let (provider, option) = (provider.clone(), option.clone());
+                            Some(untracked(move || {
+                                if busy {
+                                    return eclipse(16.0).into_element();
+                                }
+                                btn(t("Use"), Variant::Outline, Sz::Sm, None, move || store::confirm_reset(&provider, option.clone())).into_element()
+                            }))
+                        })),
+                );
+            }
+            col.into_element()
+        }))
+    }))
 }
 
 fn window_row(w: &UsageWindow, points: &[limits::Point]) -> View {

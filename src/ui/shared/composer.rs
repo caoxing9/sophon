@@ -734,6 +734,14 @@ fn queue_track(live: bool) -> impl IntoElement {
                             }
                             previews
                         })
+                        // Back into the composer, to be changed and sent again.
+                        .when(msg.images.is_empty() && msg.attachments.is_empty(), |row| {
+                            row.child(btn(t("Edit"), Variant::Ghost, Sz::Sm, Some(Icon::Pencil), move || {
+                                if let Some(id) = store::selected_id() {
+                                    store::edit_queued(&id, i);
+                                }
+                            }))
+                        })
                         // Into the running turn now, without waiting for it
                         // to end.
                         .child(btn(t("Steer"), Variant::Ghost, Sz::Sm, Some(Icon::CircleArrowUp), move || {
@@ -1062,6 +1070,24 @@ fn insert_file(key: &str, name: String, mime: String, bytes: Vec<u8>) {
     if let Some(id) = store::attach_file(name.clone(), mime.clone(), bytes) {
         insert_into(key, &[Chip { id, kind: Kind::File, name, mime }]);
     }
+}
+
+/// Attaches a message of the open conversation as context: its words,
+/// quoted (`> `), at the top of the composer, which takes the keyboard.
+pub(crate) fn attach_as_context(message: &str) {
+    let body = match message.find(crate::ui::shared::timeline::CONTEXT_MARK) {
+        Some(at) => &message[..at],
+        None => message,
+    };
+    let body = body.trim();
+    if body.is_empty() {
+        return;
+    }
+    let quote: Vec<String> = body.lines().map(|l| if l.is_empty() { ">".to_owned() } else { format!("> {l}") }).collect();
+    let Some(id) = store::selected_id() else { return };
+    let Some(session) = composer_doc::existing(&format!("agent:{id}")) else { return };
+    composer_doc::prepend_quote(&session, &quote.join("\n"));
+    session.focus();
 }
 
 fn insert_into(key: &str, chips: &[Chip]) {

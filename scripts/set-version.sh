@@ -13,9 +13,14 @@ d["version"] = v
 if build:
     d["build"] = int(build)
 open(p, "w").write(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
-p = f"{root}/Cargo.toml"
+for manifest in ("Cargo.toml", "crates/sophon-service/Cargo.toml"):
+    p = f"{root}/{manifest}"
+    s = open(p).read()
+    s = re.sub(r'(?m)^version = "[^"]*"', f'version = "{v}"', s, count=1)
+    open(p, "w").write(s)
+p = f"{root}/Cargo.lock"
 s = open(p).read()
-s = re.sub(r'(?m)^version = "[^"]*"', f'version = "{v}"', s, count=1)
+s = re.sub(r'(?m)^(name = "sophon(?:-service)?"\n)version = "[^"]*"', lambda m: m[1] + f'version = "{v}"', s)
 open(p, "w").write(s)
 PY
 echo "version $V"

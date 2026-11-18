@@ -82,6 +82,8 @@ pub enum Command {
     SetMode { agent_id: String, mode: String },
     SetThinking { agent_id: String, thinking: Option<String> },
     Rename { agent_id: String, title: String },
+    /// Pins a conversation to the sidebar's top, or unpins it (a label).
+    PinAgent { agent_id: String, pinned: bool },
     ArchiveWorkspace(String),
     PinWorkspace { workspace_id: String, pinned: bool },
     RenameWorkspace { workspace_id: String, title: String },
@@ -147,6 +149,10 @@ pub enum Command {
     RecoverWorkspace(String),
     /// A partial config, merged by the daemon.
     SetConfig(Value),
+    /// The reset credits the host's logins have.
+    ResetCredits,
+    /// Spends one: `request_id` names the attempt, the same on a retry.
+    UseReset { provider: String, credit_id: Option<String>, request_id: String },
     /// A config patch of providers (`providers`, `removeProviders`): the
     /// provider list is refreshed after it.
     PatchProviders(Value),
@@ -169,7 +175,6 @@ pub enum Command {
     Branches { cwd: String, query: String },
     AddProject(String),
     CreateProjectDir { parent: String, name: String },
-    CloneProject { repo: String, target: String },
     RenameProject { id: String, name: String },
     RemoveProject(String),
     /// `op`: `pause`, `resume`, `delete` or `run-once`.
@@ -342,6 +347,51 @@ pub struct GitStatus {
     pub managed_worktree: bool,
 }
 
+/// A provider's rate-limit reset credits (Sophon's plugin on the service).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ResetCredits {
+    /// `codex` | `claude`, as the providers are named.
+    pub provider: String,
+    pub available: u32,
+    pub expires_at: Option<String>,
+    pub options: Vec<ResetOption>,
+    pub error: Option<String>,
+}
+
+/// One kind of reset and how many of it.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ResetOption {
+    pub credit_id: Option<String>,
+    pub kind: String,
+    pub label: String,
+    pub description: Option<String>,
+    pub count: u32,
+    pub expires_at: Option<String>,
+}
+
+impl ResetCredits {
+    fn from_json(v: &Value) -> Option<Self> {
+        let s = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned);
+        let n = |v: &Value, k: &str| v.get(k).and_then(Value::as_u64).unwrap_or(0) as u32;
+        Some(Self {
+            provider: s(v, "provider")?,
+            available: n(v, "available"),
+            expires_at: s(v, "expiresAt"),
+            options: list_of(v, "options", |o| {
+                Some(ResetOption {
+                    credit_id: s(o, "creditId"),
+                    kind: s(o, "kind").unwrap_or_default(),
+                    label: s(o, "label")?,
+                    description: s(o, "description"),
+                    count: n(o, "count"),
+                    expires_at: s(o, "expiresAt"),
+                })
+            }),
+            error: s(v, "error"),
+        })
+    }
+}
+
 /// A provider's plan usage and its limit windows.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ProviderUsage {
@@ -422,7 +472,13 @@ pub struct PullRequest {
     pub state: String,
     pub merged: bool,
     pub draft: bool,
-    /// (name, status) of each check.
+    /// Into which branch, from which.
+    pub base: String,
+    pub head: String,
+    /// `MERGEABLE`, `CONFLICTING` or `UNKNOWN` (GitHub still working it out).
+    pub mergeable: String,
+    /// `approved`, `changes_requested`, `pending`, or none asked for.
+    pub review: Option<String>,
     pub checks: Vec<(String, String)>,
 }
 
@@ -690,6 +746,10 @@ pub enum Event {
     /// A provider's diagnostic text.
     Diagnostic { provider: String, text: String },
     Usage(Vec<ProviderUsage>),
+    /// The host's reset credits; `Err` when it cannot say (no plugin).
+    ResetCredits(Result<Vec<ResetCredits>, String>),
+    /// What spending one came to (`reset`, `nothing_to_reset`, ...), or why it failed.
+    ResetUsed { provider: String, result: Result<String, String> },
     /// A link a phone pairs with: relay, daemon id and key.
     PairingOffer { url: Option<String>, relay_enabled: bool, error: Option<String> },
     /// A file of [`Command::Upload`] is on the host: the attachment that
@@ -1173,6 +1233,9 @@ enum Pending {
     Import,
     Upload(String),
     Download(String),
+    ResetCredits,
+    /// A reset being spent, for this provider.
+    UseReset(String),
     /// A conversation's record being read again (`follow`): which, and since when.
     Reload(String, std::time::Instant),
     Other(&'static str),
@@ -2036,6 +2099,22 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
             Pending::Other("save host settings"),
             json!({ "type": "set_daemon_config_request", "config": patch }),
         )],
+        Command::ResetCredits => vec![request(
+            pending,
+            Pending::ResetCredits,
+            json!({ "type": "provider.credits.list.request" }),
+        )],
+        Command::UseReset { provider, credit_id, request_id } => {
+            let mut input = json!({ "provider": provider, "requestId": request_id });
+            if let Some(id) = credit_id {
+                input["creditId"] = json!(id);
+            }
+            vec![request(
+                pending,
+                Pending::UseReset(provider),
+                json!({ "type": "provider.credits.use.request", "input": input }),
+            )]
+        }
         Command::PatchProviders(patch) => {
             vec![request(pending, Pending::ProviderConfig, json!({ "type": "set_daemon_config_request", "config": patch }))]
         }
@@ -2129,11 +2208,6 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
             Pending::Project,
             json!({ "type": "project.create_directory.request", "parentPath": parent, "name": name }),
         )],
-        Command::CloneProject { repo, target } => vec![request(
-            pending,
-            Pending::Project,
-            json!({ "type": "project.github.clone.request", "repo": repo, "targetDirectory": target }),
-        )],
         Command::RenameProject { id, name } => vec![request(
             pending,
             Pending::Other("rename the project"),
@@ -2217,7 +2291,7 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
         Command::Unarchive(agent_id) => vec![request(
             pending,
             Pending::Other("restore the agent"),
-            json!({ "type": "refresh_agent_request", "agentId": agent_id }),
+            json!({ "type": "refresh_agent_request", "agentId": agent_id, "restore":true }),
         )],
         Command::KillTerminal(id) => vec![request(
             pending,
@@ -2314,6 +2388,12 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
             // Marked as given, so it goes before the last message sent as
             // the conversation's name.
             json!({ "type": "update_agent_request", "agentId": agent_id, "name": title, "labels": { "sophon.named": "1" } }),
+        )],
+        Command::PinAgent { agent_id, pinned } => vec![request(
+            pending,
+            Pending::Other("pin conversation"),
+            // Labels are merged by the service: "0" unpins.
+            json!({ "type": "update_agent_request", "agentId": agent_id, "labels": { "sophon.pinned": if pinned { "1" } else { "0" } } }),
         )],
         Command::ArchiveWorkspace(workspace_id) => vec![request(
             pending,
@@ -2424,6 +2504,14 @@ fn handle(
                 Some(Pending::ProviderConfig) => {
                     follow_ups.push(request(pending, Pending::Optional, json!({ "type": "get_daemon_config_request" })));
                 }
+                Some(Pending::ResetCredits) => {
+                    let error = payload.get("error").and_then(Value::as_str).unwrap_or("request failed").to_owned();
+                    return vec![Event::ResetCredits(Err(error))];
+                }
+                Some(Pending::UseReset(provider)) => {
+                    let error = payload.get("error").and_then(Value::as_str).unwrap_or("request failed").to_owned();
+                    return vec![Event::ResetUsed { provider, result: Err(error) }];
+                }
                 _ => {}
             }
             // A host that cannot say what came after: the latest page whole.
@@ -2465,6 +2553,7 @@ fn handle(
                 Some(Pending::Projects | Pending::Workspaces) => "load projects",
                 Some(Pending::Providers) => "load providers",
                 Some(Pending::ProviderConfig) => "save agent settings",
+                Some(Pending::ResetCredits | Pending::UseReset(_)) => "use resets",
                 None => "request",
             };
             vec![Event::Notice(format!("Could not {label}: {error}"))]
@@ -2735,6 +2824,10 @@ fn handle(
                     state: s("state"),
                     merged: st.get("isMerged").and_then(Value::as_bool).unwrap_or(false),
                     draft: st.get("isDraft").and_then(Value::as_bool).unwrap_or(false),
+                    base: s("baseRefName"),
+                    head: s("headRefName"),
+                    mergeable: s("mergeable"),
+                    review: st.get("reviewDecision").and_then(Value::as_str).map(str::to_owned),
                     checks: list_of(st, "checks", |c| {
                         Some((c.get("name")?.as_str()?.to_owned(), c.get("status").and_then(Value::as_str).unwrap_or_default().to_owned()))
                     }),
@@ -2806,6 +2899,16 @@ fn handle(
                 file: payload.get("file").filter(|f| !f.is_null()).and_then(DiffFile::from_json),
                 error: payload.pointer("/error/message").and_then(Value::as_str).map(str::to_owned),
             }]
+        }
+        "provider.credits.list.response" | "provider.credits.use.response" => {
+            match request_id.and_then(|id| pending.remove(id)) {
+                Some(Pending::ResetCredits) => vec![Event::ResetCredits(Ok(list_of(payload, "providers", ResetCredits::from_json)))],
+                Some(Pending::UseReset(provider)) => {
+                    let outcome = payload.get("outcome").and_then(Value::as_str).unwrap_or_default().to_owned();
+                    vec![Event::ResetUsed { provider, result: Ok(outcome) }]
+                }
+                _ => vec![],
+            }
         }
         "provider.usage.list.response" => {
             request_id.and_then(|id| pending.remove(id));
@@ -3393,39 +3496,38 @@ pub fn set_relay_endpoint(endpoint: &str) -> Result<(), String> {
 }
 
 fn daemon_home() -> PathBuf {
-    if let Some(home) = std::env::var_os("PASEO_HOME") {
+    if let Some(home) = std::env::var_os("SOPHON_SERVICE_HOME") {
         return PathBuf::from(home);
     }
-    home_dir().join(".paseo")
+    home_dir().join(".sophon/service")
 }
 
 fn home_dir() -> PathBuf {
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// Reads the live address from `paseo.pid` (falling back to `config.json`
+/// Reads the live address from `sophon.pid` (falling back to `config.json`
 /// and then the default port) and the local credential the daemon rewrites
-/// on every start. The credential is only offered to the address `paseo.pid`
+/// on every start. The credential is only offered to the address `sophon.pid`
 /// names, as the daemon's CLI does.
 pub fn discover() -> Endpoint {
     discover_in(&daemon_home())
 }
 
-/// The service of the Paseo home `home` on this machine (a space's).
+/// The service of the space in `home` on this machine.
 pub fn discover_in(home: &std::path::Path) -> Endpoint {
     let read_json = |name: &str| {
         std::fs::read_to_string(home.join(name)).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok())
     };
-    let pid_listen = read_json("paseo.pid")
+    let pid_listen = read_json("sophon.pid")
         .and_then(|v| v.get("listen").and_then(Value::as_str).map(str::to_owned))
         .filter(|l| !l.starts_with('/') && !l.starts_with("unix:"));
-    let listen = std::env::var("PASEO_LISTEN")
-        .ok()
-        .or_else(|| pid_listen.clone())
+    let listen = pid_listen.clone()
+        .or_else(|| std::env::var("SOPHON_SERVICE_LISTEN").ok())
         .or_else(|| {
             read_json("config.json").and_then(|v| v.pointer("/daemon/listen").and_then(Value::as_str).map(str::to_owned))
         })
-        .unwrap_or_else(|| "127.0.0.1:6767".into());
+        .unwrap_or_else(|| "127.0.0.1:0".into());
     let local_credential = (pid_listen.as_deref() == Some(listen.as_str()))
         .then(|| std::fs::read_to_string(home.join("local-credential")).ok())
         .flatten()

@@ -1,0 +1,45 @@
+name: Deploy relay
+
+# The relay is deployed when someone asks for it (Actions → Deploy relay
+# → Run workflow), not with each change under relay/: it carries every
+# phone's connection, and most changes there need no new deploy.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-relay-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: relay-production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Test relay
+        run: cargo test --manifest-path relay/Cargo.toml --locked
+      - name: Build Linux x86-64 relay
+        run: ./relay/build-linux.sh
+      - name: Install and restart relay
+        env:
+          RELAY_HOST: ${{ vars.RELAY_HOST }}
+          RELAY_SSH_KEY: ${{ secrets.RELAY_SSH_KEY }}
+          RELAY_KNOWN_HOSTS: ${{ secrets.RELAY_KNOWN_HOSTS }}
+        run: |
+          : "${RELAY_HOST:?Set RELAY_HOST to user@host}"
+          : "${RELAY_SSH_KEY:?Set RELAY_SSH_KEY}"
+          : "${RELAY_KNOWN_HOSTS:?Set the verified SSH known_hosts entry}"
+          umask 077
+          ssh_dir=$(mktemp -d)
+          trap 'rm -rf "$ssh_dir"' EXIT
+          printf '%s\n' "$RELAY_SSH_KEY" > "$ssh_dir/key"
+          printf '%s\n' "$RELAY_KNOWN_HOSTS" > "$ssh_dir/known_hosts"
+          ./relay/deploy.sh "$RELAY_HOST" -i "$ssh_dir/key" -o BatchMode=yes \
+            -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o "UserKnownHostsFile=$ssh_dir/known_hosts"

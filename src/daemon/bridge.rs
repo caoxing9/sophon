@@ -197,16 +197,11 @@ fn new_relay_id() -> String {
     format!("srv_sophon_{}", uuid::Uuid::new_v4().simple())
 }
 
-/// The relay the bridge registers with: the first space's (`host:port`,
-/// TLS), Paseo's default when it sets none.
-fn relay_target() -> (String, bool) {
-    match super::connection::relay_endpoint() {
-        Some(endpoint) => {
-            let tls = super::connection::relay_use_tls().unwrap_or_else(|| endpoint.ends_with(":443"));
-            (endpoint, tls)
-        }
-        None => (relay::DEFAULT_RELAY.to_owned(), true),
-    }
+/// The first space's explicitly configured relay.
+fn relay_target() -> Option<(String, bool)> {
+    let endpoint = super::connection::relay_endpoint()?;
+    let tls = super::connection::relay_use_tls().unwrap_or_else(|| endpoint.ends_with(":443"));
+    Some((endpoint, tls))
 }
 
 /// The relay half of a pairing link: Paseo's offer format, naming the
@@ -215,9 +210,9 @@ fn relay_target() -> (String, bool) {
 pub fn relay_offer() -> Option<String> {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     let (id, public) = with(|s| (s.relay_id.clone(), s.public))?;
-    let (endpoint, tls) = relay_target();
+    let (endpoint, tls) = relay_target()?;
     let offer = json!({ "v": 2, "serverId": id, "daemonPublicKeyB64": B64.encode(public), "relay": { "endpoint": endpoint, "useTls": tls } });
-    Some(format!("https://app.paseo.sh/#offer={}", URL_SAFE_NO_PAD.encode(offer.to_string())))
+    Some(format!("sophon://relay/#offer={}", URL_SAFE_NO_PAD.encode(offer.to_string())))
 }
 
 /// The bridge's addresses now: the LAN's, then Tailscale's.
@@ -522,7 +517,10 @@ fn push_register(v: &Value, pairing: &str, space: Option<&str>) -> Value {
 async fn relay_loop() {
     let mut wait = Duration::from_secs(1);
     loop {
-        let (endpoint, tls) = relay_target();
+        let Some((endpoint, tls)) = relay_target() else {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            continue;
+        };
         let Some(id) = with(|s| s.relay_id.clone()) else { return };
         let base = format!("{}://{endpoint}/ws?serverId={id}&role=server&v=2", if tls { "wss" } else { "ws" });
         match tokio::time::timeout(Duration::from_secs(10), tokio_tungstenite::connect_async(base.as_str())).await {
@@ -1072,44 +1070,39 @@ mod tests {
 
     /// A device away from home: through a relay (a local `sophon-relay` at
     /// `SOPHON_TEST_RELAY`), its pairing link's offer, the handshake with
-    /// the bridge and its token: the bridge counts it, relayed. Its own data
-    /// folder and Paseo home, no service behind.
+    /// the bridge and its token, and a project list from the native service.
     #[test]
     #[ignore]
     fn a_relayed_device_comes_through_the_bridge_live() {
-        let Ok(relay_addr) = std::env::var("SOPHON_TEST_RELAY") else { return };
-        let dir = std::env::temp_dir().join(format!("sophon-relay-test-{}", std::process::id()));
-        let paseo = dir.join("paseo");
-        std::fs::create_dir_all(&paseo).unwrap();
-        // A stand-in service behind the bridge: it takes the socket and
-        // keeps it, as the daemon does.
-        let service = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let service_addr = service.local_addr().unwrap();
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-            rt.block_on(async move {
-                service.set_nonblocking(true).unwrap();
-                let listener = TcpListener::from_std(service).unwrap();
-                loop {
-                    let Ok((stream, _)) = listener.accept().await else { continue };
-                    tokio::spawn(async move {
-                        if let Ok(ws) = tokio_tungstenite::accept_async(stream).await {
-                            let (_tx, mut rx) = ws.split();
-                            while let Some(Ok(_)) = rx.next().await {}
-                        }
-                    });
-                }
-            });
-        });
+        let relay_addr = std::env::var("SOPHON_TEST_RELAY").expect("set SOPHON_TEST_RELAY to a local test relay");
+        let dir = std::env::temp_dir().join(format!("sophon-relay-test-{}", uuid::Uuid::new_v4()));
+        let service_home = dir.join("service");
+        std::fs::create_dir_all(&service_home).unwrap();
         std::fs::write(
-            paseo.join("config.json"),
-            json!({ "daemon": { "listen": service_addr.to_string(), "relay": { "endpoint": relay_addr, "useTls": false } } }).to_string(),
+            service_home.join("config.json"),
+            json!({ "daemon": { "relay": { "endpoint": relay_addr, "useTls": false } } }).to_string(),
         )
         .unwrap();
+        struct Service(std::process::Child);
+        impl Drop for Service {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let binary = std::env::var_os("SOPHON_TEST_SERVICE").map(PathBuf::from)
+            .unwrap_or_else(|| std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().join("sophon-service"));
+        let service = Service(std::process::Command::new(binary).args(["daemon", "run", "--home"])
+            .arg(&service_home).env("SOPHON_SERVICE_LISTEN", "127.0.0.1:0").spawn().expect("build sophon-service first"));
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !service_home.join("sophon.pid").exists() {
+            assert!(std::time::Instant::now() < deadline, "service startup timed out");
+            std::thread::sleep(Duration::from_millis(25));
+        }
         // SAFETY: set before any thread of this test reads them.
         unsafe {
             std::env::set_var("SOPHON_DATA_DIR", dir.join("sophon"));
-            std::env::set_var("PASEO_HOME", &paseo);
+            std::env::set_var("SOPHON_SERVICE_HOME", &service_home);
         }
         let (info, mut events) = start().expect("bridge");
         let link = relay::PairingLink::parse(&relay::PairingLink::format(Some((&info.addr, &info.key, &info.token)), relay_offer().as_deref())).unwrap();
@@ -1125,7 +1118,7 @@ mod tests {
             let (ws, _) = tokio_tungstenite::connect_async(offer.ws_url()).await.expect("the relay");
             let (mut tx, mut rx) = ws.split();
             let mut hs = relay::Handshake::start(&offer).unwrap();
-            let (mut seal, _unseal) = loop {
+            let (mut seal, mut unseal) = loop {
                 tx.send(to_ws(Message::Text(hs.hello().to_owned()))).await.unwrap();
                 let frame = tokio::time::timeout(Duration::from_secs(2), rx.next()).await;
                 if let Ok(Some(Ok(frame))) = frame
@@ -1151,6 +1144,25 @@ mod tests {
             .await
             .expect("the bridge heard the device");
             assert_eq!(came, "Away Phone");
+            for request in [
+                json!({"type":"hello","protocolVersion":1}),
+                json!({"type":"session","message":{"type":"project.list.request","requestId":"through-relay"}}),
+            ] {
+                tx.send(to_ws(seal.seal(Message::Text(request.to_string())).unwrap())).await.unwrap();
+            }
+            let projects = tokio::time::timeout(Duration::from_secs(3), async {
+                while let Some(Ok(frame)) = rx.next().await {
+                    if let Some(Message::Text(text)) = unseal.open(from_ws(frame)).unwrap() {
+                        let reply: Value = serde_json::from_str(&text).unwrap();
+                        if reply.pointer("/message/type") == Some(&json!("project.list.response")) {
+                            return reply["message"]["payload"].clone();
+                        }
+                    }
+                }
+                panic!("device disconnected before receiving the project list");
+            }).await.expect("native service replied through the relay");
+            assert_eq!(projects["requestId"], "through-relay");
+            assert_eq!(projects["projects"], json!([]));
             tokio::time::sleep(Duration::from_millis(300)).await;
             assert!(connections().iter().any(|c| c.device == "Away Phone" && c.relayed), "listed, relayed, while it stays");
             // The phone goes (another host, out of range): it leaves the list.
@@ -1197,6 +1209,7 @@ mod tests {
             assert!(connections().is_empty());
             drop((tx, rx));
         });
+        drop(service);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

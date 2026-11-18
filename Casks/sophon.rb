@@ -1,13 +1,16 @@
 cask "sophon" do
-  version "0.2.37"
-  sha256 "fb77fbc3cc445bd8e4ae5eb77f70686b9693322b3a01cf810f483398bd058df0"
+  # The newest release, whichever it is: each one carries its archive
+  # under this name too, so this file is not rewritten (and no commit made
+  # to main) for a release. The app updates itself from there on.
+  version :latest
+  sha256 :no_check
 
-  url "https://github.com/caoxing9/sophon/releases/download/v#{version}/Sophon-#{version}-macos-aarch64.tar.gz"
+  url "https://github.com/caoxing9/sophon/releases/latest/download/Sophon-macos-aarch64.tar.gz"
   name "Sophon"
   desc "Native desktop client for coding agents"
   homepage "https://github.com/caoxing9/sophon"
 
-  # The app updates itself (sidebar → Update); brew upgrade works too.
+  # The app updates itself (sidebar → Update).
   auto_updates true
   depends_on arch: :arm64
   depends_on macos: ">= :sonoma"

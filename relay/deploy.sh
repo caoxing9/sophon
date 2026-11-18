@@ -30,13 +30,21 @@ cd "$(dirname "$0")"
 [ $# -ge 1 ] || { echo "usage: $0 user@host [ssh options]" >&2; exit 1; }
 HOST=$1; shift
 [ -x dist/sophon-relay ] || ./build-linux.sh
-scp "$@" dist/sophon-relay sophon-relay.service "$HOST":/tmp/
-ssh "$@" "$HOST" 'set -e
-  sudo install -m 755 /tmp/sophon-relay /usr/local/bin/sophon-relay
-  sudo install -m 644 /tmp/sophon-relay.service /etc/systemd/system/sophon-relay.service
+stage=$(ssh "$@" "$HOST" 'mktemp -d /tmp/sophon-relay.XXXXXXXXXX')
+case "$stage" in
+  /tmp/sophon-relay.??????????) ;;
+  *) echo "Unexpected staging directory" >&2; exit 1 ;;
+esac
+case "${stage#/tmp/sophon-relay.}" in *[!a-zA-Z0-9]*) exit 1 ;; esac
+scp "$@" dist/sophon-relay sophon-relay.service "$HOST:$stage/"
+ssh "$@" "$HOST" "cd '$stage' && sh -se" <<'INSTALL'
+  trap 'rm -f sophon-relay sophon-relay.service; rmdir "$PWD"' EXIT
+  sudo install -m 755 sophon-relay /usr/local/bin/sophon-relay
+  sudo install -m 644 sophon-relay.service /etc/systemd/system/sophon-relay.service
   # The unit loads the APNs key as a credential: empty until one is given.
   [ -e /etc/sophon-relay-apns.p8 ] || sudo install -m 600 /dev/null /etc/sophon-relay-apns.p8
   sudo systemctl daemon-reload
-  sudo systemctl enable --now sophon-relay
+  sudo systemctl enable sophon-relay
   sudo systemctl restart sophon-relay
-  sleep 1; systemctl --no-pager --lines=3 status sophon-relay'
+  sleep 1; systemctl --no-pager --lines=3 status sophon-relay
+INSTALL

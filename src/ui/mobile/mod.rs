@@ -81,6 +81,8 @@ pub(crate) fn push(route: Route) {
 }
 
 /// The user went back from `route` (the back button or the swipe).
+
+
 fn popped(route: &Route) {
     global::<Routes>().update(|r| {
         if let Some(i) = r.0.iter().position(|x| x == route) {
