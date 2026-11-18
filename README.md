@@ -44,11 +44,13 @@ Mac or from your phone, all talking to the same daemon. It is written in Rust wi
   when an agent needs you
 - **Self-updating**: a sidebar button appears when a new release is out
 
-The client and native host have separate coverage. See the [native service guide](docs/native-service.md) and [client checklist](docs/parity.md).
+The host service does not do a few of these yet: cloning from GitHub, archiving a workspace, importing an existing session, rewind and fork, the background work list. See the [native service guide](docs/native-service.md) for what it covers, and the [client checklist](docs/parity.md) for the client.
 
 ## Install
 
-The macOS bundle includes `sophon-service` and starts it on demand. For a source checkout, build it alongside the app with `cargo build -p sophon-service`. Install and sign in to the provider CLI you want to use on the host computer.
+The macOS bundle includes `sophon-service` and starts it on demand. For a source checkout, build it alongside the app with `cargo build -p sophon-service`. Install and sign in to the provider CLI you want to use on the host computer. An agent runs on its CLI's own login and settings, as `claude` or `codex` would in a terminal.
+
+**Upgrading from 0.2.x**: the old service kept its data in `~/.paseo`; the new one uses `~/.sophon/service`, so the project list starts empty. Import once, as the [native service guide](docs/native-service.md) describes: projects, workspaces and sessions come over, old timelines and schedules do not. With a self-hosted relay, enter its address again in Settings.
 
 ### macOS (14 Sonoma or later, Apple silicon)
 
@@ -125,7 +127,9 @@ nsh package --target ios-simulator --icon assets/app-icon/icon-ios-1024.png
 
 | Path | What it is |
 |---|---|
-| `src/daemon/` | The daemon connection: WebSocket protocol, relay end-to-end encryption, the LAN bridge for phones |
+| `crates/sophon-service/` | The host service (the daemon): runs Claude Code and Codex, keeps conversations, works on files, git and terminals |
+| `relay/` | The relay: forwards end-to-end encrypted connections between a phone and a computer; self-hostable |
+| `src/daemon/` | The client's side of the daemon connection: WebSocket protocol, relay end-to-end encryption, the LAN bridge for phones |
 | `src/store.rs` | UI state in signals |
 | `src/ui/kit/` | The design system: controls, icons, menus, tokens |
 | `src/ui/shared/` | Components both platforms use: the timeline, the composer, the agent pane, the project list, dialogs, settings sections |

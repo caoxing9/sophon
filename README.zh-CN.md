@@ -35,11 +35,13 @@ Sophon 用 Rust 和 [NSH](https://github.com/longbridge/nsh) 编写，在每个�
 - **键盘优先**：命令面板（⌘K）和快捷键，在输入框里打字时也能用；智能体需要你时发送桌面通知
 - **自动更新**：有新版本时侧边栏会出现更新按钮
 
-原生宿主的能力和旧数据导入方式见[服务指南](docs/native-service.md)。客户端功能见[协议清单](docs/parity.md)。
+宿主服务目前还不支持其中几项：从 GitHub 克隆、归档工作区、导入已有会话、回退和分叉、后台任务列表。完整的支持范围见[服务指南](docs/native-service.md)，客户端功能见[协议清单](docs/parity.md)。
 
 ## 安装
 
-macOS 应用包自带 `sophon-service`，按需启动。源码开发时先运行 `cargo build -p sophon-service`，在存放代码的电脑上安装并登录要使用的 Agent CLI。
+macOS 应用包自带 `sophon-service`，按需启动。源码开发时先运行 `cargo build -p sophon-service`，在存放代码的电脑上安装并登录要使用的 Agent CLI。智能体使用 CLI 自己的登录和配置，和在终端里直接运行 `claude`、`codex` 一致。
+
+**从 0.2.x 升级**：旧版的数据在 `~/.paseo`，新服务使用 `~/.sophon/service`，升级后项目列表是空的。按[服务指南](docs/native-service.md#导入旧数据)导入一次，可带回项目、工作区和会话；旧的聊天记录和定时任务不会迁移。使用自托管中继的话，还需要在设置里重新填写中继地址。
 
 ### macOS（14 Sonoma 及以上，Apple 芯片）
 
@@ -114,7 +116,9 @@ nsh package --target ios-simulator --icon assets/app-icon/icon-ios-1024.png
 
 | 路径 | 内容 |
 |---|---|
-| `src/daemon/` | 与守护进程的连接：WebSocket 协议、中继端到端加密、供手机连接的局域网桥 |
+| `crates/sophon-service/` | 宿主服务（守护进程）：运行 Claude Code 和 Codex，保存会话，操作文件、Git 和终端 |
+| `relay/` | 中继服务：在手机和电脑之间转发端到端加密的连接，可自托管 |
+| `src/daemon/` | 客户端一侧与守护进程的连接：WebSocket 协议、中继端到端加密、供手机连接的局域网桥 |
 | `src/store.rs` | 用 signal 管理的 UI 状态 |
 | `src/ui/kit/` | 设计系统：控件、图标、菜单、设计变量 |
 | `src/ui/shared/` | 两端公用的组件：对话时间线、输入框、智能体页面、项目列表、弹窗、设置分区 |
