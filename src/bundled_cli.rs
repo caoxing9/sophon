@@ -28,7 +28,7 @@ use serde_json::{Value, json};
 /// here: `/`, but nowhere in tests, which see only the home they make
 /// (the live test, against a service of its own, sees the machine).
 fn system(path: &str) -> PathBuf {
-    let hidden = cfg!(test) && std::env::var_os("PASEO_LISTEN").is_none();
+    let hidden = cfg!(test) && std::env::var_os("SOPHON_SERVICE_LISTEN").is_none();
     PathBuf::from(if hidden { "/nonexistent-in-tests" } else { "/" }).join(path)
 }
 

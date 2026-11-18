@@ -241,30 +241,24 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                     .accessibility_label(t("Message actions"))
                     .child(user_text(item, false)))
                     .into_element(),
-                // The desktop: its actions show while the pointer is on it.
-                RowKind::User => {
-                    let hover = signal(false);
-                    user_row(item, view()
-                    .on_mouse_enter(move |_: &MouseEvent| hover.set(true))
-                    .on_mouse_leave(move |_: &MouseEvent| hover.set(false))
-                    .child(user_actions(item).opacity(move || if hover.get() { 1.0_f32 } else { 0.0 }).transition_opacity())
-                    .px(px(14.0))
-                    .py(px(9.0))
-                    .rounded(px(18.0))
-                    .bg(tint(ACCENT, 0.10))
-                    .selectable(true)
-                    .on_text_selection_change(take_copy)
-                    .child(user_text(item, true)))
-                    .into_element()
-                }
-                // A copy button floats at its corner: under the pointer on
-                // the desktop, always on the phone (no pointer, and a press
-                // there selects).
+                RowKind::User => user_row(item, desktop_user_bubble(item)).into_element(),
+                // Its actions float at its corner under the pointer on the
+                // desktop. The phone has no pointer, and buttons always
+                // there would lie over the reply's first line: a tap on
+                // the reply opens them in a sheet (a long press still
+                // selects its text).
                 RowKind::Assistant => {
                     let hover = signal(false);
                     view()
                         .on_mouse_enter(move |_: &MouseEvent| hover.set(true))
                         .on_mouse_leave(move |_: &MouseEvent| hover.set(false))
+                        .when(MOBILE, |row| {
+                            row.on_press(move |_: &nsh_core::PressEvent| {
+                                if !streaming.get_untracked() {
+                                    reply_sheet(text_of());
+                                }
+                            })
+                        })
                         .child(copy_area(text_view()
                     // A link opens in the browser (or the app it belongs to).
                     .links(nsh_base::TextViewLinks::Open)
@@ -288,9 +282,13 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                                 .right(px(0.0))
                                 .rounded(px(R_MD))
                                 .bg(SURFACE0)
-                                .opacity(move || if !streaming.get() && (MOBILE || hover.get()) { 1.0_f32 } else { 0.0 })
+                                .opacity(move || if !MOBILE && !streaming.get() && hover.get() { 1.0_f32 } else { 0.0 })
                                 .transition_opacity()
-                                .pointer_events(move || if !streaming.get() && (MOBILE || hover.get()) { nsh_core::PointerEvents::Auto } else { nsh_core::PointerEvents::None })
+                                .pointer_events(move || if !MOBILE && !streaming.get() && hover.get() { nsh_core::PointerEvents::Auto } else { nsh_core::PointerEvents::None })
+                                .flex_row()
+                                .child(icon_btn(Icon::TextQuote, Sz::Sm, t("Attach as context"), move || {
+                                    crate::ui::shared::composer::attach_as_context(&text_of())
+                                }))
                                 .child(icon_btn(Icon::Copy, Sz::Sm, t("Copy"), move || {
                                     set_clipboard(text_of());
                                     store::notify(t("Copied").into());
@@ -549,6 +547,45 @@ fn sent_chip(name: String, thumb: Option<String>) -> View {
     view().pl(px(1.0)).pr(px(5.0)).align_middle().child(chip)
 }
 
+fn desktop_user_bubble(item: Memo<Option<Item>>) -> impl IntoElement {
+    let hover = signal(false);
+    view()
+        .flex_row()
+        .items_center()
+        .gap(sp(S1))
+        .min_w(px(0.0))
+        .on_mouse_enter(move |_: &MouseEvent| hover.set(true))
+        .on_mouse_leave(move |_: &MouseEvent| hover.set(false))
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .flex_shrink_0()
+                .opacity(move || if hover.get() { 1.0_f32 } else { 0.0 })
+                .focus_within(|style| style.opacity(1.0))
+                .transition_opacity()
+                .child(icon_btn(Icon::Copy, Sz::Sm, t("Copy"), move || {
+                    if let Some(Item::User { text, .. }) = item.get_untracked() {
+                        set_clipboard(text);
+                        store::notify(t("Copied").into());
+                    }
+                }))
+                .child(user_message_menu(item)),
+        )
+        .child(
+            view()
+                .flex_shrink(1.0)
+                .min_w(px(0.0))
+                .px(px(14.0))
+                .py(px(9.0))
+                .rounded(px(18.0))
+                .bg(tint(ACCENT, 0.10))
+                .selectable(true)
+                .on_text_selection_change(take_copy)
+                .child(user_text(item, true)),
+        )
+}
+
 fn user_row(item: Memo<Option<Item>>, bubble: impl IntoElement + 'static) -> impl IntoElement {
     let (images, has_text) = item.with_untracked(|i| match i {
         Some(Item::User { images, text, .. }) => {
@@ -597,10 +634,30 @@ fn tool_icon(kind: &str, name: &str) -> Icon {
     }
 }
 
+/// A reply's actions on the phone: copy it, or attach it as context.
+fn reply_sheet(body: String) {
+    let quoted = body.clone();
+    show_sheet(
+        None,
+        vec![
+            SheetItem::new(t("Copy"), move || {
+                set_clipboard(body.clone());
+                store::notify(t("Copied").into());
+            })
+            .icon(Icon::Copy),
+            SheetItem::new(t("Attach as context"), move || crate::ui::shared::composer::attach_as_context(&quoted)).icon(Icon::TextQuote),
+        ],
+    );
+}
+
 /// A user message's actions on the phone: copy it, or rewind to it.
 fn message_sheet(item: Memo<Option<Item>>) {
     let Some(Item::User { text: body, message_id, .. }) = item.get_untracked() else { return };
-    let mut items = vec![SheetItem::new(t("Copy"), move || set_clipboard(body.clone())).icon(Icon::Copy)];
+    let quoted = body.clone();
+    let mut items = vec![
+        SheetItem::new(t("Copy"), move || set_clipboard(body.clone())).icon(Icon::Copy),
+        SheetItem::new(t("Attach as context"), move || crate::ui::shared::composer::attach_as_context(&quoted)).icon(Icon::TextQuote),
+    ];
     if let Some(id) = message_id {
         let (a, b, c) = (id.clone(), id.clone(), id);
         items.push(SheetItem::new(t("Rewind conversation to here"), move || store::rewind(&a, "conversation")).icon(Icon::Undo2));
@@ -610,63 +667,46 @@ fn message_sheet(item: Memo<Option<Item>>) {
     show_sheet(None, items);
 }
 
-/// Rewind from a user message (the message menu).
-fn user_actions(item: Memo<Option<Item>>) -> View {
+/// A user message's menu: attach it as context, rewind to it.
+fn user_message_menu(item: Memo<Option<Item>>) -> impl IntoElement {
     let id = computed(move || match item.get() {
-        Some(Item::User { message_id: Some(id), .. }) => Some(id),
+        Some(Item::User { message_id, .. }) => Some(message_id),
         _ => None,
     });
-    view().absolute().bottom(px(-12.0)).right(px(-4.0)).child(dynamic(move || {
+    dynamic(move || {
         let id = id.get()?;
+        let body = move || match item.get_untracked() {
+            Some(Item::User { text, .. }) => text,
+            _ => String::new(),
+        };
         Some(untracked(move || {
-            let (a, b, c) = (id.clone(), id.clone(), id.clone());
-            if MOBILE {
-                // The phone: the system's action sheet.
-                return nsh_base::button()
-                    .on_press(move || {
-                        let (a, b, c) = (a.clone(), b.clone(), c.clone());
-                        show_sheet(
-                            Some(t("Rewind to here").into()),
-                            vec![
-                                SheetItem::new(t("Conversation only"), move || store::rewind(&a, "conversation")).icon(Icon::Undo2),
-                                SheetItem::new(t("Files only"), move || store::rewind(&b, "files")).icon(Icon::FileText),
-                                SheetItem::new(t("Conversation and files"), move || store::rewind(&c, "both")).icon(Icon::RotateCw),
-                            ],
-                        )
-                    })
-                    .accessibility_label(t("Message actions"))
-                    .w(px(32.0))
-                    .h(px(32.0))
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(R_FULL))
-                    .bg(SURFACE0)
-                    .border_1()
-                    .border_color(BORDER)
-                    .child(icon(Icon::Ellipsis, 14.0).text_color(FG_MUTED))
-                    .into_element();
-            }
-            dropdown(
+            let mut menu = dropdown(
                 view()
-                    .w(px(22.0))
-                    .h(px(22.0))
+                    .w(sp(CONTROL_SM))
+                    .h(sp(CONTROL_SM))
                     .items_center()
                     .justify_center()
-                    .rounded(px(R_FULL))
-                    .bg(SURFACE0)
-                    .border_1()
-                    .border_color(BORDER)
+                    .rounded(px(R_SM))
+                    .hover(|style| style.bg(highlight()))
                     .label(t("Message actions"))
                     .child(icon(Icon::Ellipsis, 13.0).text_color(FG_MUTED)),
             )
             .align(nsh_core::overlay::Align::End)
-            .child(menu_heading(t("Rewind to here")))
-            .child(menu_row(t("Conversation only"), Some(Icon::Undo2), None, false, move || store::rewind(&a, "conversation")))
-            .child(menu_row(t("Files only"), Some(Icon::FileText), None, false, move || store::rewind(&b, "files")))
-            .child(menu_row(t("Conversation and files"), Some(Icon::RotateCw), None, false, move || store::rewind(&c, "both")))
-            .into_element()
+            .child(menu_row(t("Attach as context"), Some(Icon::TextQuote), None, false, move || {
+                crate::ui::shared::composer::attach_as_context(&body())
+            }));
+            if let Some(id) = id {
+                let (a, b, c) = (id.clone(), id.clone(), id);
+                menu = menu
+                    .child(menu_divider())
+                    .child(menu_heading(t("Rewind to here")))
+                    .child(menu_row(t("Conversation only"), Some(Icon::Undo2), None, false, move || store::rewind(&a, "conversation")))
+                    .child(menu_row(t("Files only"), Some(Icon::FileText), None, false, move || store::rewind(&b, "files")))
+                    .child(menu_row(t("Conversation and files"), Some(Icon::RotateCw), None, false, move || store::rewind(&c, "both")));
+            }
+            menu.into_element()
         }))
-    }))
+    })
 }
 
 /// A run of tool calls as one row: what they did ("Ran 3 commands,
@@ -961,7 +1001,8 @@ fn action_buttons(p: &Permission) -> View {
     let mut primary_used = false;
     for act in p.actions.clone() {
         let id = pid.clone();
-        let label = if act.label.is_empty() { act.id.clone() } else { act.label.clone() };
+        // The host's own words for its answers, in the language shown.
+        let label = if act.label.is_empty() { act.id.clone() } else { crate::i18n::tr(&act.label) };
         let variant = if act.allow && !primary_used {
             primary_used = true;
             Variant::Primary

@@ -74,8 +74,7 @@ jobs:
         run: scripts/set-version.sh "${{ inputs.version || github.ref_name }}"
       - name: Package
         run: nsh package --target macos
-      # The agent service goes inside the app (a Node runtime and Paseo's
-      # daemon): a Mac with only Sophon runs its agents. The archive nsh
+      # The native agent service goes inside the app. The archive nsh
       # wrote is from before: written again, ad hoc signed as nsh leaves
       # the app (signing below writes it once more).
       - name: The service, inside the app

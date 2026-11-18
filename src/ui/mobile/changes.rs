@@ -1,6 +1,7 @@
 //! The open workspace's uncommitted changes, and one file's diff, unified,
-//! to read: pages pushed over the conversation. Reviewing, committing and
-//! pushing are the desktop's.
+//! to read; its pull request, with its checks and a merge: pages pushed
+//! over the conversation. Reviewing, committing and pushing are the
+//! desktop's.
 
 use crate::i18n::{t, tf};
 use nsh_base::{DiffLayout, button, diff_view};
@@ -43,6 +44,22 @@ pub(crate) fn diff_page(path: String) -> Screen {
                 view().w(px(44.0)),
             ))
             .child(view().flex_1().px_safe_area().pb_safe_area().child(diff(path))),
+    )
+}
+
+/// The workspace's pull request ([`crate::ui::shared::pull_request`]),
+/// read again every 15 seconds while open.
+pub(crate) fn pull_request_page() -> Screen {
+    store::watch_pull_request(|| super::is_open(&Route::PullRequest));
+    nav_page().key("pull-request").header_visible(false).title(t("Pull request")).child(
+        view()
+            .flex_1()
+            .child(top_bar(text(t("Pull request")).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)), view().w(px(44.0))))
+            .child(
+                scroll()
+                    .flex_1()
+                    .child(view().px_safe_area().child(view().px(sp(S4)).pt(sp(S2)).pb(sp(S8)).child(crate::ui::shared::pull_request::details(false)))),
+            ),
     )
 }
 

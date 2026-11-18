@@ -16,7 +16,7 @@
 
 ---
 
-Sophon is based on [Paseo](https://paseo.sh): your coding agents (Claude Code, Codex and others) run in its daemon on
+Sophon runs your coding agents (Claude Code and Codex) through its own Rust service on
 your computer, and Sophon is the window onto them: start agents, follow their work, review the diffs, answer their questions, from your
 Mac or from your phone, all talking to the same daemon. It is written in Rust with
 [NSH](https://github.com/longbridge/nsh), so it is a real native app on each platform, not a web view.
@@ -44,12 +44,11 @@ Mac or from your phone, all talking to the same daemon. It is written in Rust wi
   when an agent needs you
 - **Self-updating**: a sidebar button appears when a new release is out
 
-What is done and what is still missing, item by item: [docs/parity.md](docs/parity.md).
+The client and native host have separate coverage. See the [native service guide](docs/native-service.md) and [client checklist](docs/parity.md).
 
 ## Install
 
-You need the daemon running on the computer where your code lives (Sophon connects to it on its own once it is up:
-`paseo daemon start`).
+The macOS bundle includes `sophon-service` and starts it on demand. For a source checkout, build it alongside the app with `cargo build -p sophon-service`. Install and sign in to the provider CLI you want to use on the host computer.
 
 ### macOS (14 Sonoma or later, Apple silicon)
 

@@ -16,7 +16,7 @@
 
 ---
 
-Sophon 基于 [Paseo](https://paseo.sh)：你的编程智能体（Claude Code、Codex 等）运行在电脑上的守护进程里，Sophon 是它们的窗口：
+Sophon 通过自带的 Rust 服务运行电脑上的 Claude Code 和 Codex。你可以
 在 Mac 或手机上启动智能体、跟进进度、审查改动、回答它们的提问，所有设备连的都是同一个守护进程。
 Sophon 用 Rust 和 [NSH](https://github.com/longbridge/nsh) 编写，在每个平台上都是真正的原生应用，不是网页套壳。
 
@@ -35,11 +35,11 @@ Sophon 用 Rust 和 [NSH](https://github.com/longbridge/nsh) 编写，在每个�
 - **键盘优先**：命令面板（⌘K）和快捷键，在输入框里打字时也能用；智能体需要你时发送桌面通知
 - **自动更新**：有新版本时侧边栏会出现更新按钮
 
-逐项的完成情况见 [docs/parity.md](docs/parity.md)。
+原生宿主的能力和旧数据导入方式见[服务指南](docs/native-service.md)。客户端功能见[协议清单](docs/parity.md)。
 
 ## 安装
 
-需要在存放代码的电脑上运行守护进程（`paseo daemon start`），Sophon 会自动连上它。
+macOS 应用包自带 `sophon-service`，按需启动。源码开发时先运行 `cargo build -p sophon-service`，在存放代码的电脑上安装并登录要使用的 Agent CLI。
 
 ### macOS（14 Sonoma 及以上，Apple 芯片）
 

@@ -763,43 +763,34 @@ fn model_picker(live: bool) -> impl IntoElement {
     super::model_picker::model_picker(live, name)
 }
 
-/// The plan limits of the composer's provider, after its model: how much
-/// of each window is used and when it starts again, in the warning's
-/// colour from 80% and the danger's from 90%. A press opens the usage
-/// page. Nothing while the provider reports none.
+/// The plan limit of the composer's provider closest to running out, after
+/// its model: how much is used, and from 80% when it starts again, in the
+/// warning's colour from 80% and the danger's from 90%. A press opens the
+/// usage page, with every window. Nothing while the provider reports none.
 fn limits_chip(live: bool) -> impl IntoElement {
     use crate::usage::{self, local_offset};
     dynamic(move || {
         let provider = store::controls(live).provider;
         let p = store::usage()?.into_iter().find(|p| p.id == provider)?;
-        let windows: Vec<_> = p.windows.into_iter().filter_map(|w| Some((w.used?, w))).collect();
-        if windows.is_empty() {
-            return None;
+        let (used, w) = p.windows.into_iter().filter_map(|w| Some((w.used?, w))).max_by(|a, b| a.0.total_cmp(&b.0))?;
+        let tone = if used >= 90.0 { DANGER } else if used >= 80.0 { WARNING } else { FG_MUTED };
+        let mut words = format!("{} {used:.0}%", w.label);
+        if let Some(at) = w.resets_at.as_deref().and_then(usage::parse::rfc3339).filter(|_| used >= 80.0) {
+            words.push_str(" · ");
+            words.push_str(&tf("Resets {}", &[&usage::time_label(at, &local_offset)]));
         }
-        let mut chip = button()
+        let chip = button()
             .on_press(store::open_usage)
             .accessibility_label(t("Usage"))
             .flex_row()
             .items_center()
-            .gap(sp(S2))
             .h(sp(CONTROL_SM))
             .px(sp(S2))
             .min_w(px(0.0))
             .flex_shrink(1.0)
             .rounded(px(R_FULL))
-            .hover(|s| s.bg(highlight()));
-        for (i, (used, w)) in windows.into_iter().enumerate() {
-            let tone = if used >= 90.0 { DANGER } else if used >= 80.0 { WARNING } else { FG_MUTED };
-            let mut words = format!("{} {used:.0}%", w.label);
-            if let Some(at) = w.resets_at.as_deref().and_then(usage::parse::rfc3339) {
-                words.push_str(" · ");
-                words.push_str(&tf("Resets {}", &[&usage::time_label(at, &local_offset)]));
-            }
-            if i > 0 {
-                chip = chip.child(text("|").text_size(tx(TEXT_XS)).text_color(FG_FAINT));
-            }
-            chip = chip.child(text(words).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(tone).number_of_lines(1));
-        }
+            .hover(|s| s.bg(highlight()))
+            .child(text(words).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(tone).number_of_lines(1));
         Some(chip)
     })
 }
@@ -866,6 +857,24 @@ fn insert_file(key: &str, name: String, mime: String, bytes: Vec<u8>) {
     if let Some(id) = store::attach_file(name.clone(), mime.clone(), bytes) {
         insert_into(key, &[Chip { id, kind: Kind::File, name, mime }]);
     }
+}
+
+/// Attaches a message of the open conversation as context: its words,
+/// quoted (`> `), at the top of the composer, which takes the keyboard.
+pub(crate) fn attach_as_context(message: &str) {
+    let body = match message.find(crate::ui::shared::timeline::CONTEXT_MARK) {
+        Some(at) => &message[..at],
+        None => message,
+    };
+    let body = body.trim();
+    if body.is_empty() {
+        return;
+    }
+    let quote: Vec<String> = body.lines().map(|l| if l.is_empty() { ">".to_owned() } else { format!("> {l}") }).collect();
+    let Some(id) = store::selected_id() else { return };
+    let Some(session) = composer_doc::existing(&format!("agent:{id}")) else { return };
+    composer_doc::prepend_quote(&session, &quote.join("\n"));
+    session.focus();
 }
 
 fn insert_into(key: &str, chips: &[Chip]) {

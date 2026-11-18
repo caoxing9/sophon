@@ -47,6 +47,24 @@ pub(crate) fn page() -> Screen {
                                 .number_of_lines(1),
                         ),
                     glass_group()
+                        // The branch's pull request, in its state's colour.
+                        .child(dynamic(|| {
+                            let tone = store::git().pr.as_ref().map(|pr| crate::ui::shared::pull_request::pr_state(pr).0)?;
+                            Some(untracked(move || {
+                                button()
+                                    .on_press(|| {
+                                        dismiss_keyboard();
+                                        push(Route::PullRequest)
+                                    })
+                                    .accessibility_label(t("Pull request"))
+                                    .w(px(40.0))
+                                    .h(px(44.0))
+                                    .items_center()
+                                    .justify_center()
+                                    .active(|s| s.opacity(0.6))
+                                    .child(icon(Icon::GitPullRequest, 20.0).text_color(tone))
+                            }))
+                        }))
                         .child(header_button(Icon::FileDiff, t("Changes"), || {
                             dismiss_keyboard();
                             push(Route::Changes)

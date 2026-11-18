@@ -5,7 +5,7 @@
 
 mod explorer;
 mod file_pane;
-mod git;
+pub(crate) mod git;
 mod history;
 mod home;
 mod new_workspace;

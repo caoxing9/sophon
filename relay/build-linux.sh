@@ -8,5 +8,5 @@ mkdir -p dist
 docker run --rm --platform linux/amd64 \
   -v "$PWD":/src -w /src \
   -v sophon-relay-cargo:/usr/local/cargo/registry \
-  rust:1-alpine sh -c 'apk add --no-cache build-base>/dev/null && cargo build --release --target-dir /tmp/target && cp /tmp/target/release/sophon-relay dist/'
+  rust:1-alpine sh -c 'apk add --no-cache build-base>/dev/null && cargo build --release --locked --target-dir /tmp/target && cp /tmp/target/release/sophon-relay dist/'
 ls -la dist/sophon-relay

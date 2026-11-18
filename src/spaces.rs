@@ -1,6 +1,6 @@
-//! Spaces on this Mac: one Paseo service per person, each with its own
-//! projects, conversations, agents and schedules (`~/.paseo` is the first;
-//! the others live in `~/.paseo-spaces/<slug>`). A space is a saved host
+//! Spaces on this Mac: one service per person, each with its own
+//! projects and conversations (`~/.sophon/service` is the first;
+//! the others live in `~/.sophon/spaces/<slug>`). A space is a saved host
 //! whose address is `space:<its folder>`, so switching spaces is switching
 //! hosts. The services all run here as this Mac's user: a space keeps
 //! people's work apart, it does not wall it off.
@@ -30,7 +30,7 @@ mod imp {
     }
 
     fn root() -> PathBuf {
-        home().join(".paseo-spaces")
+        crate::daemon::data_dir().join("spaces")
     }
 
     /// `name` as a folder name: its ASCII letters and digits, else a fresh id.
@@ -64,7 +64,7 @@ mod imp {
         (6768..6868).find(|p| !taken.contains(p) && std::net::TcpListener::bind(("127.0.0.1", *p)).is_ok())
     }
 
-    fn paseo(args: &[&str]) -> Result<String, String> {
+    fn service(args: &[&str]) -> Result<String, String> {
         let cli = crate::store::service_cli().ok_or("The service is not installed on this Mac")?;
         let out = std::process::Command::new(&cli).args(args).env("PATH", crate::store::service_path(&cli)).output().map_err(|e| e.to_string())?;
         if out.status.success() {
@@ -92,29 +92,28 @@ mod imp {
         Ok(home)
     }
 
-    /// Whether the service of the space in `home` runs (Paseo keeps its pid
-    /// file while it does).
+    /// Whether the service of the space in `home` holds its runtime lock.
     pub(crate) fn running(home: &Path) -> bool {
-        home.join("paseo.pid").exists()
+        std::fs::File::open(home.join("service.lock")).is_ok_and(|file|matches!(file.try_lock_shared(), Err(std::fs::TryLockError::WouldBlock)))
     }
 
-    /// The first space's folder, Paseo's own.
+    /// The first space's folder.
     pub(crate) fn home_of_first() -> PathBuf {
-        std::env::var_os("PASEO_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".paseo"))
+        std::env::var_os("SOPHON_SERVICE_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".sophon/service"))
     }
 
     /// Starts the service of the space in `home` (blocking); one running
     /// already is left as it is.
     pub(crate) fn start(home: &Path) -> Result<(), String> {
         let home = home.to_string_lossy();
-        paseo(&["daemon", "start", "--home", &home, "--timeout", "60"]).map(|_| ())
+        service(&["daemon", "start", "--home", &home]).map(|_| ())
     }
 
     /// Stops the service of the space in `home` (blocking). Its folder,
     /// with its conversations, stays.
     pub(crate) fn stop(home: &Path) -> Result<(), String> {
         let home = home.to_string_lossy();
-        paseo(&["daemon", "stop", "--home", &home]).map(|_| ())
+        service(&["daemon", "stop", "--home", &home]).map(|_| ())
     }
 
     #[cfg(test)]
@@ -131,7 +130,7 @@ mod imp {
             // SAFETY: set before any thread of this test reads it.
             unsafe { std::env::set_var("HOME", &home) };
             let space = create("Test Space").expect("created");
-            assert!(space.starts_with(PathBuf::from(&home).join(".paseo-spaces")));
+            assert!(space.starts_with(PathBuf::from(&home).join(".sophon/spaces")));
             let port = port_of(&space).expect("a port");
             assert!(port >= 6768);
             let endpoint = crate::daemon::connection::discover_in(&space);
@@ -180,7 +179,7 @@ mod tests {
 
     #[test]
     fn a_space_address_names_its_folder() {
-        let home = Path::new("/Users/me/.paseo-spaces/lin");
+        let home = Path::new("/Users/me/.sophon/spaces/lin");
         assert_eq!(home_of(&url_of(home)).as_deref(), Some(home));
         assert_eq!(home_of("ws://1.2.3.4:6767/ws"), None);
     }

@@ -291,6 +291,7 @@ fn body(m: Modal) -> View {
                 store::close_modal();
             }))),
         Modal::Commit => commit(),
+        Modal::PullRequest => crate::ui::desktop::git::pull_request_sheet(),
         Modal::ReportIssue => report_issue(),
         Modal::Palette | Modal::ChangedFiles => view(),
         Modal::NewSchedule => schedule_form(None),
@@ -386,6 +387,26 @@ fn body(m: Modal) -> View {
                 store::archive_workspace(&id);
                 store::close_modal();
             }))),
+        // Spending a reset credit cannot be undone: said, and asked first.
+        Modal::UseReset { provider, option } => {
+            let name = if provider == "codex" { "Codex" } else { "Claude" };
+            let mut body = String::new();
+            if let Some(d) = option.description.as_deref().filter(|d| !d.is_empty()) {
+                body.push_str(d);
+                body.push_str("\n\n");
+            }
+            body.push_str(&crate::i18n::tf("This uses 1 of your {} {} reset credits ({}). It cannot be undone.", &[
+                &option.count.to_string(),
+                name,
+                &option.label,
+            ]));
+            sheet(t("Use a reset credit?"))
+                .child(text(body).text_size(tx(TEXT_BASE)).line_height(px(20.0)).text_color(FG_MUTED))
+                .child(actions(btn(t("Use credit"), Variant::Primary, Sz::Md, None, move || {
+                    store::use_reset(&provider, option.credit_id.clone());
+                    store::close_modal();
+                })))
+        }
     }
 }
 
@@ -1251,7 +1272,7 @@ fn fonts(mono: bool) -> View {
 
 fn project_settings(name: String) -> View {
     let cfg = computed(store::project_config);
-    sheet(&format!("{name} · paseo.json"))
+    sheet(&format!("{name} · sophon.json"))
         .w(px(680.0))
         .child(text(t("Setup and teardown scripts, services and other project settings, saved in the project")).text_size(tx(TEXT_SM)).text_color(FG_MUTED))
         .child(dynamic(move || {

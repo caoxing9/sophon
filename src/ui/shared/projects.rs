@@ -19,6 +19,44 @@ const ROW_HEIGHT: f32 = if MOBILE { 44.0 } else { 32.0 };
 /// How many of a workspace's conversations the list shows before "Show more".
 const CONVERSATIONS_SHOWN: usize = 8;
 
+fn row_status(status: impl Fn() -> Status + 'static) -> impl IntoElement {
+    let status = computed(status);
+    view()
+        .w(px(15.0))
+        .h(px(15.0))
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .child(dynamic(move || {
+            let current = status.get();
+            let animate = !MOBILE && current == Status::Running && !reduce_motion();
+            Some(untracked(move || {
+                if MOBILE || current != Status::Running {
+                    return status_dot(move || current).into_element();
+                }
+                let ring = view()
+                    .w(px(11.0))
+                    .h(px(11.0))
+                    .rounded(px(R_FULL))
+                    .border_1()
+                    .border_color(tint(DOT_RUNNING, 0.35))
+                    .border_t_color(DOT_RUNNING)
+                    .label(current.label());
+                if !animate {
+                    return ring.into_element();
+                }
+                let angle = animated_value(0.0);
+                Animation::sequence([
+                    Animation::timing(&angle, 360.0, nsh_core::element::Timing::new(1400.0, Easing::Linear)),
+                    Animation::timing(&angle, 0.0, nsh_core::element::Timing::new(0.0, Easing::Linear)),
+                ])
+                .looped(None)
+                .start();
+                ring.bind_transform(nsh_core::TransformKind::Rotate, &angle).into_element()
+            }))
+        }))
+}
+
 /// The list; `actions` adds the desktop's (new workspace, pin, rename,
 /// archive), `empty` is what shows with no projects. Each project is a
 /// group whose workspaces fold away: a clipped height on a native spring
@@ -33,9 +71,20 @@ pub(crate) fn project_list(actions: bool, empty: impl Fn() -> AnyElement + 'stat
             if none {
                 return empty();
             }
+            // Two sections, as Pinned and Projects read in the sidebar: the
+            // pinned first (when there are any), each under its heading.
+            let pinned = move || groups.with(|g| g.iter().filter(|g| g.project.is_none()).cloned().collect::<Vec<_>>());
+            let projects = move || groups.with(|g| g.iter().filter(|g| g.project.is_some()).cloned().collect::<Vec<_>>());
+            let any_projects = computed(move || groups.with(|g| g.iter().any(|g| g.project.is_some())));
             scroll()
                 .flex_1()
-                .child(view().pb(sp(S2)).child(each(move || groups.get(), store::Group::key, move |g, _| group(g, actions))))
+                .child(
+                    view()
+                        .pb(sp(S2))
+                        .child(each(pinned, store::Group::key, move |g, _| group(g, actions)))
+                        .child(when(move || any_projects.get(), move || projects_heading(actions)))
+                        .child(each(projects, store::Group::key, move |g, _| group(g, actions))),
+                )
                 .into_element()
         }))
     }))
@@ -50,9 +99,39 @@ fn group(g: ReadSignal<store::Group>, actions: bool) -> AnyElement {
         )
     };
     let Some(project) = g.with_untracked(|g| g.project.clone()) else {
+        let key = g.with_untracked(store::Group::key);
+        let folded = computed({
+            let key = key.clone();
+            move || store::is_collapsed(&key)
+        });
+        let heading = button()
+            .on_press(move || store::toggle_collapsed(&key))
+            .accessibility_label(t("Pinned"))
+            .w_full()
+            .h(px(if MOBILE { ROW_HEIGHT } else { 28.0 }))
+            .flex_row()
+            .items_center()
+            .gap(sp(S1))
+            .px(sp(S4))
+            .hover(|s| s.bg(sidebar_hover()))
+            .child(
+                icon(Icon::ChevronDown, 13.0)
+                    .text_color(FG_FAINT)
+                    .rotate(move || Radians(if folded.get() { -std::f32::consts::FRAC_PI_2 } else { 0.0 }))
+                    .transition_transform(),
+            )
+            .child(section_label(t("Pinned")));
+        let content = view()
+            .child(each(
+                move || g.with(|g| g.conversations.clone()),
+                |a: &crate::daemon::Agent| a.id.clone(),
+                move |a, _| conversation_row(a, actions),
+            ))
+            .child(rows());
         return view()
-            .child(section_row(computed(|| Some(Row::Section("Pinned".into())))))
-            .child(rows())
+            // Apart from the projects under it, as a section of its own.
+            .mb(sp(S3))
+            .child(nsh_base::collapsible().open(move || !folded.get()).reveal(true).content(content).child(heading))
             .into_element();
     };
     let pid = project.id.clone();
@@ -82,6 +161,11 @@ fn workspace_entry(w: ReadSignal<crate::daemon::Workspace>, actions: bool) -> im
         list.reverse();
         list
     });
+    // Those pinned on their own are under "Pinned"; a workspace whose
+    // conversations all are shows no row of its own.
+    let unpinned = computed(move || conversations.with(|c| c.iter().filter(|a| !a.pinned).cloned().collect::<Vec<_>>()));
+    let all_pinned = computed(move || conversations.with(|c| !c.is_empty() && c.iter().all(|a| a.pinned)));
+    let conversations = unpinned;
     let several = computed(move || conversations.with(|c| c.len() > 1));
     // The newest few; the rest behind "Show more", a screenful at a time
     // (a folder may hold dozens of imported sessions).
@@ -89,6 +173,9 @@ fn workspace_entry(w: ReadSignal<crate::daemon::Workspace>, actions: bool) -> im
     let more = computed(move || conversations.with(|c| c.len()).saturating_sub(limit.get()));
     view().child(dynamic(move || {
         let several = several.get();
+        if all_pinned.get() {
+            return None;
+        }
         Some(untracked(move || {
             if several {
                 view()
@@ -133,7 +220,9 @@ fn conversation_row(agent: ReadSignal<crate::daemon::Agent>, actions: bool) -> i
         .gap(sp(S2))
         .h(sp(ROW_HEIGHT))
         .pl(sp(S2))
-        .child(view().w(px(15.0)).items_center().child(status_dot(move || agent.with(|a| Status::of_agent(&a.status, a.requires_attention || !a.pending.is_empty())))))
+        .child(row_status(move || {
+            agent.with(|agent| Status::of_agent(&agent.status, agent.requires_attention || !agent.pending.is_empty()))
+        }))
         .child(text(move || agent.with(store::conversation_title)).text_size(tx(TEXT_BASE)).text_color(FG).number_of_lines(1).flex_1());
     let more = dropdown(
         view()
@@ -155,8 +244,35 @@ fn conversation_row(agent: ReadSignal<crate::daemon::Agent>, actions: bool) -> i
                     store::open_modal(store::Modal::RenameAgent { id: id.clone(), name });
                 })
             })
-            .child(menu_row(t("Archive"), Some(Icon::Archive), None, false, move || store::archive_agent(&id))),
+            .child(dynamic({
+                let id = id.clone();
+                move || {
+                    let pinned = agent.with(|a| a.pinned);
+                    let id = id.clone();
+                    Some(untracked(move || {
+                        menu_row(
+                            if pinned { t("Unpin") } else { t("Pin") },
+                            Some(if pinned { Icon::PinOff } else { Icon::Pin }),
+                            None,
+                            false,
+                            move || store::pin_agent(&id, !pinned),
+                        )
+                    }))
+                }
+            }))
+            .child(menu_row(t("Archive"), Some(Icon::Archive), None, false, {
+                let id = id.clone();
+                move || store::archive_agent(&id)
+            })),
     );
+    let quick = {
+        let (pin_id, archive_id) = (id.clone(), id.clone());
+        hover_actions(
+            computed(move || agent.with(|a| a.pinned)),
+            move |pinned| store::pin_agent(&pin_id, pinned),
+            move || store::archive_agent(&archive_id),
+        )
+    };
     view()
         .mx(sp(S2))
         .mb(px(2.0))
@@ -174,16 +290,48 @@ fn conversation_row(agent: ReadSignal<crate::daemon::Agent>, actions: bool) -> i
                 .transition_colors()
                 .child(main)
                 .when(actions, |v| {
-                    v.child(view().opacity(if MOBILE { 1.0_f32 } else { 0.0 }).group_hover(|s| s.opacity(1.0)).transition_opacity().child(more))
+                    v.child(view().flex_row().items_center().opacity(if MOBILE { 1.0_f32 } else { 0.0 }).group_hover(|s| s.opacity(1.0)).transition_opacity().when(!MOBILE, |v| v.child(quick)).child(more))
                 }),
         )
 }
 
-fn section_row(item: Memo<Option<Row>>) -> impl IntoElement {
-    view().px(sp(S4)).pt(sp(S3)).pb(sp(S1)).child(section_label(move || match item.get() {
-        Some(Row::Section(s)) => s,
-        _ => String::new(),
-    }))
+/// A row's pin and archive at hand, under the pointer before its "…"
+/// (the desktop's; the phone has them in the menu).
+fn hover_actions(pinned: Memo<bool>, pin: impl Fn(bool) + 'static, archive: impl Fn() + 'static) -> impl IntoElement {
+    let pin = std::rc::Rc::new(pin);
+    view()
+        .flex_row()
+        .items_center()
+        .child(dynamic(move || {
+            let on = pinned.get();
+            let pin = pin.clone();
+            Some(untracked(move || {
+                icon_btn(if on { Icon::PinOff } else { Icon::Pin }, Sz::Sm, if on { t("Unpin") } else { t("Pin") }, move || pin(!on))
+            }))
+        }))
+        .child(icon_btn(Icon::Archive, Sz::Sm, t("Archive"), archive))
+}
+
+/// A section's heading ("Pinned", "Projects"): its name where the rows'
+/// text starts, and an action at the right, where the rows' actions are.
+fn section_heading(label: &'static str, action: Option<AnyElement>) -> impl IntoElement {
+    view()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .h(px(28.0))
+        .pl(sp(S4))
+        .pr(sp(S2 + S1))
+        .child(section_label(label))
+        .when_some(action, |v, a| v.child(a))
+}
+
+/// The projects' heading, with "Add project" (the desktop's) at its right.
+fn projects_heading(actions: bool) -> AnyElement {
+    let add = (actions && !MOBILE).then(|| {
+        icon_btn(Icon::Plus, Sz::Sm, t("Add project"), || store::open_modal(store::Modal::AddProject)).into_element()
+    });
+    section_heading(t("Projects"), add).into_element()
 }
 
 /// How far the pointer goes before a press on a project's header is a drag.
@@ -353,7 +501,7 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
         .gap(sp(S2))
         .h(sp(ROW_HEIGHT))
         .pl(sp(S2))
-        .child(view().w(px(15.0)).items_center().child(status_dot(status)))
+        .child(row_status(status))
         .child(
             text(move || display_name.get())
                 .text_size(tx(TEXT_BASE))
@@ -424,6 +572,20 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
         }))
     }));
 
+    let quick = hover_actions(
+        computed(move || ws.with(|w| w.as_ref().is_some_and(|w| w.pinned))),
+        move |pinned| {
+            if let Some(w) = ws.get_untracked() {
+                store::pin_workspace(&w.id, pinned);
+            }
+        },
+        move || {
+            if let Some(w) = ws.get_untracked() {
+                store::open_modal(store::Modal::ArchiveWorkspace { id: w.id, name: w.name });
+            }
+        },
+    );
+
     // Two layers: the chosen row's fill below, the pointer's translucent
     // one over it (so a chosen row under the pointer darkens a step too).
     view()
@@ -447,9 +609,12 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
                 .when(actions, |v| {
                     v.child(
                         view()
+                            .flex_row()
+                            .items_center()
                             .opacity(if MOBILE { 1.0_f32 } else { 0.0 })
                             .group_hover(|s| s.opacity(1.0))
                             .transition_opacity()
+                            .when(!MOBILE, |v| v.child(quick))
                             .child(more),
                     )
                 }),

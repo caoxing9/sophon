@@ -34,6 +34,8 @@ pub(crate) enum Route {
     AddProject,
     Chat,
     Changes,
+    /// The workspace's pull request: its checks, and a merge.
+    PullRequest,
     Diff(String),
     /// A folder of the workspace (`.`, its root), and a file of it.
     Files(String),
@@ -49,6 +51,7 @@ impl Route {
             Route::AddProject => "add-project".into(),
             Route::Chat => "chat".into(),
             Route::Changes => "changes".into(),
+            Route::PullRequest => "pull-request".into(),
             Route::Diff(p) => format!("diff:{p}"),
             Route::Files(p) => format!("files:{p}"),
             Route::File(p) => format!("file:{p}"),
@@ -73,6 +76,11 @@ pub(crate) fn push(route: Route) {
 }
 
 /// The user went back from `route` (the back button or the swipe).
+/// Whether `route` is open (on top or under another).
+pub(crate) fn is_open(route: &Route) -> bool {
+    global::<Routes>().with_untracked(|r| r.0.contains(route))
+}
+
 fn popped(route: &Route) {
     global::<Routes>().update(|r| {
         if let Some(i) = r.0.iter().position(|x| x == route) {
@@ -200,6 +208,7 @@ fn stack() -> impl IntoElement {
                     Route::AddProject => add_project::page(),
                     Route::Chat => chat::page(),
                     Route::Changes => changes::files_page(),
+                    Route::PullRequest => changes::pull_request_page(),
                     Route::Diff(path) => changes::diff_page(path.clone()),
                     Route::Files(dir) => files::dir_page(dir.clone()),
                     Route::File(path) => files::file_page(path.clone()),

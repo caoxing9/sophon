@@ -293,6 +293,8 @@ pub struct Agent {
     /// Its title was given by someone (Rename; the label `sophon.named`),
     /// not made from its first message.
     pub named: bool,
+    /// Pinned to the top of the sidebar (the label `sophon.pinned`).
+    pub pinned: bool,
     /// When the user last sent it a message.
     pub last_user_message_at: String,
 }
@@ -332,8 +334,9 @@ impl Agent {
             requires_attention: v.get("requiresAttention").and_then(Value::as_bool).unwrap_or(false),
             attention_reason: str_of(v, "attentionReason"),
             archived: v.get("archivedAt").is_some_and(|a| !a.is_null()),
-            scheduled: v.pointer("/labels/paseo.schedule-id").is_some_and(|l| !l.is_null()),
+            scheduled: ["sophon.schedule-id","paseo.schedule-id"].iter().any(|key| v["labels"].get(key).is_some_and(|value|!value.is_null())),
             named: v.pointer("/labels/sophon.named").and_then(Value::as_str) == Some("1"),
+            pinned: v.pointer("/labels/sophon.pinned").and_then(Value::as_str) == Some("1"),
             last_user_message_at: str_of(v, "lastUserMessageAt").unwrap_or_default(),
             updated_at: str_of(v, "updatedAt").unwrap_or_default(),
             session_id: v.pointer("/persistence/sessionId").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned),

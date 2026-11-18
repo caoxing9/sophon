@@ -34,7 +34,8 @@ pub(crate) fn settings(compact: bool) -> impl IntoElement {
                             false,
                         ))
                         .child(relay_row())
-                        .child(if store::service_bundled() {
+                        // Inside Sophon, the service updates with Sophon ("Updates").
+                        .when(!store::service_in_sophon(), |v| v.child(if store::service_bundled() {
                             // The desktop app updates its own service.
                             row(
                                 t("Update service"),
@@ -49,7 +50,7 @@ pub(crate) fn settings(compact: bool) -> impl IntoElement {
                                 btn(t("Update"), Variant::Outline, Sz::Sm, Some(Icon::ArrowDown), store::update_daemon),
                                 false,
                             )
-                        }),
+                        })),
                 ))
                 .child(section(t("This Mac"), card().child(row(
                     t("Run agents on this Mac"),
@@ -61,7 +62,23 @@ pub(crate) fn settings(compact: bool) -> impl IntoElement {
                 .child(section(t("Devices"), devices_card()))
                 .child(section(t("Host behavior"), behavior_card()))
                 .child(section(t("Coding agents"), crate::ui::shared::agents::agents_card(true)))
-                .child(section(t("Text generation"), text_generation_card())),
+                .child(section(t("Text generation"), text_generation_card()))
+                .child(section(t("Diagnostics"), {
+                    let diagnostics = card().child(row(
+                            t("Copy diagnostics"),
+                            t("Versions, when the service started and stopped and why, and the end of Sophon's logs, to paste into a report. Nothing is sent"),
+                            btn(t("Copy"), Variant::Outline, Sz::Sm, Some(Icon::Copy), store::copy_diagnostics),
+                            true,
+                        ));
+                    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+                    let diagnostics = diagnostics.child(row(
+                            t("Logs"),
+                            t("sophon.log and connection.log, in Sophon's folder"),
+                            btn(t("Show in Finder"), Variant::Outline, Sz::Sm, Some(Icon::FolderOpen), store::open_logs),
+                            false,
+                        ));
+                    diagnostics
+                })),
         ))
 }
 
@@ -218,7 +235,7 @@ fn relay_row() -> impl IntoElement {
             .border_color(BORDER)
             .child(text(t("Relay server")).text_size(tx(TEXT_BASE)))
             .child(
-                text(t("Where phones reach this Mac away from home. Empty: the default relay. Applies after a service restart"))
+                text(t("Enter your relay address for access away from home. Leave empty for LAN only."))
                     .text_size(tx(TEXT_SM))
                     .text_color(FG_MUTED),
             )
@@ -233,7 +250,7 @@ fn relay_row() -> impl IntoElement {
                             .min_w(px(0.0))
                             .value(move || value.get())
                             .on_change(move |v: &str| value.set(v.to_owned()))
-                            .placeholder("relay.paseo.sh")
+                            .placeholder("relay.example.com:443")
                             .font_family(mono_font)
                             .text_size(tx(TEXT_SM)),
                     )
