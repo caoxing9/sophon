@@ -61,7 +61,23 @@ pub(crate) fn settings(compact: bool) -> impl IntoElement {
                 .child(section(t("Devices"), devices_card()))
                 .child(section(t("Host behavior"), behavior_card()))
                 .child(section(t("Coding agents"), crate::ui::shared::agents::agents_card(true)))
-                .child(section(t("Text generation"), text_generation_card())),
+                .child(section(t("Text generation"), text_generation_card()))
+                .child(section(
+                    t("Diagnostics"),
+                    card()
+                        .child(row(
+                            t("Copy diagnostics"),
+                            t("Versions, when the service started and stopped and why, and the end of Sophon's logs, to paste into a report. Nothing is sent"),
+                            btn(t("Copy"), Variant::Outline, Sz::Sm, Some(Icon::Copy), store::copy_diagnostics),
+                            true,
+                        ))
+                        .child(row(
+                            t("Logs"),
+                            t("sophon.log and connection.log, in Sophon's folder"),
+                            btn(t("Show in Finder"), Variant::Outline, Sz::Sm, Some(Icon::FolderOpen), store::open_logs),
+                            false,
+                        )),
+                )),
         ))
 }
 

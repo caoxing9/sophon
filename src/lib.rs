@@ -8,6 +8,7 @@ use nsh_core::{element::{AssetFile, AssetKind}, prelude::*};
 
 #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 mod agent_pictures;
+pub mod applog;
 mod agent_update;
 #[cfg(target_os = "macos")]
 mod awake;
@@ -108,6 +109,9 @@ pub fn App() -> impl IntoElement {
     store::watch_last_said();
     // The web's desktop idiom is still a page: no bridge, no updates.
     if is_desktop() && !cfg!(target_arch = "wasm32") {
+        // (Also from `main`, before anything logs; this is for the other entries.)
+        applog::init();
+        log::info!("Sophon {} started", env!("CARGO_PKG_VERSION"));
         // A Mac that only connects to others runs none of this side.
         store::start_bridge();
         store::start_spaces();

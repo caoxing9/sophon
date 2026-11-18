@@ -2994,6 +2994,7 @@ pub(crate) fn remove_host(id: &str) {
     // stays.
     #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
     if let Some(home) = hosts().into_iter().find(|h| h.id == id).and_then(|h| crate::spaces::home_of(&h.url)) {
+        log::info!("stopping the service of space {} (removed)", home.display());
         std::thread::spawn(move || {
             if let Err(e) = crate::spaces::stop(&home) {
                 log::warn!("space {}: {e}", home.display());
@@ -3539,6 +3540,7 @@ pub(crate) fn start_service() {
     global::<Starting>().set(Starting(true));
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Result<(), String>>();
     let home = current_space_home();
+    log::info!("starting the service ({})", home.as_deref().map_or_else(|| "the first space".into(), |h| h.display().to_string()));
     std::thread::spawn(move || {
         let mut args = vec!["daemon".to_owned(), "start".to_owned()];
         if let Some(home) = home {
@@ -3561,12 +3563,64 @@ pub(crate) fn start_service() {
         let result = rx.recv().await;
         global::<Starting>().set(Starting(false));
         match result {
-            Some(Err(e)) => global::<AutoStart>().update(|a| a.error = Some(e)),
+            Some(Err(e)) => {
+                log::warn!("the service did not start: {e}");
+                global::<AutoStart>().update(|a| a.error = Some(e));
+            }
             // Up: connect now rather than after the wait between attempts
             // (up to 30 s once a few have failed).
             _ => send(Command::Reconnect),
         }
     });
+}
+
+/// A connection lost to this Mac's own service: whether the service is
+/// still there, and if not what its log says of why it stopped (a signal,
+/// an update, a crash). Said once a run of failed attempts, not on each.
+fn log_service_gone(reason: &str) {
+    let was_up = global::<ConnState>().with_untracked(|c| matches!(c.0, Conn::Connected { .. }));
+    if !was_up {
+        return;
+    }
+    log::info!("disconnected: {reason}");
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+    if on_this_mac() {
+        let home = current_space_home().unwrap_or_else(crate::spaces::home_of_first);
+        if crate::spaces::running(&home) {
+            log::info!("the service is still running ({}): the connection dropped, not the service", home.display());
+        } else {
+            log::warn!("the service is not running ({})", home.display());
+            for line in crate::applog::service_lifecycle(&home, 4) {
+                log::warn!("  service log: {line}");
+            }
+        }
+    }
+}
+
+/// Everything to share when the service misbehaves (Settings, "Copy
+/// diagnostics"): versions, the service's starts and stops, and the ends
+/// of Sophon's logs. Copied for the user to read and pass on; sent nowhere.
+pub(crate) fn copy_diagnostics() {
+    let mut versions = vec![
+        ("Sophon".to_owned(), env!("CARGO_PKG_VERSION").to_owned()),
+        ("System".to_owned(), format!("{} {}", std::env::consts::OS, std::env::consts::ARCH)),
+    ];
+    if let Conn::Connected { hostname, version, .. } = conn() {
+        versions.push(("Service".to_owned(), format!("{version} on {hostname}")));
+    }
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+    let home = on_this_mac().then(|| current_space_home().unwrap_or_else(crate::spaces::home_of_first));
+    #[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
+    let home: Option<std::path::PathBuf> = None;
+    set_clipboard(crate::applog::diagnostics(home.as_deref(), &versions));
+    notify(t("Diagnostics copied: paste them where you report the problem").into());
+}
+
+/// Opens the folder Sophon's logs are in (Finder). Desktop only; the
+/// settings page that offers it is compiled for every target.
+pub(crate) fn open_logs() {
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+    let _ = open_path(crate::daemon::data_dir());
 }
 
 /// The version of the service Sophon carries: its package's.
@@ -4467,6 +4521,7 @@ pub(crate) fn reload_agent(agent_id: &str) {
 }
 
 pub(crate) fn restart_daemon() {
+    log::info!("restarting the service (asked in Settings)");
     global::<Restarting>().set(Restarting(true));
     send(Command::RestartDaemon);
     notify(t("Restarting the service…").into());
@@ -5936,6 +5991,7 @@ pub(crate) fn apply(event: Event) {
             p.retry_at = None;
         }),
         Event::Connected { hostname, version } => {
+            log::info!("connected to {hostname} (service {version})");
             // Said once it is back, if the wait was long enough to be shown.
             global::<ConnProgress>().update(|p| {
                 let now = now_ms();
@@ -5964,6 +6020,7 @@ pub(crate) fn apply(event: Event) {
             }
         }
         Event::Disconnected { reason, retry_in } => {
+            log_service_gone(&reason);
             global::<ConnProgress>().update(|p| {
                 let now = now_ms();
                 p.since.get_or_insert(now);

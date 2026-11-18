@@ -42,6 +42,15 @@ const EVERY: Duration = Duration::from_secs(2);
 const LATER: Duration = Duration::from_secs(5);
 /// How long before a record not found is looked for again.
 const LOOK_AGAIN: Duration = Duration::from_secs(60);
+/// A record is read again once it has been still this long: while the
+/// conversation goes on elsewhere it changes at every line, and is read
+/// when that pauses, not at each change.
+const QUIET: Duration = Duration::from_secs(6);
+/// Between two reads of one conversation. A long one takes the service
+/// tens of seconds to read (24 s seen for one of 15,600 items); asked
+/// every few seconds while Claude Code wrote it, the reads piled up, the
+/// service stopped answering, and Sophon looked as if it had lost it.
+const BETWEEN: Duration = Duration::from_secs(30);
 
 /// A conversation to look at: its id, agent, folder and the session's id
 /// in the agent's own records.
@@ -64,8 +73,19 @@ struct State {
     seen: HashMap<String, Stamp>,
     /// Where each session's record is (`None`: not found when looked for).
     paths: HashMap<String, (Option<PathBuf>, Instant)>,
+    /// Conversations whose record changed and is to be read again: since
+    /// when it last changed.
+    waiting: HashMap<String, Instant>,
+    /// When each was last asked to be read again.
+    asked: HashMap<String, Instant>,
     /// A look is under way.
     busy: bool,
+}
+
+/// Whether a conversation whose record last changed `changed` ago, last
+/// read again `asked` ago (if ever), is to be read again now.
+fn due(changed: Duration, asked: Option<Duration>) -> bool {
+    changed >= QUIET && asked.is_none_or(|a| a >= BETWEEN)
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -123,6 +143,7 @@ fn changed(watched: &[Watched]) -> Vec<String> {
     // What is no longer watched (running in the service, archived, gone)
     // starts over when it is watched again.
     state.seen.retain(|id, _| watched.iter().any(|w| &w.id == id));
+    state.waiting.retain(|id, _| watched.iter().any(|w| &w.id == id));
     let mut out = vec![];
     for w in watched {
         let known = state.paths.get(&w.session).filter(|(path, at)| path.is_some() || at.elapsed() < LOOK_AGAIN).map(|(p, _)| p.clone());
@@ -138,9 +159,20 @@ fn changed(watched: &[Watched]) -> Vec<String> {
         let now = Stamp(meta.len(), meta.modified().ok());
         let written_unwatched = || matches!((now.1, w.updated), (Some(written), Some(updated)) if written > updated + LATER);
         match state.seen.insert(w.id.clone(), now) {
-            Some(before) if before != now => out.push(w.id.clone()),
-            None if written_unwatched() => out.push(w.id.clone()),
+            Some(before) if before != now => {
+                state.waiting.insert(w.id.clone(), Instant::now());
+            }
+            // Written while nobody watched: read at the first chance.
+            None if written_unwatched() => {
+                state.waiting.insert(w.id.clone(), Instant::now().checked_sub(QUIET).unwrap_or_else(Instant::now));
+            }
             _ => {}
+        }
+        let Some(since) = state.waiting.get(&w.id) else { continue };
+        if due(since.elapsed(), state.asked.get(&w.id).map(Instant::elapsed)) {
+            state.waiting.remove(&w.id);
+            state.asked.insert(w.id.clone(), Instant::now());
+            out.push(w.id.clone());
         }
     }
     out
@@ -190,6 +222,7 @@ fn look() {
             // Still at rest: one that began to run meanwhile is the
             // service's to write.
             if store::agent(&id).is_some_and(|a| at_rest(&a)) {
+                log::info!("conversation {id}: its record was written outside Sophon; the service reads it again");
                 store::reload_agent(&id);
             }
         }
@@ -202,6 +235,21 @@ mod tests {
 
     fn watched(id: &str, session: &str) -> Watched {
         Watched { id: id.into(), provider: "claude".into(), cwd: "/x".into(), session: session.into(), updated: None }
+    }
+
+    /// As if `id`'s record had been still for `QUIET` already.
+    fn quiet(id: &str) {
+        if let Some(t) = STATE.lock().unwrap().as_mut().unwrap().waiting.get_mut(id) {
+            *t = Instant::now().checked_sub(QUIET).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_record_is_read_again_once_it_is_still_and_not_too_often() {
+        assert!(!due(Duration::from_secs(2), None), "still being written");
+        assert!(due(QUIET, None));
+        assert!(!due(QUIET, Some(Duration::from_secs(10))), "read moments ago: the last read may be under way");
+        assert!(due(QUIET, Some(BETWEEN)));
     }
 
     #[test]
@@ -217,8 +265,18 @@ mod tests {
         assert!(changed(&list).is_empty());
         assert!(changed(&list).is_empty());
         std::fs::write(&file, "a\nb\n").unwrap();
+        // Changed: read once it is still, once.
+        assert!(changed(&list).is_empty());
+        quiet("a1");
         assert_eq!(changed(&list), vec!["a1".to_owned()]);
         assert!(changed(&list).is_empty());
+        // Written again at once: not read again until a while after.
+        std::fs::write(&file, "a\nb\nb2\n").unwrap();
+        assert!(changed(&list).is_empty());
+        quiet("a1");
+        assert!(changed(&list).is_empty(), "read moments ago");
+        STATE.lock().unwrap().as_mut().unwrap().asked.clear();
+        assert_eq!(changed(&list), vec!["a1".to_owned()]);
         // Not watched for a while (it ran in the service): its writing
         // then is the service's own, and the next look starts over.
         assert!(changed(&[]).is_empty());
