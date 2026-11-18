@@ -69,7 +69,7 @@ curl -fsSL https://raw.githubusercontent.com/caoxing9/sophon/main/install.sh | s
 > ```
 
 **更新**：Sophon 启动后不久以及之后每 6 小时检查一次 GitHub Releases。有新版本时，侧边栏底部会出现
-*Update to x.y.z* 按钮，点一下即可下载、校验、替换并重启。也可以用 `brew upgrade --cask sophon`。
+*Update to x.y.z* 按钮，点一下即可下载、校验、替换并重启。Homebrew cask 安装的始终是最新版本，之后由应用自己更新（想从 Homebrew 更新可以用 `brew upgrade --cask --greedy sophon`）。
 
 ### iOS
 
@@ -136,12 +136,13 @@ git push origin main v0.2.0
 ```
 
 [发布工作流](.github/workflows/release.yml) 会构建 macOS 应用（Apple 芯片和 Intel）和 iOS 模拟器应用，发布 GitHub
-Release 和 `latest.json`（已安装的应用从这里获取更新），并更新 Homebrew cask。每个版本包含：
+Release 和 `latest.json`（已安装的应用从这里获取更新）。Homebrew cask 不再随版本改写，它按每个版本都带的固定文件名下载最新版本。每个版本包含：
 
 | 文件 | 用途 |
 |---|---|
 | `Sophon-<v>-macos-aarch64.dmg` | 手动安装 |
-| `Sophon-<v>-macos-aarch64.tar.gz` | 安装脚本、Homebrew 和应用内更新 |
+| `Sophon-<v>-macos-aarch64.tar.gz` | 安装脚本和应用内更新 |
+| `Sophon-macos-aarch64.tar.gz` | 同一个安装包，供 Homebrew cask 下载 |
 | `Sophon-<v>-ios-simulator.zip` | iOS 模拟器 |
 | `latest.json` | 更新源 |
 

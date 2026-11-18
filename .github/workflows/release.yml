@@ -1,6 +1,6 @@
 # Builds Sophon for macOS (Apple silicon), Android (an APK) and, with the
 # signing secrets, iOS, publishes a GitHub Release with the update manifest the app checks
-# (`latest.json`), updates the Homebrew cask, and, when the App Store
+# (`latest.json`), and, when the App Store
 # secrets are set, uploads the iOS build to TestFlight.
 #
 #   git tag v0.2.0 && git push origin v0.2.0
@@ -348,13 +348,10 @@ jobs:
           # The tag names the commit that was built, not main as it is by
           # now: a merge that landed during the build is not in this
           # release, and the next one must still see it as new.
+          # The same archive under a name without the version: what the
+          # Homebrew cask downloads (releases/latest/download/…), so the
+          # cask is the same file for every release and nothing is
+          # committed to main for it. After the update manifest, which
+          # lists the archives by their versioned names.
+          cp "dist/Sophon-$V-macos-aarch64.tar.gz" dist/Sophon-macos-aarch64.tar.gz
           gh release create "v$V" dist/* --title "Sophon $V" --generate-notes --target "${{ github.sha }}" || gh release upload "v$V" dist/* --clobber
-      - name: Homebrew cask
-        run: |
-          V=$(scripts/version.sh)
-          scripts/write-cask.sh "$V" \
-            "$(shasum -a 256 dist/Sophon-$V-macos-aarch64.tar.gz | cut -d' ' -f1)" > Casks/sophon.rb
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Casks/sophon.rb
-          git commit -m "Cask: Sophon $V" && git push origin main || echo "cask unchanged"

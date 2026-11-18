@@ -81,7 +81,7 @@ jobs:
             sleep 30
             exit 0
           fi
-          # What changed since: the app itself, not its cask (written by
+          # What changed since: the app itself, not its cask (once written by
           # each release), documents or these workflows.
           CHANGED=$(git log --oneline "v$V..HEAD" -- . ':!Casks' ':!*.md' ':!docs' ':!.github' ':!scripts/release.sh' | wc -l | tr -d ' ')
           # Run by hand, it releases all the same: someone asked for it.
