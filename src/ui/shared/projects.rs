@@ -29,30 +29,11 @@ fn row_status(status: impl Fn() -> Status + 'static) -> impl IntoElement {
         .justify_center()
         .child(dynamic(move || {
             let current = status.get();
-            let animate = !MOBILE && current == Status::Running && !reduce_motion();
             Some(untracked(move || {
                 if MOBILE || current != Status::Running {
                     return status_dot(move || current).into_element();
                 }
-                let ring = view()
-                    .w(px(11.0))
-                    .h(px(11.0))
-                    .rounded(px(R_FULL))
-                    .border_1()
-                    .border_color(tint(DOT_RUNNING, 0.35))
-                    .border_t_color(DOT_RUNNING)
-                    .label(current.label());
-                if !animate {
-                    return ring.into_element();
-                }
-                let angle = animated_value(0.0);
-                Animation::sequence([
-                    Animation::timing(&angle, 360.0, nsh_core::element::Timing::new(1400.0, Easing::Linear)),
-                    Animation::timing(&angle, 0.0, nsh_core::element::Timing::new(0.0, Easing::Linear)),
-                ])
-                .looped(None)
-                .start();
-                ring.bind_transform(nsh_core::TransformKind::Rotate, &angle).into_element()
+                spinner_ring(11.0, DOT_RUNNING).label(current.label()).into_element()
             }))
         }))
 }
