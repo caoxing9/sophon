@@ -75,17 +75,12 @@ pub(crate) fn project_list(actions: bool, empty: impl Fn() -> AnyElement + 'stat
             // pinned first (when there are any), each under its heading.
             let pinned = move || groups.with(|g| g.iter().filter(|g| g.project.is_none()).cloned().collect::<Vec<_>>());
             let projects = move || groups.with(|g| g.iter().filter(|g| g.project.is_some()).cloned().collect::<Vec<_>>());
-            let any_pinned = computed(move || groups.with(|g| g.iter().any(|g| g.project.is_none())));
-            let any_projects = computed(move || groups.with(|g| g.iter().any(|g| g.project.is_some())));
             scroll()
                 .flex_1()
                 .child(
                     view()
                         .pb(sp(S2))
                         .child(each(pinned, store::Group::key, move |g, _| group(g, actions)))
-                        // Under the pinned, when there are any: alone, the
-                        // sidebar's own "Projects" is heading enough.
-                        .child(when(move || any_projects.get() && any_pinned.get(), move || projects_heading(false)))
                         .child(each(projects, store::Group::key, move |g, _| group(g, actions))),
                 )
                 .into_element()
@@ -335,28 +330,6 @@ fn hover_actions(pinned: Memo<bool>, pin: impl Fn(bool) + 'static, archive: impl
             }))
         }))
         .child(icon_btn(Icon::Archive, Sz::Sm, t("Archive"), archive))
-}
-
-/// A section's heading ("Pinned", "Projects"): its name where the rows'
-/// text starts, and an action at the right, where the rows' actions are.
-fn section_heading(label: &'static str, action: Option<AnyElement>) -> impl IntoElement {
-    view()
-        .flex_row()
-        .items_center()
-        .justify_between()
-        .h(px(28.0))
-        .pl(sp(S4))
-        .pr(sp(S2 + S1))
-        .child(section_label(label))
-        .when_some(action, |v, a| v.child(a))
-}
-
-/// The projects' heading, with "Add project" (the desktop's) at its right.
-fn projects_heading(actions: bool) -> AnyElement {
-    let add = (actions && !MOBILE).then(|| {
-        icon_btn(Icon::Plus, Sz::Sm, t("Add project"), || store::open_modal(store::Modal::AddProject)).into_element()
-    });
-    section_heading(t("Projects"), add).into_element()
 }
 
 /// How far the pointer goes before a press on a project's header is a drag.
