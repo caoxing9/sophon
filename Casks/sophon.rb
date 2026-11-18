@@ -1,6 +1,6 @@
 cask "sophon" do
-  version "0.2.36"
-  sha256 "bc06670674002ab618547969d943c61d993da517648cc274ba161298835aa75e"
+  version "0.2.37"
+  sha256 "fb77fbc3cc445bd8e4ae5eb77f70686b9693322b3a01cf810f483398bd058df0"
 
   url "https://github.com/caoxing9/sophon/releases/download/v#{version}/Sophon-#{version}-macos-aarch64.tar.gz"
   name "Sophon"
