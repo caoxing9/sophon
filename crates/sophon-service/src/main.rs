@@ -1,4 +1,5 @@
 mod account;
+mod claude_usage;
 mod config;
 mod env;
 mod files;
@@ -212,8 +213,9 @@ async fn session(stream: TcpStream, shared: Shared, token: Rc<String>) -> Result
                             // goes on being heard and told meanwhile.
                             "provider.usage.list.request" | "provider.credits.list.request" | "provider.credits.use.request" => {
                                 let (kind, request, done) = (kind.to_owned(), request.clone(), done.clone());
+                                let home = shared.borrow().home.clone();
                                 tokio::task::spawn_local(async move {
-                                    let reply = match account::handle(&request).await {
+                                    let reply = match account::handle(&request, &home).await {
                                         Ok(mut payload) => {
                                             payload["requestId"] = request["requestId"].clone();
                                             envelope(&kind.replace("request","response"),payload)
