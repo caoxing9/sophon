@@ -109,7 +109,11 @@ pub(crate) fn shell() -> impl IntoElement {
                     )
                     .into_element()
             }
-            Layout::Sidebar => sidebar::sidebar().bg(SIDEBAR).flex_1().into_element(),
+            Layout::Sidebar => view()
+                .flex_1()
+                .child(sidebar::sidebar().bg(SIDEBAR).flex_1())
+                .child(notice::notice_bar(computed(|| Length::from(px(title_bar().top.0 + S2)))))
+                .into_element(),
             Layout::Main => main(true).into_element(),
         }))
     }))
@@ -264,7 +268,7 @@ enum Main {
     PullRequest,
 }
 
-/// The main surface: the open screen, and the notice over its foot.
+/// The main surface: the open screen and its notices.
 fn main(compact: bool) -> impl IntoElement {
     let which = computed(|| match store::screen() {
         Screen::Home => Main::Home,
@@ -276,6 +280,14 @@ fn main(compact: bool) -> impl IntoElement {
         Screen::Workspace(_) => Main::Workspace,
         Screen::Inbox => Main::Inbox,
         Screen::PullRequest { .. } => Main::PullRequest,
+    });
+    let archive_top = computed(move || {
+        let header_inset = if which.get() == Main::Workspace {
+            workspace::header_inset(compact)
+        } else {
+            0.0
+        };
+        Length::from(px(header_inset + S2))
     });
     view()
         .flex_1()
@@ -294,6 +306,6 @@ fn main(compact: bool) -> impl IntoElement {
                 Main::PullRequest => crate::ui::shared::github::pull_request_screen().into_element(),
             }))
         }))
-        .child(notice::notice_bar())
+        .child(notice::notice_bar(archive_top))
 }
 
