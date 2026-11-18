@@ -3172,7 +3172,7 @@ dependencies = [
 
 [[package]]
 name = "sophon-service"
-version = "0.2.22"
+version = "0.2.37"
 dependencies = [
  "base64 0.22.1",
  "cap-std",

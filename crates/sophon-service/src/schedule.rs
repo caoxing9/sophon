@@ -6,6 +6,9 @@ use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
 pub(crate) fn next(cadence: &Value, after: DateTime<Utc>) -> Result<String, String> {
+    // To the second: a time on the minute is that minute, not a
+    // fraction of a second into it.
+    let after = DateTime::from_timestamp(after.timestamp(), 0).unwrap_or(after);
     let when = match cadence["type"].as_str() {
         Some("every") => {
             let milliseconds = cadence["everyMs"]
