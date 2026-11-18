@@ -267,6 +267,15 @@ pub fn modes(family: &str) -> Value {
     }
 }
 
+/// The mode a new conversation is offered first: Claude Code's auto mode
+/// (a classifier answers its permission prompts: it neither stops at each
+/// nor skips them all), and for Codex its own default permissions. It is
+/// on the composer, a press from any other; a request that names no mode
+/// still gets the first, which asks ([`mode`]).
+pub fn offered_mode(_family: &str) -> &'static str {
+    "auto"
+}
+
 /// `wanted` if `family` has that mode, else its default.
 pub fn mode(family: &str, wanted: Option<&str>) -> String {
     let modes = modes(family);
@@ -306,7 +315,7 @@ pub fn snapshot(config: &Value) -> Value {
             };
             json!({"provider":provider,"label":settings["label"],
                 "enabled":settings["enabled"].as_bool().unwrap_or(true),"models":models,
-                "defaultModeId":modes[0]["id"],"modes":modes,
+                "defaultModeId":family.map(offered_mode),"modes":modes,
                 "status":if ready {"ready"} else {"unavailable"}})
         })
         .collect();
@@ -461,5 +470,21 @@ mod tests {
         assert_eq!(mode("codex", None), "auto");
         assert_eq!(family("work", &json!({"extends":"claude"})), Some("claude"));
         assert_eq!(family("opencode", &Value::Null), None);
+    }
+
+    #[test]
+    fn a_new_conversation_is_offered_auto_mode_first() {
+        let snapshot = snapshot(&json!({}));
+        for entry in snapshot["entries"].as_array().unwrap() {
+            let offered = entry["defaultModeId"].as_str().unwrap();
+            assert_eq!(offered, "auto");
+            // One of the modes it lists, so a client can show it.
+            assert!(
+                entry["modes"].as_array().unwrap().iter().any(|mode| mode["id"] == offered),
+                "{entry}"
+            );
+        }
+        // A request that names no mode is still given the one that asks.
+        assert_eq!(mode("claude", None), "default");
     }
 }
