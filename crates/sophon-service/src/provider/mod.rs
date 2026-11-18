@@ -121,8 +121,21 @@ pub(crate) fn binary(provider: &str) -> Option<PathBuf> {
         .filter(|dir| dir.is_absolute())
         .map(|dir| dir.join(provider))
         .collect();
-    if let Some(home) = env::var_os("HOME") {
-        paths.push(PathBuf::from(home).join(".local/bin").join(provider));
+    // Where the CLIs are installed, for a service started with a bare
+    // `PATH` (an app opened from the Finder has no shell's).
+    if let Some(home) = env::var_os("HOME").map(PathBuf::from) {
+        for dir in [
+            ".local/bin",
+            ".claude/local",
+            ".bun/bin",
+            ".npm-global/bin",
+            ".volta/bin",
+        ] {
+            paths.push(home.join(dir).join(provider));
+        }
+    }
+    for dir in ["/opt/homebrew/bin", "/usr/local/bin"] {
+        paths.push(PathBuf::from(dir).join(provider));
     }
     if cfg!(target_os = "macos") && provider == "codex" {
         for app in ["ChatGPT", "Codex"] {

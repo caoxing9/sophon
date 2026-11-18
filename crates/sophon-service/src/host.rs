@@ -889,6 +889,84 @@ fn answer(shared: &Shared, request: &Value, mut made: Option<Value>) -> Result<V
                 json!({"agentId":agent_id,"requestId":permission}),
             ));
         }
+        // The workspace's conversations have been seen.
+        "workspace.clear_attention.request" => {
+            let workspace = text(request, "workspaceId")?;
+            let seen: Vec<String> = host
+                .state
+                .agents
+                .iter()
+                .filter(|(_, agent)| {
+                    agent["workspaceId"] == workspace && agent["requiresAttention"] == true
+                })
+                .map(|(id, _)| id.clone())
+                .collect();
+            for agent in &seen {
+                host.state.agents.get_mut(agent).unwrap()["requiresAttention"] = json!(false);
+            }
+            host.persist().map_err(|error| error.to_string())?;
+            for agent in &seen {
+                host.update_agent(agent);
+            }
+            json!({"workspaceId":workspace})
+        }
+        // A workspace put away with its conversations, and brought back
+        // with those put away with it. Its folder stays where it is: a
+        // worktree's checkout is the user's to remove.
+        "archive_workspace_request" | "workspace.archive.undo.request" => {
+            let id = text(request, "workspaceId")?;
+            let host = &mut *host;
+            let workspace = host
+                .state
+                .workspaces
+                .get_mut(id)
+                .ok_or("Unknown workspace")?;
+            let was = workspace["archivedAt"].clone();
+            let at = if kind == "archive_workspace_request" {
+                now()
+            } else {
+                Value::Null
+            };
+            workspace["archivedAt"] = at.clone();
+            let workspace = workspace.clone();
+            let mut changed = Vec::new();
+            for (agent_id, agent) in host
+                .state
+                .agents
+                .iter_mut()
+                .filter(|(_, agent)| agent["workspaceId"] == id)
+            {
+                if at.is_null() {
+                    if !was.is_null() && agent["archivedAt"] == was {
+                        agent["archivedAt"] = Value::Null;
+                        changed.push(agent_id.clone());
+                    }
+                } else if agent["archivedAt"].is_null() {
+                    agent["archivedAt"] = at.clone();
+                    agent["status"] = json!("idle");
+                    agent["pendingPermissions"] = json!([]);
+                    changed.push(agent_id.clone());
+                }
+            }
+            for agent in &changed {
+                if !at.is_null() {
+                    host.sessions.remove(agent);
+                }
+            }
+            host.persist().map_err(|error| error.to_string())?;
+            for agent in &changed {
+                host.update_agent(agent);
+            }
+            host.publish(
+                "workspace_update",
+                if at.is_null() {
+                    json!({"kind":"upsert","workspace":workspace})
+                } else {
+                    json!({"kind":"remove","id":id})
+                },
+            );
+            json!({"workspace":workspace})
+        }
         "workspace.title.set.request"
         | "workspace.pin.set.request"
         | "workspace.mark_unread.request" => {

@@ -75,6 +75,7 @@ pub(crate) fn project_list(actions: bool, empty: impl Fn() -> AnyElement + 'stat
             // pinned first (when there are any), each under its heading.
             let pinned = move || groups.with(|g| g.iter().filter(|g| g.project.is_none()).cloned().collect::<Vec<_>>());
             let projects = move || groups.with(|g| g.iter().filter(|g| g.project.is_some()).cloned().collect::<Vec<_>>());
+            let any_pinned = computed(move || groups.with(|g| g.iter().any(|g| g.project.is_none())));
             let any_projects = computed(move || groups.with(|g| g.iter().any(|g| g.project.is_some())));
             scroll()
                 .flex_1()
@@ -82,7 +83,9 @@ pub(crate) fn project_list(actions: bool, empty: impl Fn() -> AnyElement + 'stat
                     view()
                         .pb(sp(S2))
                         .child(each(pinned, store::Group::key, move |g, _| group(g, actions)))
-                        .child(when(move || any_projects.get(), move || projects_heading(actions)))
+                        // Under the pinned, when there are any: alone, the
+                        // sidebar's own "Projects" is heading enough.
+                        .child(when(move || any_projects.get() && any_pinned.get(), move || projects_heading(false)))
                         .child(each(projects, store::Group::key, move |g, _| group(g, actions))),
                 )
                 .into_element()

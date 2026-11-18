@@ -1342,3 +1342,66 @@ async fn the_first_start_brings_over_what_the_old_service_kept() {
     let agents = ask(&mut socket, json!({"type":"fetch_agents_request"})).await;
     assert_eq!(agents["payload"]["entries"][0]["title"], "Renamed");
 }
+
+/// Whether the conversation `agent` waits to be looked at.
+async fn attention(socket: &mut Socket, agent: &Value) -> Value {
+    ask(
+        socket,
+        json!({"type":"fetch_agent_request","agentId":agent}),
+    )
+    .await["payload"]["agent"]["requiresAttention"]
+        .clone()
+}
+
+#[tokio::test]
+async fn a_workspace_is_seen_put_away_and_brought_back() {
+    let service = Service(tempfile::tempdir().unwrap());
+    install_provider(service.0.path());
+    service.cli("start");
+    let mut socket = service.connect(true).await;
+    let created = ask(&mut socket, json!({"type":"workspace.create.request","source":{"kind":"directory","path":service.0.path()},
+        "agent":{"config":{"provider":"codex"},"initialPrompt":"first"}})).await;
+    let (agent, workspace) = (
+        created["payload"]["agent"]["id"].clone(),
+        created["payload"]["workspace"]["id"].clone(),
+    );
+    finished(&mut socket).await;
+    assert_eq!(attention(&mut socket, &agent).await, true);
+    let seen = ask(
+        &mut socket,
+        json!({"type":"workspace.clear_attention.request","workspaceId":workspace}),
+    )
+    .await;
+    assert_eq!(seen["type"], "workspace.clear_attention.response", "{seen}");
+    assert_eq!(attention(&mut socket, &agent).await, false);
+
+    let count = |reply: Value| reply["payload"]["entries"].as_array().unwrap().len();
+    let away = ask(
+        &mut socket,
+        json!({"type":"archive_workspace_request","workspaceId":workspace}),
+    )
+    .await;
+    assert_eq!(away["type"], "archive_workspace_response", "{away}");
+    assert_eq!(
+        count(ask(&mut socket, json!({"type":"fetch_workspaces_request"})).await),
+        0
+    );
+    assert_eq!(
+        count(ask(&mut socket, json!({"type":"fetch_agents_request"})).await),
+        0
+    );
+    let back = ask(
+        &mut socket,
+        json!({"type":"workspace.archive.undo.request","workspaceId":workspace}),
+    )
+    .await;
+    assert_eq!(back["type"], "workspace.archive.undo.response", "{back}");
+    assert_eq!(
+        count(ask(&mut socket, json!({"type":"fetch_workspaces_request"})).await),
+        1
+    );
+    assert_eq!(
+        count(ask(&mut socket, json!({"type":"fetch_agents_request"})).await),
+        1
+    );
+}
