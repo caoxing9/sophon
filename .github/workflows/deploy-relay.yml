@@ -1,15 +1,9 @@
 name: Deploy relay
 
+# The relay is deployed when someone asks for it (Actions → Deploy relay
+# → Run workflow), not with each change under relay/: it carries every
+# phone's connection, and most changes there need no new deploy.
 on:
-  push:
-    branches: [main]
-    paths:
-      - relay/src/**
-      - relay/Cargo.toml
-      - relay/Cargo.lock
-      - relay/build-linux.sh
-      - relay/deploy.sh
-      - relay/sophon-relay.service
   workflow_dispatch:
 
 permissions:
