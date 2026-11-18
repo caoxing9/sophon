@@ -3860,6 +3860,29 @@ pub(crate) fn steer_queued(agent_id: &str, index: usize) {
     deliver_with(agent_id, &m.text, running.then_some("steer"), m.images, m.attachments);
 }
 
+/// Takes queued message `index` back into the composer to be changed,
+/// before whatever is being written there; the rest stay queued. One
+/// with pictures or files stays where it is: those stand as chips in
+/// the composer's text, which only the composer that made them has.
+pub(crate) fn edit_queued(agent_id: &str, index: usize) {
+    let mut taken = None;
+    global::<Queues>().update(|q| {
+        if let Some(list) = q.0.get_mut(agent_id)
+            && list.get(index).is_some_and(|m| m.images.is_empty() && m.attachments.is_empty())
+        {
+            taken = Some(list.remove(index));
+        }
+    });
+    let Some(message) = taken else { return };
+    let mut text = message.text;
+    let writing = draft(agent_id);
+    if !writing.trim().is_empty() {
+        text.push('\n');
+        text.push_str(&writing);
+    }
+    set_draft(agent_id, &text);
+}
+
 pub(crate) fn unqueue(agent_id: &str, index: usize) {
     global::<Queues>().update(|q| {
         if let Some(list) = q.0.get_mut(agent_id)

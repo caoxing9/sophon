@@ -734,6 +734,14 @@ fn queue_track(live: bool) -> impl IntoElement {
                             }
                             previews
                         })
+                        // Back into the composer, to be changed and sent again.
+                        .when(msg.images.is_empty() && msg.attachments.is_empty(), |row| {
+                            row.child(btn(t("Edit"), Variant::Ghost, Sz::Sm, Some(Icon::Pencil), move || {
+                                if let Some(id) = store::selected_id() {
+                                    store::edit_queued(&id, i);
+                                }
+                            }))
+                        })
                         // Into the running turn now, without waiting for it
                         // to end.
                         .child(btn(t("Steer"), Variant::Ghost, Sz::Sm, Some(Icon::CircleArrowUp), move || {
