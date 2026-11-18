@@ -50,7 +50,17 @@ The host service does not do a few of these yet: cloning from GitHub, archiving 
 
 The macOS bundle includes `sophon-service` and starts it on demand. For a source checkout, build it alongside the app with `cargo build -p sophon-service`. Install and sign in to the provider CLI you want to use on the host computer. An agent runs on its CLI's own login and settings, as `claude` or `codex` would in a terminal.
 
-**Upgrading from 0.2.x**: the old service kept its data in `~/.paseo`; the new one uses `~/.sophon/service`, so the project list starts empty. Import once, as the [native service guide](docs/native-service.md) describes: projects, workspaces and sessions come over, old timelines and schedules do not. With a self-hosted relay, enter its address again in Settings.
+### Where are my conversations?
+
+The Mac running `sophon-service` keeps the projects, workspaces and conversation timelines. Your iPhone shows the conversations on the selected host. Switch back to the original host to see its history again. A LAN connection and a relay connection to the same host show the same conversations.
+
+| Host | Data directory on the Mac |
+|---|---|
+| Older builds using Paseo | `~/.paseo/` |
+| Rust service | `~/.sophon/service/` by default |
+| Side-by-side local beta | A separate directory set with `SOPHON_SERVICE_HOME`, for example `~/.sophon-beta/service/` |
+
+**Migrating from Paseo.** Keep the old directory and import projects, workspaces and session IDs into an empty destination. You can resume a conversation if the provider still has its local session. Use the old host to read messages and schedules from before the migration. [Import instructions](docs/native-service.md#导入旧数据)
 
 ### macOS (14 Sonoma or later, Apple silicon)
 
@@ -87,16 +97,20 @@ the app and restarts it. `brew upgrade --cask sophon` works too.
 
 ### iOS
 
-There is no App Store or TestFlight build yet. To run it on your own iPhone with a free Apple ID: sign in to Xcode (*Settings → Accounts*), plug in the
+To install from source on your own iPhone, sign in to Xcode (*Settings → Accounts*), plug in the
 iPhone, turn on *Developer Mode* (*Settings → Privacy & Security*), set up the build tools (below) and run
 
 ```sh
-scripts/ios-device.sh
+xcrun devicectl list devices
+SOPHON_DEVICE="<target iPhone UDID>" scripts/ios-device.sh
 ```
 
 It makes a development certificate and profile, builds and signs Sophon and installs it. The first time, trust your
 Apple ID on the iPhone (*Settings → General → VPN & Device Management*). Free signing lasts 7 days: run it again then.
-On the Mac, open *Settings → Pair a device* in Sophon and scan the QR code with the iPhone's camera.
+
+**Connect to your Mac.** Open *Settings → Pair a device* in the Mac app you want to reach and scan its QR code with your iPhone. If you run the stable and beta apps side by side, each has its own code. To switch between paired hosts, tap the host name on the phone's home screen and choose one from the bottom sheet.
+
+On the same LAN, the phone can connect directly. For access from another network, enter your self-hosted `sophon-relay` address in the Mac app's settings before scanning its QR code so the pairing link includes the relay. An existing v2 relay works with the Rust host.
 
 ## Build from source
 

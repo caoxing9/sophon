@@ -136,7 +136,7 @@ fn clip(text: &str) -> String {
 }
 
 /// The text of a tool's result: a string, or the text blocks of a list.
-fn said(content: &Value) -> String {
+pub(crate) fn said(content: &Value) -> String {
     match content {
         Value::String(text) => text.clone(),
         Value::Array(blocks) => blocks
@@ -149,7 +149,7 @@ fn said(content: &Value) -> String {
 }
 
 /// A call as the timeline shows it, by what the tool does.
-fn detail(name: &str, input: &Value) -> Value {
+pub(crate) fn detail(name: &str, input: &Value) -> Value {
     let field = |key: &str| input[key].clone();
     match name {
         "Bash" => json!({"type":"shell","command":field("command")}),
@@ -202,7 +202,7 @@ fn patch(hunks: &Value) -> Option<String> {
 
 /// `detail` with what the call came back with: `text` as the model got
 /// it, `result` as Claude Code describes it to a program.
-fn answered(mut detail: Value, text: &str, result: &Value, failed: bool) -> Value {
+pub(crate) fn answered(mut detail: Value, text: &str, result: &Value, failed: bool) -> Value {
     match detail["type"].as_str() {
         Some("shell") => {
             let output = match (result["stdout"].as_str(), result["stderr"].as_str()) {

@@ -41,7 +41,17 @@ Sophon 用 Rust 和 [NSH](https://github.com/longbridge/nsh) 编写，在每个�
 
 macOS 应用包自带 `sophon-service`，按需启动。源码开发时先运行 `cargo build -p sophon-service`，在存放代码的电脑上安装并登录要使用的 Agent CLI。智能体使用 CLI 自己的登录和配置，和在终端里直接运行 `claude`、`codex` 一致。
 
-**从 0.2.x 升级**：旧版的数据在 `~/.paseo`，新服务使用 `~/.sophon/service`，升级后项目列表是空的。按[服务指南](docs/native-service.md#导入旧数据)导入一次，可带回项目、工作区和会话；旧的聊天记录和定时任务不会迁移。使用自托管中继的话，还需要在设置里重新填写中继地址。
+### 会话存在哪里？
+
+项目、工作区和对话时间线保存在运行 `sophon-service` 的 Mac 上。iPhone 显示当前所选宿主的会话。切换宿主后，侧边栏会显示另一份列表；切回原宿主即可继续查看原来的对话。局域网直连和中继只是到达同一宿主的两条路径。
+
+| 宿主 | Mac 上的数据目录 |
+|---|---|
+| 使用 Paseo 的旧版 | `~/.paseo/` |
+| Rust 服务 | 默认 `~/.sophon/service/` |
+| 单独安装的本地测试版 | 可用 `SOPHON_SERVICE_HOME` 指定独立目录，例如 `~/.sophon-beta/service/` |
+
+**从 Paseo 迁移。** 先保留旧目录，再将项目、工作区和会话 ID 导入空的目标服务。提供商的本地会话仍在时，可以接着聊。迁移前的逐条消息和定时任务仍需通过旧宿主查看。[导入步骤](docs/native-service.md#导入旧数据)
 
 ### macOS（14 Sonoma 及以上，Apple 芯片）
 
@@ -75,17 +85,20 @@ curl -fsSL https://raw.githubusercontent.com/caoxing9/sophon/main/install.sh | s
 
 ### iOS
 
-目前还没有 App Store 或 TestFlight 版本。每个版本都附带用于 iOS 模拟器的 `Sophon-<版本>-ios-simulator.zip`；
-想用免费 Apple ID 装到自己的 iPhone 上：在 Xcode 登录 Apple ID（*Settings → Accounts*），连上 iPhone，打开
+要从源码装到自己的 iPhone 上，在 Xcode 登录 Apple ID（*Settings → Accounts*），连上 iPhone，打开
 *开发者模式*（*设置 → 隐私与安全性*），准备好构建工具（见下文），然后运行
 
 ```sh
-scripts/ios-device.sh
+xcrun devicectl list devices
+SOPHON_DEVICE="<目标 iPhone 的 UDID>" scripts/ios-device.sh
 ```
 
 它会生成开发证书和描述文件，构建、签名并安装 Sophon。第一次需要在 iPhone 上信任你的 Apple ID
-（*设置 → 通用 → VPN与设备管理*）。免费签名 7 天有效，到期后再运行一次即可。在 Mac 上打开 Sophon 的
-*设置 → 配对设备*，用 iPhone 相机扫描二维码即可配对。
+（*设置 → 通用 → VPN与设备管理*）。免费签名 7 天有效，到期后再运行一次即可。
+
+**连接 Mac。** 在要连接的 Mac 应用中打开 *设置 → 配对设备*，用 iPhone 扫描二维码。正式版与 Beta 并排运行时，请扫对应版本的码。之后轻点手机首页的主机名称，即可从底部列表切换已配对的电脑。
+
+同一局域网可以直连。要从其他网络访问，请先在对应 Mac 应用的设置里填入自托管 `sophon-relay` 地址，再扫码，让配对链接带上中继信息。已有的 v2 中继可以继续使用。
 
 ## 从源码构建
 

@@ -5,7 +5,7 @@ use crate::{
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
-fn next(cadence: &Value, after: DateTime<Utc>) -> Result<String, String> {
+pub(crate) fn next(cadence: &Value, after: DateTime<Utc>) -> Result<String, String> {
     let when = match cadence["type"].as_str() {
         Some("every") => {
             let milliseconds = cadence["everyMs"]

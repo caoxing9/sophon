@@ -1192,3 +1192,153 @@ async fn live_codex_replies() {
     );
     assert!(timeline["payload"]["agent"]["persistence"]["sessionId"].is_string());
 }
+
+/// What the old service kept, in a home made for the test: a project
+/// with a conversation whose words are in Claude Code's record, a
+/// schedule that fell due while nothing ran, a relay, and another space.
+#[tokio::test]
+async fn the_first_start_brings_over_what_the_old_service_kept() {
+    let user = tempfile::tempdir().unwrap();
+    let home = user.path();
+    let old = home.join(".paseo");
+    fs::create_dir_all(old.join("projects")).unwrap();
+    fs::create_dir_all(old.join("agents/p")).unwrap();
+    fs::create_dir_all(old.join("schedules")).unwrap();
+    fs::create_dir_all(home.join(".paseo-spaces/lin/agents")).unwrap();
+    fs::create_dir_all(home.join(".claude/projects/-old-project")).unwrap();
+    fs::create_dir_all(home.join(".sophon")).unwrap();
+    fs::write(
+        old.join("projects/projects.json"),
+        json!([{"projectId":"p1","rootPath":"/old/project","displayName":"project","kind":"git"}])
+            .to_string(),
+    )
+    .unwrap();
+    fs::write(old.join("projects/workspaces.json"),
+        json!([{"workspaceId":"w1","projectId":"p1","cwd":"/old/project","kind":"local_checkout","title":"main"}]).to_string()).unwrap();
+    fs::write(old.join("agents/p/a1.json"), json!({"id":"a1","provider":"claude","cwd":"/old/project","workspaceId":"w1",
+        "title":"Fix it","lastModeId":"acceptEdits","config":{"model":"claude-opus-5-5","thinkingOptionId":"high"},
+        "persistence":{"sessionId":"session-1"},"updatedAt":"2026-01-01T00:00:00Z"}).to_string()).unwrap();
+    fs::write(
+        old.join("agents/p/a2.json"),
+        json!({"id":"a2","provider":"claude","cwd":"/old/project","internal":true}).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        old.join("schedules/s1.json"),
+        json!({"id":"s1","name":"Nightly","prompt":"check","status":"active",
+        "cadence":{"type":"every","everyMs":3_600_000},"nextRunAt":"2020-01-01T00:00:00Z",
+        "target":{"type":"new-agent","config":{"provider":"claude","cwd":"/old/project"}},
+        "runs":[{"id":"r1","status":"completed"}]})
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(old.join("config.json"), json!({"daemon":{"listen":"127.0.0.1:6767","relay":{"endpoint":"relay.example:8443","useTls":false}},
+        "agents":{"providers":{"work":{"extends":"claude","env":{"CLAUDE_CONFIG_DIR":"/h/.claude-work"}},"opencode":{"enabled":false}}}}).to_string()).unwrap();
+    fs::write(home.join(".paseo-spaces/lin/agents/b1.json"),
+        json!({"id":"b1","provider":"codex","cwd":"/lin/project","persistence":{"sessionId":"thread-9"}}).to_string()).unwrap();
+    fs::write(home.join(".claude/projects/-old-project/session-1.jsonl"), [
+        json!({"type":"user","uuid":"u1","message":{"content":"fix it"}}),
+        json!({"type":"assistant","message":{"model":"m","content":[{"type":"text","text":"Fixed."}]}}),
+        // Another conversation of Claude Code's, never one of Sophon's.
+    ].map(|entry| entry.to_string()).join("\n")).unwrap();
+    fs::write(
+        home.join(".claude/projects/-old-project/session-other.jsonl"),
+        json!({"type":"user","message":{"content":"not Sophon's"}}).to_string(),
+    )
+    .unwrap();
+    let before = fs::read(old.join("agents/p/a1.json")).unwrap();
+
+    let service = Service(
+        tempfile::Builder::new()
+            .prefix("service")
+            .rand_bytes(0)
+            .tempdir_in(home.join(".sophon"))
+            .unwrap(),
+    );
+    assert_eq!(service.0.path(), home.join(".sophon/service"));
+    let own = [("HOME", home.to_str().unwrap())];
+    service.cli_with_env("start", &own);
+    let mut socket = service.connect(true).await;
+    let projects = ask(&mut socket, json!({"type":"project.list.request"})).await;
+    assert_eq!(
+        projects["payload"]["projects"][0]["projectRootPath"],
+        "/old/project"
+    );
+    let agents = ask(&mut socket, json!({"type":"fetch_agents_request"})).await;
+    let agents = agents["payload"]["entries"].as_array().unwrap();
+    assert_eq!(agents.len(), 1, "{agents:?}");
+    let agent = &agents[0];
+    assert_eq!(
+        (&agent["id"], &agent["title"], &agent["workspaceId"]),
+        (&json!("a1"), &json!("Fix it"), &json!("w1"))
+    );
+    assert_eq!(
+        (
+            &agent["model"],
+            &agent["thinkingOptionId"],
+            &agent["currentModeId"]
+        ),
+        (
+            &json!("claude-opus-5-5"),
+            &json!("high"),
+            &json!("acceptEdits")
+        )
+    );
+    // What was said, from Claude Code's record of that session alone.
+    let timeline = ask(
+        &mut socket,
+        json!({"type":"fetch_agent_timeline_request","agentId":"a1"}),
+    )
+    .await;
+    let said: Vec<_> = timeline["payload"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["item"]["text"].clone())
+        .collect();
+    assert_eq!(said, ["fix it", "Fixed."]);
+    let schedules = ask(&mut socket, json!({"type":"schedule/list"})).await;
+    let schedule = &schedules["payload"]["schedules"][0];
+    assert_eq!(
+        (&schedule["name"], &schedule["status"]),
+        (&json!("Nightly"), &json!("active"))
+    );
+    assert!(
+        schedule["nextRunAt"].as_str().unwrap() > "2026",
+        "{schedule}"
+    );
+    let logs = ask(
+        &mut socket,
+        json!({"type":"schedule/logs","scheduleId":"s1"}),
+    )
+    .await;
+    assert_eq!(logs["payload"]["runs"][0]["id"], "r1");
+    let config = ask(&mut socket, json!({"type":"get_daemon_config_request"})).await;
+    let config = &config["payload"]["config"];
+    assert_eq!(
+        config["daemon"],
+        json!({"relay":{"endpoint":"relay.example:8443","useTls":false}})
+    );
+    assert_eq!(
+        config["providers"],
+        json!({"work":{"extends":"claude","env":{"CLAUDE_CONFIG_DIR":"/h/.claude-work"}}})
+    );
+    // The other space, in its own folder; the old folders as they were.
+    let lin: Value =
+        serde_json::from_slice(&fs::read(home.join(".sophon/spaces/lin/state.json")).unwrap())
+            .unwrap();
+    assert_eq!(lin["agents"]["b1"]["persistence"]["sessionId"], "thread-9");
+    assert_eq!(fs::read(old.join("agents/p/a1.json")).unwrap(), before);
+
+    // Once: what is changed here since is not replaced by the old again.
+    ask(
+        &mut socket,
+        json!({"type":"update_agent_request","agentId":"a1","name":"Renamed"}),
+    )
+    .await;
+    service.cli_with_env("stop", &own);
+    service.cli_with_env("start", &own);
+    let mut socket = service.connect(true).await;
+    let agents = ask(&mut socket, json!({"type":"fetch_agents_request"})).await;
+    assert_eq!(agents["payload"]["entries"][0]["title"], "Renamed");
+}

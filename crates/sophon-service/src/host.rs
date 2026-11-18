@@ -146,6 +146,25 @@ impl Host {
             }
             let path = self.home.join("timelines").join(format!("{agent}.jsonl"));
             let mut timeline = Timeline::load(path).map_err(|error| error.to_string())?;
+            // A conversation that came with its id and nothing said in
+            // it (brought over from the old service): what was said is
+            // in its CLI's record of that session.
+            let record = &self.state.agents[agent];
+            if timeline.is_empty()
+                && let Some(session) = record
+                    .pointer("/persistence/sessionId")
+                    .and_then(Value::as_str)
+                && let Some(provider) = record["provider"].as_str()
+            {
+                let config = crate::config::read(&self.home).map_err(|error| error.to_string())?;
+                let settings = &config["providers"][provider];
+                if let Some(family) = provider::family(provider, settings) {
+                    for item in crate::history::read(family, settings, session) {
+                        timeline.push(&item);
+                    }
+                    timeline.save().map_err(|error| error.to_string())?;
+                }
+            }
             if !self.sessions.contains_key(agent) {
                 for item in timeline.unfinished("canceled") {
                     timeline.push(&item);

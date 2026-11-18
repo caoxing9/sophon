@@ -3,6 +3,7 @@ mod config;
 mod env;
 mod files;
 mod git;
+mod history;
 mod host;
 mod import;
 mod models;
@@ -347,6 +348,8 @@ async fn serve(home: PathBuf) -> Result<(), Error> {
     }
     let listener = TcpListener::bind(address).await?;
     let address = listener.local_addr()?;
+    // Before anything is read: what the old service kept for this home.
+    import::adopt(&home);
     let host = Host::new(home.clone(), state::State::load(&home)?)?;
     transfer::prune(&home);
     let token = Rc::new(state::id());

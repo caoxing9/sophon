@@ -174,6 +174,11 @@ impl Timeline {
         seq
     }
 
+    /// Whether nothing has been said in it, as far as it knows.
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
     /// Where the message a client sent as `message_id` is, if it was
     /// taken: the same send again gets the same answer.
     pub fn sent(&self, message_id: &str) -> Option<u64> {

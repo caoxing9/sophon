@@ -27,17 +27,26 @@ Agent 用的账号和接口由 CLI 自己决定，也就是它的登录状态和
 
 要让某个提供商走别的接口，在服务配置里给它写 `env`，例如 `{"providers":{"gateway":{"extends":"claude","env":{"ANTHROPIC_BASE_URL":"…","ANTHROPIC_AUTH_TOKEN":"…"}}}}`。在无界面主机上用 API key 时也是这样配置。
 
-## 导入旧数据
+## 从旧服务升级
 
-退出桌面端，停止目标服务，再执行一次导入。旧服务目录只读，非空目标会拒绝导入。
+服务第一次在 `~/.sophon/service` 启动时（还没有 `state.json`），会自动把旧服务在 `~/.paseo` 里保存的内容带过来，之后不再重复：
+
+- 项目、工作区、会话（ID、标题、模型、思考强度、权限模式、归档状态和提供商会话 ID），旧服务内部用的会话除外。
+- 定时任务和各自的运行记录。到期时间已经过去的任务从现在起重新排期，不会一启动就补跑；发往已有会话的任务会以暂停状态带过来，因为本服务每次运行都新建会话。
+- 中继地址，以及基于 Claude Code 或 Codex 的提供商配置。
+- 其他空间：`~/.paseo-spaces/<名字>` 对应到 `~/.sophon/spaces/<名字>`，并保留各自的监听端口。
+
+旧目录只读不改，退回旧版本时数据仍在。如果旧服务还在运行，会先停掉它，避免它的定时任务和带过来的重复执行。
+
+**聊天记录**不是复制过来的：新旧服务都不保存它，保存它的是 CLI 自己的会话文件。带过来的会话在第一次打开时，按它的会话 ID 读取对应的那一个文件（Claude Code 的 `projects/*/<会话ID>.jsonl`，Codex 的 `sessions/**/rollout-*-<线程ID>.jsonl`）。只读取 Sophon 自己记录在案的会话，不会扫描或列出电脑上其他的 Claude Code、Codex 会话。CLI 的会话文件如果已被清理，对应会话仍可继续，只是看不到之前的消息。
+
+其他位置的服务目录（`--home` 指向别处）不会自动带入，可以手动导入一次，目标目录必须为空：
 
 ```sh
 target/debug/sophon-service daemon stop
-target/debug/sophon-service import "$HOME/.paseo" --home "$HOME/.sophon/service"
+target/debug/sophon-service import "$HOME/.paseo" --home DIR
 target/debug/sophon-service daemon start
 ```
-
-导入项目和工作区注册表、Agent ID、名称、归档状态和提供商会话 ID。旧服务的时间线、定时任务、插件和凭证尚未迁移。旧时间线仍需通过旧服务查看。保留原目录，直到核对完历史数据。
 
 ## 当前覆盖
 

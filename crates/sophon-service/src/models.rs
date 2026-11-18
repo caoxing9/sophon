@@ -25,7 +25,7 @@ fn home() -> PathBuf {
 
 /// Where `family`'s CLI keeps its files, as the provider's settings say
 /// (their `env`), else the service's environment, else its usual place.
-fn kept(settings: &Value, variable: &str, usual: &str) -> PathBuf {
+pub(crate) fn kept(settings: &Value, variable: &str, usual: &str) -> PathBuf {
     settings
         .pointer(&format!("/env/{variable}"))
         .and_then(Value::as_str)

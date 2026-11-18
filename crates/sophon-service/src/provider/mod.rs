@@ -9,7 +9,7 @@
 //! process goes after a while with nothing to do and comes back with the
 //! next prompt.
 
-mod claude;
+pub(crate) mod claude;
 mod codex;
 
 use serde_json::{Value, json};

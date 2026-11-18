@@ -1,0 +1,357 @@
+//! A conversation's earlier messages, read from where they are kept.
+//!
+//! Neither this service's predecessor nor an agent's CLI hands a
+//! conversation over whole: the CLI keeps each as a record of its own
+//! (Claude Code's `<config>/projects/<folder>/<session>.jsonl`, Codex's
+//! `<home>/sessions/<date>/rollout-…-<thread>.jsonl`), and a
+//! conversation brought over from the old service arrives as its id
+//! and nothing said in it. So the first time such a conversation is
+//! opened, its record is read into its timeline.
+//!
+//! Only by the session id a conversation here has: nothing is looked
+//! for, or listed, that this service was not already given.
+
+use crate::provider::claude::{answered, detail, said};
+use serde_json::{Value, json};
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+};
+
+fn tool(call: &str, name: &str, status: &str, detail: Value, error: Option<&str>) -> Value {
+    json!({"type":"tool_call","callId":call,"name":name,"status":status,"detail":detail,"error":error})
+}
+
+/// Items put one after another, as a timeline takes them: text after
+/// text starts a new paragraph, since a timeline joins them.
+#[derive(Default)]
+struct Items {
+    list: Vec<Value>,
+}
+
+impl Items {
+    fn push(&mut self, item: Value) {
+        self.list.push(item);
+    }
+
+    fn text(&mut self, kind: &str, text: &str) {
+        if text.trim().is_empty() {
+            return;
+        }
+        let follows = self.list.last().is_some_and(|last| last["type"] == kind);
+        let text = if follows {
+            format!("\n\n{text}")
+        } else {
+            text.to_owned()
+        };
+        self.list.push(json!({"type":kind,"text":text}));
+    }
+}
+
+/// What a person typed, of a message Claude Code recorded as theirs:
+/// not what it wrote there for the model (a command's output, a
+/// reminder, a notice of a task).
+fn typed(text: &str) -> Option<&str> {
+    let text = text.trim();
+    (!text.is_empty() && !text.starts_with('<') && !text.starts_with("[Request interrupted"))
+        .then_some(text)
+}
+
+/// Claude Code's record of a session, as timeline items.
+pub fn claude(record: &str) -> Vec<Value> {
+    let mut items = Items::default();
+    let mut calls: HashMap<String, (String, Value)> = HashMap::new();
+    for line in record.lines() {
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        // An agent it started, and what Claude Code noted for itself.
+        if entry["isSidechain"] == true || entry["isMeta"] == true {
+            continue;
+        }
+        let content = &entry["message"]["content"];
+        match entry["type"].as_str() {
+            Some("user") => {
+                if let Some(text) = content.as_str().and_then(typed) {
+                    items
+                        .push(json!({"type":"user_message","text":text,"messageId":entry["uuid"]}));
+                }
+                let mut words = Vec::new();
+                for block in content.as_array().into_iter().flatten() {
+                    match block["type"].as_str() {
+                        Some("text") => words.extend(block["text"].as_str().and_then(typed)),
+                        Some("tool_result") => {
+                            let id = block["tool_use_id"].as_str().unwrap_or_default();
+                            let Some((name, input)) = calls.remove(id) else {
+                                continue;
+                            };
+                            let text = said(&block["content"]);
+                            let failed = block["is_error"] == true;
+                            let detail = answered(
+                                detail(&name, &input),
+                                &text,
+                                &entry["toolUseResult"],
+                                failed,
+                            );
+                            let status = if failed { "failed" } else { "completed" };
+                            items.push(tool(
+                                id,
+                                &name,
+                                status,
+                                detail,
+                                failed.then_some(text.as_str()),
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
+                if !words.is_empty() {
+                    items.push(json!({"type":"user_message","text":words.join("\n\n"),"messageId":entry["uuid"]}));
+                }
+            }
+            Some("assistant") if entry["message"]["model"] != "<synthetic>" => {
+                for block in content.as_array().into_iter().flatten() {
+                    match block["type"].as_str() {
+                        Some("text") => items.text(
+                            "assistant_message",
+                            block["text"].as_str().unwrap_or_default(),
+                        ),
+                        Some("thinking") => {
+                            items.text("reasoning", block["thinking"].as_str().unwrap_or_default())
+                        }
+                        Some("tool_use") => {
+                            let (Some(id), Some(name)) =
+                                (block["id"].as_str(), block["name"].as_str())
+                            else {
+                                continue;
+                            };
+                            calls.insert(id.to_owned(), (name.to_owned(), block["input"].clone()));
+                            items.push(tool(
+                                id,
+                                name,
+                                "running",
+                                detail(name, &block["input"]),
+                                None,
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    items.list
+}
+
+/// Codex's record of a thread, as timeline items: what it noted as each
+/// item of a turn was done.
+pub fn codex(record: &str) -> Vec<Value> {
+    let mut items = Items::default();
+    for line in record.lines() {
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if entry["type"] != "event_msg" || entry["payload"]["type"] != "item_completed" {
+            continue;
+        }
+        let item = &entry["payload"]["item"];
+        let id = item["id"].as_str().unwrap_or_default();
+        let words = |list: &Value| -> String {
+            list.as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|part| part["text"].as_str().or(part.as_str()))
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        };
+        let status = if item["status"]
+            .as_str()
+            .is_some_and(|status| status.to_lowercase().contains("fail"))
+        {
+            "failed"
+        } else {
+            "completed"
+        };
+        match item["type"].as_str() {
+            Some("UserMessage") => {
+                let text = words(&item["content"]);
+                if !text.trim().is_empty() {
+                    items.push(json!({"type":"user_message","text":text,"messageId":id}));
+                }
+            }
+            Some("AgentMessage") => items.text("assistant_message", &words(&item["content"])),
+            Some("Reasoning") => items.text("reasoning", &words(&item["summary_text"])),
+            Some("CommandExecution") => {
+                let command = match &item["command"] {
+                    Value::Array(parts) => parts
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    other => other.as_str().unwrap_or_default().to_owned(),
+                };
+                items.push(tool(
+                    id,
+                    "shell",
+                    status,
+                    json!({"type":"shell","command":command,"cwd":item["cwd"],
+                        "output":item["aggregated_output"],"exitCode":item["exit_code"]}),
+                    None,
+                ));
+            }
+            Some("McpToolCall") => items.push(tool(
+                id,
+                &format!(
+                    "{}.{}",
+                    item["server"].as_str().unwrap_or_default(),
+                    item["tool"].as_str().unwrap_or_default()
+                ),
+                status,
+                json!({"type":"unknown","input":item["arguments"],"output":item["result"]}),
+                None,
+            )),
+            _ => {}
+        }
+    }
+    items.list
+}
+
+/// The file named `name` (or whose name ends with it) at most `depth`
+/// folders under `dir`.
+fn find(dir: &Path, depth: usize, named: &dyn Fn(&str) -> bool) -> Option<PathBuf> {
+    for entry in fs::read_dir(dir).ok()?.flatten() {
+        let path = entry.path();
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_file() && entry.file_name().to_str().is_some_and(named) {
+            return Some(path);
+        }
+        if kind.is_dir()
+            && depth > 0
+            && let Some(found) = find(&path, depth - 1, named)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// What was said in `session` of a provider of `family`, by its CLI's
+/// record: nothing if there is no such record here.
+pub fn read(family: &str, settings: &Value, session: &str) -> Vec<Value> {
+    // An id, as the CLIs make them: not a path to anywhere.
+    if session.is_empty()
+        || !session
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Vec::new();
+    }
+    let record = if family == "codex" {
+        let tail = format!("-{session}.jsonl");
+        find(
+            &crate::models::kept(settings, "CODEX_HOME", ".codex").join("sessions"),
+            3,
+            &|name| name.starts_with("rollout-") && name.ends_with(&tail),
+        )
+    } else {
+        let name = format!("{session}.jsonl");
+        find(
+            &crate::models::kept(settings, "CLAUDE_CONFIG_DIR", ".claude").join("projects"),
+            1,
+            &|found| found == name,
+        )
+    };
+    let Some(text) = record.and_then(|path| fs::read_to_string(path).ok()) else {
+        return Vec::new();
+    };
+    if family == "codex" {
+        codex(&text)
+    } else {
+        claude(&text)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn claude_code_s_record_is_what_was_said_and_done() {
+        let record = [
+            json!({"type":"user","uuid":"u1","message":{"content":"fix it"}}),
+            json!({"type":"user","isMeta":true,"message":{"content":"a note to itself"}}),
+            json!({"type":"user","message":{"content":"<local-command-stdout>set</local-command-stdout>"}}),
+            json!({"type":"assistant","message":{"model":"m","content":[{"type":"text","text":"Looking."},
+                {"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}),
+            json!({"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"a sub-agent"}]}}),
+            json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"a.txt"}]},
+                "toolUseResult":{"stdout":"a.txt","stderr":""}}),
+            json!({"type":"assistant","message":{"model":"m","content":[{"type":"text","text":"One file."}]}}),
+            json!({"type":"assistant","message":{"model":"m","content":[{"type":"text","text":"Done."}]}}),
+            json!({"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"API Error"}]}}),
+        ]
+        .map(|entry| entry.to_string())
+        .join("\n");
+        let items = claude(&record);
+        let kinds: Vec<_> = items
+            .iter()
+            .map(|item| item["type"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                "user_message",
+                "assistant_message",
+                "tool_call",
+                "tool_call",
+                "assistant_message",
+                "assistant_message"
+            ]
+        );
+        assert_eq!(
+            (&items[0]["text"], &items[0]["messageId"]),
+            (&json!("fix it"), &json!("u1"))
+        );
+        assert_eq!(
+            (&items[3]["status"], &items[3]["detail"]["output"]),
+            (&json!("completed"), &json!("a.txt"))
+        );
+        assert_eq!(items[5]["text"], "\n\nDone.");
+    }
+
+    #[test]
+    fn codex_s_record_is_its_finished_items() {
+        let done = |item: Value| {
+            json!({"type":"event_msg","payload":{"type":"item_completed","item":item}}).to_string()
+        };
+        let record = [
+            json!({"type":"response_item","payload":{"type":"message","role":"user"}}).to_string(),
+            done(json!({"type":"UserMessage","id":"u","content":[{"type":"text","text":"go"}]})),
+            done(json!({"type":"Reasoning","id":"r","summary_text":["Thinking it over"]})),
+            done(json!({"type":"CommandExecution","id":"c","command":"ls","cwd":"/w","aggregated_output":"a\n","exit_code":0,"status":"completed"})),
+            done(json!({"type":"AgentMessage","id":"a","content":[{"type":"Text","text":"done"}]})),
+        ]
+        .join("\n");
+        let items = codex(&record);
+        assert_eq!(items.len(), 4);
+        assert_eq!(
+            items[0],
+            json!({"type":"user_message","text":"go","messageId":"u"})
+        );
+        assert_eq!(
+            items[2]["detail"],
+            json!({"type":"shell","command":"ls","cwd":"/w","output":"a\n","exitCode":0})
+        );
+        assert_eq!(items[3], json!({"type":"assistant_message","text":"done"}));
+    }
+
+    #[test]
+    fn only_an_id_is_looked_for() {
+        assert!(read("claude", &Value::Null, "../../etc/passwd").is_empty());
+        assert!(read("codex", &Value::Null, "").is_empty());
+    }
+}
