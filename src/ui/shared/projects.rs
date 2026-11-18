@@ -50,10 +50,13 @@ pub(crate) fn project_list(actions: bool, empty: impl Fn() -> AnyElement + 'stat
         let none = none.get();
         Some(untracked(|| {
             if none {
-                return empty();
+                return view().flex_1().child(projects_heading(actions)).child(empty()).into_element();
             }
             // Two sections, as Pinned and Projects read in the sidebar: the
             // pinned first (when there are any), each under its heading.
+            // "Projects" is over the projects, not over both: above the
+            // pinned it named what it was not next to, and the projects
+            // began under them with no name at all.
             let pinned = move || groups.with(|g| g.iter().filter(|g| g.project.is_none()).cloned().collect::<Vec<_>>());
             let projects = move || groups.with(|g| g.iter().filter(|g| g.project.is_some()).cloned().collect::<Vec<_>>());
             scroll()
@@ -62,11 +65,26 @@ pub(crate) fn project_list(actions: bool, empty: impl Fn() -> AnyElement + 'stat
                     view()
                         .pb(sp(S2))
                         .child(each(pinned, store::Group::key, move |g, _| group(g, actions)))
+                        .child(projects_heading(actions))
                         .child(each(projects, store::Group::key, move |g, _| group(g, actions))),
                 )
                 .into_element()
         }))
     }))
+}
+
+/// The projects' heading: their name, and "Add project" (the desktop's)
+/// at its right, where the rows' actions are.
+pub(crate) fn projects_heading(actions: bool) -> View {
+    view()
+        .flex_row()
+        .items_center()
+        .mx(sp(S2))
+        .pl(sp(S2))
+        .pr(px(2.0))
+        .h(px(28.0))
+        .child(section_label(t("Projects")).flex_1())
+        .when(actions && !MOBILE, |v| v.child(icon_btn(Icon::Plus, Sz::Sm, t("Add project"), || store::open_modal(store::Modal::AddProject))))
 }
 
 fn group(g: ReadSignal<store::Group>, actions: bool) -> AnyElement {
