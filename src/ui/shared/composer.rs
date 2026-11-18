@@ -307,7 +307,11 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
 
                 )
                 .child(mic_button(doc))
-                .child(model_picker(live)),
+                .child(model_picker(live))
+                // What the agent may do without asking, beside its model:
+                // out of the picker's footer, where it took two presses to
+                // see and three to change.
+                .child(super::model_picker::access_mode(live)),
                 )
                 // How full the agent's context is, beside Send; the plan's
                 // limits are the status bar's.

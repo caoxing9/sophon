@@ -267,6 +267,17 @@ pub fn modes(family: &str) -> Value {
     }
 }
 
+/// The mode a new conversation is offered first: the family's full
+/// access. It is on the composer, a press from any other; a request that
+/// names no mode still gets the first, which asks ([`mode`]).
+pub fn offered_mode(family: &str) -> &'static str {
+    if family == "codex" {
+        "full-access"
+    } else {
+        "bypassPermissions"
+    }
+}
+
 /// `wanted` if `family` has that mode, else its default.
 pub fn mode(family: &str, wanted: Option<&str>) -> String {
     let modes = modes(family);
@@ -306,7 +317,7 @@ pub fn snapshot(config: &Value) -> Value {
             };
             json!({"provider":provider,"label":settings["label"],
                 "enabled":settings["enabled"].as_bool().unwrap_or(true),"models":models,
-                "defaultModeId":modes[0]["id"],"modes":modes,
+                "defaultModeId":family.map(offered_mode),"modes":modes,
                 "status":if ready {"ready"} else {"unavailable"}})
         })
         .collect();
@@ -461,5 +472,24 @@ mod tests {
         assert_eq!(mode("codex", None), "auto");
         assert_eq!(family("work", &json!({"extends":"claude"})), Some("claude"));
         assert_eq!(family("opencode", &Value::Null), None);
+    }
+
+    #[test]
+    fn a_new_conversation_is_offered_full_access_first() {
+        let snapshot = snapshot(&json!({}));
+        for entry in snapshot["entries"].as_array().unwrap() {
+            let offered = entry["defaultModeId"].as_str().unwrap();
+            let family = entry["provider"].as_str().unwrap();
+            assert_eq!(offered, offered_mode(family));
+            // One of the modes it lists, so a client can show it.
+            assert!(
+                entry["modes"].as_array().unwrap().iter().any(|mode| mode["id"] == offered),
+                "{entry}"
+            );
+        }
+        assert_eq!(offered_mode("claude"), "bypassPermissions");
+        assert_eq!(offered_mode("codex"), "full-access");
+        // A request that names no mode is still given the one that asks.
+        assert_eq!(mode("claude", None), "default");
     }
 }

@@ -140,7 +140,7 @@ fn divider() -> AdaptiveColor {
 
 /// The picker as T3 Code's: a chip with the agent's mark, the model and its
 /// reasoning, opening a panel of three columns (agents, models, reasoning)
-/// over a footer (speed and the agent's other switches, the access mode).
+/// over a footer (speed and the agent's other switches).
 pub(crate) fn model_picker(live: bool, current_name: Memo<String>) -> impl IntoElement {
     let open = signal(false);
     let provider = computed(move || store::controls(live).provider);
@@ -731,7 +731,8 @@ fn model_label(live: bool) -> String {
 }
 
 /// The footer: the agent's speed as Standard | Fast, its other switches each
-/// a toggle, its choices as segments, and the access mode on the right.
+/// a toggle, its choices as segments. (The access mode is on the composer's
+/// bar: [`access_mode`].)
 fn footer(live: bool) -> impl IntoElement {
     view()
         .flex_row()
@@ -772,8 +773,6 @@ fn footer(live: bool) -> impl IntoElement {
                 row.into_element()
             }))
         }))
-        .child(view().flex_1())
-        .child(access_mode(live))
 }
 
 /// A segmented group (T3's toggle group): its segments' label, glyph,
@@ -804,22 +803,31 @@ fn segments(items: Vec<(String, Option<Icon>, bool, std::rc::Rc<dyn Fn()>)>) -> 
     group.into_element()
 }
 
+/// Whether a mode lets the agent do anything without asking (Claude Code's
+/// Bypass, Codex's Full Access).
+fn full_access(id: &str) -> bool {
+    let id = id.to_lowercase();
+    id.contains("bypass") || id.contains("full") || id.contains("yolo") || id.contains("dangerous")
+}
+
 /// The access mode's glyph: what the agent may do without asking.
 fn mode_icon(id: &str) -> Icon {
-    let id = id.to_lowercase();
-    if id.contains("bypass") || id.contains("full") || id.contains("yolo") || id.contains("dangerous") {
+    let lower = id.to_lowercase();
+    if full_access(id) {
         Icon::ShieldOff
-    } else if id.contains("accept") || id.contains("edit") || id.contains("auto") {
+    } else if lower.contains("accept") || lower.contains("edit") || lower.contains("auto") {
         Icon::PenLine
-    } else if id.contains("plan") {
+    } else if lower.contains("plan") {
         Icon::ListTodo
     } else {
         Icon::Lock
     }
 }
 
-/// The access mode: its glyph and name, opening its choices upward.
-fn access_mode(live: bool) -> impl IntoElement {
+/// The access mode, on the composer's bar beside the model: its glyph and
+/// name, opening its choices upward. Full access is in the warning color,
+/// so what the agent may do is read at a glance before a message is sent.
+pub(crate) fn access_mode(live: bool) -> impl IntoElement {
     view().child(dynamic(move || {
         let c = store::controls(live);
         if c.modes.is_empty() {
@@ -828,19 +836,19 @@ fn access_mode(live: bool) -> impl IntoElement {
         Some(untracked(move || {
             let current = c.mode.as_deref().and_then(|m| c.modes.iter().find(|o| o.id == m)).or(c.modes.first()).cloned();
             let (id, label) = current.map(|o| (o.id, o.label)).unwrap_or_default();
+            let ink = if full_access(&id) { WARNING } else { FG_MUTED };
             let mut menu = dropup(
                 view()
                     .flex_row()
                     .items_center()
                     .gap(px(6.0))
-                    .h(px(28.0))
+                    .h(sp(CONTROL_SM))
                     .px(sp(S2))
-                    .rounded(px(R_MD))
-                    .group()
-                    .hover(|s| s.bg(row_hover()))
-                    .child(icon(mode_icon(&id), 14.0).text_color(FG_MUTED).group_hover(|s| s.text_color(FG)))
-                    .child(text(label).text_size(tx(TEXT_SM)).text_color(FG_MUTED).group_hover(|s| s.text_color(FG)))
-                    .child(icon(Icon::ChevronUp, 12.0).text_color(FG_MUTED)),
+                    .rounded(px(R_FULL))
+                    .hover(|s| s.bg(highlight()))
+                    .label(t("Mode"))
+                    .child(icon(mode_icon(&id), 14.0).text_color(ink))
+                    .child(text(label).text_size(tx(TEXT_SM)).text_color(ink).number_of_lines(1)),
             )
             .child(menu_heading(t("Mode")));
             for o in &c.modes {
