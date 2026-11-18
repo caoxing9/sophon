@@ -19,6 +19,44 @@ const ROW_HEIGHT: f32 = if MOBILE { 44.0 } else { 32.0 };
 /// How many of a workspace's conversations the list shows before "Show more".
 const CONVERSATIONS_SHOWN: usize = 8;
 
+fn row_status(status: impl Fn() -> Status + 'static) -> impl IntoElement {
+    let status = computed(status);
+    view()
+        .w(px(15.0))
+        .h(px(15.0))
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .child(dynamic(move || {
+            let current = status.get();
+            let animate = !MOBILE && current == Status::Running && !reduce_motion();
+            Some(untracked(move || {
+                if MOBILE || current != Status::Running {
+                    return status_dot(move || current).into_element();
+                }
+                let ring = view()
+                    .w(px(11.0))
+                    .h(px(11.0))
+                    .rounded(px(R_FULL))
+                    .border_1()
+                    .border_color(tint(DOT_RUNNING, 0.35))
+                    .border_t_color(DOT_RUNNING)
+                    .label(current.label());
+                if !animate {
+                    return ring.into_element();
+                }
+                let angle = animated_value(0.0);
+                Animation::sequence([
+                    Animation::timing(&angle, 360.0, nsh_core::element::Timing::new(1400.0, Easing::Linear)),
+                    Animation::timing(&angle, 0.0, nsh_core::element::Timing::new(0.0, Easing::Linear)),
+                ])
+                .looped(None)
+                .start();
+                ring.bind_transform(nsh_core::TransformKind::Rotate, &angle).into_element()
+            }))
+        }))
+}
+
 /// The list; `actions` adds the desktop's (new workspace, pin, rename,
 /// archive), `empty` is what shows with no projects. Each project is a
 /// group whose workspaces fold away: a clipped height on a native spring
@@ -155,7 +193,9 @@ fn conversation_row(agent: ReadSignal<crate::daemon::Agent>, actions: bool) -> i
         .gap(sp(S2))
         .h(sp(ROW_HEIGHT))
         .pl(sp(S2))
-        .child(view().w(px(15.0)).items_center().child(status_dot(move || agent.with(|a| Status::of_agent(&a.status, a.requires_attention || !a.pending.is_empty())))))
+        .child(row_status(move || {
+            agent.with(|agent| Status::of_agent(&agent.status, agent.requires_attention || !agent.pending.is_empty()))
+        }))
         .child(text(move || agent.with(store::conversation_title)).text_size(tx(TEXT_BASE)).text_color(FG).number_of_lines(1).flex_1());
     let more = dropdown(
         view()
@@ -375,7 +415,7 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
         .gap(sp(S2))
         .h(sp(ROW_HEIGHT))
         .pl(sp(S2))
-        .child(view().w(px(15.0)).items_center().child(status_dot(status)))
+        .child(row_status(status))
         .child(
             text(move || display_name.get())
                 .text_size(tx(TEXT_BASE))
