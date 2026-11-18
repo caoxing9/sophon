@@ -115,6 +115,25 @@ impl Host {
                 started["status"] = json!("canceled");
             }
         }
+        // A project added before its folder's workspace came with it has
+        // none: it gets one now, as one added today does.
+        let bare: Vec<Value> = host
+            .state
+            .projects
+            .values()
+            .filter(|project| {
+                project["archivedAt"].is_null()
+                    && !host
+                        .state
+                        .workspaces
+                        .values()
+                        .any(|workspace| workspace["projectId"] == project["projectId"])
+            })
+            .cloned()
+            .collect();
+        for project in bare {
+            host.state.workspace(&project);
+        }
         for (agent, rows) in std::mem::take(&mut host.state.history) {
             if rows.is_empty() || !host.state.agents.contains_key(&agent) {
                 continue;
@@ -1422,8 +1441,17 @@ fn answer(shared: &Shared, request: &Value, mut made: Option<Value>) -> Result<V
                 text(request, "cwd")?.to_owned()
             };
             let project = host.state.project(&cwd)?;
+            // With the folder's own workspace: a phone lists a project by
+            // its workspaces and starts a conversation in one, so a project
+            // without any never showed there and nothing could be started
+            // in it.
+            let workspace = host.state.workspace(&project);
             host.persist().map_err(|error| error.to_string())?;
             host.publish("project.update", json!({"kind":"upsert","project":project}));
+            host.publish(
+                "workspace_update",
+                json!({"kind":"upsert","workspace":workspace}),
+            );
             json!({"project":project})
         }
         "workspace.create.request" | "create_agent_request" => {

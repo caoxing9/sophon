@@ -168,9 +168,20 @@ fn workspace_entry(w: ReadSignal<crate::daemon::Workspace>, actions: bool) -> im
     // (a folder may hold dozens of imported sessions).
     let limit = signal(CONVERSATIONS_SHOWN);
     let more = computed(move || conversations.with(|c| c.len()).saturating_sub(limit.get()));
+    // The project's own folder with no conversation in it (every project
+    // has it from the moment it is added, for the phone to start one in)
+    // says nothing its project's row does not, whose + starts the first:
+    // no row, unless it is the one open.
+    let bare = computed(move || {
+        let w = w.get();
+        !w.pinned
+            && w.directory.trim_end_matches('/') == w.project_root.trim_end_matches('/')
+            && conversations.with(Vec::is_empty)
+            && store::screen() != Screen::Workspace(w.id)
+    });
     view().child(dynamic(move || {
         let several = several.get();
-        if all_pinned.get() {
+        if all_pinned.get() || bare.get() {
             return None;
         }
         Some(untracked(move || {
