@@ -93,7 +93,7 @@ launch it afterwards.
 
 **Updates**: Sophon checks GitHub Releases shortly after launch and every 6 hours. When a newer version is out, an
 *Update to x.y.z* button appears at the bottom of the sidebar; one press downloads it, verifies its checksum, replaces
-the app and restarts it. `brew upgrade --cask sophon` works too.
+the app and restarts it. The cask installs whichever release is newest and leaves updating to the app (`brew upgrade --cask --greedy sophon` does it from Homebrew).
 
 ### iOS
 
@@ -165,13 +165,14 @@ The version is committed to `main` (`nsh.json`, `Cargo.toml`, `Cargo.lock`) befo
 build names itself what was released last and does not offer that release as an update. By hand,
 `scripts/release.sh patch|minor|major|<x.y.z>` opens a pull request that sets the version; merging it releases it.
 
-The [release workflow](.github/workflows/release.yml) builds the macOS app (Apple silicon), publishes the GitHub Release with `latest.json` (what installed apps update from), and updates the
-Homebrew cask. Each release has:
+The [release workflow](.github/workflows/release.yml) builds the macOS app (Apple silicon), publishes the GitHub Release with `latest.json` (what installed apps update from). The Homebrew cask is not
+rewritten: it downloads the newest release by a name every release carries. Each release has:
 
 | Asset | For |
 |---|---|
 | `Sophon-<v>-macos-aarch64.dmg` | Installing by hand |
-| `Sophon-<v>-macos-aarch64.tar.gz` | The installer, Homebrew and in-app updates |
+| `Sophon-<v>-macos-aarch64.tar.gz` | The installer and in-app updates |
+| `Sophon-macos-aarch64.tar.gz` | The same archive, for the Homebrew cask |
 | `latest.json` | The update feed |
 
 With App Store signing secrets set (`IOS_CERT_P12`, `IOS_CERT_PASSWORD`, `IOS_PROFILE`, `ASC_APP_ID`,
