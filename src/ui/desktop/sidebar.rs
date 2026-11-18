@@ -21,13 +21,26 @@ pub(crate) fn sidebar() -> View {
                 .px(sp(S2))
                 // The space between the two groups, which the first
                 // project's own top margin no longer gives.
-                .pb(sp(S4))
-                .child(nav_item(Icon::SquarePen, t("New workspace"), || store::screen() == Screen::NewWorkspace, || {
+                .pb(sp(S2))
+                .child(nav_item(Icon::SquarePen, t("New workspace"), || store::screen() == Screen::NewWorkspace && !store::form().scoped, || {
                     store::open_new_workspace(None)
                 }))
-                .child(nav_item(Icon::History, t("History"), || store::screen() == Screen::History, store::open_history))
-                .child(nav_item(Icon::Search, t("Search"), || false, || store::open_modal(store::Modal::Palette)))
-                .child(nav_item(Icon::CalendarClock, t("Schedules"), || store::screen() == Screen::Schedules, store::open_schedules)),
+                .child(nav_item(Icon::Search, t("Search"), || false, || store::open_modal(store::Modal::Palette)).child(hint("⌘K")))
+                .child(nav_item(Icon::CalendarClock, t("Schedules"), || store::screen() == Screen::Schedules, store::open_schedules))
+                .child(more_menu()),
+        )
+        // The projects under a heading of their own, adding one beside it
+        // (monocode's sidebar): "New workspace" above is the only other +.
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .mx(sp(S2))
+                .pl(sp(S2))
+                .pr(px(2.0))
+                .h(px(28.0))
+                .child(section_label(t("Projects")).flex_1())
+                .child(icon_btn(Icon::Plus, Sz::Sm, t("Add project"), || store::open_modal(store::Modal::AddProject))),
         )
         // A Mac that runs no agents of its own, connected nowhere yet: how to
         // reach one, in place of a list it has none of.
@@ -170,10 +183,11 @@ fn nav_item(
     label: &'static str,
     active: impl Fn() -> bool + 'static,
     on_press: impl Fn() + 'static,
-) -> impl IntoElement {
+) -> nsh_base::ButtonElement {
     let active = computed(active);
     button()
         .on_press(on_press)
+        .accessibility_label(label)
         .flex_row()
         .items_center()
         .gap(sp(S2))
@@ -186,7 +200,43 @@ fn nav_item(
         .hover(|s| s.bg(sidebar_hover()))
         .active(|s| s.opacity(0.7))
         .child(icon(glyph, 16.0).text_color(FG_MUTED))
-        .child(text(label).text_size(tx(TEXT_BASE)).text_color(FG))
+        .child(text(label).text_size(tx(TEXT_BASE)).text_color(FG).flex_1())
+}
+
+/// Pull requests, History and Usage, less often wanted, behind "More" (the
+/// row shows which one is open, and a dot while a pull request is unseen).
+fn more_menu() -> impl IntoElement {
+    let active = computed(|| matches!(store::screen(), Screen::Inbox | Screen::PullRequest { .. } | Screen::History | Screen::Usage));
+    let width = (if window().width.0 < 600.0 { window().width.0 } else { store::sidebar_width() }) - 2.0 * S2;
+    dropdown_wide(
+        view()
+            .flex_row()
+            .items_center()
+            .gap(sp(S2))
+            .h(sp(CONTROL_MD))
+            .my(px(1.0))
+            .px(sp(S2))
+            .rounded(px(R_LG))
+            .bg(move || if active.get() { SIDEBAR_SELECTED } else { tint(SIDEBAR, 0.0) })
+            .hover(|s| s.bg(sidebar_hover()))
+            .child(icon(Icon::Ellipsis, 16.0).text_color(FG_MUTED))
+            .child(text(move || match store::screen() {
+                Screen::Inbox | Screen::PullRequest { .. } => t("Pull requests"),
+                Screen::History => t("History"),
+                Screen::Usage => t("Usage"),
+                _ => t("More"),
+            }).text_size(tx(TEXT_BASE)).text_color(FG).flex_1())
+            .child(when(|| store::desk_inbox_items().iter().any(store::inbox_unseen), || view().w(px(6.0)).h(px(6.0)).mr(px(4.0)).rounded(px(R_FULL)).bg(DOT_RUNNING))),
+        width,
+    )
+    .child(menu_row(t("Pull requests"), Some(Icon::GitPullRequest), None, false, store::open_inbox))
+    .child(menu_row(t("History"), Some(Icon::History), None, false, store::open_history))
+    .child(menu_row(t("Usage"), Some(Icon::Activity), None, false, store::open_usage))
+}
+
+/// A row's shortcut, faint at its end.
+fn hint(keys: &'static str) -> impl IntoElement {
+    text(keys).text_size(tx(TEXT_XS)).text_color(FG_FAINT).mr(px(2.0))
 }
 
 fn empty_list() -> impl IntoElement {
@@ -236,6 +286,8 @@ fn service_status() -> impl IntoElement {
     }))
 }
 
+/// The foot: Settings alone, as monocode's, with a quiet way to report
+/// an issue beside it.
 fn footer() -> impl IntoElement {
     view()
         .flex_row()
@@ -243,16 +295,8 @@ fn footer() -> impl IntoElement {
         .gap(sp(S1))
         .px(sp(S2))
         .py(sp(S2))
-        .border_t_1()
-        .border_color(tint(BORDER, 0.6))
-        .child(
-            view().flex_1().child(nav_item(Icon::FolderPlus, t("Add project"), || false, || {
-                store::open_modal(store::Modal::AddProject)
-            })),
-        )
-        .child(icon_btn(Icon::MessageSquare, Sz::Md, t("Feedback"), || store::open_modal(store::Modal::ReportIssue)))
-        .child(icon_btn(Icon::Activity, Sz::Md, t("Usage"), store::open_usage))
-        .child(icon_btn(Icon::Settings, Sz::Md, t("Settings"), store::open_settings))
+        .child(view().flex_1().child(nav_item(Icon::Settings, t("Settings"), || store::screen() == Screen::Settings, store::open_settings).child(hint("⌘,"))))
+        .child(icon_btn(Icon::MessageSquare, Sz::Sm, t("Feedback"), || store::open_modal(store::Modal::ReportIssue)))
 }
 
 /// A newer version on offer, above the footer: press to download, install

@@ -47,24 +47,6 @@ pub(crate) fn page() -> Screen {
                                 .number_of_lines(1),
                         ),
                     glass_group()
-                        // The branch's pull request, in its state's colour.
-                        .child(dynamic(|| {
-                            let tone = store::git().pr.as_ref().map(|pr| crate::ui::shared::pull_request::pr_state(pr).0)?;
-                            Some(untracked(move || {
-                                button()
-                                    .on_press(|| {
-                                        dismiss_keyboard();
-                                        push(Route::PullRequest)
-                                    })
-                                    .accessibility_label(t("Pull request"))
-                                    .w(px(40.0))
-                                    .h(px(44.0))
-                                    .items_center()
-                                    .justify_center()
-                                    .active(|s| s.opacity(0.6))
-                                    .child(icon(Icon::GitPullRequest, 20.0).text_color(tone))
-                            }))
-                        }))
                         .child(header_button(Icon::FileDiff, t("Changes"), || {
                             dismiss_keyboard();
                             push(Route::Changes)
@@ -157,9 +139,19 @@ fn agent_sheet() {
             SheetItem::new(t("New agent"), || store::open_tab(Tab::Draft)).icon(Icon::SquarePen)
         },
         SheetItem::new(t("Browse files"), || push(Route::Files(".".into()))).icon(Icon::Folder),
+    ];
+    // The workspace's pull request, when it has one: its page here.
+    if let Some((repo, number)) = store::git().pr.and_then(|pr| crate::github::of_url(&pr.url)) {
+        let from = a.id.clone();
+        items.insert(1, SheetItem::new(crate::i18n::tf("Pull request #{}", &[&number.to_string()]), move || {
+            push(Route::PullRequest(repo.clone(), number, Some(from.clone())))
+        })
+        .icon(Icon::GitPullRequest));
+    }
+    items.extend([
         SheetItem::new(t("Fork into new agent"), store::fork_selected).icon(Icon::GitCompare),
         SheetItem::new(t("Rename"), move || store::open_modal(store::Modal::RenameAgent { id: rename.clone(), name: title.clone() })).icon(Icon::Pencil),
-    ];
+    ]);
     let subs = store::subagents(&a.id).len();
     if subs > 0 {
         let parent = a.id.clone();

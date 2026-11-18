@@ -290,8 +290,10 @@ fn body(m: Modal) -> View {
                 store::remove_host(&id);
                 store::close_modal();
             }))),
+        Modal::SpaceCap { home, name } => space_cap(home, name),
+        Modal::DeviceFolder { id, name, folder } => device_folder(id, name, folder),
+        Modal::Mcp { cwd } => mcp_panel(cwd),
         Modal::Commit => commit(),
-        Modal::PullRequest => crate::ui::desktop::git::pull_request_sheet(),
         Modal::ReportIssue => report_issue(),
         Modal::Palette | Modal::ChangedFiles => view(),
         Modal::NewSchedule => schedule_form(None),
@@ -432,6 +434,197 @@ fn rename(title: &'static str, current: String, apply: impl Fn(&str) + Clone + '
                 .auto_focus(true),
         )
         .child(actions(btn(t("Save"), Variant::Primary, Sz::Md, None, save)))
+}
+
+/// A shared space's monthly cap: USD a month, or none. Past it, the
+/// devices that reach the space through this Mac send nothing there until
+/// the next month (`space_limits`).
+fn space_cap(home: String, name: String) -> View {
+    let (current, spend) = (crate::space_limits::caps().get(&home).copied(), crate::space_limits::spend(&home));
+    let value = signal(current.map(|c| format!("{c}")).unwrap_or_default());
+    let error = signal(None::<&'static str>);
+    let apply = move |cap: Option<f64>| {
+        crate::space_limits::set_cap(&home, cap);
+        store::close_modal();
+    };
+    let save = {
+        let apply = apply.clone();
+        move || {
+            let text = value.get_untracked();
+            match text.trim().trim_start_matches('$').parse::<f64>() {
+                Ok(c) if c.is_finite() && c > 0.0 => apply(Some(c)),
+                _ => error.set(Some(t("A limit is an amount of dollars, more than 0"))),
+            }
+        }
+    };
+    let save2 = save.clone();
+    let spent = spend.map(|s| tf("Used this month: ${}", &[&format!("{:.2}", s.spent)]));
+    let mut primary = view().flex_row().justify_end().gap(sp(S2));
+    if current.is_some() {
+        let lift = apply.clone();
+        primary = primary.child(btn(t("Remove limit"), Variant::Secondary, Sz::Md, None, move || lift(None)));
+    }
+    sheet(&tf("Monthly limit of “{}”", &[&name]))
+        .child(
+            text(t("What the conversations of this space may cost a calendar month, at API list prices. Past it, the devices it is shared with cannot send messages or start conversations there until the next month; reading stays, and this Mac is not limited."))
+                .text_size(tx(TEXT_SM))
+                .line_height(px(19.0))
+                .text_color(FG_MUTED),
+        )
+        .when_some(spent, |v, s| v.child(text(s).text_size(tx(TEXT_SM))))
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap(sp(S2))
+                .child(text("$").text_size(tx(TEXT_BASE)).text_color(FG_MUTED))
+                .child(
+                    field()
+                        .value(move || value.get())
+                        .on_change(move |v: &str| {
+                            value.set(v.to_owned());
+                            error.set(None);
+                        })
+                        .on_submit(move |_: &str| save2())
+                        .placeholder(t("e.g. 50"))
+                        .auto_focus(true)
+                        .flex_1(),
+                )
+                .child(text(t("a month")).text_size(tx(TEXT_SM)).text_color(FG_MUTED)),
+        )
+        .child(when(move || error.with(Option::is_some), move || text(move || error.get().unwrap_or_default()).text_size(tx(TEXT_SM)).text_color(DANGER)))
+        .child(
+            view()
+                .flex_row()
+                .justify_end()
+                .gap(sp(S2))
+                .child(btn(t("Cancel"), Variant::Secondary, Sz::Md, None, store::close_modal))
+                .child(primary)
+                .child(btn(t("Save"), Variant::Primary, Sz::Md, None, save)),
+        )
+}
+
+/// Keeps a paired device to one folder of this Mac: picked in its folders;
+/// or lets it use all of them again.
+fn device_folder(id: String, name: String, folder: Option<String>) -> View {
+    let (pick_id, all_id) = (id.clone(), id);
+    let mut v = sheet(&tf("Folder of “{}”", &[&name]))
+        .w(px(560.0))
+        .child(
+            text(t("The device sees and uses only this folder: its projects, conversations and files. Requests for anything outside it are refused. It keeps the device's view to the folder; an agent's own commands still run as you on this Mac."))
+                .text_size(tx(TEXT_SM))
+                .line_height(px(19.0))
+                .text_color(FG_MUTED),
+        );
+    if let Some(f) = &folder {
+        v = v.child(text(tf("Now: {}", &[f])).text_size(tx(TEXT_SM)));
+    }
+    v = v.child(host_folders("Keep it to “{}”", move |path| {
+        crate::lan::set_folder(&pick_id, Some(path));
+        store::close_modal();
+    }));
+    if folder.is_some() {
+        v = v.child(view().flex_row().justify_end().child(btn(t("Allow all folders"), Variant::Secondary, Sz::Md, None, move || {
+            crate::lan::set_folder(&all_id, None);
+            store::close_modal();
+        })));
+    }
+    v
+}
+
+/// `/mcp`: Claude Code's MCP servers for the project, each with its state
+/// and tools; Sign in on one that asks for it (its page opens in the
+/// computer's browser, and the list is read again once it is done). A
+/// server signed in to is there for the conversations started after.
+fn mcp_panel(cwd: String) -> View {
+    use crate::mcp::{State, servers_of};
+    let key = crate::github::Op::McpStatus { cwd: cwd.clone() }.key();
+    let (k1, k2) = (key.clone(), key);
+    let answer = computed(move || store::github(&k1));
+    let loading = computed(move || store::github_loading(&k2));
+    let refresh_cwd = cwd.clone();
+    sheet(t("MCP servers"))
+        .w(px(560.0))
+        .child(text(cwd.clone()).text_size(tx(TEXT_XS)).text_color(FG_FAINT).number_of_lines(1))
+        .child(view().child(dynamic(move || {
+            let answer = answer.get();
+            let busy = loading.get();
+            // The sign-ins under way: read here, so a press shows at once.
+            let signing_now = store::github_loading_with("mcp:signin:");
+            let cwd = cwd.clone();
+            Some(untracked(move || match answer {
+                None => view().py(sp(S6)).items_center().gap(sp(S2)).child(eclipse(20.0)).child(text(t("Asking Claude Code…")).text_size(tx(TEXT_SM)).text_color(FG_MUTED)).into_element(),
+                Some(Err(e)) => text(e).text_size(tx(TEXT_SM)).text_color(DANGER).into_element(),
+                Some(Ok(v)) => {
+                    let list = servers_of(&v);
+                    if list.is_empty() {
+                        return text(t("No MCP servers: add one with claude mcp add, or a plugin")).text_size(tx(TEXT_SM)).text_color(FG_MUTED).into_element();
+                    }
+                    let mut c = card();
+                    for (i, s) in list.into_iter().enumerate() {
+                        let (word, tone) = match s.state {
+                            State::Connected => (t("Connected"), SUCCESS),
+                            State::NeedsAuth => (t("Needs sign-in"), WARNING),
+                            State::Failed => (t("Failed"), DANGER),
+                            State::Pending => (t("Connecting…"), FG_MUTED),
+                            State::Disabled => (t("Disabled"), FG_FAINT),
+                        };
+                        let detail = match (&s.error, s.tools) {
+                            (Some(e), _) => e.clone(),
+                            (None, Some(n)) => tf("{} tools", &[&n.to_string()]),
+                            (None, None) => s.target.clone(),
+                        };
+                        let signing = signing_now.iter().any(|k| *k == format!("mcp:signin:{}", s.name));
+                        let mut right = view().flex_row().items_center().gap(sp(S2)).child(text(word).text_size(tx(TEXT_XS)).text_color(tone));
+                        if s.state == State::NeedsAuth {
+                            right = if signing {
+                                right.child(eclipse(14.0)).child(text(t("Waiting for the browser…")).text_size(tx(TEXT_XS)).text_color(FG_MUTED))
+                            } else if MOBILE {
+                                right.child(text(t("Sign in on the computer")).text_size(tx(TEXT_XS)).text_color(FG_FAINT))
+                            } else {
+                                let (cwd, name) = (cwd.clone(), s.name.clone());
+                                right.child(btn(t("Sign in"), Variant::Primary, Sz::Sm, None, move || store::mcp_sign_in(&cwd, &name)))
+                            };
+                        }
+                        c = c.child(
+                            view()
+                                .flex_row()
+                                .items_center()
+                                .gap(sp(S3))
+                                .px(sp(S4))
+                                .py(sp(S3))
+                                .when(i > 0, |v| v.border_t(px(1.0)).border_color(BORDER))
+                                .child(view().w(px(8.0)).h(px(8.0)).rounded(px(R_FULL)).bg(tone))
+                                .child(
+                                    view()
+                                        .flex_1()
+                                        .min_w(px(0.0))
+                                        .child(text(s.label()).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)).number_of_lines(1))
+                                        .child(text(if s.scope.is_empty() { detail } else { format!("{} · {detail}", s.scope) }).text_size(tx(TEXT_XS)).text_color(FG_MUTED).number_of_lines(1)),
+                                )
+                                .child(right),
+                        );
+                    }
+                    let _ = busy;
+                    c.into_element()
+                }
+            }))
+        })))
+        .child(text(t("A server signed in to is there for conversations started after: start a new one to use it.")).text_size(tx(TEXT_SM)).line_height(px(19.0)).text_color(FG_MUTED))
+        .child(
+            view()
+                .flex_row()
+                .justify_end()
+                .gap(sp(S2))
+                .child(btn(t("Refresh"), Variant::Secondary, Sz::Md, Some(Icon::RotateCw), move || {
+                    store::github_fetch(crate::github::Op::McpStatus { cwd: refresh_cwd.clone() })
+                }))
+                .child(btn(t("New conversation"), Variant::Secondary, Sz::Md, Some(Icon::SquarePen), || {
+                    store::close_modal();
+                    store::open_tab(store::Tab::Draft);
+                }))
+                .child(btn(t("Done"), Variant::Primary, Sz::Md, None, store::close_modal)),
+        )
 }
 
 /// The versions and system an issue is reported from: nothing of the

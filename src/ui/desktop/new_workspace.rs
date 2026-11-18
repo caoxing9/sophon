@@ -16,7 +16,7 @@ use crate::store;
 /// not the timeline's reading width.
 const NEW_WORKSPACE_WIDTH: f32 = 600.0;
 
-pub(crate) fn new_workspace(compact: bool) -> impl IntoElement {
+pub(crate) fn new_workspace(compact: bool) -> AnyElement {
     let form = computed(store::form);
     let project_label = computed(move || {
         let path = form.with(|f| f.path.clone());
@@ -30,6 +30,18 @@ pub(crate) fn new_workspace(compact: bool) -> impl IntoElement {
         form.with(|f| store::projects().iter().any(|p| p.is_git() && p.root_path == f.path.trim_end_matches('/')))
     });
 
+    // Each when the + or ⌘T makes the form a project's own, or not.
+    let scoped = computed(move || form.with(|f| f.scoped));
+    view().flex_1().child(dynamic(move || {
+        if scoped.get() {
+            return Some(untracked(|| project_chat(form, project_label).into_element()));
+        }
+        Some(untracked(|| new_workspace_form(compact, form, project_label, is_git)))
+    }))
+    .into_element()
+}
+
+fn new_workspace_form(compact: bool, form: Memo<store::Form>, project_label: Memo<String>, is_git: Memo<bool>) -> AnyElement {
     view()
         .flex_1()
         .when(compact, |v| {
@@ -119,6 +131,46 @@ pub(crate) fn new_workspace(compact: bool) -> impl IntoElement {
                             }))),
                     ),
             ),
+        )
+    .into_element()
+}
+
+/// A new conversation in its project already (the project's + and ⌘T):
+/// a blank chat, the project named above it, the composer at the foot;
+/// its first message makes it.
+fn project_chat(form: Memo<store::Form>, project_label: Memo<String>) -> View {
+    view()
+        .flex_1()
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap(sp(S2))
+                .h(px(44.0))
+                .px(sp(S4))
+                .window_drag(true)
+                .child(icon(Icon::Folder, 14.0).text_color(FG_MUTED))
+                .child(text(move || project_label.get()).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)))
+                .child(text(t("New conversation")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED)),
+        )
+        .child(
+            view().flex_1().items_center().justify_center().gap(sp(S2)).child(icon(Icon::SquarePen, 22.0).text_color(FG_FAINT)).child(
+                text(move || tf("A new conversation in {}", &[&project_label.get()])).text_size(tx(TEXT_SM)).text_color(FG_MUTED),
+            ),
+        )
+        .child(
+            view()
+                .px(sp(S8))
+                .pb(sp(S4))
+                .gap(sp(S1))
+                .child(composer::composer(Target::Form, t("What should the agent do?")))
+                .child(composer::hint(move || {
+                    form.with(|f| {
+                        f.error.clone().map(|e| (e, true)).or_else(|| {
+                            if f.busy { Some((t("Creating workspace…").into(), false)) } else { Some((tf("Runs in {}", &[&f.path]), false)) }
+                        })
+                    })
+                })),
         )
 }
 

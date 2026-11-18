@@ -112,6 +112,13 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
             }
         }
         store::sync_attachments(&out.attachments);
+        // One of Claude Code's interactive commands: Sophon's to do, not
+        // the headless agent's (`slash`).
+        if let Some(native) = crate::slash::native(&out.message) {
+            set_text("");
+            run_native(native, live);
+            return;
+        }
         match target {
             Target::Agent => {
                 if let Some(id) = store::selected_id()
@@ -220,6 +227,9 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                                     ),
                             )
                             .child(view().flex_1())
+                            // The context, beside Send (a press opens the
+                            // usage page; the phone has no pointer to rest).
+                            .child(when(move || live, context_meter_ring))
                             .child(disc(running, busy, empty, submit)),
                     )
                     // While it listens, the whole card is the listening:
@@ -287,10 +297,11 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
 
                 )
                 .child(mic_button(doc))
-                .child(model_picker(live))
-                .child(limits_chip(live)),
+                .child(model_picker(live)),
                 )
-                .child(view().flex_shrink_0().child(disc(running, busy, empty, submit))),
+                // How full the agent's context is, beside Send; the plan's
+                // limits are the status bar's.
+                .child(view().flex_shrink_0().flex_row().items_center().gap(sp(S2)).child(when(move || live, context_meter_ring)).child(disc(running, busy, empty, submit))),
         ))
         .into_element()
 }
@@ -374,6 +385,47 @@ fn settings_summary(live: bool) -> String {
 }
 
 /// The agent's settings, as a sheet: each opens its choices.
+/// Does what an interactive command of Claude Code does, Sophon's way.
+fn run_native(native: crate::slash::Native, live: bool) {
+    use crate::slash::Native;
+    match native {
+        Native::Model => model_sheet(live),
+        Native::Permissions => options_sheet(live),
+        Native::Clear => store::open_tab(store::Tab::Draft),
+        Native::Resume if MOBILE => store::go_home(),
+        Native::Resume => store::open_history(),
+        Native::Usage if MOBILE => store::notify(t("Usage is on the home screen's Usage tab").into()),
+        Native::Usage => store::open_usage(),
+        Native::Status => store::notify(status_words(live)),
+        Native::Config if MOBILE => store::notify(t("Settings are on the home screen's Settings tab").into()),
+        Native::Config => store::open_settings(),
+        Native::Memory if MOBILE => store::notify(t("CLAUDE.md is in the conversation's files").into()),
+        Native::Memory => store::open_file("CLAUDE.md"),
+        Native::Mcp => store::open_mcp(),
+        // The phone has no terminal: run on the computer.
+        Native::Terminal(cmd) if MOBILE => store::notify(tf("Run “claude /{}” in a terminal on the computer", &[cmd])),
+        // This Mac's: a Terminal window in the project. Another computer's:
+        // a terminal of its service, in the workspace.
+        Native::Terminal(cmd) if cfg!(target_os = "macos") && store::on_this_mac() => match store::current_workspace() {
+            Some(w) => store::run_in_terminal(&crate::slash::terminal_command(&w.directory, cmd)),
+            None => store::notify(t("Open a workspace to run it in a terminal").into()),
+        },
+        Native::Terminal(cmd) => store::run_in_workspace_terminal(crate::slash::terminal_line(cmd)),
+    }
+}
+
+/// `/status`: the computer, its service, and the agent's model and mode.
+fn status_words(live: bool) -> String {
+    let host = match store::conn() {
+        store::Conn::Connected { hostname, version, .. } => format!("{hostname} · {}", tf("service {}", &[&version])),
+        _ => t("Not connected").to_owned(),
+    };
+    let c = store::controls(live);
+    let model = c.model.as_deref().map(model_name).unwrap_or_else(|| c.provider.clone());
+    let mode = c.mode.unwrap_or_default();
+    [host, model, mode].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ")
+}
+
 fn options_sheet(live: bool) {
     let c = store::controls(live);
     let provider = store::provider(&c.provider);
@@ -489,11 +541,17 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
                 let agent = store::selected_id()?;
                 store::commands(&agent)
                     .into_iter()
-                    .filter(|c| c.name.to_lowercase().starts_with(&prefix.to_lowercase()))
+                    .filter(|c| c.name.to_lowercase().starts_with(&prefix.to_lowercase()) && !crate::slash::hidden(&c.name))
                     .take(8)
                     .map(|c| {
                         let insert = format!("/{} ", c.name);
-                        (if c.skill { Icon::Sparkles } else { Icon::Slash }, format!("/{}", c.name), c.description, insert, false, true)
+                        // Where it opens, when Sophon does it.
+                        let detail = match crate::slash::hint(&c.name) {
+                            Some(h) if c.description.is_empty() => h.to_owned(),
+                            Some(h) => format!("{} · {h}", c.description),
+                            None => c.description,
+                        };
+                        (if c.skill { Icon::Sparkles } else { Icon::Slash }, format!("/{}", c.name), detail, insert, false, true)
                     })
                     .collect()
             }
@@ -763,36 +821,183 @@ fn model_picker(live: bool) -> impl IntoElement {
     super::model_picker::model_picker(live, name)
 }
 
-/// The plan limit of the composer's provider closest to running out, after
-/// its model: how much is used, and from 80% when it starts again, in the
-/// warning's colour from 80% and the danger's from 90%. A press opens the
-/// usage page, with every window. Nothing while the provider reports none.
-fn limits_chip(live: bool) -> impl IntoElement {
-    use crate::usage::{self, local_offset};
-    dynamic(move || {
+/// The status bar under the desktop's conversation (as monocode's): the
+/// provider's mark, then its 5-hour and weekly limits, each a ring, a word
+/// and a percentage with the time until it starts again; and a refresh.
+/// (The context is the composer's, beside Send: `context_meter_ring`.) Amber from 80%,
+/// red from 90%; a meter opens the usage page. One with nothing to say is
+/// left out. `live`: the open agent's (else a new conversation's).
+pub(crate) fn usage_bar(live: bool) -> impl IntoElement {
+    let readings = computed(move || {
+        // The time left moves on each minute.
+        let now = store::minute().max(crate::usage::now());
+        let mut out: Vec<(&'static str, f64, Option<i64>)> = Vec::new();
         let provider = store::controls(live).provider;
-        let p = store::usage()?.into_iter().find(|p| p.id == provider)?;
-        let (used, w) = p.windows.into_iter().filter_map(|w| Some((w.used?, w))).max_by(|a, b| a.0.total_cmp(&b.0))?;
-        let tone = if used >= 90.0 { DANGER } else if used >= 80.0 { WARNING } else { FG_MUTED };
-        let mut words = format!("{} {used:.0}%", w.label);
-        if let Some(at) = w.resets_at.as_deref().and_then(usage::parse::rfc3339).filter(|_| used >= 80.0) {
-            words.push_str(" · ");
-            words.push_str(&tf("Resets {}", &[&usage::time_label(at, &local_offset)]));
+        if let Some(p) = store::usage().and_then(|l| l.into_iter().find(|p| p.id == provider)) {
+            for (word, length) in [(t("5h"), 5 * 3600), (t("Week"), 7 * 86_400)] {
+                if let Some((pct, resets)) = limit_window(&p.windows, length) {
+                    out.push((word, pct, resets.map(|at| at - now)));
+                }
+            }
         }
-        let chip = button()
-            .on_press(store::open_usage)
-            .accessibility_label(t("Usage"))
-            .flex_row()
-            .items_center()
-            .h(sp(CONTROL_SM))
-            .px(sp(S2))
-            .min_w(px(0.0))
-            .flex_shrink(1.0)
-            .rounded(px(R_FULL))
-            .hover(|s| s.bg(highlight()))
-            .child(text(words).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(tone).number_of_lines(1));
-        Some(chip)
-    })
+        (provider, out)
+    });
+    view().flex_row().items_center().h(px(30.0)).px(sp(S3)).gap(sp(S2)).border_t(px(1.0)).border_color(BORDER).child(dynamic(move || {
+        let (provider, list) = readings.get();
+        Some(untracked(move || {
+            let glyph = match provider.as_str() {
+                "codex" => Icon::Codex,
+                _ => Icon::Claude,
+            };
+            let mut row = view().flex_row().items_center().gap(sp(S4)).child(icon(glyph, 13.0).text_color(FG_MUTED));
+            if list.is_empty() {
+                row = row.child(text(t("No usage reported yet")).text_size(tx(TEXT_XS)).text_color(FG_FAINT));
+            }
+            for (word, pct, left) in list {
+                let tone = meter_tone(pct);
+                let mut meter = button()
+                    .on_press(store::open_usage)
+                    .accessibility_label(t("Usage"))
+                    .flex_row()
+                    .items_center()
+                    .gap(px(5.0))
+                    .px(px(4.0))
+                    .h(px(22.0))
+                    .rounded(px(R_MD))
+                    .hover(|s| s.bg(highlight()))
+                    .child(ring(pct).text_color(tone))
+                    .child(text(word).text_size(tx(TEXT_XS)).text_color(FG_MUTED))
+                    .child(text(format!("{:.0}%", pct.clamp(0.0, 100.0))).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(tone));
+                if let Some(secs) = left.filter(|s| *s > 0) {
+                    meter = meter.child(text(time_left(secs)).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(FG_FAINT));
+                }
+                row = row.child(meter);
+            }
+            row.child(icon_btn(Icon::RotateCw, Sz::Sm, t("Refresh"), store::refresh_usage)).into_element()
+        }))
+    }))
+}
+
+/// The open agent's context beside Send: a ring and its percentage; under
+/// the pointer, a card: "Context", "6% used", a bar, and the tokens
+/// (`6.1万 / 100万`, `61K / 1M`). Amber from 80%, red from 90%.
+fn context_meter_ring() -> impl IntoElement {
+    use nsh_core::element::Interactive as _;
+    let usage = computed(|| store::selected_agent().and_then(|a| Some((a.context_used?, a.context_max.filter(|m| *m > 0)?))));
+    view().child(dynamic(move || {
+        let (used, max) = usage.get()?;
+        let pct = (used as f64 / max as f64 * 100.0).clamp(0.0, 100.0);
+        let tone = meter_tone(pct);
+        Some(untracked(move || {
+            let tip = view()
+                .w(px(260.0))
+                .gap(sp(S2))
+                .px(sp(S4))
+                .py(sp(S3))
+                .rounded(px(R_LG))
+                .bg(SURFACE0)
+                .border_1()
+                .border_color(BORDER)
+                .child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .child(text(t("Context")).text_size(tx(TEXT_SM)).font_weight(FontWeight(600)).flex_1())
+                        .child(text(tf("{}% used", &[&format!("{pct:.0}")])).text_size(tx(TEXT_XS)).text_color(FG_MUTED)),
+                )
+                .child(
+                    view()
+                        .h(px(5.0))
+                        .rounded(px(R_FULL))
+                        .bg(SURFACE3)
+                        .child(view().h_full().w(relative((pct / 100.0) as f32)).rounded(px(R_FULL)).bg(if pct >= 80.0 { tone } else { FG_MUTED })),
+                )
+                .child(text(format!("{} / {}", tokens(used), tokens(max))).text_size(tx(TEXT_XS)).text_color(FG_MUTED));
+            view().tooltip(tip.into_element()).child(
+                button()
+                    .on_press(store::open_usage)
+                    .accessibility_label(tf("{}% context used", &[&format!("{pct:.0}")]))
+                    .flex_row()
+                    .items_center()
+                    .gap(px(5.0))
+                    .h(px(28.0))
+                    .px(px(6.0))
+                    .rounded(px(R_FULL))
+                    .hover(|s| s.bg(highlight()))
+                    .child(ring(pct).text_color(tone))
+                    .child(text(format!("{pct:.0}%")).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(tone)),
+            )
+        }))
+    }))
+}
+
+/// A count of tokens, short, as the language writes it: `6.1万` / `100万`,
+/// `61K` / `1M`.
+fn tokens(n: u64) -> String {
+    tokens_in(n, crate::i18n::is_zh())
+}
+
+fn tokens_in(n: u64, zh: bool) -> String {
+    if zh && n >= 10_000 {
+        let w = n as f64 / 10_000.0;
+        let s = if w >= 100.0 { format!("{w:.0}") } else { format!("{w:.1}") };
+        format!("{}万", s.trim_end_matches(".0"))
+    } else {
+        crate::usage::compact(n)
+    }
+}
+
+/// Seconds until a reset, short: `7h 38m`, `2d 3h`, `12m`.
+fn time_left(secs: i64) -> String {
+    let (d, h, m) = (secs / 86_400, secs % 86_400 / 3600, secs % 3600 / 60);
+    if d > 0 {
+        format!("{d}d {h}h")
+    } else if h > 0 {
+        format!("{h}h {m}m")
+    } else {
+        format!("{}m", m.max(1))
+    }
+}
+
+/// The used percentage of the provider's window of `length` seconds (the
+/// one for every model, not one model's own), and when it resets (Unix
+/// seconds).
+fn limit_window(windows: &[crate::daemon::connection::UsageWindow], length: i64) -> Option<(f64, Option<i64>)> {
+    use crate::usage::{self, limits};
+    windows
+        .iter()
+        .filter(|w| w.used.is_some() && limits::window_length(&w.id, &w.label) == Some(length))
+        // The shortest id is the unscoped one (`weekly`, not `weekly_model_…`).
+        .min_by_key(|w| w.id.len())
+        .map(|w| {
+            (w.used.unwrap_or(0.0), w.resets_at.as_deref().and_then(usage::parse::rfc3339))
+        })
+}
+
+fn meter_tone(pct: f64) -> AdaptiveColor {
+    if pct >= 90.0 {
+        DANGER
+    } else if pct >= 80.0 {
+        WARNING
+    } else {
+        FG_MUTED
+    }
+}
+
+/// A 14-point ring filled to `pct`, in the text color (its track a faint
+/// one of the same).
+fn ring(pct: f64) -> nsh_core::element::Svg {
+    let markup = ring_markup(pct);
+    svg(move || nsh_core::element::ImageSrc::svg_markup(&markup)).w(px(14.0)).h(px(14.0)).flex_shrink_0()
+}
+
+fn ring_markup(pct: f64) -> String {
+    let r = 6.0_f64;
+    let c = 2.0 * std::f64::consts::PI * r;
+    let on = c * pct.clamp(0.0, 100.0) / 100.0;
+    format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="{r}" fill="none" stroke="currentColor" stroke-opacity="0.22" stroke-width="2.5"/><circle cx="8" cy="8" r="{r}" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="{on:.2} {c:.2}" transform="rotate(-90 8 8)"/></svg>"#
+    )
 }
 
 pub(crate) fn thinking_options(live: bool) -> Vec<crate::daemon::model::Opt> {
@@ -947,36 +1152,6 @@ fn pick_files_into(key: String) {
             insert_file(&key, f.name.clone(), f.mime.clone(), f.data.bytes().to_vec());
         }
     });
-}
-
-/// How full the agent's context window is, and what it cost.
-pub(crate) fn context_meter() -> impl IntoElement {
-    let usage = computed(|| store::selected_agent().map(|a| (a.context_used, a.context_max, a.cost_usd)));
-    view().child(dynamic(move || {
-        let (Some(used), Some(max), cost) = usage.get()? else { return None };
-        if max == 0 {
-            return None;
-        }
-        let pct = (used as f64 / max as f64 * 100.0).round() as u32;
-        let tone = if pct >= 85 { DANGER } else if pct >= 65 { WARNING } else { FG_MUTED };
-        Some(untracked(move || {
-            let label = match cost {
-                Some(c) if c > 0.0 => format!("{pct}% · ${c:.2}"),
-                _ => format!("{pct}%"),
-            };
-            view()
-                .flex_row()
-                .items_center()
-                .gap(px(6.0))
-                .px(sp(S2))
-                .child(
-                    view().w(px(28.0)).h(px(4.0)).rounded(px(R_FULL)).bg(SURFACE3).child(
-                        view().h_full().w(relative((pct.min(100) as f32) / 100.0)).rounded(px(R_FULL)).bg(tone),
-                    ),
-                )
-                .child(text(label).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(tone))
-        }))
-    }))
 }
 
 #[derive(Clone, Default)]
@@ -1374,5 +1549,46 @@ mod paste_tests {
         assert_eq!(data_uri("data:text/plain;base64,aGk="), None);
         assert_eq!(data_uri("data:image/png,raw"), None);
         assert_eq!(data_uri("file:///tmp/x.png"), None);
+    }
+}
+
+#[cfg(test)]
+mod meter_tests {
+    use super::{limit_window, ring_markup};
+    use crate::daemon::connection::UsageWindow;
+
+    fn w(id: &str, label: &str, used: Option<f64>) -> UsageWindow {
+        UsageWindow { id: id.into(), label: label.into(), used, resets_at: None }
+    }
+
+    #[test]
+    fn the_5h_and_weekly_meters_take_the_provider_s_own_windows() {
+        let claude = [w("five_hour", "Session", Some(42.0)), w("weekly_model_fable", "Weekly · Fable", Some(86.0)), w("weekly", "Weekly", Some(55.0))];
+        assert_eq!(limit_window(&claude, 5 * 3600).map(|x| x.0), Some(42.0));
+        // The weekly for every model, not one model's own.
+        assert_eq!(limit_window(&claude, 7 * 86_400).map(|x| x.0), Some(55.0));
+        // Nothing reported: no meter.
+        assert_eq!(limit_window(&[w("weekly", "Weekly", None)], 7 * 86_400), None);
+        assert_eq!(limit_window(&[w("credits", "Credits", Some(3.0))], 5 * 3600), None);
+    }
+
+    #[test]
+    fn tokens_read_as_the_language_writes_them() {
+        use super::tokens_in;
+        assert_eq!((tokens_in(61_234, true), tokens_in(1_000_000, true), tokens_in(140_000, true), tokens_in(9_500, true)), ("6.1万".into(), "100万".into(), "14万".into(), crate::usage::compact(9_500)));
+        assert_eq!(tokens_in(61_234, false), crate::usage::compact(61_234));
+    }
+
+    #[test]
+    fn the_time_left_is_short() {
+        use super::time_left;
+        assert_eq!((time_left(7 * 3600 + 38 * 60), time_left(2 * 86_400 + 3 * 3600 + 5), time_left(30), time_left(12 * 60)), ("7h 38m".into(), "2d 3h".into(), "1m".into(), "12m".into()));
+    }
+
+    #[test]
+    fn a_ring_is_filled_to_its_percentage() {
+        assert!(ring_markup(0.0).contains("stroke-dasharray=\"0.00 "));
+        assert!(ring_markup(50.0).contains("stroke-dasharray=\"18.85 37.70\""));
+        assert!(ring_markup(150.0).contains("stroke-dasharray=\"37.70 37.70\""));
     }
 }

@@ -143,7 +143,7 @@ fn group(g: ReadSignal<store::Group>, actions: bool) -> AnyElement {
             nsh_base::collapsible()
                 .open(move || !store::is_collapsed(&project.id))
                 .reveal(true)
-                .content(view().child(rows()))
+                .content(view().child(draft_row(project.root_path.clone())).child(rows()))
                 .child(project_row(header, actions)),
         )
         .into_element()
@@ -205,6 +205,28 @@ fn workspace_entry(w: ReadSignal<crate::daemon::Workspace>, actions: bool) -> im
 
 /// One conversation of a workspace that has several: its state, its title,
 /// and (the desktop's) archiving it.
+/// The new conversation being written in project `root` (its + or ⌘T),
+/// first in its list until its first message makes it.
+fn draft_row(root: String) -> impl IntoElement {
+    let here = computed(move || {
+        store::screen() == Screen::NewWorkspace && store::form().scoped && store::form().path.trim_end_matches('/') == root.trim_end_matches('/')
+    });
+    when(here, || {
+        view()
+            .mx(sp(S2))
+            .mb(px(2.0))
+            .rounded(px(R_LG))
+            .bg(SIDEBAR_SELECTED)
+            .flex_row()
+            .items_center()
+            .gap(sp(S2))
+            .h(sp(ROW_HEIGHT))
+            .pl(sp(S2))
+            .child(view().w(px(15.0)).items_center().child(icon(Icon::SquarePen, 13.0).text_color(FG_MUTED)))
+            .child(text(t("New conversation")).text_size(tx(TEXT_BASE)).text_color(FG).number_of_lines(1).flex_1())
+    })
+}
+
 fn conversation_row(agent: ReadSignal<crate::daemon::Agent>, actions: bool) -> impl IntoElement {
     let id = agent.with_untracked(|a| a.id.clone());
     let selected = {
@@ -430,7 +452,7 @@ fn project_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
         .when(actions, |v| {
             v.child(view().flex_row().items_center().opacity(if MOBILE { 1.0 } else { 0.0 }).group_hover(|s| s.opacity(1.0)).transition_opacity().child(icon_btn(Icon::Plus, Sz::Sm, t("New workspace in project"), move || {
                 if let Some(p) = project.get_untracked().filter(|p| !p.root_path.is_empty()) {
-                    store::open_new_workspace(Some(p.root_path));
+                    store::new_chat_in(p.root_path);
                 }
             }))
             .child(

@@ -1,17 +1,13 @@
 //! Git in the workspace header: ahead / behind, and the pull request with
-//! its checks; pressed, the pull request's sheet: each check, and a merge.
-//! The other actions (commit, push, pull, …) are the command palette's:
-//! the agents do most of them, and a button for them was noise.
+//! its checks. The actions (commit, push, pull, …) are the command
+//! palette's: the agents do most of them, and a button for them was noise.
 
-use crate::i18n::t;
+use crate::i18n::{t, tf};
 use nsh_core::{element::FontWeight, prelude::*};
 use crate::ui::kit::text;
 
 use crate::ui::kit::*;
-use crate::daemon::connection::PullRequest;
 use crate::store;
-use crate::ui::shared::modals::sheet;
-use crate::ui::shared::pull_request::{self, checks_summary, pr_state};
 
 pub(crate) fn git_controls() -> impl IntoElement {
     let git = computed(store::git);
@@ -34,13 +30,36 @@ pub(crate) fn git_controls() -> impl IntoElement {
         }))
 }
 
-fn pr_badge(pr: PullRequest) -> impl IntoElement {
-    let (tone, state) = pr_state(&pr);
-    let checks = checks_summary(&pr);
+fn pr_badge(pr: crate::daemon::connection::PullRequest) -> impl IntoElement {
+    let (tone, state) = if pr.merged {
+        (DOT_RUNNING, t("Merged"))
+    } else if pr.state.eq_ignore_ascii_case("closed") {
+        (DANGER, t("Closed"))
+    } else if pr.draft {
+        (FG_MUTED, t("Draft"))
+    } else {
+        (SUCCESS, if crate::i18n::is_zh() { "开启" } else { t("Open") })
+    };
+    let failing = pr.checks.iter().filter(|(_, s)| matches!(s.as_str(), "failure" | "failed" | "error")).count();
+    let pending = pr.checks.iter().filter(|(_, s)| matches!(s.as_str(), "pending" | "in_progress" | "queued")).count();
+    let checks = if pr.checks.is_empty() {
+        None
+    } else if failing > 0 {
+        Some((DANGER, tf("{} failing", &[&failing.to_string()])))
+    } else if pending > 0 {
+        Some((WARNING, tf("{} running", &[&pending.to_string()])))
+    } else {
+        Some((SUCCESS, t("Checks passed").to_owned()))
+    };
+    let url = pr.url.clone();
     nsh_base::button()
-        .on_press(|| {
-            store::open_modal(store::Modal::PullRequest);
-            store::watch_pull_request(|| matches!(store::modal(), Some(store::Modal::PullRequest)));
+        // Its page here (summary, code, checks, merge); GitHub's when the
+        // address is not GitHub's.
+        .on_press(move || match crate::github::of_url(&url) {
+            Some((repo, number)) => store::open_pull_request(&repo, number, store::selected_id()),
+            None => {
+                let _ = open_url(url.clone());
+            }
         })
         .flex_row()
         .items_center()
@@ -66,8 +85,3 @@ fn pr_badge(pr: PullRequest) -> impl IntoElement {
         })
 }
 
-
-/// The open workspace's pull request, as a sheet ([`pull_request`]).
-pub(crate) fn pull_request_sheet() -> View {
-    sheet(t("Pull request")).w(px(560.0)).child(pull_request::details(true))
-}

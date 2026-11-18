@@ -63,22 +63,22 @@ pub(crate) fn settings(compact: bool) -> impl IntoElement {
                 .child(section(t("Host behavior"), behavior_card()))
                 .child(section(t("Coding agents"), crate::ui::shared::agents::agents_card(true)))
                 .child(section(t("Text generation"), text_generation_card()))
-                .child(section(t("Diagnostics"), {
-                    let diagnostics = card().child(row(
+                .child(section(
+                    t("Diagnostics"),
+                    card()
+                        .child(row(
                             t("Copy diagnostics"),
                             t("Versions, when the service started and stopped and why, and the end of Sophon's logs, to paste into a report. Nothing is sent"),
                             btn(t("Copy"), Variant::Outline, Sz::Sm, Some(Icon::Copy), store::copy_diagnostics),
                             true,
-                        ));
-                    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
-                    let diagnostics = diagnostics.child(row(
+                        ))
+                        .child(row(
                             t("Logs"),
                             t("sophon.log and connection.log, in Sophon's folder"),
                             btn(t("Show in Finder"), Variant::Outline, Sz::Sm, Some(Icon::FolderOpen), store::open_logs),
                             false,
-                        ));
-                    diagnostics
-                })),
+                        )),
+                )),
         ))
 }
 
@@ -132,9 +132,20 @@ fn spaces_card() -> impl IntoElement {
                 let here = current.as_deref() == Some(h.id.as_str());
                 let (rename_id, rename_name) = (h.id.clone(), h.label());
                 let (remove_id, remove_name, remove_folder) = (h.id.clone(), h.label(), short(&folder));
+                let (cap_home, cap_name) = (folder.to_string_lossy().into_owned(), h.label());
+                // Its month against its cap, when it has one.
+                let mut details = detail(&folder, crate::spaces::port_of(&folder), crate::spaces::running(&folder));
+                if let Some(s) = crate::space_limits::spend(&cap_home) {
+                    details.push_str(&format!(" · {}", tf("${} of ${} this month", &[&format!("{:.2}", s.spent), &format!("{:.0}", s.cap)])));
+                    if s.over() {
+                        details.push_str(&format!(" · {}", t("limit reached")));
+                    }
+                } else if let Some(cap) = crate::space_limits::caps().get(&cap_home) {
+                    details.push_str(&format!(" · {}", tf("limit ${} a month", &[&format!("{cap:.0}")])));
+                }
                 c = c.child(row(
                     h.label(),
-                    detail(&folder, crate::spaces::port_of(&folder), crate::spaces::running(&folder)),
+                    details,
                     view()
                         .flex_row()
                         .items_center()
@@ -142,6 +153,9 @@ fn spaces_card() -> impl IntoElement {
                         .child(switch_btn(Some(h.id.clone()), here))
                         .child(icon_btn(Icon::Pencil, Sz::Sm, t("Rename"), move || {
                             store::open_modal(store::Modal::RenameHost { id: rename_id.clone(), name: rename_name.clone() })
+                        }))
+                        .child(icon_btn(Icon::Activity, Sz::Sm, t("Monthly limit"), move || {
+                            store::open_modal(store::Modal::SpaceCap { home: cap_home.clone(), name: cap_name.clone() })
                         }))
                         .child(icon_btn(Icon::Trash2, Sz::Sm, t("Remove space"), move || {
                             store::open_modal(store::Modal::RemoveSpace { id: remove_id.clone(), name: remove_name.clone(), folder: remove_folder.clone() })
@@ -180,29 +194,54 @@ fn devices_card() -> impl IntoElement {
             };
             for d in &connected {
                 let conn = d.conn;
+                // Its pairing of its own, if it has one: its folder is set there.
+                let own = d.device_id.as_ref().and_then(|id| paired.iter().find(|p| p.id == *id)).cloned();
+                let mut hint = {
+                    let how = if d.relayed { t("Connected now, through the relay") } else { t("Connected now, over the LAN") };
+                    match &d.space {
+                        Some(space) => format!("{how} · {space}"),
+                        None => how.to_owned(),
+                    }
+                };
+                if let Some(f) = own.as_ref().and_then(|p| p.folder.as_ref()) {
+                    hint.push_str(&format!(" · {}", tf("only {}", &[f])));
+                }
+                let mut controls = view().flex_row().gap(sp(S1));
+                if let Some(p) = own {
+                    let label = if p.folder.is_some() { t("Folder…") } else { t("Limit to a folder…") };
+                    controls = controls.child(btn(label, Variant::Outline, Sz::Sm, None, move || {
+                        store::open_modal(store::Modal::DeviceFolder { id: p.id.clone(), name: p.name.clone(), folder: p.folder.clone() })
+                    }));
+                }
                 c = line(
                     c,
                     d.device.clone(),
-                    {
-                        let how = if d.relayed { t("Connected now, through the relay") } else { t("Connected now, over the LAN") };
-                        match &d.space {
-                            Some(space) => format!("{how} · {space}"),
-                            None => how.to_owned(),
-                        }
-                    },
-                    btn(t("Disconnect"), Variant::Outline, Sz::Sm, None, move || crate::lan::disconnect(conn)).into_element(),
+                    hint,
+                    controls.child(btn(t("Disconnect"), Variant::Outline, Sz::Sm, None, move || crate::lan::disconnect(conn))).into_element(),
                 );
             }
             for p in paired.iter().filter(|p| !connected.iter().any(|c| c.device_id.as_deref() == Some(p.id.as_str()))) {
                 let id = p.id.clone();
+                let (fid, fname, ffolder) = (p.id.clone(), p.name.clone(), p.folder.clone());
+                let mut hint = match &p.space {
+                    Some(space) => format!("{} · {space}", t("Paired")),
+                    None => t("Paired").to_owned(),
+                };
+                if let Some(f) = &p.folder {
+                    hint.push_str(&format!(" · {}", tf("only {}", &[f])));
+                }
                 c = line(
                     c,
                     p.name.clone(),
-                    match &p.space {
-                        Some(space) => format!("{} · {space}", t("Paired")),
-                        None => t("Paired").to_owned(),
-                    },
-                    btn(t("Remove"), Variant::Outline, Sz::Sm, None, move || crate::lan::revoke(&id)).into_element(),
+                    hint,
+                    view()
+                        .flex_row()
+                        .gap(sp(S1))
+                        .child(btn(if p.folder.is_some() { t("Folder…") } else { t("Limit to a folder…") }, Variant::Outline, Sz::Sm, None, move || {
+                            store::open_modal(store::Modal::DeviceFolder { id: fid.clone(), name: fname.clone(), folder: ffolder.clone() })
+                        }))
+                        .child(btn(t("Remove"), Variant::Outline, Sz::Sm, None, move || crate::lan::revoke(&id)))
+                        .into_element(),
                 );
             }
             if connected.is_empty() && paired.is_empty() {

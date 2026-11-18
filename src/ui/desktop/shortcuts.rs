@@ -7,7 +7,7 @@ use crate::ui::kit::text;
 
 use crate::ui::kit::*;
 use crate::daemon::connection::GitAction;
-use crate::store::{self, ExplorerTab, Modal, Screen, Tab};
+use crate::store::{self, ExplorerTab, Modal, Tab};
 
 /// Binds the app's shortcuts for as long as the shell lives.
 pub(crate) fn bind() {
@@ -152,10 +152,9 @@ fn keys(with_menu: bool) -> Vec<(String, std::rc::Rc<dyn Fn()>)> {
     out
 }
 
+/// ⌘T: a new conversation in the open one's project.
 fn new_chat() {
-    if matches!(store::screen(), Screen::Workspace(_)) {
-        store::open_tab(Tab::Draft);
-    }
+    store::new_chat_here();
 }
 
 /// The menu bar, as a Mac app's: ⌘W closes the open tab (not the window),

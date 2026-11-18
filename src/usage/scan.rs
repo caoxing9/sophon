@@ -175,6 +175,21 @@ pub(crate) fn scan() -> Report {
     report
 }
 
+/// What the sessions `ids` cost this calendar month: their log files
+/// (named after the session), as the last [`scan`] read them.
+pub(crate) fn month_cost_of(ids: &[String]) -> f64 {
+    if ids.is_empty() {
+        return 0.0;
+    }
+    let guard = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(cache) = guard.as_ref() else { return 0.0 };
+    let entries = cache
+        .iter()
+        .filter(|(path, _)| path.file_name().and_then(|n| n.to_str()).is_some_and(|n| ids.iter().any(|id| !id.is_empty() && n.contains(id.as_str()))))
+        .flat_map(|(_, f)| f.entries.iter());
+    super::month_cost(entries, super::now(), &super::local_offset)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

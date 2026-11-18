@@ -35,7 +35,13 @@ pub enum Command {
     /// The device's network changed (`platform::network`): back online, or
     /// another interface. Online, a wait between attempts ends now and a
     /// live connection is checked; off Wi-Fi, a LAN connection is dropped.
-    NetworkChanged { online: bool, wifi: bool },
+    NetworkChanged {
+        online: bool,
+        wifi: bool,
+        /// The network as it is at the start, not a change: kept (the LAN is
+        /// looked for first on Wi-Fi), nothing checked.
+        first: bool,
+    },
     /// `behavior`: `steer` or `interrupt` while a turn runs.
     /// `message_id`: the id the host echoes the message back with, so the
     /// copy shown at once is not shown twice.
@@ -48,6 +54,9 @@ pub enum Command {
     /// Asks the host's Sophon for its session-log statistics (a phone has
     /// no logs of its own).
     HostUsage,
+    /// Asks the host's Sophon to do `op` with its `gh` (`crate::github`):
+    /// answered by [`Event::GitHub`].
+    GitHub(crate::github::Op),
     /// Tells the host's Sophon this device wants push notifications
     /// (`docs/push.md`): its id, Apple's token for it (empty: no longer),
     /// which of Apple's servers knows the token, its language, and
@@ -471,19 +480,7 @@ pub struct PullRequest {
     pub mergeable: String,
     /// `approved`, `changes_requested`, `pending`, or none asked for.
     pub review: Option<String>,
-    pub checks: Vec<PrCheck>,
-}
-
-/// One CI check of a pull request.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct PrCheck {
-    pub name: String,
-    /// `pending`, `success`, `failure`, `cancelled` or `skipped`.
-    pub status: String,
-    /// Its page: the run's log on GitHub.
-    pub url: Option<String>,
-    /// How long it took, or has been running, as the service words it.
-    pub duration: Option<String>,
+    pub checks: Vec<(String, String)>,
 }
 
 /// One entry of a directory listing.
@@ -688,6 +685,8 @@ pub enum Event {
     Connecting { url: String },
     /// A step of the attempt under way.
     Stage(Stage),
+    /// The answer to [`Command::GitHub`]: by the op's key.
+    GitHub { key: String, result: Result<serde_json::Value, String> },
     Connected { hostname: String, version: String },
     /// `retry_in`: the wait before the next attempt.
     Disconnected { reason: String, retry_in: Duration },
@@ -801,6 +800,12 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
     // LAN does not answer (away from home), the LAN again after that.
     let mut lan_index = 0usize;
     let mut backoff = Duration::from_secs(1);
+    // On Wi-Fi now (the device's network, `platform::network`): the LAN
+    // first; off it, the relay at once. `None`: not known.
+    let mut on_wifi: Option<bool> = None;
+    // The session through the relay just found the LAN bridge answering:
+    // the next attempt goes there, whatever the last route was.
+    let mut lan_answered = false;
     // The host whose kept lists the UI has been given.
     let mut shown: Option<String> = None;
     loop {
@@ -824,7 +829,13 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
                 // Through the relay last time (away from home): the relay
                 // at once, not after the LAN's look; the session moves to
                 // the LAN within seconds if it answers after all.
-                let away = lan_index == 0 && has_relay(r) && last_route() == Some(Route::Relay);
+                // As the device's network is now (read where it is kept,
+                // before any command says it).
+                #[cfg(any(target_os = "macos", target_os = "ios"))]
+                if let Some(now) = crate::platform::network::on_wifi() {
+                    on_wifi = Some(now);
+                }
+                let away = lan_index == 0 && has_relay(r) && skip_lan(on_wifi, last_route(), std::mem::take(&mut lan_answered));
                 let found = if lan_index == 0 && !away && has_lan(r) {
                     if events.send(Event::Stage(Stage::Finding)).is_err() {
                         return;
@@ -851,7 +862,7 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
         }
         let mut reached = false;
         let attempt = tokio::select! {
-            r = session(&endpoint, &events, &mut commands, &mut open_agent, &mut diff_cwd, &mut reached) => Some(r),
+            r = session(&endpoint, &events, &mut commands, &mut open_agent, &mut diff_cwd, &mut reached, &mut on_wifi) => Some(r),
             _ = switch_signal().notified() => None,
         };
         let result = match attempt {
@@ -872,7 +883,9 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
                 continue;
             }
             Ok(Exit::Lan) => {
+                trace("the LAN bridge answers: moving to it from the relay");
                 lan_index = 0;
+                lan_answered = true;
                 backoff = Duration::from_secs(1);
                 continue;
             }
@@ -938,6 +951,9 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
                     }
                     // Asked while away: no answer, said so (no notice).
                     Some(Command::HostUsage) => { let _ = events.send(Event::HostUsage(None)); }
+                    Some(Command::GitHub(op)) => {
+                        let _ = events.send(Event::GitHub { key: op.key(), result: Err("Not connected to the computer".into()) });
+                    }
                     Some(Command::AskPictures { .. } | Command::PushRegister { .. }) => {}
                     // Just started: try now, then again soon.
                     Some(Command::Reconnect) => {
@@ -952,13 +968,15 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
                         lan_index = 0;
                         break;
                     }
+                    Some(Command::NetworkChanged { wifi, first: true, .. }) => on_wifi = Some(wifi),
                     // Back online, or on another network: try now.
-                    Some(Command::NetworkChanged { online: true, .. }) => {
+                    Some(Command::NetworkChanged { online: true, wifi, .. }) => {
+                        on_wifi = Some(wifi);
                         backoff = Duration::from_millis(500);
                         lan_index = 0;
                         break;
                     }
-                    Some(Command::NetworkChanged { online: false, .. }) => {}
+                    Some(Command::NetworkChanged { wifi, .. }) => on_wifi = Some(wifi),
                     Some(_) => { let _ = events.send(Event::Notice("Not connected to the service".into())); }
                 },
             }
@@ -1071,6 +1089,17 @@ async fn lan_now(r: &RemoteHost) -> Option<String> {
         }
     }
     None
+}
+
+/// Whether a start goes to the relay without looking for the LAN first:
+/// as the last session went (the relay when it was the relay: connected
+/// at once; the session then looks for the LAN within seconds and moves
+/// to it, the steadier way, if it answers); and always on cellular alone,
+/// where the computer's LAN is not. Never when the LAN was just found
+/// answering (`lan_answered`): that is the move to it, which the last
+/// route (the relay it leaves) must not send back.
+fn skip_lan(on_wifi: Option<bool>, last: Option<Route>, lan_answered: bool) -> bool {
+    !lan_answered && (on_wifi == Some(false) || last == Some(Route::Relay))
 }
 
 /// How a session last reached the current host.
@@ -1208,6 +1237,8 @@ enum Pending {
     ResetCredits,
     /// A reset being spent, for this provider.
     UseReset(String),
+    /// A conversation's record being read again (`follow`): which, and since when.
+    Reload(String, std::time::Instant),
     Other(&'static str),
 }
 
@@ -1218,6 +1249,7 @@ async fn session(
     open_agent: &mut Option<String>,
     diff_cwd: &mut Option<String>,
     reached: &mut bool,
+    on_wifi: &mut Option<bool>,
 ) -> Result<Exit, String> {
     let mut diff_sub: Option<String> = None;
     // Terminal output arrives in binary frames addressed by slot.
@@ -1306,13 +1338,16 @@ async fn session(
     // than the wait.
     const LONG_AWAY_ANSWER: Duration = Duration::from_millis(1500);
     let mut last_frame = rt::Instant::now();
+    let mut flood = Flood::default();
     // Back in the foreground with a connection silent for a while: it has
     // until this to answer a ping.
     let mut check_at: Option<rt::Instant> = None;
     // The wait of the probe under way.
     let mut probing = RESUME_ANSWER;
+    // Through the relay with a LAN bridge to find: looked for soon after
+    // (on the computer's Wi-Fi it answers at once), then every 15 s.
     let mut lan_check = rt::interval_at(
-        rt::Instant::now() + Duration::from_secs(5),
+        rt::Instant::now() + Duration::from_secs(2),
         Duration::from_secs(15),
     );
 
@@ -1321,7 +1356,8 @@ async fn session(
             _ = &mut hello_deadline, if !connected => {
                 return Err("The daemon did not answer the handshake".into());
             }
-            _ = lan_check.tick(), if connected && (!endpoint.lan_probe.is_empty() || endpoint.lan_key.is_some()) => {
+            // Not on cellular alone: no LAN of the computer's there.
+            _ = lan_check.tick(), if connected && *on_wifi != Some(false) && (!endpoint.lan_probe.is_empty() || endpoint.lan_key.is_some()) => {
                 let found = match &endpoint.lan_key {
                     Some(key) => find_key(key.clone(), Duration::from_millis(1000)).await,
                     None => None,
@@ -1361,7 +1397,24 @@ async fn session(
                 // while away): alive. Else a ping, and a short wait for
                 // anything at all, shorter after long away or on the LAN
                 // (as t3code's connection supervisor waits).
+                if let Command::NetworkChanged { wifi, .. } = &cmd {
+                    *on_wifi = Some(*wifi);
+                    // On a Wi-Fi through the relay: the computer may be on
+                    // it; looked for now, and moved to if it answers.
+                    if *wifi && !endpoint.is_lan() && (!endpoint.lan_probe.is_empty() || endpoint.lan_key.is_some()) {
+                        lan_check.fire_now();
+                    }
+                }
                 let probe = match &cmd {
+                    // This computer's own service: a loopback socket does
+                    // not die unheard (its end closing is read at once),
+                    // and a ping it is slow to answer only means it is busy
+                    // (an agent running many sub-agents); dropping it then
+                    // made it do the whole start over again (every list,
+                    // the open conversation's page). The ping timeout
+                    // still ends a service that hangs.
+                    _ if endpoint.via() == Via::Local => None,
+                    Command::NetworkChanged { first: true, .. } => None,
                     Command::Resume { away } => Some(*away >= LONG_AWAY),
                     // The LAN's bridge is not reached off Wi-Fi.
                     Command::NetworkChanged { wifi: false, .. } if endpoint.is_lan() => return Ok(Exit::Stale),
@@ -1380,7 +1433,7 @@ async fn session(
                         }
                         let wait = if long {
                             LONG_AWAY_ANSWER
-                        } else if endpoint.is_lan() || endpoint.via() == Via::Local {
+                        } else if endpoint.is_lan() {
                             LAN_ANSWER
                         } else {
                             RESUME_ANSWER
@@ -1397,6 +1450,15 @@ async fn session(
                     // Only the host's Sophon (its bridge) keeps this.
                     if connected && endpoint.bridge_token.is_some() {
                         send(&mut tx, &json!({ "type": "sophon_push_register", "device": device, "token": token, "env": env, "lang": lang, "hide": hide })).await?;
+                    }
+                    continue;
+                }
+                if let Command::GitHub(op) = &cmd {
+                    // Only the host's Sophon (its bridge) runs gh.
+                    if connected && endpoint.bridge_token.is_some() {
+                        send(&mut tx, &json!({ "type": "sophon_github_request", "key": op.key(), "request": op.to_json() })).await?;
+                    } else if events.send(Event::GitHub { key: op.key(), result: Err("GitHub needs Sophon on the computer (pair with it there)".into()) }).is_err() {
+                        return Ok(Exit::UiGone);
                     }
                     continue;
                 }
@@ -1523,6 +1585,7 @@ async fn session(
                     // subscribe to either yet.
                     _ => continue,
                 };
+                flood.add(text.len());
                 let Ok(msg) = serde_json::from_str::<Value>(text.as_str()) else { continue };
                 match msg.get("type").and_then(Value::as_str) {
                     Some("hello.rejected") => {
@@ -1532,6 +1595,17 @@ async fn session(
                     Some("session") => {}
                     Some("sophon_usage") => {
                         if events.send(Event::HostUsage(msg.get("report").cloned())).is_err() {
+                            return Ok(Exit::UiGone);
+                        }
+                        continue;
+                    }
+                    Some("sophon_github") => {
+                        let key = msg.get("key").and_then(Value::as_str).unwrap_or_default().to_owned();
+                        let result = match msg.get("ok").and_then(Value::as_bool) {
+                            Some(true) => Ok(msg.get("data").cloned().unwrap_or(Value::Null)),
+                            _ => Err(msg.get("error").and_then(Value::as_str).unwrap_or("GitHub failed").to_owned()),
+                        };
+                        if events.send(Event::GitHub { key, result }).is_err() {
                             return Ok(Exit::UiGone);
                         }
                         continue;
@@ -1568,6 +1642,10 @@ async fn session(
                         *reached = true;
                         remember_route(if endpoint.is_lan() { Route::Lan } else if endpoint.relay.is_some() { Route::Relay } else { Route::Direct });
                         let field = |k| payload.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
+                        HISTORY_SYNC.store(
+                            payload.pointer("/features/agentHistorySync").and_then(Value::as_bool) == Some(true),
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
                         trace(&format!("connected to {} ({}) via {via:?} in {} ms", field("hostname"), field("version"), started.elapsed().as_millis()));
                         if events.send(Event::Connected { hostname: field("hostname"), version: field("version") }).is_err() {
                             return Ok(Exit::UiGone);
@@ -1653,6 +1731,34 @@ fn tail_request(agent_id: &str, pending: &mut HashMap<String, Pending>) -> Value
             "projection": "projected",
         }),
     )
+}
+
+/// The kept page `kept` (ending at `from`) with `rows`, what came after it,
+/// joined on: the last [`TIMELINE_PAGE`] rows, and where they now begin
+/// and end. `None` when there is nothing to add, or the kept page is no
+/// longer the one asked after (another epoch, another end).
+fn extend_kept(kept: &Value, from: u64, epoch: &str, rows: &[Value]) -> Option<Value> {
+    let last = rows.last()?;
+    let end = last.get("seqEnd").or_else(|| last.get("seq"))?.as_u64()?;
+    let kept_end = kept.get("endCursor")?;
+    let kept_epoch = kept_end.get("epoch").or_else(|| kept.get("epoch"))?.as_str()?;
+    if kept_epoch != epoch || kept_end.get("seq")?.as_u64()? != from {
+        return None;
+    }
+    let mut entries = kept.get("entries")?.as_array()?.clone();
+    entries.extend_from_slice(rows);
+    let cut = entries.len().saturating_sub(TIMELINE_PAGE as usize);
+    let mut page = kept.clone();
+    if cut > 0 {
+        entries.drain(..cut);
+        let start = entries.first().and_then(|e| e.get("seqStart").or_else(|| e.get("seq"))).and_then(Value::as_u64)?;
+        page["startCursor"] = json!({ "epoch": epoch, "seq": start });
+        page["hasOlder"] = json!(true);
+    }
+    page["entries"] = Value::Array(entries);
+    page["endCursor"] = json!({ "epoch": epoch, "seq": end });
+    page["epoch"] = json!(epoch);
+    Some(page)
 }
 
 fn timeline_requests(agent_id: &str, pending: &mut HashMap<String, Pending>) -> Vec<Value> {
@@ -1742,7 +1848,11 @@ fn events_request(pending: &mut HashMap<String, Pending>, full: bool) -> Value {
 }
 
 fn startup_messages(open_agent: Option<&str>, pending: &mut HashMap<String, Pending>) -> Vec<Value> {
-    let mut out = vec![
+    // The conversation on screen first: the service answers in order, and
+    // behind the lists (hundreds of agents and workspaces, the providers)
+    // a busy one kept it waiting for seconds.
+    let mut out = open_agent.map(|id| timeline_requests(id, pending)).unwrap_or_default();
+    out.extend([
         events_request(pending, true),
         request(pending, Pending::Projects, json!({ "type": "project.list.request" })),
         request(
@@ -1757,10 +1867,7 @@ fn startup_messages(open_agent: Option<&str>, pending: &mut HashMap<String, Pend
         ),
         request(pending, Pending::Providers, json!({ "type": "get_providers_snapshot_request" })),
         request(pending, Pending::Optional, json!({ "type": "workspace.label.list.request" })),
-    ];
-    if let Some(id) = open_agent {
-        out.extend(timeline_requests(id, pending));
-    }
+    ]);
     out
 }
 
@@ -1774,7 +1881,7 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
     match cmd {
         Command::Open(id) => timeline_requests(&id, pending),
         // Sent by the session itself, with its binary frames.
-        Command::Upload { .. } | Command::Download { .. } | Command::Reconnect | Command::Resume { .. } | Command::NetworkChanged { .. } | Command::AskPictures { .. } | Command::HostUsage | Command::PushRegister { .. } => vec![],
+        Command::Upload { .. } | Command::Download { .. } | Command::Reconnect | Command::Resume { .. } | Command::NetworkChanged { .. } | Command::GitHub(_) | Command::AskPictures { .. } | Command::HostUsage | Command::PushRegister { .. } => vec![],
         Command::Send { agent_id, text, behavior, images, attachments, message_id } => {
             let mut msg = json!({
                 "type": "send_agent_message_request",
@@ -2172,12 +2279,21 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
         Command::ScheduleRuns(id) => {
             vec![request(pending, Pending::ScheduleRuns(id.clone()), json!({ "type": "schedule/logs", "scheduleId": id }))]
         }
-        // The same request, asked quietly: the record is read again.
-        Command::Reload(agent_id) => vec![request(
-            pending,
-            Pending::Optional,
-            json!({ "type": "refresh_agent_request", "agentId": agent_id }),
-        )],
+        // The record is read again: only what was appended to it, by a
+        // service that can (`agent.history.sync`); else the whole of it,
+        // the conversation reloaded.
+        Command::Reload(agent_id) => {
+            let kind = if HISTORY_SYNC.load(std::sync::atomic::Ordering::Relaxed) {
+                "agent.history.sync.request"
+            } else {
+                "refresh_agent_request"
+            };
+            vec![request(
+                pending,
+                Pending::Reload(agent_id.clone(), std::time::Instant::now()),
+                json!({ "type": kind, "agentId": agent_id }),
+            )]
+        }
         Command::Unarchive(agent_id) => vec![request(
             pending,
             Pending::Other("restore the agent"),
@@ -2383,6 +2499,11 @@ fn handle(
                     return vec![];
                 }
                 Some(Pending::Optional) => return vec![],
+                Some(Pending::Reload(agent, since)) => {
+                    let error = payload.get("error").and_then(Value::as_str).unwrap_or("request failed");
+                    log::warn!("conversation {agent}: reading it again failed after {} ms: {error}", since.elapsed().as_millis());
+                    return vec![];
+                }
                 // An agent with no sessions to list: none of its own.
                 Some(Pending::Recent(seq)) => return vec![Event::RecentSessions { seq, list: vec![] }],
                 // The page showed the change already: show the config as it is.
@@ -2430,7 +2551,7 @@ fn handle(
                 Some(Pending::Pairing) => {
                     return vec![Event::PairingOffer { url: None, relay_enabled: false, error: Some(error.to_owned()) }];
                 }
-                Some(Pending::Optional | Pending::Recent(_)) => "load",
+                Some(Pending::Optional | Pending::Recent(_) | Pending::Reload(..)) => "load",
                 Some(Pending::Git(action)) => return vec![Event::GitDone { cwd: String::new(), action, error: Some(error.to_owned()), url: None }],
                 Some(Pending::Write(_)) => "save the file",
                 Some(Pending::Suggest(_)) => "search files",
@@ -2504,8 +2625,38 @@ fn handle(
             out
         }
         // Legacy create replies arrive as status payloads carrying the requestId.
+        "agent.history.sync.response" => {
+            if let Some(Pending::Reload(agent, since)) = request_id.and_then(|id| pending.remove(id)) {
+                let ms = since.elapsed().as_millis();
+                let s = |k: &str| payload.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
+                let n = |k: &str| payload.get(k).and_then(Value::as_u64).unwrap_or(0);
+                let (outcome, items, size) = (s("outcome"), n("appendedItems"), n("timelineSize"));
+                match payload.get("error").and_then(Value::as_str) {
+                    Some(error) => log::warn!("conversation {agent}: syncing its record failed after {ms} ms: {error}"),
+                    None if outcome == "reloaded" && ms >= 5000 => {
+                        log::warn!("conversation {agent} reloaded in {ms} ms ({size} timeline items): slow")
+                    }
+                    None => log::info!("conversation {agent} synced in {ms} ms: {outcome}, {items} new of {size} timeline items"),
+                }
+            }
+            vec![]
+        }
         "status" => {
             let status = payload.get("status").and_then(Value::as_str);
+            // How long the service took to read a conversation again, and
+            // how long it is: what a slow or stuck service comes down to.
+            if status == Some("agent_refreshed") {
+                if let Some(Pending::Reload(agent, since)) = request_id.and_then(|id| pending.remove(id)) {
+                    let items = payload.get("timelineSize").and_then(Value::as_u64).unwrap_or(0);
+                    let ms = since.elapsed().as_millis();
+                    if ms >= 5000 {
+                        log::warn!("conversation {agent} read again in {ms} ms ({items} timeline items): slow");
+                    } else {
+                        log::info!("conversation {agent} read again in {ms} ms ({items} timeline items)");
+                    }
+                }
+                return vec![];
+            }
             if !matches!(status, Some("agent_created" | "agent_resumed" | "agent_create_failed")) {
                 return vec![];
             }
@@ -2565,6 +2716,14 @@ fn handle(
                     })
                     .collect();
                 out.push(Event::TimelineSynced { agent_id: agent_id.clone() });
+                // The kept page brought up to date too: else it stayed
+                // where it was first fetched, and a conversation followed
+                // for long (a turn running for an hour) asked again for
+                // its whole latest page at each opening or reconnection.
+                let name = super::cache::timeline_name(&agent_id);
+                if let Some(kept) = super::cache::load(&name).and_then(|kept| extend_kept(&kept, from, epoch, &rows)) {
+                    super::cache::save(&name, &kept);
+                }
                 if let Some(agent) = payload.get("agent").and_then(Agent::from_json) {
                     out.push(Event::AgentUpsert(agent));
                 }
@@ -2676,13 +2835,7 @@ fn handle(
                     mergeable: s("mergeable"),
                     review: st.get("reviewDecision").and_then(Value::as_str).map(str::to_owned),
                     checks: list_of(st, "checks", |c| {
-                        let opt = |k: &str| c.get(k).and_then(Value::as_str).filter(|v| !v.is_empty()).map(str::to_owned);
-                        Some(PrCheck {
-                            name: c.get("name")?.as_str()?.to_owned(),
-                            status: opt("status").unwrap_or_default(),
-                            url: opt("url"),
-                            duration: opt("duration"),
-                        })
+                        Some((c.get("name")?.as_str()?.to_owned(), c.get("status").and_then(Value::as_str).unwrap_or_default().to_owned()))
                     }),
                 }
             });
@@ -3389,6 +3542,50 @@ pub fn discover_in(home: &std::path::Path) -> Endpoint {
     Endpoint { url: format!("ws://{listen}/ws"), local_credential, password: None, relay: None, bridge_token: None, lan_probe: vec![], lan_key: None }
 }
 
+/// Whether the service in use reads only what was appended to a
+/// conversation's record (`server_info.features.agentHistorySync`, Sophon's
+/// build of the service): set as each connection opens.
+static HISTORY_SYNC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// What arrives in a burst: a conversation's whole history sent again (its
+/// record read again, 4,444 messages and 7 MB for 2,816 items), which keeps
+/// the app busy and can look like a lost service. Said in the log once a
+/// burst, with its size.
+#[derive(Default)]
+struct Flood {
+    since: Option<std::time::Instant>,
+    messages: u64,
+    bytes: u64,
+    said: bool,
+}
+
+impl Flood {
+    /// A burst: this many messages within [`Flood::WINDOW`].
+    const MESSAGES: u64 = 2000;
+    const WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
+
+    fn add(&mut self, bytes: usize) {
+        let now = std::time::Instant::now();
+        if self.since.is_none_or(|s| now.duration_since(s) > Self::WINDOW) {
+            if self.said {
+                log::warn!("burst over: {} messages, {:.1} MB in the last {} s", self.messages, self.bytes as f64 / 1e6, Self::WINDOW.as_secs());
+            }
+            *self = Flood { since: Some(now), ..Default::default() };
+        }
+        self.messages += 1;
+        self.bytes += bytes as u64;
+        if !self.said && self.messages >= Self::MESSAGES {
+            self.said = true;
+            log::warn!(
+                "a burst from the service: {} messages, {:.1} MB in {} ms (a conversation's history sent again?)",
+                self.messages,
+                self.bytes as f64 / 1e6,
+                self.since.map_or(0, |s| now.duration_since(s).as_millis())
+            );
+        }
+    }
+}
+
 /// A stable id, so a reconnect within the daemon's grace period resumes the
 /// same logical session.
 fn client_id() -> String {
@@ -3405,6 +3602,27 @@ fn client_id() -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// A start goes the way the last one did (the session moves to the
+    /// LAN after, when it answers); on cellular alone, the relay at once.
+    #[test]
+    fn a_start_goes_the_last_way_and_never_looks_for_the_lan_on_cellular() {
+        assert!(skip_lan(Some(true), Some(Route::Relay), false), "the relay first, the LAN found after");
+        assert!(!skip_lan(Some(true), Some(Route::Lan), false));
+        assert!(!skip_lan(Some(true), None, false));
+        assert!(skip_lan(Some(false), Some(Route::Lan), false), "no LAN of the computer's on cellular");
+        assert!(skip_lan(None, Some(Route::Relay), false));
+        assert!(!skip_lan(None, None, false));
+    }
+
+    /// The session through the relay found the LAN answering: the next
+    /// attempt is the LAN, though the relay was the last route. (It went
+    /// back to the relay, found the LAN again 15 s later, and so on.)
+    #[test]
+    fn the_lan_found_from_the_relay_is_moved_to() {
+        assert!(!skip_lan(Some(true), Some(Route::Relay), true));
+        assert!(!skip_lan(None, Some(Route::Relay), true));
+    }
     #[test]
     fn file_frames_follow_the_protocol() {
         let bytes = vec![7u8; FILE_CHUNK_BYTES + 3];
@@ -3796,34 +4014,39 @@ mod tests {
     }
 
     #[test]
-    fn reset_credits_and_their_use_come_back_as_events() {
+    fn a_record_is_synced_where_the_service_can_and_reloaded_where_not() {
+        use std::sync::atomic::Ordering;
         let mut pending = HashMap::new();
         let mut follow_ups = Vec::new();
-        let sent = command_messages(Command::ResetCredits, &mut pending);
+        HISTORY_SYNC.store(false, Ordering::Relaxed);
+        let sent = command_messages(Command::Reload("a1".into()), &mut pending);
+        assert_eq!(sent[0]["message"]["type"], "refresh_agent_request");
+        HISTORY_SYNC.store(true, Ordering::Relaxed);
+        let sent = command_messages(Command::Reload("a1".into()), &mut pending);
+        HISTORY_SYNC.store(false, Ordering::Relaxed);
         let msg = &sent[0]["message"];
-        assert_eq!(msg["type"], "provider.credits.list.request");
-        let output = json!({ "requestId":msg["requestId"], "providers": [{ "provider": "codex", "available": 2, "options": [
-            { "creditId": "c1", "kind": "codexRateLimits", "label": "Rate limit reset", "count": 2, "expiresAt": "2026-12-01T00:00:00.000Z" }
-        ] }] });
-        let events = handle("provider.credits.list.response", &output, &mut pending, None, &mut follow_ups);
-        let [Event::ResetCredits(Ok(list))] = &events[..] else { panic!("{events:?}") };
-        assert_eq!(list[0].available, 2);
-        assert_eq!(list[0].options[0].credit_id.as_deref(), Some("c1"));
-
-        let sent = command_messages(Command::UseReset { provider: "codex".into(), credit_id: Some("c1".into()), request_id: "r1".into() }, &mut pending);
-        let msg = &sent[0]["message"];
-        assert_eq!(msg["type"], "provider.credits.use.request");
-        assert_eq!(msg["input"], json!({ "provider": "codex", "creditId": "c1", "requestId": "r1" }));
-        let events = handle("rpc_error", &json!({ "requestId": msg["requestId"], "error": "Codex is limiting resets. Try again soon." }), &mut pending, None, &mut follow_ups);
-        assert!(matches!(&events[..], [Event::ResetUsed { provider, result: Err(_) }] if provider == "codex"));
+        assert_eq!(msg["type"], "agent.history.sync.request");
+        assert_eq!(msg["agentId"], "a1");
+        let id = msg["requestId"].as_str().unwrap().to_owned();
+        let reply = json!({ "requestId": id, "agentId": "a1", "outcome": "appended", "appendedItems": 2, "timelineSize": 30, "error": null });
+        assert!(handle("agent.history.sync.response", &reply, &mut pending, None, &mut follow_ups).is_empty());
+        assert!(!pending.contains_key(&id), "the request is answered");
     }
 
     #[test]
     #[ignore]
-    fn reset_credits_live() {
-        let listen = std::env::var("SOPHON_SERVICE_LISTEN").expect("SOPHON_SERVICE_LISTEN: a test service");
-        std::env::var("SOPHON_SERVICE_HOME").expect("SOPHON_SERVICE_HOME: isolated service directory");
+    fn an_appended_turn_is_synced_live() {
+        // A service of its own (PASEO_LISTEN, PASEO_HOME, SOPHON_DATA_DIR)
+        // with an imported Claude conversation (SOPHON_TEST_AGENT) whose
+        // record is a copy (SOPHON_TEST_TRANSCRIPT, its last record's id in
+        // SOPHON_TEST_PARENT): a turn appended to it is read on its own when
+        // the service can (Sophon's build), and the log says so.
+        let listen = std::env::var("PASEO_LISTEN").expect("PASEO_LISTEN: a test service");
         assert!(!listen.ends_with(":6767"), "not the user's own service");
+        let agent = std::env::var("SOPHON_TEST_AGENT").expect("SOPHON_TEST_AGENT");
+        let transcript = std::env::var("SOPHON_TEST_TRANSCRIPT").expect("SOPHON_TEST_TRANSCRIPT");
+        let parent = std::env::var("SOPHON_TEST_PARENT").expect("SOPHON_TEST_PARENT");
+        crate::applog::init();
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async move {
             let (ev_tx, mut ev_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -3832,22 +4055,33 @@ mod tests {
             loop {
                 if let Some(Event::Connected { .. }) = ev_rx.recv().await { break; }
             }
-            let answer = tokio::time::timeout(Duration::from_secs(90), async {
+            cmd_tx.send(Command::Open(agent.clone())).unwrap();
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let turn = [
+                json!({ "type": "user", "uuid": "sophon-live-u", "parentUuid": parent, "message": { "role": "user", "content": "from a terminal" } }),
+                json!({ "type": "assistant", "uuid": "sophon-live-a", "parentUuid": "sophon-live-u", "message": { "role": "assistant", "content": "reply in the terminal" } }),
+            ];
+            let mut text = String::new();
+            for record in turn {
+                text.push_str(&record.to_string());
+                text.push('\n');
+            }
+            use std::io::Write;
+            std::fs::OpenOptions::new().append(true).open(&transcript).unwrap().write_all(text.as_bytes()).unwrap();
+            cmd_tx.send(Command::Reload(agent.clone())).unwrap();
+            let log = crate::applog::path();
+            let seen = tokio::time::timeout(Duration::from_secs(30), async {
                 loop {
-                    tokio::time::sleep(Duration::from_secs(3)).await;
-                    cmd_tx.send(Command::ResetCredits).unwrap();
-                    loop {
-                        match ev_rx.recv().await {
-                            Some(Event::ResetCredits(Ok(list))) => return list,
-                            Some(Event::ResetCredits(Err(e))) => { println!("not yet: {e}"); break; }
-                            _ => {}
-                        }
-                    }
+                    while ev_rx.try_recv().is_ok() {}
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    if std::fs::read_to_string(&log).is_ok_and(|t| t.contains("synced in")) { return; }
                 }
             })
-            .await
-            .expect("the service never answered");
-            println!("credits: {answer:?}");
+            .await;
+            println!("{}", std::fs::read_to_string(&log).unwrap_or_default());
+            assert!(seen.is_ok(), "no sync in the log");
+            let log = std::fs::read_to_string(crate::applog::path()).unwrap();
+            assert!(log.contains("appended, 2 new"), "{log}");
         });
     }
 
@@ -4029,6 +4263,53 @@ mod tests {
         );
         assert!(matches!(&events[..], [Event::TimelineLive { agent_id, item: Item::Assistant { text }, .. }] if agent_id == "a1" && text == "hi"));
         assert!(follow.is_empty());
+    }
+
+    #[test]
+    fn startup_asks_the_open_conversation_first() {
+        let mut pending = HashMap::new();
+        let msgs = startup_messages(Some("a1"), &mut pending);
+        assert_eq!(msgs[0]["message"]["type"], "fetch_agent_timeline_request");
+        assert_eq!(msgs[0]["message"]["agentId"], "a1");
+        assert_eq!(msgs[1]["message"]["type"], "agent.timeline.set_subscription.request");
+        let none = startup_messages(None, &mut pending);
+        assert!(none.iter().all(|m| m["message"]["type"] != "fetch_agent_timeline_request"));
+    }
+
+    fn rows(seqs: std::ops::RangeInclusive<u64>) -> Vec<Value> {
+        seqs.map(|s| json!({"item": {"type": "assistant_message", "text": format!("m{s}")}, "seqStart": s, "seqEnd": s})).collect()
+    }
+
+    #[test]
+    fn a_kept_page_takes_what_came_after_it() {
+        let kept = json!({"epoch": "e1", "entries": rows(1..=3), "startCursor": {"epoch": "e1", "seq": 1}, "endCursor": {"epoch": "e1", "seq": 3}, "hasOlder": false});
+        let page = extend_kept(&kept, 3, "e1", &rows(4..=5)).unwrap();
+        assert_eq!(page["entries"].as_array().unwrap().len(), 5);
+        assert_eq!(page["endCursor"], json!({"epoch": "e1", "seq": 5}));
+        assert_eq!(page["hasOlder"], false);
+        let (items, older, cursor) = timeline_page(&page);
+        assert_eq!(items.len(), 5);
+        assert!(older.is_none());
+        assert_eq!(cursor, Some(("e1".to_owned(), 5)));
+    }
+
+    #[test]
+    fn a_kept_page_stays_a_page() {
+        let kept = json!({"epoch": "e1", "entries": rows(1..=40), "endCursor": {"epoch": "e1", "seq": 40}, "hasOlder": false});
+        let page = extend_kept(&kept, 40, "e1", &rows(41..=50)).unwrap();
+        let entries = page["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), TIMELINE_PAGE as usize);
+        assert_eq!(entries[0]["seqStart"], 11);
+        assert_eq!(page["startCursor"], json!({"epoch": "e1", "seq": 11}));
+        assert_eq!(page["hasOlder"], true);
+    }
+
+    #[test]
+    fn a_kept_page_another_than_asked_after_is_left() {
+        let kept = json!({"epoch": "e1", "entries": rows(1..=3), "endCursor": {"epoch": "e1", "seq": 3}});
+        assert!(extend_kept(&kept, 2, "e1", &rows(4..=4)).is_none());
+        assert!(extend_kept(&kept, 3, "e2", &rows(4..=4)).is_none());
+        assert!(extend_kept(&kept, 3, "e1", &[]).is_none());
     }
 
     #[test]

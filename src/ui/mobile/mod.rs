@@ -12,6 +12,7 @@
 mod add_project;
 mod changes;
 mod files;
+mod github;
 mod chat;
 mod connect;
 mod home;
@@ -34,14 +35,17 @@ pub(crate) enum Route {
     AddProject,
     Chat,
     Changes,
-    /// The workspace's pull request: its checks, and a merge.
-    PullRequest,
     Diff(String),
     /// A folder of the workspace (`.`, its root), and a file of it.
     Files(String),
     File(String),
     /// A sub-agent's timeline: (parent agent, sub-agent).
     Subagent(String, String),
+    /// The open pull requests that involve the user.
+    Inbox,
+    /// A pull request (repository, number), and the conversation it was
+    /// opened from.
+    PullRequest(String, u64, Option<String>),
 }
 
 impl Route {
@@ -51,11 +55,12 @@ impl Route {
             Route::AddProject => "add-project".into(),
             Route::Chat => "chat".into(),
             Route::Changes => "changes".into(),
-            Route::PullRequest => "pull-request".into(),
             Route::Diff(p) => format!("diff:{p}"),
             Route::Files(p) => format!("files:{p}"),
             Route::File(p) => format!("file:{p}"),
             Route::Subagent(_, id) => format!("sub:{id}"),
+            Route::Inbox => "inbox".into(),
+            Route::PullRequest(repo, number, _) => format!("pr:{repo}#{number}"),
         }
     }
 }
@@ -76,10 +81,7 @@ pub(crate) fn push(route: Route) {
 }
 
 /// The user went back from `route` (the back button or the swipe).
-/// Whether `route` is open (on top or under another).
-pub(crate) fn is_open(route: &Route) -> bool {
-    global::<Routes>().with_untracked(|r| r.0.contains(route))
-}
+
 
 fn popped(route: &Route) {
     global::<Routes>().update(|r| {
@@ -208,11 +210,12 @@ fn stack() -> impl IntoElement {
                     Route::AddProject => add_project::page(),
                     Route::Chat => chat::page(),
                     Route::Changes => changes::files_page(),
-                    Route::PullRequest => changes::pull_request_page(),
                     Route::Diff(path) => changes::diff_page(path.clone()),
                     Route::Files(dir) => files::dir_page(dir.clone()),
                     Route::File(path) => files::file_page(path.clone()),
                     Route::Subagent(parent, id) => chat::subagent_page(parent.clone(), id.clone()),
+                    Route::Inbox => github::inbox_page(),
+                    Route::PullRequest(repo, number, agent) => github::pull_request_page(repo.clone(), *number, agent.clone()),
                 };
                 page.on_dismiss(move || popped(&gone))
             },

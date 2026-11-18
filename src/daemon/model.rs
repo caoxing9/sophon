@@ -423,6 +423,42 @@ pub enum Item {
     Todo { lines: Vec<(bool, String)> },
     Error { message: String },
     Notice { message: String },
+    /// Claude Code retrying a failed API request: the attempt that failed
+    /// (of `max`), the HTTP status when there was one, Claude Code's word
+    /// for the error, and the wait before the next attempt.
+    Retry { attempt: u32, max: u32, status: Option<u16>, error: String, delay_ms: u64 },
+}
+
+/// The start of the notice the bundled service makes of Claude Code's
+/// `api_retry` message (`scripts/bundle-service.sh` adds it):
+/// `API retry 3/10 · 529 overloaded_error · 12000 ms` (status `-` when none).
+const RETRY_PREFIX: &str = "API retry ";
+
+/// A retry notice's parts, `None` for any other notice.
+fn retry_of(message: &str) -> Option<Item> {
+    let mut parts = message.strip_prefix(RETRY_PREFIX)?.split(" · ");
+    let (attempt, max) = parts.next()?.split_once('/')?;
+    let (status, error) = parts.next()?.split_once(' ').unwrap_or(("-", ""));
+    let delay_ms = parts.next()?.strip_suffix(" ms")?.parse().ok()?;
+    Some(Item::Retry {
+        attempt: attempt.parse().ok()?,
+        max: max.parse().ok()?,
+        status: status.parse().ok(),
+        error: error.to_owned(),
+        delay_ms,
+    })
+}
+
+/// Keeps the last of each run of retries: one row says how far it got.
+pub fn collapse_retries(items: &mut Vec<Item>) {
+    let mut out: Vec<Item> = Vec::with_capacity(items.len());
+    for item in items.drain(..) {
+        if matches!(item, Item::Retry { .. }) && matches!(out.last(), Some(Item::Retry { .. })) {
+            out.pop();
+        }
+        out.push(item);
+    }
+    *items = out;
 }
 
 /// What a conversation says in place of the agent's own failure when its
@@ -482,7 +518,10 @@ impl Item {
                     .unwrap_or_default(),
             },
             "error" => Item::Error { message: str_of(v, "message").unwrap_or_default() },
-            "notification" => Item::Notice { message: str_of(v, "message").unwrap_or_default() },
+            "notification" => {
+                let message = str_of(v, "message").unwrap_or_default();
+                retry_of(&message).unwrap_or(Item::Notice { message })
+            }
             "compaction" => Item::Notice {
                 message: if str_of(v, "status").as_deref() == Some("loading") {
                     "Compacting context…".into()
@@ -530,6 +569,13 @@ pub fn apply_live(items: &mut Vec<Item>, incoming: Item) {
             if !duplicate {
                 items.push(incoming);
             }
+        }
+        Item::Retry { .. } => {
+            // The next attempt's word replaces the last one's.
+            if matches!(items.last(), Some(Item::Retry { .. })) {
+                items.pop();
+            }
+            items.push(incoming);
         }
         other => items.push(other),
     }
@@ -705,6 +751,28 @@ pub fn plan_of(input: &Value) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_retry_notice_reads_as_a_retry_and_a_run_of_them_as_its_last() {
+        let notice = |m: &str| Item::from_json(&json!({ "type": "notification", "level": "warning", "message": m })).unwrap();
+        let first = notice("API retry 1/10 · 529 overloaded_error · 600 ms");
+        assert_eq!(first, Item::Retry { attempt: 1, max: 10, status: Some(529), error: "overloaded_error".into(), delay_ms: 600 });
+        assert_eq!(
+            notice("API retry 2/10 · - unknown · 1200 ms"),
+            Item::Retry { attempt: 2, max: 10, status: None, error: "unknown".into(), delay_ms: 1200 }
+        );
+        assert_eq!(notice("API retry soon"), Item::Notice { message: "API retry soon".into() });
+
+        let mut items = vec![Item::User { text: "hi".into(), message_id: None, images: vec![] }];
+        apply_live(&mut items, first.clone());
+        apply_live(&mut items, notice("API retry 2/10 · - unknown · 1200 ms"));
+        assert_eq!(items.len(), 2);
+        assert!(matches!(items[1], Item::Retry { attempt: 2, .. }));
+
+        let mut page = vec![first.clone(), first.clone(), Item::Assistant { text: "ok".into() }, first];
+        collapse_retries(&mut page);
+        assert_eq!(page.len(), 3);
+    }
 
     #[test]
     fn assistant_deltas_merge_into_one_row() {

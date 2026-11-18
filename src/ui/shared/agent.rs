@@ -86,7 +86,8 @@ fn agent_tools_of(agent: Memo<Option<crate::daemon::Agent>>) -> impl IntoElement
         .gap(sp(S2))
         .min_w(px(0.0))
         .child(text(move || label.get()).text_size(tx(TEXT_SM)).text_color(FG_FAINT).number_of_lines(1).flex_shrink(1.0))
-        .child(composer::context_meter())
+        // The desktop's is beside the send button (`composer::meters`).
+        // (The context is the composer's, beside Send.)
         .child(view().w(sp(S1)))
         // The phone's outline; the desktop has the rail beside the
         // conversation (`timeline::turn_rail`).

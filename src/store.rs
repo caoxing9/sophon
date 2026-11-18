@@ -37,6 +37,11 @@ pub(crate) enum Screen {
     Schedules,
     Usage,
     Workspace(String),
+    /// The open pull requests that involve the user (`crate::github`).
+    Inbox,
+    /// One pull request; `agent`: the conversation it was opened from,
+    /// which "Fix with agent" writes to.
+    PullRequest { repo: String, number: u64, agent: Option<String> },
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -175,6 +180,492 @@ pub(crate) fn save_project_config() {
         Ok(config) => send(Command::WriteProjectConfig { root: c.root, config, revision: c.revision }),
         Err(e) => global::<ProjectConfig>().update(|c| c.error = Some(format!("Not valid JSON: {e}"))),
     }
+}
+
+// ------------------------------------------------------------------ GitHub
+
+/// GitHub's answers (`crate::github`) by their op's key, and the keys being
+/// asked for now.
+#[derive(Clone, Default)]
+struct GitHubState {
+    data: HashMap<String, Result<serde_json::Value, String>>,
+    loading: std::collections::HashSet<String>,
+}
+
+/// The last answer kept for `key` (it stays while it is asked again).
+pub(crate) fn github(key: &str) -> Option<Result<serde_json::Value, String>> {
+    global::<GitHubState>().with(|g| g.data.get(key).cloned())
+}
+
+/// The keys being asked for now that start with `prefix`.
+pub(crate) fn github_loading_with(prefix: &str) -> Vec<String> {
+    global::<GitHubState>().with(|g| g.loading.iter().filter(|k| k.starts_with(prefix)).cloned().collect())
+}
+
+pub(crate) fn github_loading(key: &str) -> bool {
+    global::<GitHubState>().with(|g| g.loading.contains(key))
+}
+
+/// Asks GitHub for `op`: with this Mac's `gh` when its service is this
+/// Mac's, else through the computer's Sophon.
+pub(crate) fn github_fetch(op: crate::github::Op) {
+    let key = op.key();
+    global::<GitHubState>().update(|g| {
+        g.loading.insert(key.clone());
+    });
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+    if is_desktop() && on_this_mac() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::github::run(&op));
+        });
+        spawn_detached(async move {
+            let result = rx.await.unwrap_or_else(|_| Err("GitHub failed".into()));
+            github_answered(key, result);
+        });
+        return;
+    }
+    send(Command::GitHub(op));
+}
+
+/// `/mcp`: the MCP servers of the open workspace (or the new
+/// conversation's folder), asked for now.
+pub(crate) fn open_mcp() {
+    let cwd = current_workspace().map(|w| w.directory).filter(|d| !d.is_empty()).or_else(|| Some(form().path).filter(|p| !p.is_empty()));
+    let Some(cwd) = cwd else {
+        notify(t("Open a workspace to see its MCP servers").into());
+        return;
+    };
+    github_fetch(crate::github::Op::McpStatus { cwd: cwd.clone() });
+    open_modal(Modal::Mcp { cwd });
+}
+
+/// Signs in to MCP server `server` (its page opens in the computer's
+/// browser); the servers are asked for again once it is done.
+pub(crate) fn mcp_sign_in(cwd: &str, server: &str) {
+    github_fetch(crate::github::Op::McpSignIn { cwd: cwd.to_owned(), server: server.to_owned() });
+}
+
+fn github_answered(key: String, result: Result<serde_json::Value, String>) {
+    // A sign-in done: said, and the servers asked for again.
+    if let Some(server) = key.strip_prefix("mcp:signin:") {
+        match &result {
+            Ok(_) => notify(tf("Signed in to {}. A new conversation has it.", &[server])),
+            Err(e) => notify(e.clone()),
+        }
+        if let Some(Modal::Mcp { cwd }) = modal() {
+            github_fetch(crate::github::Op::McpStatus { cwd });
+        }
+    }
+    if key.starts_with("inbox:") && result.is_ok() {
+        let (key, value) = (key.clone(), result.clone());
+        std::thread::spawn(move || save_inbox(&key, value));
+    }
+    global::<GitHubState>().update(|g| {
+        g.loading.remove(&key);
+        // An action that failed keeps the pull request shown: its error is
+        // said, the pull request as it was stays.
+        match (&result, g.data.get(&key)) {
+            (Err(e), Some(Ok(_))) => notify(e.clone()),
+            _ => {
+                g.data.insert(key, result);
+            }
+        }
+    });
+}
+
+/// The project folders here, for the inbox to match to repositories.
+fn project_roots() -> Vec<String> {
+    projects().into_iter().map(|p| p.root_path).filter(|r| !r.is_empty()).collect()
+}
+
+/// The inbox's filter: a state of `github::STATES`, and drafts alone
+/// (of the open ones).
+#[derive(Clone, PartialEq)]
+pub(crate) struct InboxFilter {
+    pub(crate) state: &'static str,
+    pub(crate) drafts: bool,
+}
+
+impl Default for InboxFilter {
+    fn default() -> Self {
+        Self { state: "open", drafts: false }
+    }
+}
+
+pub(crate) fn inbox_filter() -> InboxFilter {
+    global::<InboxFilter>().with(Clone::clone)
+}
+
+/// Shows the inbox's pull requests in `state` (asked for the first time),
+/// drafts alone with `drafts`.
+pub(crate) fn set_inbox_filter(state: &'static str, drafts: bool) {
+    global::<InboxFilter>().set(InboxFilter { state, drafts });
+    if github(&format!("inbox:{state}")).is_none() {
+        refresh_inbox();
+    }
+}
+
+/// How many of each state's pull requests are asked for ("Load more").
+#[derive(Clone, Default)]
+struct InboxLimits(HashMap<&'static str, u32>);
+
+/// How many of `state`'s pull requests are asked for.
+pub(crate) fn inbox_limit(state: &'static str) -> u32 {
+    global::<InboxLimits>().with(|l| l.0.get(state).copied().unwrap_or(crate::github::INBOX_PAGE))
+}
+
+/// Where the inbox's last answers are kept, by state: shown at once the
+/// next time (the app's start too), while they are asked for again.
+fn inbox_cache_path() -> std::path::PathBuf {
+    crate::daemon::data_dir().join("github-inbox.json")
+}
+
+fn save_inbox(key: &str, value: Result<serde_json::Value, String>) {
+    let Ok(value) = value else { return };
+    let path = inbox_cache_path();
+    let mut all = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    all.insert(key.to_owned(), value);
+    let _ = std::fs::create_dir_all(crate::daemon::data_dir());
+    let _ = std::fs::write(path, serde_json::Value::Object(all).to_string());
+}
+
+/// The inbox was opened: what was kept shows at once, the filter's state is
+/// asked for again, then (once a run) the other states, so a switch to one
+/// shows it at once.
+pub(crate) fn inbox_opened() {
+    #[derive(Clone, Copy, Default)]
+    struct Prefetched(bool);
+    let empty = global::<GitHubState>().with_untracked(|g| !g.data.keys().any(|k| k.starts_with("inbox:")));
+    if empty
+        && let Some(kept) = std::fs::read_to_string(inbox_cache_path())
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .and_then(|v| v.as_object().cloned())
+    {
+        global::<GitHubState>().update(|g| {
+            for (k, v) in kept {
+                if k.starts_with("inbox:") {
+                    g.data.entry(k).or_insert(Ok(v));
+                }
+            }
+        });
+    }
+    refresh_inbox();
+    if !global::<Prefetched>().with_untracked(|p| p.0) {
+        global::<Prefetched>().set(Prefetched(true));
+        let current = global::<InboxFilter>().with_untracked(|f| f.state);
+        for state in ["open", "merged", "closed"].into_iter().filter(|s| *s != current) {
+            let limit = untracked(|| inbox_limit(state));
+            github_fetch(crate::github::Op::Inbox { roots: project_roots(), state: state.to_owned(), limit });
+        }
+    }
+}
+
+/// Asks for the inbox (in its filter's state) again.
+pub(crate) fn refresh_inbox() {
+    let state = global::<InboxFilter>().with_untracked(|f| f.state);
+    let limit = untracked(|| inbox_limit(state));
+    github_fetch(crate::github::Op::Inbox { roots: project_roots(), state: state.to_owned(), limit });
+}
+
+/// The next page of the filter's state.
+pub(crate) fn inbox_load_more() {
+    use crate::github::{INBOX_MAX, INBOX_PAGE};
+    let state = global::<InboxFilter>().with_untracked(|f| f.state);
+    global::<InboxLimits>().update(|l| {
+        let n = l.0.entry(state).or_insert(INBOX_PAGE);
+        *n = (*n + INBOX_PAGE).min(INBOX_MAX);
+    });
+    refresh_inbox();
+}
+
+/// Asks for pull request `repo#number` and its checks again (its diff when
+/// its Code is opened).
+pub(crate) fn refresh_pull_request(repo: &str, number: u64) {
+    use crate::github::Op;
+    github_fetch(Op::View { repo: repo.to_owned(), number });
+    github_fetch(Op::Checks { repo: repo.to_owned(), number });
+}
+
+/// The pull requests of the open conversation: its branch's, then the ones
+/// it links to, the last linked first (at most 20).
+pub(crate) fn conversation_prs() -> Vec<(String, u64)> {
+    let mut out: Vec<(String, u64)> = vec![];
+    if let Some(pr) = git().pr.and_then(|p| crate::github::of_url(&p.url)) {
+        out.push(pr);
+    }
+    let found: Vec<(String, u64)> = global::<Timeline>().with(|t| {
+        let mut found = vec![];
+        for item in t.items.iter().rev() {
+            let text = match item {
+                Item::User { text, .. } | Item::Assistant { text } => std::borrow::Cow::Borrowed(text.as_str()),
+                Item::Tool { detail, .. } => std::borrow::Cow::Owned(detail.to_string()),
+                _ => continue,
+            };
+            if !text.contains("github.com/") {
+                continue;
+            }
+            let mut here = crate::github::mentioned(&text);
+            here.reverse();
+            found.extend(here);
+        }
+        found
+    });
+    for pr in found {
+        if !out.contains(&pr) {
+            out.push(pr);
+        }
+    }
+    out.truncate(20);
+    out
+}
+
+/// The open workspace's folder, as the side panel's PR tab reads its
+/// repository.
+pub(crate) fn workspace_dir() -> Option<String> {
+    current_workspace().map(|w| w.directory).filter(|d| !d.is_empty())
+}
+
+/// The pull requests of the open workspace's repository, asked for the
+/// first time.
+pub(crate) fn repo_prs(refresh: bool) {
+    let Some(cwd) = untracked(workspace_dir) else { return };
+    let key = format!("repo_prs:{cwd}");
+    if refresh || (github(&key).is_none() && !github_loading(&key)) {
+        github_fetch(crate::github::Op::RepoPrs { cwd });
+    }
+}
+
+/// The desktop inbox's filters, as monocode's: the states shown (none
+/// picked: all of them), the repositories hidden, how recent, only the
+/// ones asking for the user's review, and the words searched for.
+#[derive(Clone, PartialEq, Default)]
+pub(crate) struct DeskInbox {
+    /// Open, draft, merged, closed.
+    pub(crate) status: [bool; 4],
+    pub(crate) hidden: Vec<String>,
+    /// `all`, `day`, `week`, `month`.
+    pub(crate) time: &'static str,
+    pub(crate) review_only: bool,
+    pub(crate) query: String,
+}
+
+impl DeskInbox {
+    pub(crate) fn narrowed(&self) -> bool {
+        self.status.iter().any(|s| *s) || !self.hidden.is_empty() || !matches!(self.time, "" | "all") || self.review_only
+    }
+
+    /// The inbox's states to ask for.
+    pub(crate) fn states(&self) -> Vec<&'static str> {
+        let [open, draft, merged, closed] = self.status;
+        if !(open || draft || merged || closed) {
+            return crate::github::STATES.to_vec();
+        }
+        let mut out = vec![];
+        if open || draft {
+            out.push("open");
+        }
+        if merged {
+            out.push("merged");
+        }
+        if closed {
+            out.push("closed");
+        }
+        out
+    }
+
+    /// Whether `item` shows, updated `age` seconds ago (when known).
+    pub(crate) fn shows(&self, item: &crate::github::InboxItem, age: Option<i64>) -> bool {
+        let [open, draft, merged, closed] = self.status;
+        if open || draft || merged || closed {
+            let ok = match item.state.as_str() {
+                "merged" => merged,
+                "closed" => closed,
+                _ if item.draft => draft,
+                _ => open,
+            };
+            if !ok {
+                return false;
+            }
+        }
+        if self.hidden.iter().any(|r| r.eq_ignore_ascii_case(&item.repo)) || (self.review_only && !item.review_requested) {
+            return false;
+        }
+        let span = match self.time {
+            "day" => 86_400,
+            "week" => 7 * 86_400,
+            "month" => 30 * 86_400,
+            _ => 0,
+        };
+        if span > 0 && age.is_some_and(|a| a > span) {
+            return false;
+        }
+        let q = self.query.trim().to_lowercase();
+        q.is_empty() || item.title.to_lowercase().contains(&q) || item.repo.to_lowercase().contains(&q) || format!("#{}", item.number).contains(&q) || item.author.to_lowercase().contains(&q)
+    }
+}
+
+pub(crate) fn desk_inbox() -> DeskInbox {
+    global::<DeskInbox>().with(Clone::clone)
+}
+
+/// Changes the desktop inbox's filters; the states not yet known are asked
+/// for.
+pub(crate) fn set_desk_inbox(f: impl FnOnce(&mut DeskInbox)) {
+    global::<DeskInbox>().update(f);
+    let states = global::<DeskInbox>().with_untracked(DeskInbox::states);
+    for state in states {
+        if github(&format!("inbox:{state}")).is_none() && !github_loading(&format!("inbox:{state}")) {
+            let limit = untracked(|| inbox_limit(state));
+            github_fetch(crate::github::Op::Inbox { roots: project_roots(), state: state.to_owned(), limit });
+        }
+    }
+}
+
+/// The desktop inbox's pull requests: the states its filters ask for,
+/// together, the latest first (each once).
+pub(crate) fn desk_inbox_items() -> Vec<crate::github::InboxItem> {
+    let f = desk_inbox();
+    let mut items: Vec<crate::github::InboxItem> = vec![];
+    for state in f.states() {
+        if let Some(Ok(v)) = github(&format!("inbox:{state}")) {
+            for mut item in crate::github::Inbox::from_json(&v).items {
+                if item.state.is_empty() {
+                    item.state = state.to_owned();
+                }
+                if !items.iter().any(|i| i.repo == item.repo && i.number == item.number) {
+                    items.push(item);
+                }
+            }
+        }
+    }
+    items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    items
+}
+
+/// Asks for the desktop inbox's states again.
+pub(crate) fn refresh_desk_inbox() {
+    for state in desk_inbox().states() {
+        let limit = untracked(|| inbox_limit(state));
+        github_fetch(crate::github::Op::Inbox { roots: project_roots(), state: state.to_owned(), limit });
+    }
+}
+
+/// The pull requests the user has seen, as they were then (`updatedAt`):
+/// one updated since is new again (monocode's unread dot).
+#[derive(Clone, Default)]
+struct InboxSeen(Option<HashMap<String, String>>);
+
+fn seen_path() -> std::path::PathBuf {
+    crate::daemon::data_dir().join("github-seen.json")
+}
+
+fn with_seen<R>(f: impl FnOnce(&HashMap<String, String>) -> R) -> R {
+    if global::<InboxSeen>().with_untracked(|s| s.0.is_none()) {
+        let kept: HashMap<String, String> = std::fs::read_to_string(seen_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        global::<InboxSeen>().set(InboxSeen(Some(kept)));
+    }
+    global::<InboxSeen>().with(|s| f(s.0.as_ref().expect("loaded")))
+}
+
+/// Whether `item` changed since the user last saw it.
+pub(crate) fn inbox_unseen(item: &crate::github::InboxItem) -> bool {
+    let key = format!("{}#{}", item.repo, item.number);
+    with_seen(|m| m.get(&key).is_none_or(|at| *at < item.updated_at))
+}
+
+/// The user saw `items`, as they are now.
+pub(crate) fn mark_inbox_seen(items: &[crate::github::InboxItem]) {
+    with_seen(|_| ());
+    global::<InboxSeen>().update(|s| {
+        let m = s.0.get_or_insert_with(HashMap::new);
+        for item in items {
+            m.insert(format!("{}#{}", item.repo, item.number), item.updated_at.clone());
+        }
+        let text = serde_json::to_string(m).unwrap_or_default();
+        std::thread::spawn(move || {
+            let _ = std::fs::create_dir_all(crate::daemon::data_dir());
+            let _ = std::fs::write(seen_path(), text);
+        });
+    });
+}
+
+/// Comments `body` on pull request `repo#number`; its page shows it after.
+pub(crate) fn comment_on_pull_request(repo: &str, number: u64, body: &str) {
+    github_fetch(crate::github::Op::Comment { repo: repo.to_owned(), number, body: body.to_owned() });
+}
+
+/// The pull request picked in the desktop's inbox, shown beside its list.
+#[derive(Clone, Default, PartialEq)]
+struct InboxSelected(Option<(String, u64)>);
+
+pub(crate) fn inbox_selected() -> Option<(String, u64)> {
+    global::<InboxSelected>().with(|s| s.0.clone())
+}
+
+/// Shows pull request `repo#number` beside the inbox's list (asked for
+/// the first time).
+pub(crate) fn select_inbox(repo: &str, number: u64) {
+    let pr = (repo.to_owned(), number);
+    if global::<InboxSelected>().with_untracked(|s| s.0.as_ref() == Some(&pr)) {
+        return;
+    }
+    global::<InboxSelected>().set(InboxSelected(Some(pr)));
+    if github(&crate::github::Op::View { repo: repo.to_owned(), number }.key()).is_none() {
+        refresh_pull_request(repo, number);
+    }
+}
+
+/// The desktop's inbox.
+pub(crate) fn open_inbox() {
+    global::<Nav>().update(|n| n.screen = Screen::Inbox);
+    send(Command::WatchDiff(None));
+    inbox_opened();
+}
+
+/// The desktop's page of a pull request.
+pub(crate) fn open_pull_request(repo: &str, number: u64, agent: Option<String>) {
+    global::<Nav>().update(|n| n.screen = Screen::PullRequest { repo: repo.to_owned(), number, agent });
+    send(Command::WatchDiff(None));
+    refresh_pull_request(repo, number);
+}
+
+/// Does `action` (`crate::github::ACTIONS`) to the pull request; its
+/// page shows it as it is after.
+pub(crate) fn pull_request_act(repo: &str, number: u64, action: &str) {
+    github_fetch(crate::github::Op::Act { repo: repo.to_owned(), number, action: action.to_owned() });
+    // What its checks and the inbox say may change with it.
+    let (repo, number) = (repo.to_owned(), number);
+    set_timeout(std::time::Duration::from_secs(4), move || {
+        github_fetch(crate::github::Op::Checks { repo, number });
+        if global::<GitHubState>().with_untracked(|g| g.data.keys().any(|k| k.starts_with("inbox:"))) {
+            refresh_inbox();
+        }
+    });
+}
+
+/// "Fix with agent": the prompt goes into the composer of the conversation
+/// the pull request was opened from, or of a new conversation in `root`,
+/// to read and send. Where it went: `Some(workspace)` for a conversation
+/// (the phone opens it), `None` for the new conversation's form.
+pub(crate) fn fix_with_agent(prompt: String, agent: Option<&str>, root: Option<&str>) -> Option<String> {
+    if let Some(a) = agent.and_then(self::agent) {
+        set_draft(&a.id, &prompt);
+        let ws = a.workspace_id.clone()?;
+        if is_desktop() {
+            open_workspace(&ws);
+            open_tab(Tab::Agent(a.id.clone()));
+        }
+        return Some(ws);
+    }
+    open_new_workspace(root.map(str::to_owned));
+    edit_form(|f| f.prompt = prompt);
+    None
 }
 
 pub(crate) fn open_usage() {
@@ -513,33 +1004,6 @@ pub(crate) fn search_branches(query: &str) {
     }
 }
 
-/// Reads the open workspace's git status and pull request again; then
-/// again every 15 seconds while `shown` (the desktop's sheet, the phone's
-/// page): its checks move on their own.
-pub(crate) fn watch_pull_request(shown: impl Fn() -> bool + 'static) {
-    let refresh = || {
-        if let Some(cwd) = current_workspace().map(|w| w.directory) {
-            send(Command::GitStatus(cwd));
-        }
-    };
-    thread_local!(static WATCH: std::cell::Cell<u64> = const { std::cell::Cell::new(0) });
-    // One loop at a time: opening the sheet again ends the one before.
-    let me = WATCH.with(|w| {
-        w.set(w.get() + 1);
-        w.get()
-    });
-    refresh();
-    spawn_detached(async move {
-        loop {
-            nsh_core::element::timer(std::time::Duration::from_secs(15)).await;
-            if WATCH.with(|w| w.get()) != me || !untracked(&shown) {
-                return;
-            }
-            refresh();
-        }
-    });
-}
-
 pub(crate) fn git_action(action: crate::daemon::connection::GitAction) {
     let Some(cwd) = current_workspace().map(|w| w.directory) else { return };
     let label = action.label();
@@ -601,6 +1065,22 @@ pub(crate) fn terminal_input(id: &str, data: &str) {
 
 pub(crate) fn terminal_resize(id: &str, rows: u16, cols: u16) {
     send(Command::TerminalResize { terminal_id: id.to_owned(), rows, cols });
+}
+
+/// What the next terminal made is to run, typed in once its shell is up
+/// (a slash command done in `claude`, `slash::Native::Terminal`).
+#[derive(Clone, Default)]
+struct TerminalLine(Option<String>);
+
+/// A new terminal of the service in the open workspace, running `line`
+/// (the computer's own: on a Mac followed from elsewhere).
+pub(crate) fn run_in_workspace_terminal(line: String) {
+    if current_workspace().is_none() {
+        notify(t("Open a workspace to run it in a terminal").into());
+        return;
+    }
+    global::<TerminalLine>().set(TerminalLine(Some(line)));
+    new_terminal();
 }
 
 pub(crate) fn new_terminal() {
@@ -704,6 +1184,8 @@ pub(crate) enum ExplorerTab {
     Changes,
     Files,
     Commits,
+    /// The conversation's pull requests.
+    PullRequests,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -828,6 +1310,20 @@ pub(crate) fn toggle_explorer() {
     save_prefs();
 }
 
+/// The header's PR button: the side panel open on the repository's pull
+/// requests, or back to the changes when it already is.
+pub(crate) fn toggle_prs_panel() {
+    let showing = global::<Explorer>().with_untracked(|e| e.open && e.tab == ExplorerTab::PullRequests);
+    if showing {
+        set_explorer_tab(ExplorerTab::Changes);
+        return;
+    }
+    if !global::<Explorer>().with_untracked(|e| e.open) {
+        toggle_explorer();
+    }
+    set_explorer_tab(ExplorerTab::PullRequests);
+}
+
 pub(crate) fn explorer_tab() -> ExplorerTab {
     global::<Explorer>().with(|e| e.tab)
 }
@@ -931,12 +1427,16 @@ pub(crate) enum Modal {
     RenameMySpace { name: String },
     /// Removes a space on this Mac (its service stops; its folder stays).
     RemoveSpace { id: String, name: String, folder: String },
+    /// Claude Code's MCP servers of the project in `cwd` (`/mcp`).
+    Mcp { cwd: String },
+    /// The one folder a paired device may use (`folder_scope`).
+    DeviceFolder { id: String, name: String, folder: Option<String> },
+    /// A shared space's monthly spending cap (`space_limits`), by its home.
+    SpaceCap { home: String, name: String },
     ArchiveWorkspace { id: String, name: String },
     /// Confirms spending one of a provider's rate-limit reset credits.
     UseReset { provider: String, option: crate::daemon::connection::ResetOption },
     Commit,
-    /// The open workspace's pull request: its checks, and a merge.
-    PullRequest,
     /// Reporting an issue on GitHub (`feedback`).
     ReportIssue,
     Palette,
@@ -1140,6 +1640,9 @@ pub(crate) struct Form {
     pub(crate) context: Option<(serde_json::Value, String)>,
     /// The provider's features for a new agent, with the values chosen.
     pub(crate) features: Vec<crate::daemon::model::Feature>,
+    /// A new conversation in its project already (the project's + and
+    /// ⌘T): a blank chat, no pickers; else the New workspace screen.
+    pub(crate) scoped: bool,
 }
 
 thread_local! {
@@ -1572,27 +2075,49 @@ pub(crate) fn group_summary(start: usize, end: usize) -> crate::fold::Summary {
 pub(crate) fn set_timeline_scroll(offset: f32, content: f32, height: f32) {
     let from_end = content - offset - height;
     TIMELINE_FROM_END.with(|d| d.set(from_end));
-    // Scrolling now (not the list settling as it opens): the jumps show
-    // until it has been still a moment.
-    let settling = TIMELINE_OPENED.with(|o| o.get().is_some_and(|at| at.elapsed() < std::time::Duration::from_millis(1200)));
-    if !settling {
-        let n = TIMELINE_SCROLLS.with(|c| {
-            c.set(c.get() + 1);
-            c.get()
-        });
-        if !global::<TimelineScrolling>().with_untracked(|s| s.0) {
-            global::<TimelineScrolling>().set(TimelineScrolling(true));
+    // The content grew or shrank (a reply streaming, a group opened, a
+    // page measured): the scroll that comes with it, and for a moment
+    // after, is the list's own, not the user's.
+    let now = std::time::Instant::now();
+    let own = TIMELINE_CONTENT.with(|c| {
+        let (last, changed) = c.get();
+        if (content - last).abs() > 0.5 {
+            c.set((content, Some(now)));
+            return true;
         }
-        set_timeout(std::time::Duration::from_millis(1500), move || {
-            if TIMELINE_SCROLLS.with(std::cell::Cell::get) == n {
-                global::<TimelineScrolling>().set(TimelineScrolling(false));
-            }
-        });
+        changed.is_some_and(|at| now.duration_since(at) < std::time::Duration::from_millis(400))
+    });
+    // Scrolling now (not the list settling as it opens, nor following its
+    // content): the jumps show until it has been still a moment.
+    let settling = TIMELINE_OPENED.with(|o| o.get().is_some_and(|at| at.elapsed() < std::time::Duration::from_millis(1200)));
+    if !settling && !own {
+        timeline_scrolled_by_user();
     }
-    let ends = TimelineEnds { away_from_start: offset > height || jumping_start(), away_from_end: from_end > height };
+    // Shown past a screen from an end, hidden within 0.7 of one: no
+    // flicker at the edge as the content moves.
+    let before = global::<TimelineEnds>().with_untracked(|e| *e);
+    let past = |was: bool, distance: f32| if was { distance > height * 0.7 } else { distance > height };
+    let ends = TimelineEnds { away_from_start: past(before.away_from_start, offset) || jumping_start(), away_from_end: past(before.away_from_end, from_end) };
     if global::<TimelineEnds>().with_untracked(|e| *e != ends) {
         global::<TimelineEnds>().set(ends);
     }
+}
+
+/// The user scrolls the conversation (a scroll of theirs, or a drag
+/// started): the jumps show until it has been still a moment.
+pub(crate) fn timeline_scrolled_by_user() {
+    let n = TIMELINE_SCROLLS.with(|c| {
+        c.set(c.get() + 1);
+        c.get()
+    });
+    if !global::<TimelineScrolling>().with_untracked(|s| s.0) {
+        global::<TimelineScrolling>().set(TimelineScrolling(true));
+    }
+    set_timeout(std::time::Duration::from_millis(1500), move || {
+        if TIMELINE_SCROLLS.with(std::cell::Cell::get) == n {
+            global::<TimelineScrolling>().set(TimelineScrolling(false));
+        }
+    });
 }
 
 /// How far the conversation's list is from its ends: more than a screen.
@@ -3178,9 +3703,10 @@ pub(crate) fn copy_diagnostics() {
     notify(t("Diagnostics copied: paste them where you report the problem").into());
 }
 
-/// Opens the folder Sophon's logs are in (Finder).
-#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+/// Opens the folder Sophon's logs are in (Finder). Desktop only; the
+/// settings page that offers it is compiled for every target.
 pub(crate) fn open_logs() {
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
     let _ = open_path(crate::daemon::data_dir());
 }
 
@@ -4248,6 +4774,37 @@ pub(crate) fn stop_background(agent: &str, item: &str, token: &str) {
     send(Command::StopBackground { agent: agent.to_owned(), item: item.to_owned(), token: token.to_owned() });
 }
 
+/// A new conversation in project `path`, at once: a blank chat whose
+/// first message makes it (the project's + and ⌘T).
+pub(crate) fn new_chat_in(path: String) {
+    // Its project shows open, the new conversation's row in it.
+    let root = path.trim_end_matches('/').to_owned();
+    if let Some(p) = projects().into_iter().find(|p| p.root_path.trim_end_matches('/') == root)
+        && is_collapsed(&p.id)
+    {
+        toggle_collapsed(&p.id);
+    }
+    open_new_workspace(Some(path));
+    edit_form(|f| f.scoped = true);
+    // Ready to type in.
+    set_timeout(std::time::Duration::from_millis(80), || {
+        if let Some(session) = crate::ui::shared::composer_doc::existing("form") {
+            session.focus();
+        }
+    });
+}
+
+/// ⌘T: a new conversation in the open conversation's project, else the New
+/// workspace screen.
+pub(crate) fn new_chat_here() {
+    let root = current_workspace().map(|w| if w.project_root.is_empty() { w.directory } else { w.project_root }).filter(|r| !r.is_empty());
+    let scoped_path = form().scoped.then(|| form().path).filter(|_| screen() == Screen::NewWorkspace);
+    match root.or(scoped_path) {
+        Some(root) => new_chat_in(root),
+        None => open_new_workspace(None),
+    }
+}
+
 pub(crate) fn open_new_workspace(project_path: Option<String>) {
     global::<Nav>().update(|n| n.screen = Screen::NewWorkspace);
     send(Command::WatchDiff(None));
@@ -4978,7 +5535,26 @@ fn push_limits(list: &[crate::daemon::connection::ProviderUsage]) {
 /// after: the composer shows them (`composer::limits_chip`), and on this
 /// Mac the paired phones hear of one near its end (`push_limits`), with
 /// the usage page closed.
+/// The clock the status bar's times left read: moved each minute.
+#[derive(Clone, Copy, Default, PartialEq)]
+struct Minute(i64);
+
+pub(crate) fn minute() -> i64 {
+    global::<Minute>().with(|m| m.0)
+}
+
+fn watch_minute() {
+    fn again() {
+        set_timeout(std::time::Duration::from_secs(60), || {
+            global::<Minute>().set(Minute(crate::usage::now()));
+            again();
+        });
+    }
+    Owner::detached().run(again);
+}
+
 pub(crate) fn watch_limits() {
+    watch_minute();
     effect(|| {
         let url = match conn() {
             Conn::Connected { url, .. } => Some(url),
@@ -5068,10 +5644,15 @@ pub(crate) fn watch_network() {
             let mut last: Option<crate::platform::network::NetState> = None;
             while let Some(state) = changes.recv().await {
                 global::<Network>().set(Network(Some(state.online)));
-                // The first is how it is, not a change.
-                if last.is_some_and(|l| l != state) {
-                    log::info!("network changed: {state:?}");
-                    send(Command::NetworkChanged { online: state.online, wifi: state.wifi });
+                // The first is how it is, not a change: said, so the LAN is
+                // looked for first on Wi-Fi.
+                match last {
+                    None => send(Command::NetworkChanged { online: state.online, wifi: state.wifi, first: true }),
+                    Some(l) if l != state => {
+                        log::info!("network changed: {state:?}");
+                        send(Command::NetworkChanged { online: state.online, wifi: state.wifi, first: false });
+                    }
+                    _ => {}
                 }
                 last = Some(state);
             }
@@ -5131,6 +5712,24 @@ pub(crate) fn answer_permission_with(
         }
     });
     send(Command::Permit { agent_id, permission_id: permission_id.to_owned(), allow, action_id, updated_input });
+}
+
+/// Sends the open conversation's last message again: after its turn
+/// failed, or while Claude Code waits to retry a failed request (which it
+/// interrupts). The text alone: pictures and files are not sent again.
+pub(crate) fn retry_last() {
+    let Some(agent) = selected_agent() else { return };
+    let text = global::<Timeline>().with_untracked(|t| {
+        if t.agent_id.as_deref() != Some(agent.id.as_str()) {
+            return None;
+        }
+        t.items.iter().rev().find_map(|i| match i {
+            Item::User { text, .. } if !text.trim().is_empty() => Some(text.clone()),
+            _ => None,
+        })
+    });
+    let Some(text) = text else { return };
+    deliver_with(&agent.id, &text, agent.is_running().then_some("interrupt"), vec![], vec![]);
 }
 
 pub(crate) fn stop_selected() {
@@ -5232,6 +5831,10 @@ thread_local! {
     static TIMELINE_OPENED: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
     /// Counts scroll events, so only the last one's timer ends `TimelineScrolling`.
     static TIMELINE_SCROLLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// The list's content height as last seen, and when it last changed:
+    /// a scroll then is the list keeping its end in place (or settling),
+    /// not the user's.
+    static TIMELINE_CONTENT: std::cell::Cell<(f32, Option<std::time::Instant>)> = const { std::cell::Cell::new((0.0, None)) };
 }
 
 pub(crate) fn set_timeline_list(list: ElementRef) {
@@ -5397,9 +6000,8 @@ pub(crate) fn archive_workspace(id: &str) {
     if screen() == Screen::Workspace(id.to_owned()) {
         go_home();
     }
-    let name = workspace(id).map(|w| w.name).unwrap_or_else(|| "Workspace".into());
     send(Command::ArchiveWorkspace(id.to_owned()));
-    notify_with(format!("“{name}” archived"), Some(NoticeAction::UndoArchive(id.to_owned())));
+    notify_with(t("Archived").to_owned(), Some(NoticeAction::UndoArchive(id.to_owned())));
 }
 
 pub(crate) fn pin_workspace(id: &str, pinned: bool) {
@@ -5478,6 +6080,7 @@ pub(crate) fn apply(event: Event) {
                 c.0 = Conn::Connecting(url);
             }
         }),
+        Event::GitHub { key, result } => github_answered(key, result),
         Event::Stage(stage) => global::<ConnProgress>().update(|p| {
             use crate::daemon::connection::Stage;
             if let Stage::Reaching(via) | Stage::Securing(via) | Stage::Greeting(via) = stage {
@@ -5651,6 +6254,7 @@ pub(crate) fn apply(event: Event) {
             global::<Timeline>().update(|t| {
                 if t.agent_id.as_deref() == Some(agent_id.as_str()) {
                     opened = !t.loaded;
+                    crate::daemon::model::collapse_retries(&mut items);
                     carry_images(&t.items, &mut items);
                     crate::sent_pictures::restore(&mut items);
                     ask_pictures(&items, Some(&agent_id));
@@ -5697,6 +6301,7 @@ pub(crate) fn apply(event: Event) {
             global::<Timeline>().update(|t| {
             if t.agent_id.as_deref() == Some(agent_id.as_str()) {
                 let mut merged = items;
+                crate::daemon::model::collapse_retries(&mut merged);
                 crate::sent_pictures::restore(&mut merged);
                 ask_pictures(&merged, Some(&agent_id));
                 merged.append(&mut t.items);
@@ -5739,6 +6344,12 @@ pub(crate) fn apply(event: Event) {
         }),
         Event::TerminalCreated(info) => {
             let id = info.id.clone();
+            // A command waiting for it: typed in once its shell has started.
+            if let Some(line) = global::<TerminalLine>().with_untracked(|l| l.0.clone()) {
+                global::<TerminalLine>().set(TerminalLine(None));
+                let to = id.clone();
+                set_timeout(std::time::Duration::from_millis(700), move || terminal_input(&to, &line));
+            }
             global::<Terminals>().update(|t| {
                 if !t.list.iter().any(|x| x.id == info.id) {
                     t.list.push(info);
