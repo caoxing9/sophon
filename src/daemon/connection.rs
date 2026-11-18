@@ -175,7 +175,6 @@ pub enum Command {
     Branches { cwd: String, query: String },
     AddProject(String),
     CreateProjectDir { parent: String, name: String },
-    CloneProject { repo: String, target: String },
     RenameProject { id: String, name: String },
     RemoveProject(String),
     /// `op`: `pause`, `resume`, `delete` or `run-once`.
@@ -2208,11 +2207,6 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
             pending,
             Pending::Project,
             json!({ "type": "project.create_directory.request", "parentPath": parent, "name": name }),
-        )],
-        Command::CloneProject { repo, target } => vec![request(
-            pending,
-            Pending::Project,
-            json!({ "type": "project.github.clone.request", "repo": repo, "targetDirectory": target }),
         )],
         Command::RenameProject { id, name } => vec![request(
             pending,

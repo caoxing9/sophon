@@ -752,7 +752,7 @@ pub async fn commands(shared: &Shared, request: &Value) -> Result<Value, String>
 }
 
 /// Answers a request that waits on something outside the service (a
-/// clone, a CLI asked its version, records read from disk), with
+/// CLI asked its version, records read from disk), with
 /// nothing of the host held while it waits. `None` for any other.
 pub async fn slow(shared: &Shared, request: &Value) -> Option<Result<Value, String>> {
     let kind = request["type"].as_str()?;
@@ -768,19 +768,6 @@ pub async fn slow(shared: &Shared, request: &Value) -> Option<Result<Value, Stri
         Ok((settings, family))
     };
     Some(match kind {
-        "project.github.clone.request" => {
-            async {
-                let folder =
-                    crate::git::clone(text(request, "repo")?, text(request, "targetDirectory")?)
-                        .await?;
-                let mut host = shared.borrow_mut();
-                let project = host.state.project(&folder)?;
-                host.persist().map_err(|error| error.to_string())?;
-                host.publish("project.update", json!({"kind":"upsert","project":project}));
-                Ok(reply(json!({"project":project,"repo":request["repo"]})))
-            }
-            .await
-        }
         "provider_diagnostic_request" => async {
             let name = text(request, "provider")?;
             let (settings, _) = provider_of(name)?;

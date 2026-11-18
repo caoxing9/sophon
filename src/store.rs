@@ -3960,10 +3960,6 @@ pub(crate) fn create_project_dir(parent: &str, name: &str) {
     send(Command::CreateProjectDir { parent: parent.to_owned(), name: name.to_owned() });
 }
 
-pub(crate) fn clone_project(repo: &str, target: &str) {
-    send(Command::CloneProject { repo: repo.to_owned(), target: target.to_owned() });
-}
-
 pub(crate) fn rename_project(id: &str, name: &str) {
     send(Command::RenameProject { id: id.to_owned(), name: name.to_owned() });
 }

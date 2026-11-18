@@ -274,8 +274,6 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Existing folder", "已有文件夹"),
     ("Pick a folder on this computer; Sophon lists it with your projects", "选择这台电脑上的文件夹，Sophon 会把它列入你的项目"),
     ("Pick a folder on the connected computer; Sophon lists it with your projects", "选择所连接电脑上的文件夹，Sophon 会把它列入你的项目"),
-    ("Clone from GitHub", "从 GitHub 克隆"),
-    ("Clone", "克隆"),
     ("owner/repository", "所有者/仓库"),
     ("Choose where it goes", "选择存放位置"),
     ("Folder name", "文件夹名称"),

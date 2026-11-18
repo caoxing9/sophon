@@ -1407,7 +1407,7 @@ async fn a_workspace_is_seen_put_away_and_brought_back() {
 }
 
 #[tokio::test]
-async fn copies_clones_merges_and_a_restart() {
+async fn copies_merges_and_a_restart() {
     let service = Service(tempfile::tempdir().unwrap());
     install_provider(service.0.path());
     let project = tempfile::tempdir().unwrap();
@@ -1467,27 +1467,6 @@ async fn copies_clones_merges_and_a_restart() {
         "new\n"
     );
 
-    // A repository cloned into a folder named for it, and made a project.
-    let into = tempfile::tempdir().unwrap();
-    let cloned = ask(
-        &mut socket,
-        json!({"type":"project.github.clone.request",
-        "repo":format!("file://{}", cwd.display()),"targetDirectory":into.path()}),
-    )
-    .await;
-    assert_eq!(cloned["type"], "project.github.clone.response", "{cloned}");
-    let root = cloned["payload"]["project"]["projectRootPath"]
-        .as_str()
-        .unwrap();
-    assert!(Path::new(root).join("notes.txt").exists(), "{cloned}");
-    let again = ask(
-        &mut socket,
-        json!({"type":"project.github.clone.request",
-        "repo":format!("file://{}", cwd.display()),"targetDirectory":into.path()}),
-    )
-    .await;
-    assert_eq!(again["type"], "rpc_error");
-
     let said = ask(
         &mut socket,
         json!({"type":"provider_diagnostic_request","provider":"codex"}),
@@ -1536,7 +1515,7 @@ async fn copies_clones_merges_and_a_restart() {
     );
     let mut socket = service.connect(true).await;
     let projects = ask(&mut socket, json!({"type":"project.list.request"})).await;
-    assert_eq!(projects["payload"]["projects"].as_array().unwrap().len(), 2);
+    assert_eq!(projects["payload"]["projects"].as_array().unwrap().len(), 1);
 }
 
 /// A `claude` with something running in the background, which stops it

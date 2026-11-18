@@ -244,7 +244,7 @@ async fn session(stream: TcpStream, shared: Shared, token: Rc<String>) -> Result
                                 continue;
                             }
                             "subscribe_terminals_request" | "create_terminal_request" | "kill_terminal_request" | "terminal_input" => terminal::dispatch(&shared,request),
-                            "project.github.clone.request" | "provider_diagnostic_request" | "fetch_recent_provider_sessions_request" | "workspace.recovery.restore.request" => {
+                            "provider_diagnostic_request" | "fetch_recent_provider_sessions_request" | "workspace.recovery.restore.request" => {
                                 let (shared, request, done) = (shared.clone(), request.clone(), done.clone());
                                 tokio::task::spawn_local(async move {
                                     let reply = match host::slow(&shared, &request).await {

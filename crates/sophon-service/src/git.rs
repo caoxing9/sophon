@@ -481,64 +481,6 @@ pub async fn execute(kind: &str, cwd: &str, request: &Value) -> Result<Value, St
     Ok(payload)
 }
 
-/// Clones `repo` (`owner/name`, or an address `git` takes) into a folder
-/// named for it under `parent`, and answers that folder.
-pub async fn clone(repo: &str, parent: &str) -> Result<String, String> {
-    let repo = repo.trim();
-    let address = if repo.contains("://") || repo.starts_with("git@") {
-        repo.to_owned()
-    } else if repo.split('/').count() == 2
-        && !repo.starts_with('-')
-        && !repo.contains(char::is_whitespace)
-    {
-        format!("https://github.com/{}.git", repo.trim_end_matches(".git"))
-    } else {
-        return Err("Expected owner/name or a repository's address".into());
-    };
-    let name = address
-        .trim_end_matches('/')
-        .trim_end_matches(".git")
-        .trim_end_matches('/')
-        .rsplit(['/', ':'])
-        .next()
-        .filter(|name| !name.is_empty() && !name.starts_with(['.', '-']))
-        .ok_or("That address names no repository")?
-        .to_owned();
-    let parent = match parent.trim().strip_prefix("~/") {
-        Some(rest) => Path::new(&std::env::var("HOME").unwrap_or_default()).join(rest),
-        None => Path::new(parent.trim()).to_path_buf(),
-    };
-    if !parent.is_absolute() {
-        return Err("Expected a folder to clone into".into());
-    }
-    std::fs::create_dir_all(&parent).map_err(|error| error.to_string())?;
-    let target = parent.join(&name);
-    if target.exists() {
-        return Err(format!("{} is already there", target.display()));
-    }
-    let result = timeout(
-        Duration::from_secs(30 * 60),
-        Command::new("git")
-            .args(["clone", "--", &address])
-            .arg(&target)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .stdin(Stdio::null())
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await
-    .map_err(|_| "Cloning timed out".to_owned())?
-    .map_err(|error| error.to_string())?;
-    if !result.status.success() {
-        let _ = std::fs::remove_dir_all(&target);
-        return Err(String::from_utf8_lossy(&result.stderr).trim().into());
-    }
-    target
-        .to_str()
-        .map(str::to_owned)
-        .ok_or_else(|| "Invalid folder name".into())
-}
-
 /// Checks a worktree's branch out again where its folder was, for one
 /// whose folder went missing: the branch and its commits are in the
 /// project's repository still.

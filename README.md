@@ -27,7 +27,7 @@ Mac or from your phone, all talking to the same daemon. It is written in Rust wi
 
 ## Features
 
-- **Projects and workspaces**: local folders or git worktrees, new branches, cloning from GitHub; pin, rename, archive
+- **Projects and workspaces**: local folders or git worktrees, new branches; pin, rename, archive
 - **Agents as tabs**: several agents per workspace; model, mode and thinking pickers; slash commands, `@` file mentions,
   image attachments; queue, steer or interrupt
 - **Live timeline**: streaming output, tool calls, plans, permission and question cards, sub-agents, background work,

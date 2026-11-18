@@ -991,7 +991,6 @@ fn add_project() -> View {
     enum Mode {
         Open,
         Create,
-        Clone,
     }
     let mode = signal(Mode::Open);
     // Folders are the connected computer's: this Mac's through the system's
@@ -1002,7 +1001,6 @@ fn add_project() -> View {
     // Another computer's folder for "where it goes" is being chosen.
     let choosing = signal(false);
     let name = signal(String::new());
-    let repo = signal(String::new());
     let pick_parent = move || {
         if !local {
             return choosing.set(true);
@@ -1019,7 +1017,7 @@ fn add_project() -> View {
     sheet(t("Add project"))
         .w(px(520.0))
         .child(segmented(
-            vec![(Mode::Open, t("Existing folder").into()), (Mode::Create, t("New folder").into()), (Mode::Clone, t("Clone from GitHub").into())],
+            vec![(Mode::Open, t("Existing folder").into()), (Mode::Create, t("New folder").into())],
             move || mode.get(),
             move |m| mode.set(m),
         ))
@@ -1062,20 +1060,6 @@ fn add_project() -> View {
                             store::close_modal();
                         })
                         .disabled(move || name.with(|n| n.trim().is_empty())),
-                    )),
-                Mode::Clone => view()
-                    .gap(sp(S3))
-                    .child(field().value(move || repo.get()).on_change(move |v: &str| repo.set(v.to_owned())).placeholder(t("owner/repository")))
-                    .child(location_row(parent, pick_parent))
-                    .child(actions(
-                        btn(t("Clone"), Variant::Primary, Sz::Md, Some(Icon::GitBranch), move || {
-                            let r = repo.get_untracked();
-                            let folder = r.trim().rsplit('/').next().unwrap_or_default().trim_end_matches(".git").to_owned();
-                            let target = format!("{}/{}", parent.get_untracked().trim_end_matches('/'), folder);
-                            store::clone_project(r.trim(), &target);
-                            store::close_modal();
-                        })
-                        .disabled(move || repo.with(|r| !r.contains('/'))),
                     )),
             }))
         }))
