@@ -1310,8 +1310,9 @@ fn question_card(p: Permission, questions: Vec<Question>) -> View {
         )
 }
 
-/// The most the sub-agents' rows take over the composer before they scroll.
-const SUBAGENT_ROWS_MAX_H: f32 = 176.0;
+/// The most the sub-agents' rows take over the composer before they
+/// scroll: three 30pt rows and the gaps between them.
+const SUBAGENT_ROWS_MAX_H: f32 = 3.0 * 30.0 + 2.0 * 2.0;
 
 /// Sub-agents and background work of the open agent, as tracks above the
 /// composer.
@@ -1409,9 +1410,8 @@ pub(crate) fn tracks() -> View {
                             .child(text(s.subtitle.clone()).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1).flex_1()),
                     );
                 }
-                // About five and a half rows, so the fold above stays on
-                // screen however many there are, and a cut row says more
-                // are below.
+                // Three rows at most, so the fold above stays on screen
+                // however many there are.
                 c.child(scroll().max_h(px(SUBAGENT_ROWS_MAX_H)).child(rows))
             }))
         }))
