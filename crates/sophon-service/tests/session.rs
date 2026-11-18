@@ -1405,3 +1405,394 @@ async fn a_workspace_is_seen_put_away_and_brought_back() {
         1
     );
 }
+
+#[tokio::test]
+async fn copies_clones_merges_and_a_restart() {
+    let service = Service(tempfile::tempdir().unwrap());
+    install_provider(service.0.path());
+    let project = tempfile::tempdir().unwrap();
+    fs::create_dir(project.path().join("repo")).unwrap();
+    let cwd = fs::canonicalize(project.path().join("repo")).unwrap();
+    git(&cwd, &["init", "-b", "main"]);
+    fs::write(cwd.join("notes.txt"), "one\n").unwrap();
+    fs::create_dir(cwd.join("docs")).unwrap();
+    fs::write(cwd.join("docs/a.md"), "a").unwrap();
+    git(&cwd, &["add", "."]);
+    git(&cwd, &["commit", "-m", "initial"]);
+    service.cli("start");
+    let mut socket = service.connect(true).await;
+    let made = ask(
+        &mut socket,
+        json!({"type":"workspace.create.request","idempotencyKey":"k",
+        "source":{"kind":"worktree","branchName":"feature","baseBranch":"main","cwd":cwd},
+        "agent":{"config":{"provider":"codex"}}}),
+    )
+    .await;
+    let tree = made["payload"]["workspace"]["workspaceDirectory"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // A copy of a file, and of a folder with what is in it.
+    for path in ["notes.txt", "notes.txt", "docs"] {
+        let copied = ask(
+            &mut socket,
+            json!({"type":"fs.entry.duplicate.request","cwd":tree,"path":path}),
+        )
+        .await;
+        assert!(copied["payload"]["error"].is_null(), "{copied}");
+    }
+    assert_eq!(
+        fs::read_to_string(Path::new(&tree).join("notes copy.txt")).unwrap(),
+        "one\n"
+    );
+    assert!(Path::new(&tree).join("notes copy 2.txt").exists());
+    assert_eq!(
+        fs::read_to_string(Path::new(&tree).join("docs copy/a.md")).unwrap(),
+        "a"
+    );
+
+    // The worktree's branch into its base, which the project's folder has checked out.
+    fs::write(Path::new(&tree).join("feature.txt"), "new\n").unwrap();
+    git(Path::new(&tree), &["add", "feature.txt"]);
+    git(Path::new(&tree), &["commit", "-m", "feature"]);
+    let merged = ask(
+        &mut socket,
+        json!({"type":"checkout_merge_request","cwd":tree,"strategy":"merge"}),
+    )
+    .await;
+    assert!(merged["payload"]["error"].is_null(), "{merged}");
+    assert_eq!(
+        fs::read_to_string(cwd.join("feature.txt")).unwrap(),
+        "new\n"
+    );
+
+    // A repository cloned into a folder named for it, and made a project.
+    let into = tempfile::tempdir().unwrap();
+    let cloned = ask(
+        &mut socket,
+        json!({"type":"project.github.clone.request",
+        "repo":format!("file://{}", cwd.display()),"targetDirectory":into.path()}),
+    )
+    .await;
+    assert_eq!(cloned["type"], "project.github.clone.response", "{cloned}");
+    let root = cloned["payload"]["project"]["projectRootPath"]
+        .as_str()
+        .unwrap();
+    assert!(Path::new(root).join("notes.txt").exists(), "{cloned}");
+    let again = ask(
+        &mut socket,
+        json!({"type":"project.github.clone.request",
+        "repo":format!("file://{}", cwd.display()),"targetDirectory":into.path()}),
+    )
+    .await;
+    assert_eq!(again["type"], "rpc_error");
+
+    let said = ask(
+        &mut socket,
+        json!({"type":"provider_diagnostic_request","provider":"codex"}),
+    )
+    .await;
+    assert!(
+        said["payload"]["diagnostic"]
+            .as_str()
+            .unwrap()
+            .contains("Binary:"),
+        "{said}"
+    );
+
+    // The worktree's folder gone, and back from its branch.
+    fs::remove_dir_all(&tree).unwrap();
+    let back = ask(&mut socket, json!({"type":"workspace.recovery.restore.request","workspaceId":made["payload"]["workspace"]["id"]})).await;
+    assert_eq!(
+        back["type"], "workspace.recovery.restore.response",
+        "{back}"
+    );
+    assert_eq!(
+        fs::read_to_string(Path::new(&tree).join("feature.txt")).unwrap(),
+        "new\n"
+    );
+
+    // Started again when asked, with what it had.
+    let before = fs::read_to_string(service.0.path().join("sophon.pid")).unwrap();
+    let restarting = ask(
+        &mut socket,
+        json!({"type":"restart_server_request","reason":"test"}),
+    )
+    .await;
+    assert_eq!(
+        restarting["type"], "restart_server_response",
+        "{restarting}"
+    );
+    for _ in 0..100 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        if fs::read_to_string(service.0.path().join("sophon.pid")).is_ok_and(|now| now != before) {
+            break;
+        }
+    }
+    assert_ne!(
+        fs::read_to_string(service.0.path().join("sophon.pid")).unwrap(),
+        before
+    );
+    let mut socket = service.connect(true).await;
+    let projects = ask(&mut socket, json!({"type":"project.list.request"})).await;
+    assert_eq!(projects["payload"]["projects"].as_array().unwrap().len(), 2);
+}
+
+/// A `claude` with something running in the background, which stops it
+/// when told and gives files back when asked.
+const REWINDING_CLAUDE: &str = r#"#!/bin/sh
+say() { printf '%s\n' "$1"; }
+while IFS= read -r line; do
+    id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+    case "$line" in
+        *'"subtype":"rewind_files"'*)
+            printf '%s\n' "$line" >> rewound
+            say "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"$id\",\"response\":{}}}" ;;
+        *'"subtype":"stop_task"'*) printf '%s\n' "$line" >> stopped ;;
+        *'"type":"user"'*)
+            printf '%s\n' "$line" >> prompts
+            say '{"type":"system","subtype":"session_state_changed","state":"running"}'
+            say '{"type":"system","subtype":"init","session_id":"session-1"}'
+            say '{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"bg1","task_type":"local_bash","description":"Dev server"}]}'
+            say '{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m","model":"m","content":[{"type":"text","text":"ok"}]}}'
+            say '{"type":"result","is_error":false}'
+            say '{"type":"system","subtype":"session_state_changed","state":"idle"}' ;;
+    esac
+done
+"#;
+
+#[tokio::test]
+async fn background_work_a_fork_and_going_back() {
+    let user = tempfile::tempdir().unwrap();
+    let home = user.path();
+    let record = home.join(".claude/projects/-p");
+    fs::create_dir_all(&record).unwrap();
+    let first = "11111111-1111-4111-8111-111111111111";
+    let second = "22222222-2222-4222-8222-222222222222";
+    // Claude Code's record of the session, as it would have written it.
+    fs::write(record.join("session-1.jsonl"), [
+        json!({"type":"user","uuid":first,"sessionId":"session-1","message":{"content":"one"}}),
+        json!({"type":"assistant","uuid":"a1","sessionId":"session-1","message":{"model":"m","content":[{"type":"text","text":"ok"}]}}),
+        json!({"type":"user","uuid":second,"sessionId":"session-1","message":{"content":"two"}}),
+        json!({"type":"assistant","uuid":"a2","sessionId":"session-1","message":{"model":"m","content":[{"type":"text","text":"ok"}]}}),
+    ].map(|entry| entry.to_string()).join("\n")).unwrap();
+    let service = Service(tempfile::tempdir().unwrap());
+    install(service.0.path(), "claude", REWINDING_CLAUDE);
+    let own = [("HOME", home.to_str().unwrap())];
+    service.cli_with_env("start", &own);
+    let mut socket = service.connect(true).await;
+    let created = ask(&mut socket, json!({"type":"workspace.create.request","source":{"kind":"directory","path":service.0.path()},
+        "agent":{"config":{"provider":"claude"},"initialPrompt":"one","clientMessageId":first}})).await;
+    let agent = created["payload"]["agent"]["id"].clone();
+    finished(&mut socket).await;
+    ask(&mut socket, json!({"type":"send_agent_message_request","agentId":agent,"text":"two","messageId":second})).await;
+    finished(&mut socket).await;
+    // Each message went to Claude Code under its own id.
+    let prompts = fs::read_to_string(service.0.path().join("prompts")).unwrap();
+    assert!(
+        prompts.contains(&format!("\"uuid\":\"{first}\""))
+            && prompts.contains(&format!("\"uuid\":\"{second}\"")),
+        "{prompts}"
+    );
+
+    let running = ask(
+        &mut socket,
+        json!({"type":"agent.background_work.list.request","agentId":agent}),
+    )
+    .await;
+    assert_eq!(
+        running["payload"]["items"],
+        json!([{"id":"bg1","kind":"local_bash","description":"Dev server",
+        "command":null,"canStop":true,"stopToken":"bg1"}]),
+        "{running}"
+    );
+    ask(&mut socket, json!({"type":"agent.background_work.stop.request","agentId":agent,"itemId":"bg1","stopToken":"bg1"})).await;
+
+    let fork = ask(
+        &mut socket,
+        json!({"type":"agent.fork_context.request","agentId":agent}),
+    )
+    .await;
+    let attachment = &fork["payload"]["attachment"];
+    let words = fs::read_to_string(attachment["path"].as_str().unwrap()).unwrap();
+    assert!(
+        words.contains("## User\n\ntwo") && words.contains("## Assistant\n\nok"),
+        "{words}"
+    );
+    // What a new conversation is given to read is taken as an upload is.
+    let next = ask(&mut socket, json!({"type":"workspace.create.request","source":{"kind":"directory","path":service.0.path()},
+        "agent":{"config":{"provider":"claude"},"initialPrompt":"go on","attachments":[attachment]}})).await;
+    assert_eq!(next["type"], "workspace.create.response", "{next}");
+    finished(&mut socket).await;
+
+    // Back to before the second message, files and conversation both.
+    let id = "rewind-1";
+    send(
+        &mut socket,
+        json!({"type":"session","message":{"type":"agent.rewind.request","requestId":id,
+        "agentId":agent,"messageId":second,"mode":"both"}}),
+    )
+    .await;
+    let done = loop {
+        let frame = read(&mut socket).await;
+        if frame["message"]["type"] == "agent.rewind.response" {
+            break frame["message"]["payload"].clone();
+        }
+    };
+    assert_eq!(
+        (&done["requestId"], &done["error"]),
+        (&json!(id), &Value::Null),
+        "{done}"
+    );
+    assert!(
+        fs::read_to_string(service.0.path().join("rewound"))
+            .unwrap()
+            .contains(&format!("\"user_message_id\":\"{second}\""))
+    );
+    assert!(
+        fs::read_to_string(service.0.path().join("stopped"))
+            .unwrap()
+            .contains("\"task_id\":\"bg1\"")
+    );
+    let timeline = ask(
+        &mut socket,
+        json!({"type":"fetch_agent_timeline_request","agentId":agent}),
+    )
+    .await;
+    let said: Vec<_> = timeline["payload"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["item"]["text"].clone())
+        .collect();
+    assert_eq!(said, ["one", "ok"]);
+    // A session of its own, Claude Code's record of it ending where the conversation now does.
+    let session = timeline["payload"]["agent"]["persistence"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(session, "session-1");
+    let kept = fs::read_to_string(record.join(format!("{session}.jsonl"))).unwrap();
+    assert_eq!(kept.lines().count(), 2);
+    assert!(
+        kept.contains(&session) && !kept.contains("session-1"),
+        "{kept}"
+    );
+    assert_eq!(
+        fs::read_to_string(record.join("session-1.jsonl"))
+            .unwrap()
+            .lines()
+            .count(),
+        4
+    );
+
+    // A session the CLI has and Sophon does not, listed and taken in.
+    fs::write(record.join("other-9.jsonl"),
+        json!({"type":"user","uuid":"u","sessionId":"other-9","cwd":service.0.path(),"message":{"content":"from a terminal"}}).to_string()).unwrap();
+    let recent = ask(
+        &mut socket,
+        json!({"type":"fetch_recent_provider_sessions_request","limit":50,"providers":["claude"]}),
+    )
+    .await;
+    let listed: Vec<_> = recent["payload"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["providerHandleId"].clone())
+        .collect();
+    assert!(
+        listed.contains(&json!("other-9")) && !listed.contains(&json!(session)),
+        "{recent}"
+    );
+    let taken = ask(&mut socket, json!({"type":"import_agent_request","providerId":"claude","providerHandleId":"other-9","cwd":service.0.path()})).await;
+    assert_eq!(
+        (
+            &taken["payload"]["status"],
+            &taken["payload"]["agent"]["title"]
+        ),
+        (&json!("agent_created"), &json!("from a terminal")),
+        "{taken}"
+    );
+    let theirs = ask(
+        &mut socket,
+        json!({"type":"fetch_agent_timeline_request","agentId":taken["payload"]["agent"]["id"]}),
+    )
+    .await;
+    assert_eq!(
+        theirs["payload"]["entries"][0]["item"]["text"],
+        "from a terminal"
+    );
+}
+
+/// Going back, with the real Claude Code: its files and its memory.
+#[tokio::test]
+#[ignore = "runs the host's own Claude Code, on its account"]
+async fn live_claude_goes_back_to_before_a_message() {
+    PATIENCE.store(120, std::sync::atomic::Ordering::Relaxed);
+    let service = Service(tempfile::tempdir().unwrap());
+    let project = tempfile::tempdir().unwrap();
+    let cwd = fs::canonicalize(project.path()).unwrap();
+    service.cli("start");
+    let mut socket = service.connect(true).await;
+    let (first, second) = (
+        uuid::Uuid::new_v4().to_string(),
+        uuid::Uuid::new_v4().to_string(),
+    );
+    let created = ask(&mut socket, json!({"type":"workspace.create.request","source":{"kind":"directory","path":cwd},
+        "agent":{"config":{"provider":"claude","model":"haiku","modeId":"acceptEdits"},"clientMessageId":first,
+            "initialPrompt":"Use the Write tool to create a.txt containing exactly the word one. Then reply done."}})).await;
+    let agent = created["payload"]["agent"]["id"].clone();
+    finished(&mut socket).await;
+    assert_eq!(fs::read_to_string(cwd.join("a.txt")).unwrap().trim(), "one");
+    ask(&mut socket, json!({"type":"send_agent_message_request","agentId":agent,"messageId":second,
+        "text":"Use the Write tool to overwrite a.txt so it contains exactly the word two. Then reply done."})).await;
+    finished(&mut socket).await;
+    assert_eq!(fs::read_to_string(cwd.join("a.txt")).unwrap().trim(), "two");
+
+    send(
+        &mut socket,
+        json!({"type":"session","message":{"type":"agent.rewind.request","requestId":"r",
+        "agentId":agent,"messageId":second,"mode":"both"}}),
+    )
+    .await;
+    let done = loop {
+        let frame = read(&mut socket).await;
+        if frame["message"]["type"] == "agent.rewind.response" {
+            break frame["message"]["payload"].clone();
+        }
+    };
+    assert_eq!(done["error"], Value::Null, "{done}");
+    assert_eq!(fs::read_to_string(cwd.join("a.txt")).unwrap().trim(), "one");
+    let timeline = ask(
+        &mut socket,
+        json!({"type":"fetch_agent_timeline_request","agentId":agent}),
+    )
+    .await;
+    let asked: Vec<_> = timeline["payload"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["item"]["type"] == "user_message")
+        .collect();
+    assert_eq!(asked.len(), 1, "{timeline}");
+
+    // It goes on from there, with no memory of what was taken back.
+    ask(&mut socket, json!({"type":"send_agent_message_request","agentId":agent,
+        "text":"Without using any tools: how many times have I asked you to write a.txt in this conversation? Reply with just the number."})).await;
+    finished(&mut socket).await;
+    let timeline = ask(
+        &mut socket,
+        json!({"type":"fetch_agent_timeline_request","agentId":agent}),
+    )
+    .await;
+    let last = timeline["payload"]["entries"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()["item"]["text"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(last.contains('1') && !last.contains('2'), "{last}");
+}

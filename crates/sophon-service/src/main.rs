@@ -244,6 +244,18 @@ async fn session(stream: TcpStream, shared: Shared, token: Rc<String>) -> Result
                                 continue;
                             }
                             "subscribe_terminals_request" | "create_terminal_request" | "kill_terminal_request" | "terminal_input" => terminal::dispatch(&shared,request),
+                            "project.github.clone.request" | "provider_diagnostic_request" | "fetch_recent_provider_sessions_request" | "workspace.recovery.restore.request" => {
+                                let (shared, request, done) = (shared.clone(), request.clone(), done.clone());
+                                tokio::task::spawn_local(async move {
+                                    let reply = match host::slow(&shared, &request).await {
+                                        Some(Ok(reply)) => reply,
+                                        Some(Err(error)) => envelope("rpc_error", json!({"requestId":request["requestId"],"error":error})),
+                                        None => return,
+                                    };
+                                    let _ = done.send(Done::Reply(reply));
+                                });
+                                continue;
+                            }
                             "list_commands_request" => {
                                 let (shared, request, done) = (shared.clone(), request.clone(), done.clone());
                                 tokio::task::spawn_local(async move {
@@ -269,7 +281,14 @@ async fn session(stream: TcpStream, shared: Shared, token: Rc<String>) -> Result
                             kind if git::handles(kind) => {
                                 let cwd = request["cwd"].as_str().unwrap_or_default().to_owned();
                                 if shared.borrow().state.workspaces.values().any(|workspace|workspace["workspaceDirectory"] == cwd.as_str()) {
-                                    let (kind, request, done) = (kind.to_owned(), request.clone(), done.clone());
+                                    let (kind, mut request, done) = (kind.to_owned(), request.clone(), done.clone());
+                                    // A worktree's base is on record here, not in the request.
+                                    if kind == "checkout_merge_request" && request["baseRef"].is_null() {
+                                        request["baseRef"] = shared.borrow().state.workspaces.values()
+                                            .find(|workspace| workspace["workspaceDirectory"] == cwd.as_str())
+                                            .map(|workspace| workspace["gitRuntime"]["baseBranch"].clone())
+                                            .unwrap_or(Value::Null);
+                                    }
                                     tokio::task::spawn_local(async move {
                                         let result = git::execute(&kind,&cwd,&request).await;
                                         let mut payload = result.clone().unwrap_or_else(|error|json!({"cwd":cwd,"error":{"message":error}}));
@@ -360,6 +379,7 @@ async fn serve(home: PathBuf) -> Result<(), Error> {
         &serde_json::to_vec(&json!({"listen":address.to_string(),"pid":std::process::id()}))?,
     )?;
     let host = Rc::new(RefCell::new(host));
+    let mut again = false;
     let mut poll = interval(Duration::from_millis(200));
     let mut schedules = interval(Duration::from_secs(1));
     loop {
@@ -386,12 +406,35 @@ async fn serve(home: PathBuf) -> Result<(), Error> {
                 if fs::read_to_string(home.join("stop")).ok().as_deref() == Some(token.as_str()) {
                     break;
                 }
+                // Asked to start again: once the answer to that has gone.
+                if host.borrow().restart {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    again = true;
+                    break;
+                }
             }
         }
     }
     fs::remove_file(home.join("sophon.pid"))?;
     fs::remove_file(home.join("local-credential"))?;
-    fs::remove_file(home.join("stop"))?;
+    let _ = fs::remove_file(home.join("stop"));
+    if again {
+        // The next one takes the lock this one lets go of, and says so
+        // in the same log.
+        drop(host);
+        drop(lock);
+        let log = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(home.join("service.log"))?;
+        Command::new(environment::current_exe()?)
+            .args(["daemon", "run", "--home"])
+            .arg(&home)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(log)
+            .spawn()?;
+    }
     Ok(())
 }
 

@@ -27,11 +27,25 @@ use tokio::{
 const IDLE: Duration = Duration::from_secs(15 * 60);
 
 pub enum Command {
-    /// Into the turn underway if there is one, else a new turn.
+    /// Into the turn underway if there is one, else a new turn. `id`:
+    /// the message's own, which a later rewind names it by.
     Prompt {
+        id: String,
         text: String,
         images: Vec<Value>,
     },
+    /// Back to before the message `message`: the files it and what
+    /// followed changed, the conversation from it on, or both. `turns`:
+    /// how many of the person's messages that is, counted from the end.
+    Rewind {
+        message: String,
+        turns: u64,
+        files: bool,
+        conversation: bool,
+    },
+    /// Stops something the agent left running, by the id it was told
+    /// of under.
+    StopTask(String),
     Interrupt,
     /// The client's answer to the permission `id`.
     Answer {
@@ -64,6 +78,11 @@ pub enum Event {
         id: String,
         item: Value,
     },
+    /// What the agent has running in the background now: each with an
+    /// `id`, a `kind` and a `description`.
+    Background(Value),
+    /// A rewind is done, or why it could not be.
+    Rewound(Result<(), String>),
     /// A turn is underway.
     Busy,
     /// Nothing is; how what was underway ended.
@@ -111,6 +130,69 @@ pub async fn commands(family: &str, settings: &Value, cwd: &str) -> io::Result<V
     } else {
         Ok(json!([]))
     }
+}
+
+/// What can be said of a provider's CLI on this host, for a person to
+/// read or paste into a report: where it is, its version, where it
+/// keeps its files and what it would start on.
+pub async fn diagnostic(provider: &str, settings: &Value) -> String {
+    let Some(family) = family(provider, settings) else {
+        return format!("{provider}\n  Not a provider this host runs");
+    };
+    let name = if family == "codex" {
+        "Codex"
+    } else {
+        "Claude Code"
+    };
+    let Some(program) = executable(family, settings) else {
+        return format!("{name}\n  Not installed on this host");
+    };
+    let version = tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::process::Command::new(&program)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+    .filter(|version| !version.is_empty())
+    .unwrap_or_else(|| "did not answer".to_owned());
+    let (variable, usual) = if family == "codex" {
+        ("CODEX_HOME", ".codex")
+    } else {
+        ("CLAUDE_CONFIG_DIR", ".claude")
+    };
+    let models = crate::models::list(family, settings);
+    let starts = models
+        .iter()
+        .find(|model| model["isDefault"] == true)
+        .map(|model| {
+            format!(
+                "{} ({})",
+                model["label"].as_str().unwrap_or_default(),
+                model["defaultThinkingOptionId"]
+                    .as_str()
+                    .unwrap_or("default effort")
+            )
+        })
+        .unwrap_or_else(|| "its own default".to_owned());
+    let endpoint = settings["env"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .find(|(key, _)| key.ends_with("_BASE_URL"))
+        .and_then(|(_, value)| value.as_str())
+        .unwrap_or("its own");
+    format!(
+        "{name}\n  Binary: {}\n  Version: {version}\n  Files: {}\n  Models listed: {}\n  Starts on: {starts}\n  Endpoint: {endpoint}",
+        program.display(),
+        crate::models::kept(settings, variable, usual).display(),
+        models.len()
+    )
 }
 
 pub(crate) fn binary(provider: &str) -> Option<PathBuf> {

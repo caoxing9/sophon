@@ -63,6 +63,9 @@ struct Claude {
     /// agent has started, and the agent says later how it ended.
     agents: HashSet<String>,
     background: HashSet<String>,
+    /// A rewind of files asked of Claude Code and not answered: the
+    /// request, the message, and whether the conversation goes back too.
+    rewinding: Option<(String, String, bool)>,
     /// The request that asks Claude Code what it is (its commands).
     introduced: Option<String>,
     /// Messages whose text came as it was written.
@@ -97,6 +100,7 @@ pub async fn run(start: Start, mut inbox: UnboundedReceiver<Command>, emit: Emit
         agents: HashSet::new(),
         background: HashSet::new(),
         introduced: None,
+        rewinding: None,
         streamed: HashSet::new(),
         asks: HashMap::new(),
         spoke: false,
@@ -306,6 +310,22 @@ impl Claude {
             .await
     }
 
+    /// Takes the conversation back to before `message`: a new session
+    /// whose record is this one's up to that message, which Claude Code
+    /// resumes in its place. The old record stays as it is.
+    fn cut(&mut self, message: &str) -> Result<(), String> {
+        let session = self
+            .start
+            .session
+            .clone()
+            .ok_or("This conversation has not started")?;
+        self.close();
+        let fresh = crate::history::cut(&self.start.settings, &session, message)?;
+        self.start.session = Some(fresh.clone());
+        (self.emit)(Event::Session(fresh));
+        Ok(())
+    }
+
     /// Lets the process go; what it cost stays counted.
     fn close(&mut self) {
         self.process = None;
@@ -362,7 +382,10 @@ impl Claude {
             &self.start.settings,
             &self.start.cwd,
             &args,
-            &[("CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS", "1")],
+            &[
+                ("CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS", "1"),
+                ("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "true"),
+            ],
         )?);
         self.states = false;
         self.introduced = Some(format!("sophon-{}", self.requests + 1));
@@ -424,7 +447,7 @@ impl Claude {
 
     async fn command(&mut self, command: Command) -> io::Result<()> {
         match command {
-            Command::Prompt { text, images } => {
+            Command::Prompt { id, text, images } => {
                 let mut content = Vec::new();
                 for image in &images {
                     let (mime, _, data) = super::image(image)?;
@@ -440,9 +463,14 @@ impl Claude {
                 if !self.busy {
                     self.begin();
                 }
-                self.send(json!({"type":"user","message":{"role":"user","content":content},
-                    "parent_tool_use_id":null,"session_id":self.start.session.clone().unwrap_or_default()}))
-                    .await
+                let mut message = json!({"type":"user","message":{"role":"user","content":content},
+                    "parent_tool_use_id":null,"session_id":self.start.session.clone().unwrap_or_default()});
+                // Recorded by Claude Code under the message's own id,
+                // so a rewind can name it.
+                if uuid::Uuid::parse_str(&id).is_ok() {
+                    message["uuid"] = json!(id);
+                }
+                self.send(message).await
             }
             Command::Interrupt => {
                 if !self.busy {
@@ -488,6 +516,39 @@ impl Claude {
                     .await
             }
             // An effort is the process's for its life.
+            Command::StopTask(task) => {
+                self.control(json!({"subtype":"stop_task","task_id":task}))
+                    .await
+            }
+            Command::Rewind {
+                message,
+                files,
+                conversation,
+                ..
+            } => {
+                if self.busy {
+                    (self.emit)(Event::Rewound(Err(
+                        "The agent is working: stop it first".into()
+                    )));
+                    return Ok(());
+                }
+                // The files first, by a process that has the session as
+                // it is; then the conversation, cut where the message is.
+                if files {
+                    self.open().await?;
+                    self.rewinding = Some((
+                        format!("sophon-{}", self.requests + 1),
+                        message.clone(),
+                        conversation,
+                    ));
+                    return self
+                        .control(json!({"subtype":"rewind_files","user_message_id":message}))
+                        .await;
+                }
+                let cut = self.cut(&message);
+                (self.emit)(Event::Rewound(cut));
+                Ok(())
+            }
             Command::Thinking(thinking) => {
                 self.start.thinking = thinking;
                 if self.busy {
@@ -546,7 +607,18 @@ impl Claude {
             }
             Some("control_response") => {
                 let response = &event["response"];
-                if let Some(error) = response["error"].as_str() {
+                let ours = response["request_id"].as_str();
+                if let Some((_, message, conversation)) = self
+                    .rewinding
+                    .take_if(|(request, _, _)| Some(request.as_str()) == ours)
+                {
+                    let done = match response["error"].as_str() {
+                        Some(error) => Err(error.to_owned()),
+                        None if conversation => self.cut(&message),
+                        None => Ok(()),
+                    };
+                    (self.emit)(Event::Rewound(done));
+                } else if let Some(error) = response["error"].as_str() {
                     eprintln!("claude: control request refused: {error}");
                 } else if self.introduced.as_deref() == response["request_id"].as_str()
                     && response["response"]["commands"].is_array()
@@ -602,6 +674,20 @@ impl Claude {
                     };
                     (self.emit)(Event::Subagent(json!({"id":id,"status":status})));
                 }
+            }
+            Some("background_tasks_changed") => {
+                let tasks: Vec<Value> = event["tasks"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|task| {
+                        Some(
+                            json!({"id":task["task_id"].as_str()?,"kind":task["task_type"],
+                            "description":task["description"],"command":task["command"]}),
+                        )
+                    })
+                    .collect();
+                (self.emit)(Event::Background(json!(tasks)));
             }
             Some("compact_boundary") => {
                 self.item(json!({"type":"compaction","status":"completed"}))

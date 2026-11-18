@@ -44,7 +44,7 @@ Mac or from your phone, all talking to the same daemon. It is written in Rust wi
   when an agent needs you
 - **Self-updating**: a sidebar button appears when a new release is out
 
-The host service does not do a few of these yet: cloning from GitHub, archiving a workspace, importing an existing session, rewind and fork, the background work list. See the [native service guide](docs/native-service.md) for what it covers, and the [client checklist](docs/parity.md) for the client.
+See the [native service guide](docs/native-service.md) for what the host service covers, and the [client checklist](docs/parity.md) for the client.
 
 ## Install
 

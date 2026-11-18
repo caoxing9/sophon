@@ -149,6 +149,49 @@ pub fn execute(root: &Path, request: &Value) -> io::Result<Value> {
             directory.rename(path, &directory, destination)?;
             response["parentPath"] = json!(parent);
         }
+        // A copy beside it, under the first of "name copy", "name copy 2"
+        // … that is free; a folder with everything in it.
+        "fs.entry.duplicate.request" => {
+            let parent = entry(path)?.parent().unwrap_or(Path::new(""));
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default();
+            let (stem, extension) = match name.rsplit_once('.') {
+                Some((stem, extension)) if !stem.is_empty() => (stem, format!(".{extension}")),
+                _ => (name, String::new()),
+            };
+            let copy = (1..1000)
+                .map(|number| {
+                    let mark = if number == 1 {
+                        " copy".to_owned()
+                    } else {
+                        format!(" copy {number}")
+                    };
+                    parent.join(format!("{stem}{mark}{extension}"))
+                })
+                .find(|copy| directory.symlink_metadata(copy).is_err())
+                .ok_or_else(|| io::Error::other("Too many copies"))?;
+            fn copy_all(directory: &Dir, from: &Path, to: &Path, depth: usize) -> io::Result<()> {
+                let kind = directory.symlink_metadata(from)?;
+                if kind.is_dir() {
+                    if depth > 64 {
+                        return Err(io::Error::other("Folders nested too deep to copy"));
+                    }
+                    directory.create_dir(to)?;
+                    for child in directory.read_dir(from)? {
+                        let name = child?.file_name();
+                        copy_all(directory, &from.join(&name), &to.join(&name), depth + 1)?;
+                    }
+                } else if kind.is_file() {
+                    directory.copy(from, directory, to)?;
+                }
+                Ok(())
+            }
+            copy_all(&directory, path, &copy, 0)?;
+            response["parentPath"] = json!(parent);
+            response["path"] = json!(copy);
+        }
         "fs.entry.delete.request" => {
             let parent = entry(path)?.parent().unwrap_or(Path::new(""));
             if directory.symlink_metadata(path)?.is_dir() {

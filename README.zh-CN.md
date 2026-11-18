@@ -35,7 +35,7 @@ Sophon 用 Rust 和 [NSH](https://github.com/longbridge/nsh) 编写，在每个�
 - **键盘优先**：命令面板（⌘K）和快捷键，在输入框里打字时也能用；智能体需要你时发送桌面通知
 - **自动更新**：有新版本时侧边栏会出现更新按钮
 
-宿主服务目前还不支持其中几项：从 GitHub 克隆、归档工作区、导入已有会话、回退和分叉、后台任务列表。完整的支持范围见[服务指南](docs/native-service.md)，客户端功能见[协议清单](docs/parity.md)。
+宿主服务的支持范围见[服务指南](docs/native-service.md)，客户端功能见[协议清单](docs/parity.md)。
 
 ## 安装
 

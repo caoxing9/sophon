@@ -27,6 +27,13 @@ pub struct Host {
     /// Requests to create a workspace whose worktree is being checked
     /// out, by the key each was asked under.
     creating: HashSet<String>,
+    /// What each agent has running in the background, as it last said.
+    background: HashMap<String, Value>,
+    /// Rewinds asked of an agent and not yet done: the request to
+    /// answer, and the message to go back to.
+    rewinds: HashMap<String, (Value, String, bool)>,
+    /// Set to have the service start again once it has answered.
+    pub restart: bool,
     /// The commands a provider's CLI has in a directory, as it last
     /// said: by provider and directory.
     commands: HashMap<(String, String), Value>,
@@ -97,6 +104,9 @@ impl Host {
             stopping: HashSet::new(),
             creating: HashSet::new(),
             commands: HashMap::new(),
+            background: HashMap::new(),
+            rewinds: HashMap::new(),
+            restart: false,
             timelines: HashMap::new(),
             terminals: Default::default(),
         };
@@ -380,6 +390,47 @@ impl Host {
                 return;
             }
             Event::Idle(outcome) => return self.finished(agent, outcome),
+            Event::Background(tasks) => {
+                let items: Vec<Value> = tasks
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|task| {
+                        let mut item = task.clone();
+                        item["canStop"] = json!(true);
+                        item["stopToken"] = task["id"].clone();
+                        item
+                    })
+                    .collect();
+                self.background.insert(agent.to_owned(), json!(items));
+                self.publish(
+                    "agent.background_work.update",
+                    json!({"agentId":agent,"items":items}),
+                );
+                return;
+            }
+            Event::Rewound(done) => {
+                let Some((request, message, conversation)) = self.rewinds.remove(agent) else {
+                    return;
+                };
+                let done = done.and_then(|()| {
+                    if conversation {
+                        self.timeline(agent)?
+                            .cut(&message)
+                            .map_err(|error| error.to_string())?;
+                    }
+                    Ok(())
+                });
+                self.publish(
+                    "agent.rewind.response",
+                    json!({"requestId":request,"agentId":agent,"error":done.as_ref().err()}),
+                );
+                if done.is_ok() {
+                    self.publish("agent.timeline.replacement", json!({"agentId":agent}));
+                    self.update_agent(agent);
+                }
+                return;
+            }
             Event::Commands(list) => {
                 let place = |key: &str| record[key].as_str().unwrap_or_default().to_owned();
                 self.commands
@@ -589,6 +640,7 @@ fn turn(
     let images = input["images"].as_array().cloned().unwrap_or_default();
     if commands
         .send(Command::Prompt {
+            id: message_id.clone(),
             text: provider_prompt,
             images,
         })
@@ -699,6 +751,129 @@ pub async fn commands(shared: &Shared, request: &Value) -> Result<Value, String>
     }
 }
 
+/// Answers a request that waits on something outside the service (a
+/// clone, a CLI asked its version, records read from disk), with
+/// nothing of the host held while it waits. `None` for any other.
+pub async fn slow(shared: &Shared, request: &Value) -> Option<Result<Value, String>> {
+    let kind = request["type"].as_str()?;
+    let reply = |mut payload: Value| {
+        payload["requestId"] = request["requestId"].clone();
+        envelope(&kind.replace("request", "response"), payload)
+    };
+    let provider_of = |name: &str| -> Result<(Value, Option<&'static str>), String> {
+        let config =
+            crate::config::read(&shared.borrow().home).map_err(|error| error.to_string())?;
+        let settings = config["providers"][name].clone();
+        let family = provider::family(name, &settings);
+        Ok((settings, family))
+    };
+    Some(match kind {
+        "project.github.clone.request" => {
+            async {
+                let folder =
+                    crate::git::clone(text(request, "repo")?, text(request, "targetDirectory")?)
+                        .await?;
+                let mut host = shared.borrow_mut();
+                let project = host.state.project(&folder)?;
+                host.persist().map_err(|error| error.to_string())?;
+                host.publish("project.update", json!({"kind":"upsert","project":project}));
+                Ok(reply(json!({"project":project,"repo":request["repo"]})))
+            }
+            .await
+        }
+        "provider_diagnostic_request" => async {
+            let name = text(request, "provider")?;
+            let (settings, _) = provider_of(name)?;
+            Ok(reply(
+                json!({"provider":name,"diagnostic":provider::diagnostic(name, &settings).await}),
+            ))
+        }
+        .await,
+        // A workspace whose folder went missing gets it back: a
+        // worktree's from its branch, any other as an empty folder.
+        "workspace.recovery.restore.request" => {
+            async {
+                let id = text(request, "workspaceId")?;
+                let workspace = shared
+                    .borrow()
+                    .state
+                    .workspaces
+                    .get(id)
+                    .cloned()
+                    .ok_or("Unknown workspace")?;
+                let folder = text(&workspace, "workspaceDirectory")?;
+                if std::path::Path::new(folder).exists() {
+                    return Err("Its folder is there".into());
+                }
+                if workspace["workspaceKind"] == "worktree" {
+                    let branch = workspace["gitRuntime"]["currentBranch"]
+                        .as_str()
+                        .unwrap_or_default();
+                    crate::git::restore(text(&workspace, "projectRootPath")?, folder, branch)
+                        .await?;
+                } else {
+                    std::fs::create_dir_all(folder).map_err(|error| error.to_string())?;
+                }
+                Ok(reply(json!({"workspaceId":id})))
+            }
+            .await
+        }
+        // Sessions the CLIs have that are not conversations here yet.
+        "fetch_recent_provider_sessions_request" => {
+            async {
+                let limit = request["limit"].as_u64().unwrap_or(50).clamp(1, 200) as usize;
+                let query = request["query"].as_str().unwrap_or_default().to_owned();
+                let wanted: Vec<String> = match request["providers"].as_array() {
+                    Some(named) => named
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect(),
+                    None => vec!["claude".to_owned(), "codex".to_owned()],
+                };
+                let known: HashSet<String> = shared
+                    .borrow()
+                    .state
+                    .agents
+                    .values()
+                    .filter_map(|agent| {
+                        agent
+                            .pointer("/persistence/sessionId")?
+                            .as_str()
+                            .map(str::to_owned)
+                    })
+                    .collect();
+                let mut entries = Vec::new();
+                for name in wanted {
+                    let (settings, Some(family)) = provider_of(&name)? else {
+                        continue;
+                    };
+                    let query = query.clone();
+                    let found = tokio::task::spawn_blocking(move || {
+                        crate::history::recent(&name, family, &settings, limit, &query)
+                    })
+                    .await
+                    .map_err(|error| error.to_string())?;
+                    entries.extend(found.into_iter().filter(|session| {
+                        session["providerHandleId"]
+                            .as_str()
+                            .is_some_and(|id| !known.contains(id))
+                    }));
+                }
+                entries.sort_by(|left, right| {
+                    right["lastActivityAt"]
+                        .as_str()
+                        .cmp(&left["lastActivityAt"].as_str())
+                });
+                entries.truncate(limit);
+                Ok(reply(json!({"entries":entries})))
+            }
+            .await
+        }
+        _ => return None,
+    })
+}
+
 pub fn dispatch(shared: &Shared, request: &Value) -> Result<Value, String> {
     answer(shared, request, None)
 }
@@ -758,6 +933,170 @@ fn answer(shared: &Shared, request: &Value, mut made: Option<Value>) -> Result<V
             page
         }
         "daemon.get_pairing_offer.request" => json!({"relayEnabled":false,"url":null}),
+        // Back to before a message: asked of the agent's session, which
+        // answers when it is done (`Event::Rewound`).
+        "agent.rewind.request" => {
+            let (agent_id, message) = (text(request, "agentId")?, text(request, "messageId")?);
+            let mode = request["mode"].as_str().unwrap_or("conversation");
+            let (files, conversation) = (mode != "conversation", mode != "files");
+            if host
+                .state
+                .agents
+                .get(agent_id)
+                .is_some_and(|agent| agent["status"] == "running")
+            {
+                return Err("The agent is working: stop it first".into());
+            }
+            let turns = host.timeline(agent_id)?.turns_from(message);
+            if turns == 0 {
+                return Err("That message is not in this conversation".into());
+            }
+            let commands = session(shared, &mut host, agent_id)?;
+            host.rewinds.insert(
+                agent_id.to_owned(),
+                (
+                    request["requestId"].clone(),
+                    message.to_owned(),
+                    conversation,
+                ),
+            );
+            let asked = commands.send(Command::Rewind {
+                message: message.to_owned(),
+                turns,
+                files,
+                conversation,
+            });
+            if asked.is_err() {
+                host.rewinds.remove(agent_id);
+                return Err("The agent's session ended".into());
+            }
+            return Ok(envelope(
+                "agent.rewind.accepted",
+                json!({"agentId":agent_id}),
+            ));
+        }
+        // What was said, as a file a new conversation is given to read.
+        "agent.fork_context.request" => {
+            let agent_id = text(request, "agentId")?;
+            let title = host.state.agents.get(agent_id).ok_or("Unknown agent")?["title"]
+                .as_str()
+                .unwrap_or("conversation")
+                .to_owned();
+            let mut words = format!("# {title}\n\nAn earlier conversation, for context.\n");
+            let mut count = 0;
+            for item in host.timeline(agent_id)?.items() {
+                let said = item["text"].as_str().unwrap_or_default().trim();
+                match item["type"].as_str() {
+                    Some("user_message") if !said.is_empty() => {
+                        words.push_str(&format!("\n## User\n\n{said}\n"))
+                    }
+                    Some("assistant_message") if !said.is_empty() => {
+                        words.push_str(&format!("\n## Assistant\n\n{said}\n"))
+                    }
+                    Some("tool_call") => {
+                        let what = ["command", "filePath", "query", "url", "description"]
+                            .iter()
+                            .find_map(|key| item["detail"][*key].as_str())
+                            .unwrap_or_default();
+                        words.push_str(&format!(
+                            "\n- {} {what}\n",
+                            item["name"].as_str().unwrap_or("tool")
+                        ));
+                    }
+                    _ => continue,
+                }
+                count += 1;
+            }
+            let uploads = host.home.join("uploads");
+            std::fs::create_dir_all(&uploads).map_err(|error| error.to_string())?;
+            let name = format!("{}.md", id());
+            crate::state::write(&uploads, &name, words.as_bytes())
+                .map_err(|error| error.to_string())?;
+            let path =
+                std::fs::canonicalize(uploads.join(&name)).map_err(|error| error.to_string())?;
+            json!({"agentId":agent_id,"itemCount":count,"error":null,
+                "attachment":{"type":"file","path":path,"fileName":format!("{}.md", title.chars().take(40).collect::<String>().replace('/', "-")),
+                    "mimeType":"text/markdown","size":words.len()}})
+        }
+        "agent.background_work.list.request" => {
+            let agent_id = text(request, "agentId")?;
+            json!({"agentId":agent_id,"items":host.background.get(agent_id).cloned().unwrap_or_else(|| json!([]))})
+        }
+        "agent.background_work.stop.request" => {
+            let agent_id = text(request, "agentId")?;
+            let task = request["stopToken"]
+                .as_str()
+                .or(request["itemId"].as_str())
+                .ok_or("Missing itemId")?;
+            let told = host
+                .sessions
+                .get(agent_id)
+                .is_some_and(|commands| commands.send(Command::StopTask(task.to_owned())).is_ok());
+            if !told {
+                return Err("Nothing of this agent's is running".into());
+            }
+            json!({"agentId":agent_id})
+        }
+        // A conversation the CLI already has, taken as one of this
+        // service's: by its id, with what was said read from its record
+        // when it is opened.
+        "import_agent_request" => {
+            let provider = text(request, "providerId")?;
+            let handle = text(request, "providerHandleId")?;
+            let config = crate::config::read(&host.home).map_err(|error| error.to_string())?;
+            let settings = &config["providers"][provider];
+            let family = provider::family(provider, settings)
+                .filter(|_| settings["enabled"] != false)
+                .ok_or("Unknown provider")?;
+            if let Some(known) = host.state.agents.values().find(|agent| {
+                agent["provider"] == provider
+                    && agent
+                        .pointer("/persistence/sessionId")
+                        .and_then(Value::as_str)
+                        == Some(handle)
+            }) {
+                return Ok(envelope(
+                    "status",
+                    json!({"requestId":request["requestId"],"status":"agent_resumed","agent":known}),
+                ));
+            }
+            let said = crate::history::read(family, settings, handle);
+            if said.is_empty() {
+                return Err("That session has no record on this host".into());
+            }
+            let title: String = said
+                .iter()
+                .find(|item| item["type"] == "user_message")
+                .and_then(|item| item["text"].as_str())
+                .unwrap_or_default()
+                .chars()
+                .take(72)
+                .collect();
+            let project = host.state.project(text(request, "cwd")?)?;
+            host.publish("project.update", json!({"kind":"upsert","project":project}));
+            let workspace = host.state.workspace(&project);
+            let agent_id = id();
+            let created = now();
+            let agent = json!({"id":agent_id,"provider":provider,"cwd":workspace["workspaceDirectory"],
+                "workspaceId":workspace["id"],"status":"idle","labels":{},"persistence":{"sessionId":handle},
+                "currentModeId":provider::mode(family, None),"availableModes":provider::modes(family),
+                "pendingPermissions":[],"title":title,"createdAt":created,"updatedAt":created});
+            host.state.agents.insert(agent_id.clone(), agent);
+            host.persist().map_err(|error| error.to_string())?;
+            host.publish(
+                "workspace_update",
+                json!({"kind":"upsert","workspace":workspace}),
+            );
+            host.update_agent(&agent_id);
+            response = "status".into();
+            json!({"status":"agent_created","agent":host.state.agents[&agent_id]})
+        }
+        // The service ships with the app: its newer version is the
+        // app's, and starting again is how it is taken up.
+        "restart_server_request" | "daemon.update.request" => {
+            host.restart = true;
+            json!({"status":"restarting"})
+        }
         "agent.provider_subagents.list.request" => {
             let parent = text(request, "parentAgentId")?;
             json!({"parentAgentId":parent,

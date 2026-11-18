@@ -20,6 +20,8 @@ enum Sent {
     /// Into the turn underway; if that turn was over, this starts one.
     Steer(Value),
     Other,
+    /// Taking the thread back some turns.
+    Rollback,
 }
 
 /// What Codex waits on: the request to answer, and how.
@@ -391,7 +393,7 @@ impl Codex {
 
     async fn command(&mut self, command: Command) -> io::Result<()> {
         match command {
-            Command::Prompt { text, images } => {
+            Command::Prompt { text, images, .. } => {
                 let mut input = vec![json!({"type":"text","text":text,"text_elements":[]})];
                 for image in &images {
                     let (_, extension, data) = super::image(image)?;
@@ -475,6 +477,23 @@ impl Codex {
                 self.start.model = model;
                 Ok(())
             }
+            Command::StopTask(_) => Ok(()),
+            Command::Rewind { turns, files, .. } => {
+                if self.busy || files {
+                    let why = if files {
+                        "Codex keeps no checkpoints of files to go back to"
+                    } else {
+                        "The agent is working: stop it first"
+                    };
+                    (self.emit)(Event::Rewound(Err(why.into())));
+                    return Ok(());
+                }
+                self.open().await?;
+                let params = json!({"threadId":self.thread,"numTurns":turns});
+                self.request("thread/rollback", params, Sent::Rollback)
+                    .await
+                    .map(drop)
+            }
             Command::Thinking(thinking) => {
                 self.start.thinking = thinking;
                 Ok(())
@@ -533,6 +552,12 @@ impl Codex {
                         None => Ok(()),
                     },
                     (Sent::Steer(input), Some(_)) => self.turn(input).await,
+                    (Sent::Rollback, error) => {
+                        (self.emit)(Event::Rewound(
+                            error.map_or(Ok(()), |error| Err(error.to_owned())),
+                        ));
+                        Ok(())
+                    }
                     _ => Ok(()),
                 }
             }

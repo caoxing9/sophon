@@ -174,6 +174,42 @@ impl Timeline {
         seq
     }
 
+    /// Its rows' items, in order.
+    pub fn items(&self) -> impl Iterator<Item = &Value> {
+        self.rows.iter().map(|row| &row.item)
+    }
+
+    /// How many of the person's messages there are from the one sent
+    /// as `message_id` on, that one counted: none if it is not here.
+    pub fn turns_from(&self, message_id: &str) -> u64 {
+        let Some(at) = self.rows.iter().position(|row| {
+            row.item["type"] == "user_message" && row.item["messageId"] == message_id
+        }) else {
+            return 0;
+        };
+        self.rows[at..]
+            .iter()
+            .filter(|row| row.item["type"] == "user_message")
+            .count() as u64
+    }
+
+    /// Drops the message sent as `message_id` and everything after it.
+    /// Places in the stream are not given again: what follows starts
+    /// after the last one there was.
+    pub fn cut(&mut self, message_id: &str) -> io::Result<()> {
+        let Some(at) = self.rows.iter().position(|row| {
+            row.item["type"] == "user_message" && row.item["messageId"] == message_id
+        }) else {
+            return Ok(());
+        };
+        self.rows.truncate(at);
+        self.unsaved.clear();
+        if let Some(dir) = self.path.parent() {
+            fs::create_dir_all(dir)?;
+        }
+        self.rewrite()
+    }
+
     /// Whether nothing has been said in it, as far as it knows.
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty()

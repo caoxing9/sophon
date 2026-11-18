@@ -239,6 +239,51 @@ fn find(dir: &Path, depth: usize, named: &dyn Fn(&str) -> bool) -> Option<PathBu
     None
 }
 
+/// Claude Code's record of `session`, where it is.
+fn claude_record(settings: &Value, session: &str) -> Option<PathBuf> {
+    if session.is_empty()
+        || !session
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return None;
+    }
+    let name = format!("{session}.jsonl");
+    find(
+        &crate::models::kept(settings, "CLAUDE_CONFIG_DIR", ".claude").join("projects"),
+        1,
+        &|found| found == name,
+    )
+}
+
+/// Makes a session that is `session` up to, and not with, the message
+/// `message` (by the id Claude Code recorded it under), and answers its
+/// id: a record beside the old one, the same lines under the new id.
+/// The old record is not changed.
+pub fn cut(settings: &Value, session: &str, message: &str) -> Result<String, String> {
+    let path =
+        claude_record(settings, session).ok_or("Claude Code has no record of this conversation")?;
+    let record = fs::read_to_string(&path).map_err(|error| error.to_string())?;
+    let fresh = uuid::Uuid::new_v4().to_string();
+    let mut kept = String::new();
+    let mut found = false;
+    for line in record.lines() {
+        let entry = serde_json::from_str::<Value>(line).unwrap_or(Value::Null);
+        if entry["uuid"] == message {
+            found = true;
+            break;
+        }
+        kept.push_str(&line.replace(session, &fresh));
+        kept.push('\n');
+    }
+    if !found {
+        return Err("Claude Code's record does not have that message".into());
+    }
+    fs::write(path.with_file_name(format!("{fresh}.jsonl")), kept)
+        .map_err(|error| error.to_string())?;
+    Ok(fresh)
+}
+
 /// What was said in `session` of a provider of `family`, by its CLI's
 /// record: nothing if there is no such record here.
 pub fn read(family: &str, settings: &Value, session: &str) -> Vec<Value> {
@@ -354,4 +399,123 @@ mod tests {
         assert!(read("claude", &Value::Null, "../../etc/passwd").is_empty());
         assert!(read("codex", &Value::Null, "").is_empty());
     }
+}
+
+/// The files named as `named` says at most `depth` folders under `dir`,
+/// each with when it was last written.
+fn all(
+    dir: &Path,
+    depth: usize,
+    named: &dyn Fn(&str) -> bool,
+    found: &mut Vec<(std::time::SystemTime, PathBuf)>,
+) {
+    for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_file() && entry.file_name().to_str().is_some_and(named) {
+            if let Ok(written) = entry.metadata().and_then(|metadata| metadata.modified()) {
+                found.push((written, entry.path()));
+            }
+        } else if kind.is_dir() && depth > 0 {
+            all(&entry.path(), depth - 1, named, found);
+        }
+    }
+}
+
+/// The sessions `family`'s CLI has records of on this host, the latest
+/// first: for a person to pick one to bring into Sophon. Each is read
+/// only as far as it says where it ran and what was first asked.
+pub fn recent(
+    provider: &str,
+    family: &str,
+    settings: &Value,
+    limit: usize,
+    query: &str,
+) -> Vec<Value> {
+    use std::io::{BufRead, BufReader};
+    let mut records = Vec::new();
+    if family == "codex" {
+        let dir = crate::models::kept(settings, "CODEX_HOME", ".codex").join("sessions");
+        all(
+            &dir,
+            3,
+            &|name| name.starts_with("rollout-") && name.ends_with(".jsonl"),
+            &mut records,
+        );
+    } else {
+        let dir = crate::models::kept(settings, "CLAUDE_CONFIG_DIR", ".claude").join("projects");
+        all(&dir, 1, &|name| name.ends_with(".jsonl"), &mut records);
+    }
+    records.sort_by(|left, right| right.0.cmp(&left.0));
+    let query = query.to_lowercase();
+    let mut sessions = Vec::new();
+    // With something to find, further back is looked through for it.
+    for (written, path) in
+        records
+            .into_iter()
+            .take(if query.is_empty() { limit } else { limit * 5 })
+    {
+        let Ok(file) = fs::File::open(&path) else {
+            continue;
+        };
+        let (mut id, mut cwd, mut first) = (None::<String>, None::<String>, None::<String>);
+        for line in BufReader::new(file).lines().take(120).map_while(Result::ok) {
+            let Ok(entry) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            if family == "codex" {
+                let payload = &entry["payload"];
+                if entry["type"] == "session_meta" {
+                    id = payload["id"].as_str().map(str::to_owned);
+                    cwd = payload["cwd"].as_str().map(str::to_owned);
+                } else if payload["type"] == "item_completed"
+                    && payload["item"]["type"] == "UserMessage"
+                {
+                    first = payload["item"]["content"][0]["text"]
+                        .as_str()
+                        .map(str::to_owned);
+                }
+            } else {
+                id = id.or_else(|| entry["sessionId"].as_str().map(str::to_owned));
+                cwd = cwd.or_else(|| entry["cwd"].as_str().map(str::to_owned));
+                if entry["type"] == "user"
+                    && entry["isMeta"] != true
+                    && entry["isSidechain"] != true
+                {
+                    let content = &entry["message"]["content"];
+                    first = content
+                        .as_str()
+                        .or_else(|| {
+                            content
+                                .as_array()?
+                                .iter()
+                                .find_map(|block| block["text"].as_str())
+                        })
+                        .and_then(typed)
+                        .map(str::to_owned);
+                }
+            }
+            if id.is_some() && cwd.is_some() && first.is_some() {
+                break;
+            }
+        }
+        let (Some(id), Some(cwd)) = (id, cwd) else {
+            continue;
+        };
+        let title: String = first.unwrap_or_default().chars().take(120).collect();
+        if !query.is_empty()
+            && !title.to_lowercase().contains(&query)
+            && !cwd.to_lowercase().contains(&query)
+        {
+            continue;
+        }
+        sessions.push(json!({"providerId":provider,"providerLabel":if family == "codex" { "Codex" } else { "Claude" },
+            "providerHandleId":id,"cwd":cwd,"title":if title.is_empty() { Value::Null } else { json!(title) },
+            "lastActivityAt":chrono::DateTime::<chrono::Utc>::from(written).to_rfc3339()}));
+        if sessions.len() == limit {
+            break;
+        }
+    }
+    sessions
 }

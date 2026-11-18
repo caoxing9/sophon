@@ -429,7 +429,126 @@ pub async fn execute(kind: &str, cwd: &str, request: &Value) -> Result<Value, St
             };
             command(cwd, "gh", &["pr", "merge", method]).await?;
         }
+        // The branch here into its base: where the base is checked out
+        // (the project's own folder, usually), merged there; checked
+        // out nowhere, moved forward to this branch if it can be.
+        "checkout_merge_request" => {
+            let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"]).await?;
+            let base = match request["baseRef"].as_str().filter(|base| !base.is_empty()) {
+                Some(base) => base.trim_start_matches("origin/").to_owned(),
+                None => git(&["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+                    .await
+                    .map(|head| head.trim_start_matches("origin/").to_owned())
+                    .map_err(|_| "This branch has no base to merge into".to_owned())?,
+            };
+            if branch == base || base.starts_with('-') {
+                return Err("This branch is its own base".into());
+            }
+            let listed = git(&["worktree", "list", "--porcelain"]).await?;
+            let mut held = None;
+            let mut at = None;
+            for line in listed.lines() {
+                if let Some(path) = line.strip_prefix("worktree ") {
+                    at = Some(path.to_owned());
+                } else if line.strip_prefix("branch refs/heads/") == Some(base.as_str()) {
+                    held = at.take();
+                }
+            }
+            let squash = request["strategy"] == "squash";
+            match held {
+                Some(place) if squash => {
+                    command(&place, "git", &["merge", "--squash", &branch]).await?;
+                    command(
+                        &place,
+                        "git",
+                        &["commit", "--no-edit", "-m", &format!("Merge {branch}")],
+                    )
+                    .await?;
+                }
+                Some(place) => {
+                    command(&place, "git", &["merge", "--no-edit", &branch]).await?;
+                }
+                None => {
+                    git(&["fetch", ".", &format!("{branch}:{base}")]).await.map_err(|error| {
+                        format!("{base} has moved on from {branch}: check it out and merge there ({error})")
+                    })?;
+                }
+            }
+            payload["baseRef"] = json!(base);
+        }
         _ => return Err(format!("Unsupported Git operation: {kind}")),
     }
     Ok(payload)
+}
+
+/// Clones `repo` (`owner/name`, or an address `git` takes) into a folder
+/// named for it under `parent`, and answers that folder.
+pub async fn clone(repo: &str, parent: &str) -> Result<String, String> {
+    let repo = repo.trim();
+    let address = if repo.contains("://") || repo.starts_with("git@") {
+        repo.to_owned()
+    } else if repo.split('/').count() == 2
+        && !repo.starts_with('-')
+        && !repo.contains(char::is_whitespace)
+    {
+        format!("https://github.com/{}.git", repo.trim_end_matches(".git"))
+    } else {
+        return Err("Expected owner/name or a repository's address".into());
+    };
+    let name = address
+        .trim_end_matches('/')
+        .trim_end_matches(".git")
+        .trim_end_matches('/')
+        .rsplit(['/', ':'])
+        .next()
+        .filter(|name| !name.is_empty() && !name.starts_with(['.', '-']))
+        .ok_or("That address names no repository")?
+        .to_owned();
+    let parent = match parent.trim().strip_prefix("~/") {
+        Some(rest) => Path::new(&std::env::var("HOME").unwrap_or_default()).join(rest),
+        None => Path::new(parent.trim()).to_path_buf(),
+    };
+    if !parent.is_absolute() {
+        return Err("Expected a folder to clone into".into());
+    }
+    std::fs::create_dir_all(&parent).map_err(|error| error.to_string())?;
+    let target = parent.join(&name);
+    if target.exists() {
+        return Err(format!("{} is already there", target.display()));
+    }
+    let result = timeout(
+        Duration::from_secs(30 * 60),
+        Command::new("git")
+            .args(["clone", "--", &address])
+            .arg(&target)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| "Cloning timed out".to_owned())?
+    .map_err(|error| error.to_string())?;
+    if !result.status.success() {
+        let _ = std::fs::remove_dir_all(&target);
+        return Err(String::from_utf8_lossy(&result.stderr).trim().into());
+    }
+    target
+        .to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| "Invalid folder name".into())
+}
+
+/// Checks a worktree's branch out again where its folder was, for one
+/// whose folder went missing: the branch and its commits are in the
+/// project's repository still.
+pub async fn restore(root: &str, folder: &str, branch: &str) -> Result<(), String> {
+    if branch.is_empty() || branch.starts_with('-') {
+        return Err("This workspace has no branch on record".into());
+    }
+    // The repository still lists the folder that is gone.
+    command(root, "git", &["worktree", "prune"]).await?;
+    command(root, "git", &["worktree", "add", "--", folder, branch])
+        .await
+        .map(drop)
 }
