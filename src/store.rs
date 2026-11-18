@@ -41,6 +41,7 @@ pub(crate) enum Screen {
     Inbox,
     /// One pull request; `agent`: the conversation it was opened from,
     /// which "Fix with agent" writes to.
+    #[allow(dead_code)]
     PullRequest { repo: String, number: u64, agent: Option<String> },
 }
 
@@ -629,6 +630,9 @@ pub(crate) fn open_inbox() {
 }
 
 /// The desktop's page of a pull request.
+// The desktop's header no longer shows the branch's pull request, which
+// was the way to this screen; the phone has its own (a page it pushes).
+#[allow(dead_code)]
 pub(crate) fn open_pull_request(repo: &str, number: u64, agent: Option<String>) {
     global::<Nav>().update(|n| n.screen = Screen::PullRequest { repo: repo.to_owned(), number, agent });
     send(Command::WatchDiff(None));

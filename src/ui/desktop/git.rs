@@ -1,9 +1,7 @@
-//! Git in the workspace header: ahead / behind, and the pull request with
-//! its checks. The actions (commit, push, pull, …) are the command
+//! Git in the workspace header: ahead / behind. The actions (commit, push, pull, …) are the command
 //! palette's: the agents do most of them, and a button for them was noise.
 
-use crate::i18n::{t, tf};
-use nsh_core::{element::FontWeight, prelude::*};
+use nsh_core::prelude::*;
 use crate::ui::kit::text;
 
 use crate::ui::kit::*;
@@ -24,64 +22,5 @@ pub(crate) fn git_controls() -> impl IntoElement {
                 text(format!("↑{} ↓{}", st.ahead, st.behind)).text_size(tx(TEXT_SM)).font_family(mono_font).text_color(FG_MUTED)
             }))
         }))
-        .child(dynamic(move || {
-            let pr = git.with(|g| g.pr.clone())?;
-            Some(untracked(move || pr_badge(pr.clone())))
-        }))
-}
-
-fn pr_badge(pr: crate::daemon::connection::PullRequest) -> impl IntoElement {
-    let (tone, state) = if pr.merged {
-        (DOT_RUNNING, t("Merged"))
-    } else if pr.state.eq_ignore_ascii_case("closed") {
-        (DANGER, t("Closed"))
-    } else if pr.draft {
-        (FG_MUTED, t("Draft"))
-    } else {
-        (SUCCESS, if crate::i18n::is_zh() { "开启" } else { t("Open") })
-    };
-    let failing = pr.checks.iter().filter(|(_, s)| matches!(s.as_str(), "failure" | "failed" | "error")).count();
-    let pending = pr.checks.iter().filter(|(_, s)| matches!(s.as_str(), "pending" | "in_progress" | "queued")).count();
-    let checks = if pr.checks.is_empty() {
-        None
-    } else if failing > 0 {
-        Some((DANGER, tf("{} failing", &[&failing.to_string()])))
-    } else if pending > 0 {
-        Some((WARNING, tf("{} running", &[&pending.to_string()])))
-    } else {
-        Some((SUCCESS, t("Checks passed").to_owned()))
-    };
-    let url = pr.url.clone();
-    nsh_base::button()
-        // Its page here (summary, code, checks, merge); GitHub's when the
-        // address is not GitHub's.
-        .on_press(move || match crate::github::of_url(&url) {
-            Some((repo, number)) => store::open_pull_request(&repo, number, store::selected_id()),
-            None => {
-                let _ = open_url(url.clone());
-            }
-        })
-        .flex_row()
-        .items_center()
-        .gap(px(6.0))
-        .h(px(26.0))
-        .px(sp(S2))
-        .rounded(px(R_FULL))
-        .bg(tint(tone, 0.1))
-        .hover(|s| s.opacity(0.85))
-        .child(icon(Icon::GitPullRequest, 14.0).text_color(tone))
-        .child(
-            text(match pr.number {
-                Some(n) => format!("#{n} {state}"),
-                None => state.to_owned(),
-            })
-            .text_size(tx(TEXT_SM))
-            .font_weight(FontWeight(500))
-            .text_color(tone),
-        )
-        .when_some(checks, |v, (c, label)| {
-            v.child(view().w(px(1.0)).h(px(12.0)).bg(tint(tone, 0.3)))
-                .child(text(label).text_size(tx(TEXT_SM)).text_color(c))
-        })
 }
 
