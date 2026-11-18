@@ -13,7 +13,7 @@
 use std::{cell::RefCell, collections::HashMap, time::Duration};
 
 use nsh_base::rich_editor::{
-    commands::command,
+    commands::{Dispatch, command, delete_selection, join_forward, split_block},
     extensions::{HistoryOptions, history, keymap, kit, starter},
     model::{AttrSpec, Attrs, Fragment, Node, NodeSpec, Schema, SchemaSpec, TextRender},
     state::{EditorState, EditorStateConfig, Selection, TextSelection, Transaction},
@@ -393,10 +393,48 @@ fn editor_key_name(keystroke: &str) -> String {
         .join("-")
 }
 
+/// Control+K, as macOS's text fields take it: deletes from the caret to
+/// the end of its line, or at the end the break after it (the next line
+/// comes up); a selection is deleted instead.
+fn kill_line(state: &EditorState, dispatch: Dispatch<'_>) -> bool {
+    let selection = state.selection();
+    if !selection.empty() {
+        return delete_selection(state, dispatch);
+    }
+    let head = selection.head();
+    let Ok(at) = state.doc().resolve(head) else { return false };
+    if !at.parent().inline_content() {
+        return false;
+    }
+    let end = at.end(at.depth);
+    if head == end {
+        return join_forward(state, dispatch);
+    }
+    if let Some(dispatch) = dispatch {
+        let mut tr = state.tr();
+        if tr.delete(head, end).is_err() {
+            return false;
+        }
+        tr.scroll_into_view();
+        dispatch(tr);
+    }
+    true
+}
+
 fn new_session(key: &str, text: &str) -> EditorSession {
     let schema = schema();
     let mut bindings = kit::history_keys();
-    bindings.extend(kit::hard_break_keys(&schema, false));
+    // A new line is a new paragraph, as the phone's Return and a paste make
+    // one: a line break inside a paragraph left Up and Down, Control+A and
+    // Control+E taking the whole message for one line. Option+Enter and
+    // Control+J are Claude Code's own keys for it.
+    for key in ["Shift-Enter", "Mod-Enter", "Alt-Enter", "Ctrl-Enter", "Ctrl-j"] {
+        bindings.push((key.into(), command(split_block)));
+    }
+    if cfg!(any(target_os = "macos", target_os = "ios")) {
+        // macOS's Control+K, which the editor's own keys leave out.
+        bindings.push(("Ctrl-k".into(), command(kill_line)));
+    }
     // The suggestions' keys, while they show; the editor's own otherwise.
     for (name, what) in [("ArrowDown", "down"), ("ArrowUp", "up"), ("Tab", "pick")] {
         bindings.push((name.into(), command(move |_, dispatch| dispatch.is_some() && menu_key(what))));
@@ -699,6 +737,26 @@ mod tests {
         let text = "first line\n\nthird";
         assert_eq!(outgoing(&doc_from_text(&schema, text)).text, text);
         assert!(outgoing(&doc_from_text(&schema, "")).is_empty());
+    }
+
+    #[test]
+    fn control_k_takes_the_rest_of_the_line_then_the_break_after_it() {
+        let schema = schema();
+        let doc = doc_from_text(&schema, "one two\nthree");
+        let mut state = EditorState::create(EditorStateConfig::new(schema).doc(doc)).unwrap();
+        // After "one": the paragraph's start (1), then three letters.
+        let mut tr = state.tr();
+        let at = TextSelection::create(tr.doc(), 4, None);
+        tr.set_selection(at);
+        state = state.apply(tr).unwrap();
+        for after in ["one\nthree", "onethree", "one"] {
+            let mut made = None;
+            assert!(kill_line(&state, Some(&mut |tr| made = Some(tr))));
+            state = state.apply(made.expect("an edit")).unwrap();
+            assert_eq!(outgoing(state.doc()).text, after);
+        }
+        // Nothing after the caret: nothing to do.
+        assert!(!kill_line(&state, None));
     }
 
     #[test]

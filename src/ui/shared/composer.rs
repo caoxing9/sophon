@@ -8,7 +8,7 @@ use nsh_base::{
     button,
     rich_editor::view::{EditorSession, PartStyles, RichEditorClasses, RichEditorPastedFiles, RichEditorStyles, rich_editor},
 };
-use nsh_core::{element::{FontWeight, StyleRefinement}, prelude::*};
+use nsh_core::{element::{FontWeight, Interactive as _, StyleRefinement}, prelude::*};
 use nsh_base::text_view::PartStyle;
 use crate::ui::kit::text;
 
@@ -258,6 +258,16 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         .child(chips::preview_layer(key))
         .child(glass_strong(view())
         .w_full()
+        // A press anywhere on the card that nothing else takes (its edges
+        // around the text, the bar between the controls and Send) is a
+        // press on the input: the text was a strip in the middle of what
+        // looks like one field.
+        .test_id("composer-card")
+        .on_press(move || {
+            if let Some(session) = doc.session() {
+                session.focus();
+            }
+        })
         // Close to the bar above it (where it runs, the branch): the two
         // read as one piece, not a pill under a card.
         .rounded(px(16.0))

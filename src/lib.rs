@@ -94,6 +94,9 @@ pub(crate) const LOADER_CORONA_LIGHT: ImageAsset = asset!("loader/corona-light@2
 /// The application's root component.
 #[component]
 pub fn App() -> impl IntoElement {
+    // Before any text input is made: they read it as they are.
+    #[cfg(target_os = "macos")]
+    platform::typing::keep_as_typed();
     store::load_prefs();
     start_connection();
     store::load_hosts();

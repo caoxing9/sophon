@@ -58,6 +58,71 @@ test("Backspace deletes a chip as one unit", async () => {
   expect(app.count("label:moon@2x.png")).toBe(0);
 });
 
+test("a new line in the composer is a line of its own to the caret's keys", async () => {
+  const app = await open(".", { width: 1100, height: 760, platform: "macos" });
+  await newWorkspace(app);
+  await app.type("id:composer", "one");
+  await app.keyboard.press("shift+enter");
+  await app.type("id:composer", "two");
+  // Control+A: the start of this line, not of the whole message.
+  await app.keyboard.press("ctrl+a");
+  await app.type("id:composer", ">");
+  expect(app.texts()).toContain("one");
+  expect(app.texts()).toContain(">two");
+  // Control+K: the rest of the line; once more, the break after it.
+  await app.keyboard.press("ctrl+k");
+  expect(app.texts()).toContain(">");
+  expect(app.texts()).not.toContain(">two");
+  await app.keyboard.press("cmd+up");
+  await app.keyboard.press("cmd+right");
+  await app.keyboard.press("ctrl+k");
+  expect(app.texts()).toContain("one>");
+});
+
+test("typing on an empty line above another stays on that line", async () => {
+  const app = await open(".", { width: 1100, height: 760, platform: "macos" });
+  await newWorkspace(app);
+  // An empty first line, a second with text, and the caret back up: it
+  // showed on the first line while what was typed went to the second.
+  await app.type("id:composer", "q");
+  await app.keyboard.press("backspace");
+  await app.keyboard.press("shift+enter");
+  await app.type("id:composer", "second");
+  await app.keyboard.press("up");
+  await app.type("id:composer", "first");
+  expect(app.texts()).toContain("first");
+  expect(app.texts()).toContain("second");
+  // And on an empty line between two.
+  await app.keyboard.press("cmd+down");
+  await app.keyboard.press("shift+enter");
+  await app.keyboard.press("shift+enter");
+  await app.type("id:composer", "fourth");
+  await app.keyboard.press("up");
+  await app.type("id:composer", "third");
+  for (const line of ["first", "second", "third", "fourth"]) expect(app.texts()).toContain(line);
+});
+
+test("Option+Enter and Control+J break the line as Shift+Enter does", async () => {
+  const app = await open(".", { width: 1100, height: 760, platform: "macos" });
+  await newWorkspace(app);
+  await app.type("id:composer", "first");
+  await app.keyboard.press("alt+enter");
+  await app.type("id:composer", "second");
+  await app.keyboard.press("ctrl+j");
+  await app.type("id:composer", "third");
+  for (const line of ["first", "second", "third"]) expect(app.texts()).toContain(line);
+});
+
+test("a press on the composer's card is a press on its text", async () => {
+  const app = await open(".", { width: 1100, height: 760 });
+  await newWorkspace(app);
+  // The card's middle: the bar between the controls and Send.
+  await app.press("id:composer-card");
+  await app.keyboard.press("h");
+  await app.keyboard.press("i");
+  expect(app.texts()).toContain("hi");
+});
+
 test("settings lists the agents with their add buttons", async () => {
   const app = await open(".", { width: 1100, height: 900 });
   await app.press("label:Settings >> nth=0");
