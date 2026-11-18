@@ -84,6 +84,17 @@ pub(crate) fn workspace(compact: bool) -> impl IntoElement {
         .child(crate::ui::shared::composer::usage_bar(true))
 }
 
+const HEADER_MIN_HEIGHT: f32 = 40.0;
+const HEADER_COMPACT_HEIGHT: f32 = 48.0;
+
+pub(super) fn header_inset(compact: bool) -> f32 {
+    if !compact && !MOBILE {
+        (HEADER_MIN_HEIGHT - nsh_core::element::desktop::title_bar().top.0).max(0.0)
+    } else {
+        HEADER_COMPACT_HEIGHT
+    }
+}
+
 fn header(compact: bool, explorer_shown: Memo<bool>) -> impl IntoElement {
     let ws = computed(store::current_workspace);
     let bar = computed(nsh_core::element::desktop::title_bar);
@@ -96,7 +107,7 @@ fn header(compact: bool, explorer_shown: Memo<bool>) -> impl IntoElement {
         .flex_row()
         .items_center()
         .gap(sp(S2))
-        .h(move || Length::from(px(if inline { bar.get().top.0.max(40.0) } else { 48.0 })))
+        .h(move || Length::from(px(if inline { bar.get().top.0.max(HEADER_MIN_HEIGHT) } else { HEADER_COMPACT_HEIGHT })))
         .mt(move || Length::from(px(if inline { -bar.get().top.0 } else { 0.0 })))
         .pl(move || {
             Length::from(px(if inline && store::sidebar_hidden() && bar.get().top.0 > 0.0 { bar.get().left.0 + 40.0 } else { S4 }))

@@ -5914,9 +5914,8 @@ pub(crate) fn archive_workspace(id: &str) {
     if screen() == Screen::Workspace(id.to_owned()) {
         go_home();
     }
-    let name = workspace(id).map(|w| w.name).unwrap_or_else(|| "Workspace".into());
     send(Command::ArchiveWorkspace(id.to_owned()));
-    notify_with(format!("“{name}” archived"), Some(NoticeAction::UndoArchive(id.to_owned())));
+    notify_with(t("Archived").to_owned(), Some(NoticeAction::UndoArchive(id.to_owned())));
 }
 
 pub(crate) fn pin_workspace(id: &str, pinned: bool) {
