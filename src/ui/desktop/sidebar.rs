@@ -31,24 +31,15 @@ pub(crate) fn sidebar() -> View {
         )
         // The projects under a heading of their own, adding one beside it
         // (monocode's sidebar): "New workspace" above is the only other +.
-        .child(
-            view()
-                .flex_row()
-                .items_center()
-                .mx(sp(S2))
-                .pl(sp(S2))
-                .pr(px(2.0))
-                .h(px(28.0))
-                .child(section_label(t("Projects")).flex_1())
-                .child(icon_btn(Icon::Plus, Sz::Sm, t("Add project"), || store::open_modal(store::Modal::AddProject))),
-        )
+        // The list puts it over the projects themselves, so under the
+        // pinned conversations when there are any.
         // A Mac that runs no agents of its own, connected nowhere yet: how to
         // reach one, in place of a list it has none of.
         .child(dynamic(|| {
             let elsewhere = !store::local_service() && store::current_host().is_none();
             Some(untracked(move || {
                 if elsewhere {
-                    connect_elsewhere().into_element()
+                    view().flex_1().child(projects::projects_heading(true)).child(connect_elsewhere()).into_element()
                 } else {
                     projects::project_list(true, || empty_list().into_element()).into_element()
                 }

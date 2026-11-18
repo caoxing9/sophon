@@ -1,0 +1,107 @@
+# Packages the Android app, by hand only: Actions → Android → Run workflow.
+# The branch is the one picked there ("Use workflow from"), or the branch,
+# tag or commit named in `ref` (to build one that does not have this file).
+# The APK is the run's artifact.
+#
+# Neither CI nor a release packages Android: from nothing NSH's Android
+# runtime takes half an hour to build, which every pull request and
+# every release waited for.
+name: Android
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag or commit to build (empty: the branch picked above)"
+        required: false
+        default: ""
+      abi:
+        description: "ABIs in the APK (arm64-v8a: phones, the quick build)"
+        type: choice
+        options: [arm64-v8a, all]
+        default: arm64-v8a
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ inputs.ref || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Signed with the release key when ANDROID_KEYSTORE (base64 of the
+  # keystore), ANDROID_KEYSTORE_PASSWORD and ANDROID_KEY_ALIAS are set: an
+  # update installs over the last only with the same key. Without them it
+  # is the debug key, which differs from machine to machine.
+  android:
+    name: Package Android
+    runs-on: macos-26
+    env:
+      HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android
+          cache-targets: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: NSH revision
+        id: nshrev
+        run: |
+          echo "rev=$(sed -n 's/^nsh-core = .*rev = \"\([0-9a-f]*\)\".*/\1/p' Cargo.toml | head -n 1)" >> "$GITHUB_OUTPUT"
+          echo "month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+      - name: The target directory
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: target-android-${{ runner.os }}-${{ steps.nshrev.outputs.month }}-${{ steps.nshrev.outputs.rev }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            target-android-${{ runner.os }}-${{ steps.nshrev.outputs.month }}-${{ steps.nshrev.outputs.rev }}-
+      # With NSH's Android runtime, built in its checkout (half an hour
+      # from nothing, seconds once it is there): kept per NSH revision,
+      # else CI's cache of the CLI alone.
+      - name: The nsh CLI and Android runtime cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/sophon-nsh
+          key: nsh-android-${{ runner.os }}-${{ steps.nshrev.outputs.rev }}
+          restore-keys: |
+            nsh-cli-${{ runner.os }}-${{ steps.nshrev.outputs.rev }}
+      - name: The nsh CLI (the commit Cargo.toml pins)
+        run: echo "$(scripts/install-nsh.sh)" >> "$GITHUB_PATH"
+      # The build number is the version code, which has to go up for an
+      # APK to install over the last: this workflow's runs, counted from
+      # above the releases' own (their run numbers, while they made APKs).
+      - name: Version
+        run: scripts/set-version.sh "$(scripts/version.sh)" "$((10000 + ${{ github.run_number }}))"
+      - name: Package
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          NSH_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ABI: ${{ inputs.abi }}
+        run: |
+          set --
+          [ "$ABI" = all ] || set -- --abi "$ABI"
+          if [ "$HAS_KEYSTORE" = true ]; then
+            echo "$KEYSTORE" | base64 --decode > "$RUNNER_TEMP/release.jks"
+            set -- "$@" --keystore "$RUNNER_TEMP/release.jks" --key-alias "$KEY_ALIAS"
+          fi
+          scripts/android-package.sh "$@"
+          # Named for what it was built from: the version and the commit.
+          mv "$(ls .nsh/out/*.apk | head -n 1)" ".nsh/out/Sophon-$(scripts/version.sh)-$(git rev-parse --short HEAD)-android.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sophon-android
+          path: .nsh/out/*.apk

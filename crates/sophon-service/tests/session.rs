@@ -1775,3 +1775,70 @@ async fn live_claude_goes_back_to_before_a_message() {
         .to_owned();
     assert!(last.contains('1') && !last.contains('2'), "{last}");
 }
+
+/// A phone lists a project by its workspaces and starts a conversation in
+/// one: a folder added as a project has its own from the start, and one
+/// added before that was so gets it when the service next starts.
+#[tokio::test]
+async fn a_project_added_has_its_folder_s_workspace() {
+    let service = Service(tempfile::tempdir().unwrap());
+    let added = service.0.path().join("added");
+    let earlier = service.0.path().join("earlier");
+    fs::create_dir_all(&added).unwrap();
+    fs::create_dir_all(&earlier).unwrap();
+    let earlier = fs::canonicalize(&earlier).unwrap();
+    // As the service kept a project added before: no workspace with it.
+    fs::write(
+        service.0.path().join("state.json"),
+        json!({"projects":{"p-earlier":{"projectId":"p-earlier","projectRootPath":earlier,
+            "projectDisplayName":"earlier","projectKind":"directory"}},"workspaces":{},"agents":{}})
+        .to_string(),
+    )
+    .unwrap();
+    service.cli("start");
+    let mut socket = service.connect(true).await;
+    let folders = |reply: Value| -> Vec<String> {
+        let mut list: Vec<String> = reply["payload"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|workspace| workspace["name"].as_str().unwrap().to_owned())
+            .collect();
+        list.sort();
+        list
+    };
+    assert_eq!(
+        folders(ask(&mut socket, json!({"type":"fetch_workspaces_request"})).await),
+        ["earlier"]
+    );
+    let reply = ask(
+        &mut socket,
+        json!({"type":"project.add.request","cwd":added}),
+    )
+    .await;
+    assert_eq!(reply["type"], "project.add.response", "{reply}");
+    let project = reply["payload"]["project"]["projectId"].clone();
+    let listed = ask(&mut socket, json!({"type":"fetch_workspaces_request"})).await;
+    let workspace = listed["payload"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|workspace| workspace["projectId"] == project)
+        .expect("the added folder's workspace")
+        .clone();
+    assert_eq!(
+        workspace["workspaceDirectory"],
+        reply["payload"]["project"]["projectRootPath"]
+    );
+    // Added again: the same project, the same workspace.
+    ask(
+        &mut socket,
+        json!({"type":"project.add.request","cwd":added}),
+    )
+    .await;
+    assert_eq!(
+        folders(ask(&mut socket, json!({"type":"fetch_workspaces_request"})).await),
+        ["added", "earlier"]
+    );
+    service.cli("stop");
+}

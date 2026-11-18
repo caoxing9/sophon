@@ -29,30 +29,11 @@ fn row_status(status: impl Fn() -> Status + 'static) -> impl IntoElement {
         .justify_center()
         .child(dynamic(move || {
             let current = status.get();
-            let animate = !MOBILE && current == Status::Running && !reduce_motion();
             Some(untracked(move || {
                 if MOBILE || current != Status::Running {
                     return status_dot(move || current).into_element();
                 }
-                let ring = view()
-                    .w(px(11.0))
-                    .h(px(11.0))
-                    .rounded(px(R_FULL))
-                    .border_1()
-                    .border_color(tint(DOT_RUNNING, 0.35))
-                    .border_t_color(DOT_RUNNING)
-                    .label(current.label());
-                if !animate {
-                    return ring.into_element();
-                }
-                let angle = animated_value(0.0);
-                Animation::sequence([
-                    Animation::timing(&angle, 360.0, nsh_core::element::Timing::new(1400.0, Easing::Linear)),
-                    Animation::timing(&angle, 0.0, nsh_core::element::Timing::new(0.0, Easing::Linear)),
-                ])
-                .looped(None)
-                .start();
-                ring.bind_transform(nsh_core::TransformKind::Rotate, &angle).into_element()
+                spinner_ring(11.0, DOT_RUNNING).label(current.label()).into_element()
             }))
         }))
 }
@@ -69,10 +50,13 @@ pub(crate) fn project_list(actions: bool, empty: impl Fn() -> AnyElement + 'stat
         let none = none.get();
         Some(untracked(|| {
             if none {
-                return empty();
+                return view().flex_1().child(projects_heading(actions)).child(empty()).into_element();
             }
             // Two sections, as Pinned and Projects read in the sidebar: the
             // pinned first (when there are any), each under its heading.
+            // "Projects" is over the projects, not over both: above the
+            // pinned it named what it was not next to, and the projects
+            // began under them with no name at all.
             let pinned = move || groups.with(|g| g.iter().filter(|g| g.project.is_none()).cloned().collect::<Vec<_>>());
             let projects = move || groups.with(|g| g.iter().filter(|g| g.project.is_some()).cloned().collect::<Vec<_>>());
             scroll()
@@ -81,11 +65,26 @@ pub(crate) fn project_list(actions: bool, empty: impl Fn() -> AnyElement + 'stat
                     view()
                         .pb(sp(S2))
                         .child(each(pinned, store::Group::key, move |g, _| group(g, actions)))
+                        .child(projects_heading(actions))
                         .child(each(projects, store::Group::key, move |g, _| group(g, actions))),
                 )
                 .into_element()
         }))
     }))
+}
+
+/// The projects' heading: their name, and "Add project" (the desktop's)
+/// at its right, where the rows' actions are.
+pub(crate) fn projects_heading(actions: bool) -> View {
+    view()
+        .flex_row()
+        .items_center()
+        .mx(sp(S2))
+        .pl(sp(S2))
+        .pr(px(2.0))
+        .h(px(28.0))
+        .child(section_label(t("Projects")).flex_1())
+        .when(actions && !MOBILE, |v| v.child(icon_btn(Icon::Plus, Sz::Sm, t("Add project"), || store::open_modal(store::Modal::AddProject))))
 }
 
 fn group(g: ReadSignal<store::Group>, actions: bool) -> AnyElement {
@@ -169,9 +168,20 @@ fn workspace_entry(w: ReadSignal<crate::daemon::Workspace>, actions: bool) -> im
     // (a folder may hold dozens of imported sessions).
     let limit = signal(CONVERSATIONS_SHOWN);
     let more = computed(move || conversations.with(|c| c.len()).saturating_sub(limit.get()));
+    // The project's own folder with no conversation in it (every project
+    // has it from the moment it is added, for the phone to start one in)
+    // says nothing its project's row does not, whose + starts the first:
+    // no row, unless it is the one open.
+    let bare = computed(move || {
+        let w = w.get();
+        !w.pinned
+            && w.directory.trim_end_matches('/') == w.project_root.trim_end_matches('/')
+            && conversations.with(Vec::is_empty)
+            && store::screen() != Screen::Workspace(w.id)
+    });
     view().child(dynamic(move || {
         let several = several.get();
-        if all_pinned.get() {
+        if all_pinned.get() || bare.get() {
             return None;
         }
         Some(untracked(move || {

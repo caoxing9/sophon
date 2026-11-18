@@ -1652,9 +1652,6 @@ const VERBS_EN: [&str; 16] = [
 ];
 const VERBS_ZH: [&str; 12] = ["思考中", "琢磨中", "酝酿中", "发酵中", "推敲中", "构思中", "打磨中", "冥想中", "捣鼓中", "盘算中", "斟酌中", "沉吟中"];
 
-/// The star's frames, as Claude Code's spinner turns them.
-const STAR: [&str; 6] = ["·", "✢", "✳", "✶", "✻", "✽"];
-
 thread_local! {
     /// When each agent's running turn was first seen running here.
     static TURN_STARTED: std::cell::RefCell<std::collections::HashMap<String, std::time::Instant>> =
@@ -1679,7 +1676,9 @@ fn short_time(secs: u64) -> String {
 }
 
 /// While the agent works, at the conversation's foot, as Claude Code's
-/// status line: a turning star, the turn's word, how long it has run and
+/// status line: a turning ring (the sidebar's, for a conversation that
+/// runs; Claude Code's star was a letter of whatever font had it, small
+/// and off its place), the turn's word, how long it has run and
 /// about how many tokens it has written so far (its messages, thinking and
 /// calls since the user's message, counted here: the service says the
 /// turn's tokens only at its end).
@@ -1725,15 +1724,14 @@ fn thinking(running: Memo<bool>) -> impl IntoElement {
                 h.finish() as usize
             };
             let verb = if crate::i18n::is_zh() { VERBS_ZH[seed % VERBS_ZH.len()] } else { VERBS_EN[seed % VERBS_EN.len()] };
-            // The star turns, and the time goes on, from one tick.
+            // The time goes on with each tick.
             let tick = signal(0u64);
             spawn(async move {
                 loop {
-                    nsh_core::element::timer(std::time::Duration::from_millis(120)).await;
+                    nsh_core::element::timer(std::time::Duration::from_secs(1)).await;
                     tick.update(|t| *t += 1);
                 }
             });
-            let star = move || STAR[(tick.get() as usize / 2) % STAR.len()].to_owned();
             let detail = move || {
                 tick.get();
                 let secs = started.elapsed().as_secs();
@@ -1754,7 +1752,7 @@ fn thinking(running: Memo<bool>) -> impl IntoElement {
                 .flex_row()
                 .items_center()
                 .gap(sp(S2))
-                .child(text(star).text_size(tx(TEXT_BASE)).font_family(mono_font).text_color(ACCENT).w(px(14.0)))
+                .child(spinner_ring(12.0, ACCENT))
                 .child(text(format!("{verb}…")).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(ACCENT))
                 .child(text(detail).text_size(tx(TEXT_SM)).text_color(FG_FAINT))
                 .into_element()
