@@ -277,31 +277,6 @@ pub(crate) fn status_dot(status: impl Fn() -> Status + 'static) -> View {
     view().w(px(7.0)).h(px(7.0)).rounded(px(R_FULL)).flex_shrink_0().bg(move || status().dot())
 }
 
-/// A ring that turns while something runs: `size` points across, faint
-/// all round and `color` at its top. It stands still for those who asked
-/// the system for less motion.
-pub(crate) fn spinner_ring(size: f32, color: AdaptiveColor) -> View {
-    let ring = view()
-        .w(px(size))
-        .h(px(size))
-        .flex_shrink_0()
-        .rounded(px(R_FULL))
-        .border_1()
-        .border_color(tint(color, 0.35))
-        .border_t_color(color);
-    if reduce_motion() {
-        return ring;
-    }
-    let angle = animated_value(0.0);
-    Animation::sequence([
-        Animation::timing(&angle, 360.0, nsh_core::element::Timing::new(1400.0, Easing::Linear)),
-        Animation::timing(&angle, 0.0, nsh_core::element::Timing::new(0.0, Easing::Linear)),
-    ])
-    .looped(None)
-    .start();
-    ring.bind_transform(nsh_core::TransformKind::Rotate, &angle)
-}
-
 /// A small pill with a tinted fill.
 pub(crate) fn badge(label: impl IntoReactive<SharedString>, color: AdaptiveColor) -> View {
     view()

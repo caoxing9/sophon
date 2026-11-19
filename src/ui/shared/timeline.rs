@@ -1676,9 +1676,9 @@ fn short_time(secs: u64) -> String {
 }
 
 /// While the agent works, at the conversation's foot, as Claude Code's
-/// status line: a turning ring (the sidebar's, for a conversation that
-/// runs; Claude Code's star was a letter of whatever font had it, small
-/// and off its place), the turn's word, how long it has run and
+/// status line: the app's loading mark (the eclipse, as the sidebar has it
+/// for a conversation that runs; Claude Code's star was a letter of
+/// whatever font had it, small and off its place), the turn's word, how long it has run and
 /// about how many tokens it has written so far (its messages, thinking and
 /// calls since the user's message, counted here: the service says the
 /// turn's tokens only at its end).
@@ -1752,7 +1752,7 @@ fn thinking(running: Memo<bool>) -> impl IntoElement {
                 .flex_row()
                 .items_center()
                 .gap(sp(S2))
-                .child(spinner_ring(12.0, ACCENT))
+                .child(eclipse(14.0))
                 .child(text(format!("{verb}…")).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(ACCENT))
                 .child(text(detail).text_size(tx(TEXT_SM)).text_color(FG_FAINT))
                 .into_element()

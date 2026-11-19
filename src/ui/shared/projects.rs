@@ -33,7 +33,9 @@ fn row_status(status: impl Fn() -> Status + 'static) -> impl IntoElement {
                 if MOBILE || current != Status::Running {
                     return status_dot(move || current).into_element();
                 }
-                spinner_ring(11.0, DOT_RUNNING).label(current.label()).into_element()
+                // Running: the app's own loading mark, as everywhere it
+                // waits (a ring of its own here was one more way to say so).
+                eclipse(13.0).label(current.label()).into_element()
             }))
         }))
 }
