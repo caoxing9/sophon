@@ -76,7 +76,6 @@ fn body() -> impl IntoElement {
         // Over the keyboard while it shows: the composer rides just above
         // it; the home indicator's room otherwise.
         .pb(move || Length::from(px(keyboard_height().0.max(safe_area().bottom.0))))
-        .child(crate::ui::shared::conn_banner::conn_banner())
         .child(dynamic(move || {
             let p = pane.get();
             Some(untracked(move || match p {
@@ -85,6 +84,8 @@ fn body() -> impl IntoElement {
                 Pane::None => view().flex_1().into_element(),
             }))
         }))
+        // Last, so over the conversation: at its top.
+        .child(crate::ui::shared::conn_banner::conn_banner(6.0))
 }
 
 /// The workspace's agents, the open one checked, and a new one: the
