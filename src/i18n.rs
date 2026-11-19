@@ -254,6 +254,8 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Use credit", "确认使用"),
     ("Use", "使用"),
     ("Resets: {}", "重置额度：{}"),
+    ("Limit resets", "额度重置"),
+    ("Claude Code shows how many are left and asks before using one", "由 Claude Code 显示剩余次数，使用前会先确认"),
     ("expires {}", "{} 过期"),
     ("{} limits reset", "{} 额度已重置"),
     ("{} has nothing to reset right now; no credit was used", "{} 当前没有需要重置的额度，未消耗次数"),

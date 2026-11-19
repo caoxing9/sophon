@@ -357,7 +357,53 @@ fn provider_card(p: &ProviderUsage, history: &limits::History) -> View {
         let points = history.windows.get(&store::limit_key(p, w)).map(Vec::as_slice).unwrap_or_default();
         c = c.child(window_row(w, points));
     }
-    c.child(resets_row(p.id.clone()))
+    // Claude Code's own account: its banked resets are Claude Code's to
+    // show and use. (An account added beside it signs in from a folder of
+    // its own, which a plain `claude` in a terminal would not be.)
+    let claude = p.id == "claude";
+    c.child(resets_row(p.id.clone())).when(claude, |c| c.child(claude_resets_row()))
+}
+
+/// Claude's limit resets: no count here (Anthropic says it to Claude Code
+/// alone), a way to Claude Code's `/limit-reset`, which shows how many are
+/// left and asks before it uses one.
+fn claude_resets_row() -> View {
+    view()
+        .flex_row()
+        .items_center()
+        .gap(sp(S2))
+        .pt(sp(S2))
+        .border_t_1()
+        .border_color(tint(BORDER, 0.6))
+        .child(icon(Icon::Ticket, 14.0).text_color(FG_MUTED))
+        .child(
+            view()
+                .flex_1()
+                .min_w(px(0.0))
+                .child(text(t("Limit resets")).text_size(tx(TEXT_SM)).number_of_lines(1))
+                .child(
+                    text(t("Claude Code shows how many are left and asks before using one"))
+                        .text_size(tx(TEXT_XS))
+                        .text_color(FG_FAINT),
+                ),
+        )
+        .child(btn(t("Open"), Variant::Outline, Sz::Sm, None, open_limit_reset))
+}
+
+/// Opens Claude Code's `/limit-reset`: a Terminal window on this Mac, a
+/// terminal of the service on another computer; on the phone, said.
+fn open_limit_reset() {
+    let command = crate::slash::LIMIT_RESET;
+    if MOBILE {
+        store::notify(tf("Run “claude /{}” in a terminal on the computer", &[command]));
+    } else if cfg!(target_os = "macos") && store::on_this_mac() {
+        // In the open workspace's folder, else the home folder: the
+        // command is about the account, not a project.
+        let dir = store::current_workspace().map(|w| w.directory).unwrap_or_else(store::host_home);
+        store::run_in_terminal(&crate::slash::terminal_command(&dir, command));
+    } else {
+        store::run_in_workspace_terminal(crate::slash::terminal_line(command));
+    }
 }
 
 /// The provider's banked reset credits, by kind, each with "Use" (which
