@@ -34,7 +34,15 @@ pub(crate) enum Native {
 }
 
 /// The commands that open Claude Code's own screens, done in a terminal.
-const IN_TERMINAL: [&str; 8] = ["agents", "hooks", "plugin", "plugins", "login", "logout", "doctor", "install-github-app"];
+/// `limit-reset` among them: the resets a plan banks are Claude Code's to
+/// show and to use (Anthropic answers nobody else about them), and it
+/// asks before it uses one.
+const IN_TERMINAL: [&str; 9] =
+    ["agents", "hooks", "plugin", "plugins", "login", "logout", "doctor", "install-github-app", LIMIT_RESET];
+
+/// Claude Code's command that shows a plan's banked limit resets and uses
+/// one.
+pub(crate) const LIMIT_RESET: &str = "limit-reset";
 
 /// The commands with no place in Sophon (its own terminal, editor and
 /// window take care of them).
@@ -100,6 +108,8 @@ mod tests {
         assert_eq!(native("/model"), Some(Native::Model));
         assert_eq!(native("  /MCP  "), Some(Native::Mcp));
         assert_eq!(native("/hooks"), Some(Native::Terminal("hooks")));
+        assert_eq!(native("/limit-reset"), Some(Native::Terminal(LIMIT_RESET)));
+        assert_eq!(terminal_line(LIMIT_RESET), "claude /limit-reset\r");
         assert_eq!(native("/clear"), Some(Native::Clear));
         assert_eq!(native("/permissions"), Some(Native::Permissions));
         assert_eq!(native("/memory"), Some(Native::Memory));
