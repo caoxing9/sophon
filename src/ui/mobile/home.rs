@@ -78,9 +78,10 @@ pub(crate) fn home() -> impl IntoElement {
                                 store::open_modal(store::Modal::ReportIssue)
                             })),
                         ))
-                        .child(crate::ui::shared::conn_banner::conn_banner())
                         .child(search_field(query, t("Search conversations")))
                         .child(chats(query))
+                        // Last, so over the rest: under the title's row.
+                        .child(crate::ui::shared::conn_banner::conn_banner(HEADER_HEIGHT))
                         .into_element(),
                     HomeTab::Projects => view()
                         .flex_1()
@@ -94,15 +95,20 @@ pub(crate) fn home() -> impl IntoElement {
                                 ])
                             })),
                         ))
-                        .child(crate::ui::shared::conn_banner::conn_banner())
                         .child(search_field(query, t("Search projects")))
                         .child(projects(query, false))
+                        // Last, so over the rest: under the title's row.
+                        .child(crate::ui::shared::conn_banner::conn_banner(HEADER_HEIGHT))
                         .into_element(),
                 }
             }))
         }))
         .child(foot(tab))
 }
+
+/// How tall the large title's row is (its 30-point title between its
+/// paddings): where what lies over the screen under it starts.
+const HEADER_HEIGHT: f32 = 56.0;
 
 /// iOS's large title, with what the screen offers beside it.
 fn large_header(title: &'static str, trailing: impl IntoElement) -> View {

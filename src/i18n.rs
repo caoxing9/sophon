@@ -561,7 +561,8 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Unavailable", "不可用"),
     ("Not available", "不可用"),
     ("Starting…", "正在启动…"),
-    ("Connecting…", "正在连接…"),
+    ("Connecting…", "连接中…"),
+    ("Can't reach your computer", "连不上电脑"),
     ("Draft", "草稿"),
     // Schedules
     ("New schedule", "新建定时任务"),

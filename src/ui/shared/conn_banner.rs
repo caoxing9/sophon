@@ -1,13 +1,13 @@
-//! The connection's strip, under the phone's headers: what the attempt is
-//! doing ("Connecting through the relay… · 4 s"), when the next one starts
-//! after a failure (with Retry now), and "Connected · over the local
-//! network" for a moment once it is back. An attempt that ends within
-//! `store::CONN_QUIET_MS` shows nothing.
+//! The connection's word, over the phone's screens as a notice is: a
+//! small pill that takes no room of its own ("Connecting…"; "Can't reach
+//! your computer" with Retry after a failure; "Connected" for a moment
+//! once it is back). An attempt that ends within `store::CONN_QUIET_MS`
+//! shows nothing.
 
 use nsh_core::prelude::*;
 
 use crate::daemon::connection::{Stage, Via};
-use crate::i18n::{t, tf};
+use crate::i18n::t;
 use crate::store::{self, Conn, ConnProgress};
 use crate::ui::kit::text;
 use crate::ui::kit::*;
@@ -47,37 +47,25 @@ pub(crate) fn banner_of(conn: &Conn, p: &ConnProgress, now: i64, online: bool) -
     }
 }
 
-/// What it says, in words.
+/// What it says, in a word or two: which step the attempt is at and how
+/// long it has taken were a line across the screen that told nobody what
+/// to do.
 pub(crate) fn words(b: &Banner) -> String {
     match b {
-        Banner::Working { stage, secs } => {
-            let step = match stage {
-                Some(Stage::Finding) => t("Looking for your computer on this network…"),
-                Some(Stage::Reaching(Via::Lan)) => t("Connecting over the local network…"),
-                Some(Stage::Reaching(Via::Relay)) => t("Connecting through the relay…"),
-                Some(Stage::Securing(_)) => t("Securing the connection…"),
-                Some(Stage::Greeting(_)) => t("Waiting for your computer to answer…"),
-                _ => t("Connecting…"),
-            };
-            match secs {
-                Some(s) => tf("{} · {} s", &[step, &s.to_string()]),
-                None => step.to_owned(),
-            }
-        }
-        Banner::Down { retry_in: Some(s) } => tf("Can't reach your computer · retrying in {} s", &[&s.to_string()]),
-        Banner::Down { retry_in: None } => t("Can't reach your computer · retrying…").to_owned(),
-        Banner::Back(Some(Via::Lan)) => t("Connected · over the local network").to_owned(),
-        Banner::Back(Some(Via::Relay)) => t("Connected · through the relay").to_owned(),
+        Banner::Working { .. } => t("Connecting…").to_owned(),
+        Banner::Down { .. } => t("Can't reach your computer").to_owned(),
         Banner::Back(_) => t("Connected").to_owned(),
-        Banner::NoNetwork => t("This device is offline · reconnects when it is back").to_owned(),
+        Banner::NoNetwork => t("Offline").to_owned(),
     }
 }
 
-/// The strip itself: nothing while connected and quiet.
-pub(crate) fn conn_banner() -> impl IntoElement {
+/// The pill itself, `top` points down the screen it is the last child of
+/// (it lies over what is there and takes no room): nothing while
+/// connected and quiet.
+pub(crate) fn conn_banner(top: f32) -> impl IntoElement {
     let banner = computed(|| banner_of(&store::conn(), &store::conn_progress(), store::conn_clock().max(store::now_ms()), store::network_online()));
-    // Its kind, not its words, decides what is built: the words change
-    // every second while the strip stays.
+    // Its kind decides what is built: the clock turns every second while
+    // the pill stays as it is.
     let kind = computed(move || {
         banner.with(|b| match b {
             None => 0u8,
@@ -87,54 +75,49 @@ pub(crate) fn conn_banner() -> impl IntoElement {
             Some(Banner::NoNetwork) => 4,
         })
     });
-    let said = move || banner.with(|b| b.as_ref().map(words).unwrap_or_default());
     view().child(dynamic(move || {
         let k = kind.get();
+        if k == 0 {
+            return None;
+        }
         Some(untracked(move || {
-            let strip = |tone: AdaptiveColor| {
-                view()
-                    .flex_row()
-                    .items_center()
-                    .gap(sp(S2))
-                    .min_h(px(32.0))
-                    .px(sp(S3))
-                    .mx(sp(S3))
-                    .mt(sp(S1))
-                    .mb(sp(S1))
-                    .rounded(px(R_FULL))
-                    .bg(tint(tone, 0.12))
-            };
-            let words = |tone: AdaptiveColor| text(said).text_size(tx(TEXT_SM)).text_color(tone).number_of_lines(1).flex_1();
-            match k {
-                1 => strip(FG_MUTED).child(eclipse(14.0)).child(words(FG_MUTED)).into_element(),
-                2 => strip(WARNING)
-                    .child(icon(Icon::CircleAlert, 14.0).text_color(WARNING))
-                    .child(words(WARNING))
-                    .child(
-                        nsh_base::button()
-                            .on_press(store::retry_now)
-                            .accessibility_label(t("Retry now"))
-                            .px(sp(S2))
-                            .h(px(26.0))
-                            .rounded(px(R_FULL))
-                            .bg(tint(WARNING, 0.18))
-                            .items_center()
-                            .justify_center()
-                            .active(|s| s.opacity(0.6))
-                            .child(text(t("Retry now")).text_size(tx(TEXT_SM)).font_weight(FontWeight(600)).text_color(WARNING)),
-                    )
-                    .into_element(),
-                3 => {
-                    let glyph = match store::conn_progress().via {
-                        Some(Via::Lan) => Icon::Wifi,
-                        Some(Via::Relay) => Icon::Cloud,
-                        _ => Icon::Check,
-                    };
-                    strip(SUCCESS).child(icon(glyph, 14.0).text_color(SUCCESS)).child(words(SUCCESS)).into_element()
-                }
-                4 => strip(FG_MUTED).child(icon(Icon::CircleAlert, 14.0).text_color(FG_MUTED)).child(words(FG_MUTED)).into_element(),
-                _ => view().into_element(),
+            let said = banner.with_untracked(|b| b.as_ref().map(words).unwrap_or_default());
+            let mut pill = view()
+                .flex_row()
+                .items_center()
+                .gap(sp(S2))
+                .h(px(30.0))
+                .px(sp(S3))
+                .rounded(px(R_FULL))
+                .bg(FG)
+                .shadow_md()
+                .child(text(said).text_size(tx(TEXT_SM)).text_color(SURFACE0).number_of_lines(1));
+            // After a failure the next attempt comes by itself; the press
+            // makes it now.
+            if k == 2 {
+                pill = pill.pr(sp(S1)).child(
+                    nsh_base::button()
+                        .on_press(store::retry_now)
+                        .accessibility_label(t("Retry now"))
+                        .px(sp(S2))
+                        .h(px(22.0))
+                        .rounded(px(R_FULL))
+                        .bg(tint(SURFACE0, 0.18))
+                        .items_center()
+                        .justify_center()
+                        .active(|s| s.opacity(0.6))
+                        .child(text(t("Retry")).text_size(tx(TEXT_SM)).font_weight(FontWeight(600)).text_color(SURFACE0)),
+                );
             }
+            view()
+                .absolute()
+                .top(px(top))
+                .left(px(0.0))
+                .right(px(0.0))
+                .items_center()
+                // Only the pill takes a touch: what it lies over stays in reach.
+                .pointer_events(PointerEvents::BoxNone)
+                .child(pill)
         }))
     }))
 }
@@ -154,6 +137,16 @@ mod tests {
         assert_eq!(banner_of(&conn, &progress(reaching, Some(1000)), 1000 + store::CONN_QUIET_MS - 1, true), None);
         assert_eq!(banner_of(&conn, &progress(reaching, Some(1000)), 1000 + store::CONN_QUIET_MS, true), Some(Banner::Working { stage: reaching, secs: None }));
         assert_eq!(banner_of(&conn, &progress(reaching, Some(1000)), 1000 + 4200, true), Some(Banner::Working { stage: reaching, secs: Some(4) }));
+    }
+
+    #[test]
+    fn what_it_says_is_a_word_or_two_whatever_the_step() {
+        let securing = Banner::Working { stage: Some(Stage::Securing(Via::Relay)), secs: Some(6) };
+        assert_eq!(words(&securing), t("Connecting…"));
+        assert_eq!(words(&Banner::Working { stage: None, secs: None }), t("Connecting…"));
+        // No step, no count of seconds.
+        assert!(!words(&securing).contains('6'));
+        assert!(!words(&Banner::Down { retry_in: Some(9) }).contains('9'));
     }
 
     #[test]
