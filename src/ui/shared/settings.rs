@@ -10,7 +10,7 @@ use nsh_core::{
 use crate::ui::kit::text;
 
 use crate::ui::kit::*;
-use crate::store::{self, Conn, SendBehavior};
+use crate::store::{self, Conn, DefaultModel, SendBehavior};
 
 /// Theme and language.
 pub(crate) fn appearance_card() -> View {
@@ -300,6 +300,78 @@ pub(crate) fn host_card() -> View {
             .text_color(FG_MUTED),
             false,
         ))
+}
+
+/// What a new conversation starts with: a model of one of the agents and,
+/// when it has levels, how hard it thinks. "Last used" leaves it as it was:
+/// the model the previous conversation was started with.
+pub(crate) fn default_model_card() -> View {
+    // The model chosen, as the agents offer it now.
+    let chosen = computed(|| {
+        let d = store::default_model()?;
+        let model = store::provider(&d.provider).and_then(|p| store::offered_models(&p).into_iter().find(|m| m.id == d.model).map(|m| (p.label.clone(), m)));
+        Some((d, model))
+    });
+    let label = computed(move || match chosen.get() {
+        None => t("Last used").to_owned(),
+        Some((_, Some((agent, m)))) => format!("{} · {agent}", m.name),
+        Some((d, None)) => d.model,
+    });
+    card()
+        .child(row(
+            t("Default model"),
+            t("What a new conversation starts with. It can still be changed in the conversation"),
+            dropdown(picker_trigger(Some(Icon::Cpu), move || label.get()))
+                .align(nsh_core::overlay::Align::End)
+                .child(dynamic(move || {
+                    let current = store::default_model();
+                    let providers: Vec<_> = store::providers().into_iter().filter(|p| p.available()).collect();
+                    Some(untracked(move || {
+                        let mut list = view().child(menu_row(
+                            t("Last used"),
+                            None,
+                            Some(t("The model the last conversation was started with").into()),
+                            current.is_none(),
+                            || store::set_default_model(None),
+                        ));
+                        for p in &providers {
+                            let models = store::offered_models(p);
+                            if models.is_empty() {
+                                continue;
+                            }
+                            list = list.child(menu_divider()).child(menu_heading(p.label.clone()));
+                            for m in models {
+                                let (pid, mid) = (p.id.clone(), m.id.clone());
+                                let checked = current.as_ref().is_some_and(|d| d.provider == pid && d.model == mid);
+                                // The level it had, where the new model has it too.
+                                let kept = current.as_ref().and_then(|d| d.thinking.clone());
+                                list = list.child(menu_row(m.name.clone(), None, None, checked, move || {
+                                    store::set_default_model(Some(DefaultModel { provider: pid.clone(), model: mid.clone(), thinking: kept.clone() }))
+                                }));
+                            }
+                        }
+                        menu_scroll(420.0, list).into_element()
+                    }))
+                })),
+            true,
+        ))
+        // How hard it thinks, when the model chosen has levels.
+        .child(dynamic(move || {
+            let (d, Some((_, model))) = chosen.get()? else { return None };
+            if model.levels.is_empty() {
+                return None;
+            }
+            Some(untracked(move || {
+                let now = d.thinking.clone().filter(|t| model.levels.iter().any(|(id, _)| id == t)).or(model.default_level.clone());
+                let shown = model.levels.iter().find(|(id, _)| Some(id) == now.as_ref()).map(|(_, l)| l.clone()).unwrap_or_default();
+                let mut menu = dropdown(picker_trigger(Some(Icon::Brain), shown)).align(nsh_core::overlay::Align::End);
+                for (id, level) in &model.levels {
+                    let (on, pick) = (Some(id) == now.as_ref(), DefaultModel { thinking: Some(id.clone()), ..d.clone() });
+                    menu = menu.child(menu_row(level.clone(), None, None, on, move || store::set_default_model(Some(pick.clone()))));
+                }
+                row(t("Reasoning"), t("How hard the default model thinks"), menu, false)
+            }))
+        }))
 }
 
 /// The model the service names chats and branches with. Default leaves the

@@ -62,6 +62,7 @@ pub(crate) fn settings(compact: bool) -> impl IntoElement {
                 .child(section(t("Devices"), devices_card()))
                 .child(section(t("Host behavior"), behavior_card()))
                 .child(section(t("Coding agents"), crate::ui::shared::agents::agents_card(true)))
+                .child(section(t("New conversations"), crate::ui::shared::settings::default_model_card()))
                 .child(section(t("Text generation"), text_generation_card()))
                 .child(section(
                     t("Diagnostics"),
