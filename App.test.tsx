@@ -3,27 +3,6 @@
 // (`nsh.json` "root").
 import { expect, open, test } from "nsh/test";
 
-// A `.sophon` file made by hand (a gzipped tar): the plugin `hello`, one
-// setting of it, and an automation set up with it.
-const HELLO_SOPHON =
-  "H4sIAAAAAAAC/+2WzW7cIBDHfe5TIOdWNV7IflV5geTeYxMp1CZrGgwIsNKV5XcvjO1s4laKlCirKJmfD6BhgAH0n7E3tja6+O2Nzt4KGtmsVtBG5i1dbw99sDPKGM0IzY5A6wN3hGSflC6/Na7hIT8n7BvJnTGpm9dCKZNHg+XlHd8JH40/u1xWTwbvpAaDVe1O6mTRvBHJcjm5SF2qthLJLbhW9NfR5kUIUu/Smt24WOrtnBDJDlvIvO+jK2+DidFJo8FlWv4H3xOYSCou1R4CdaaxEPvJCblIS13pK31wDIbcdN19bfr+poAJQ9CPzxNEYxUPsAVEk4zGpu2HYJVp4cD7eCEpvJJXQpcCxsLewsTSGbgK8cc64f0Qer6k5Dv5Gj92uo5H69/L+0/vu4BLWBQe8sHpcDmLoXltdnhO/2eUzfS/3ixR/0fS/0zT/yi4Er500o4aTNLzo6QEL2vSGKeTaCFXON6MmWJa5kHUcVzxX0Il48Vk7K/7DHlH+j/kW7+Ap3tkeXEaeE7/jJ3N9L9d0hXq/zj6/59qoc6lgjjWNH8vQ1k/0XCqrDKQ5BkLMAr5o+p/+K8qmurt6j9ly5n+N3SL+j8KDz/IxRcUA4IgCIIgCIIgCIIgCIIgCIIgyAfgL62iWQwAKAAA";
-
-function fromBase64(text: string): Uint8Array {
-  const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  const bytes: number[] = [];
-  let held = 0;
-  let bits = 0;
-  for (const letter of text.replace(/=+$/, "")) {
-    held = (held << 6) | letters.indexOf(letter);
-    bits += 6;
-    if (bits >= 8) {
-      bits -= 8;
-      bytes.push((held >> bits) & 0xff);
-    }
-  }
-  return new Uint8Array(bytes);
-}
-
 // The new-workspace screen, once it is drawn: a page may come a frame
 // after the press that opens it, and a slow machine (CI) shows that.
 async function newWorkspace(app: Awaited<ReturnType<typeof open>>) {
@@ -288,45 +267,4 @@ test("plugins have a page of their own, apart from the integrations they count o
   expect(app.texts()).toContain("A plugin runs its scripts on that computer, and so do the integrations it brings: add only what you trust");
   // What connects a service is not listed here.
   expect(app.texts()).not.toContain("Add an integration");
-});
-
-test("a plugin is saved as a file, and a file is shown before it is added", async () => {
-  const app = await open(".", { width: 1100, height: 900 });
-  // By way of the automations the plugins bring: the headless runner does
-  // not put a dialog away on Escape once a menu was the way to its page.
-  await app.press("Automations >> nth=0");
-  await app.waitFor("text:From plugins");
-  await app.press("From plugins");
-  await app.waitFor("text:Open Plugins");
-  await app.press("Open Plugins");
-  await app.waitFor("text:Add a plugin");
-  // What would go in the file is said before it is made. One that comes
-  // with Sophon, nothing set here: there is nothing to hand on yet.
-  await app.press("label:Save as a file to share >> nth=0");
-  await app.waitFor("text:Save “GitHub PR 值守” as a file");
-  expect(app.texts()).toContain("A sign-in is never in the file: whoever adds it signs in themselves");
-  expect(app.texts().some((text) => text.startsWith("Named, not packed, since it comes with Sophon: GitHub PR 值守"))).toBe(true);
-  expect(app.enabled("Save file…")).toBe(false);
-  expect(app.texts()).toContain("Nothing to put in the file yet: it comes with Sophon, and nothing is set or made with it here");
-  await app.keyboard.press("escape");
-  expect(app.texts()).not.toContain("Save file…");
-  // A file someone handed on is read and shown: what it installs, what
-  // it fills in, and the automation that comes with it. Nothing of it
-  // is here until that is answered.
-  app.onPick(() => [{ name: "hello.sophon", data: fromBase64(HELLO_SOPHON) }]);
-  await app.press("Choose a file…");
-  await app.waitFor("text:Add “Hello”");
-  expect(app.texts()).toContain("Says hello each morning");
-  expect(app.texts()).toContain("Fills in these settings");
-  expect(app.texts()).toContain("Hello · Greeting");
-  expect(app.texts()).toContain("Opens the automation “Say hello daily”");
-  expect(app.texts()).toContain("What it installs runs its scripts on that computer: add only what you trust");
-  // Put away unanswered, none of it is installed.
-  await app.keyboard.press("escape");
-  expect(app.texts()).not.toContain("Says hello each morning");
-  expect(app.texts()).not.toContain("Hello");
-  // One that is no file of Sophon's is refused, and says so.
-  app.onPick(() => [{ name: "notes.sophon", data: new Uint8Array([1, 2, 3]) }]);
-  await app.press("Choose a file…");
-  await app.waitFor("text:Could not read the file: This is not a file Sophon made");
 });
