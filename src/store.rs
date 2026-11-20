@@ -1886,6 +1886,120 @@ struct Collapsed(Vec<String>);
 #[derive(Clone, Default)]
 struct FavoriteModels(Vec<String>);
 
+/// What a new conversation starts with: an agent, its model and (when the
+/// model has levels) how hard it thinks. `None`: the one used last, else
+/// the agent's own default.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct DefaultModel {
+    pub(crate) provider: String,
+    pub(crate) model: String,
+    pub(crate) thinking: Option<String>,
+}
+
+#[derive(Clone, Default)]
+struct DefaultModelPref(Option<DefaultModel>);
+
+pub(crate) fn default_model() -> Option<DefaultModel> {
+    global::<DefaultModelPref>().with(|d| d.0.clone())
+}
+
+/// Sets what new conversations start with (`None`: the one used last).
+/// A refused model is never kept. The draft open now takes it too.
+pub(crate) fn set_default_model(choice: Option<DefaultModel>) {
+    if let Some(c) = &choice
+        && refuse_model(&c.provider, &c.model)
+    {
+        return;
+    }
+    global::<DefaultModelPref>().set(DefaultModelPref(choice.clone()));
+    save_prefs();
+    if let Some(c) = choice {
+        let list = providers();
+        edit_form(|f| {
+            if let Some((provider, model, thinking)) = default_choice(&list, offered_models, &c) {
+                let changed = f.provider != provider;
+                f.provider = provider;
+                if changed {
+                    apply_provider_defaults(f);
+                }
+                f.model = Some(model);
+                f.thinking = thinking;
+            }
+        });
+        refresh_draft_features();
+    }
+}
+
+/// A model an agent offers, as the model picker lists it: its id, its
+/// name, its levels (id, label) and the one it starts at.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct OfferedModel {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) levels: Vec<(String, String)>,
+    pub(crate) default_level: Option<String>,
+}
+
+/// The models `p` offers: the agent's own list on this computer first
+/// (it names models the service's list may not have yet), then the
+/// service's others; Claude Code's own models only, and never a Claude
+/// model through a subscription.
+pub(crate) fn offered_models(p: &Provider) -> Vec<OfferedModel> {
+    offered_from(p, local_models(&p.id))
+}
+
+fn offered_from(p: &Provider, local: Option<Vec<crate::models::LocalModel>>) -> Vec<OfferedModel> {
+    let service = |m: &crate::daemon::model::Model| OfferedModel {
+        id: m.id.clone(),
+        name: m.label.clone(),
+        levels: m.thinking.iter().map(|o| (o.id.clone(), o.label.clone())).collect(),
+        default_level: m.default_thinking.clone(),
+    };
+    let mut list: Vec<OfferedModel> = match local {
+        Some(local) => {
+            let mut list: Vec<OfferedModel> = local
+                .into_iter()
+                .map(|m| {
+                    // Its levels from the service when the agent's list has none.
+                    let known = p.model(&m.id);
+                    OfferedModel {
+                        levels: if m.thinking.is_empty() { known.map(|k| service(k).levels).unwrap_or_default() } else { m.thinking },
+                        default_level: m.default_thinking.or_else(|| known.and_then(|k| k.default_thinking.clone())),
+                        id: m.id,
+                        name: m.name,
+                    }
+                })
+                .collect();
+            for m in &p.models {
+                // The service's extras, not its bare aliases.
+                let alias = matches!(m.id.as_str(), "opus" | "sonnet" | "haiku" | "fable" | "default");
+                if !alias && !list.iter().any(|o| o.id == m.id) {
+                    list.push(service(m));
+                }
+            }
+            list
+        }
+        None => p.models.iter().map(service).collect(),
+    };
+    list.retain(|m| (p.id != "claude" || !m.id.contains('/')) && !forbidden_model(&m.id, &m.name));
+    list
+}
+
+/// `saved` as a new conversation can start with it now: its agent there
+/// and on, a model it offers, and a level of the model's (the saved one,
+/// else the model's own). `None` when it cannot.
+fn default_choice(list: &[Provider], offered: impl Fn(&Provider) -> Vec<OfferedModel>, saved: &DefaultModel) -> Option<(String, String, Option<String>)> {
+    let p = list.iter().find(|p| p.id == saved.provider && p.available())?;
+    let model = offered(p).into_iter().find(|m| m.id == saved.model)?;
+    let thinking = saved
+        .thinking
+        .clone()
+        .filter(|t| model.levels.iter().any(|(id, _)| id == t))
+        .or(model.default_level.clone())
+        .or_else(|| model.levels.first().map(|(id, _)| id.clone()));
+    Some((p.id.clone(), model.id, thinking))
+}
+
 pub(crate) fn favorite_models() -> Vec<String> {
     global::<FavoriteModels>().with(|f| f.0.clone())
 }
@@ -3202,6 +3316,9 @@ fn save_prefs() {
         "lastAgent": global::<LastOpen>().with_untracked(|l| l.agent.clone()),
         "collapsedProjects": global::<Collapsed>().with_untracked(|c| c.0.clone()),
         "favoriteModels": global::<FavoriteModels>().with_untracked(|f| f.0.clone()),
+        "defaultModel": global::<DefaultModelPref>().with_untracked(|d| d.0.as_ref().map(|c| serde_json::json!({
+            "provider": c.provider, "model": c.model, "thinking": c.thinking,
+        }))),
         "language": crate::i18n::lang_untracked().as_str(),
         "fontFamily": global::<Fonts>().with_untracked(|f| f.ui.clone()),
         "monoFontFamily": global::<Fonts>().with_untracked(|f| f.mono.clone()),
@@ -3391,6 +3508,10 @@ pub(crate) fn load_prefs() {
     global::<Collapsed>().set(Collapsed(strings("collapsedProjects")));
     global::<KeptRuns>().set(KeptRuns(strings("keptRuns")));
     global::<FavoriteModels>().set(FavoriteModels(strings("favoriteModels")));
+    global::<DefaultModelPref>().set(DefaultModelPref(v.get("defaultModel").and_then(|d| {
+        let field = |k: &str| d.get(k).and_then(serde_json::Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned);
+        Some(DefaultModel { provider: field("provider")?, model: field("model")?, thinking: field("thinking") })
+    })));
     if let Some(h) = v.get("terminalHeight").and_then(serde_json::Value::as_f64) {
         global::<TerminalPanel>().update(|p| p.height = (h as f32).clamp(120.0, 900.0));
     }
@@ -5264,7 +5385,16 @@ fn reset_form(path: Option<String>) {
     let list = providers();
     // A prompt link's text starts this new draft.
     let prompt = take_prompt_link_text().unwrap_or_default();
+    // The default chosen in Settings, where it can be had; else the one
+    // used last, else the agent's own.
+    let chosen = default_model().and_then(|d| default_choice(&list, offered_models, &d));
     global::<Form>().update(|f| {
+        if let Some((provider, model, thinking)) = chosen {
+            *f = Form { path: path.clone().unwrap_or_default(), provider, prompt, ..Default::default() };
+            apply_provider_defaults(f);
+            (f.model, f.thinking) = (Some(model), thinking);
+            return;
+        }
         let provider = default_provider(&list, &f.provider);
         let keep = f.provider == provider && f.model.is_some();
         let (model, mode, thinking) = (f.model.clone(), f.mode.clone(), f.thinking.clone());
@@ -7196,6 +7326,75 @@ mod model_rule_tests {
         assert!(!forbidden_model("codex/gpt-6-astra", "GPT-6-Astra · Codex"));
         assert!(!forbidden_model("anthropic/claude-sonnet-5", "Claude Sonnet 5 · Anthropic"));
         assert!(!forbidden_model("teable/claude-opus-5-5", "Claude Opus 5.5 · teable"));
+    }
+}
+
+#[cfg(test)]
+mod default_model_tests {
+    use super::{DefaultModel, default_choice, offered_from};
+    use crate::models::LocalModel;
+    use crate::daemon::model::Provider;
+    use serde_json::json;
+
+    fn providers() -> Vec<Provider> {
+        [
+            json!({"provider":"claude","status":"ready","models":[
+                {"id":"claude-opus-5-5","label":"Opus 5.5","defaultThinkingOptionId":"medium",
+                 "thinkingOptions":[{"id":"low","label":"Low"},{"id":"medium","label":"Medium"},{"id":"high","label":"High"}]},
+                {"id":"claude-haiku-5-5","label":"Haiku 5.5"}]}),
+            json!({"provider":"codex","status":"unavailable","models":[{"id":"gpt-6","label":"GPT-6"}]}),
+        ]
+        .iter()
+        .filter_map(Provider::from_json)
+        .collect()
+    }
+
+    fn saved(provider: &str, model: &str, thinking: Option<&str>) -> DefaultModel {
+        DefaultModel { provider: provider.into(), model: model.into(), thinking: thinking.map(str::to_owned) }
+    }
+
+    fn choice(saved: &DefaultModel) -> Option<(String, String, Option<String>)> {
+        default_choice(&providers(), |p| offered_from(p, None), saved)
+    }
+
+    #[test]
+    fn a_saved_default_starts_a_conversation_as_it_was_chosen() {
+        assert_eq!(
+            choice(&saved("claude", "claude-opus-5-5", Some("high"))),
+            Some(("claude".into(), "claude-opus-5-5".into(), Some("high".into())))
+        );
+        // A level the model no longer has: the model's own.
+        assert_eq!(choice(&saved("claude", "claude-opus-5-5", Some("max"))).and_then(|c| c.2), Some("medium".into()));
+        // A model without levels has none.
+        assert_eq!(choice(&saved("claude", "claude-haiku-5-5", Some("high"))).map(|c| c.2), Some(None));
+    }
+
+    #[test]
+    fn a_default_that_cannot_be_had_gives_way() {
+        // Its model is gone, or its agent is not there to run it.
+        assert_eq!(choice(&saved("claude", "claude-sonnet-4", None)), None);
+        assert_eq!(choice(&saved("codex", "gpt-6", None)), None);
+        assert_eq!(choice(&saved("gemini", "gemini-3", None)), None);
+    }
+
+    #[test]
+    fn the_agents_own_list_offers_what_the_service_does_not_know_yet() {
+        let list = providers();
+        let local = vec![LocalModel {
+            id: "claude-fable-5-2".into(),
+            name: "Fable 5.2".into(),
+            main: true,
+            thinking: vec![("high".into(), "High".into())],
+            default_thinking: Some("high".into()),
+        }];
+        let offered = |p: &crate::daemon::model::Provider| offered_from(p, (p.id == "claude").then(|| local.clone()));
+        assert_eq!(
+            default_choice(&list, offered, &saved("claude", "claude-fable-5-2", None)),
+            Some(("claude".into(), "claude-fable-5-2".into(), Some("high".into())))
+        );
+        // And the service's models after them.
+        let names: Vec<_> = offered(&list[0]).into_iter().map(|m| m.name).collect();
+        assert_eq!(names, ["Fable 5.2", "Opus 5.5", "Haiku 5.5"]);
     }
 }
 

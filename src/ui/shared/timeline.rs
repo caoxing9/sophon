@@ -308,28 +308,53 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                     .into_element(),
                 RowKind::Assistant => {
                     let hover = signal(false);
+                    // One piece of the reply as Markdown, as the whole is shown.
+                    let piece = move |markdown: Box<dyn Fn() -> String>| {
+                        text_view()
+                            // A link opens in the browser (or the app it belongs to).
+                            .links(nsh_base::TextViewLinks::Open)
+                            // A copy button on each code block (under the pointer on the
+                            // desktop, always on the phone).
+                            .code_block_actions(vec![nsh_base::TextViewCodeAction::new("copy").with_label(crate::i18n::t("Copy"))])
+                            // While searching, the words found are marked in the
+                            // text itself, not only the message they are in.
+                            .markdown(move || {
+                                let body = markdown();
+                                let f = store::find();
+                                Some(SharedString::from(if f.open && hit.get() > 0 { mark_matches(&body, &f.query) } else { body }))
+                            })
+                            .options(move || MarkdownOptions { streaming: streaming.get(), ..MarkdownOptions::default() })
+                            .selectable(true)
+                            .gap_3()
+                            .text_size(tx(TEXT_CONTENT))
+                            .line_height(px(24.0))
+                            .text_color(FG)
+                    };
+                    // Written, a reply with quotes in it shows each quote apart,
+                    // with a copy button of its own (a reply drafted for someone
+                    // else is often one): while it is written it is one piece.
+                    let pieces = computed(move || if streaming.get() { Vec::new() } else { quote_pieces(&text_of()) });
                     view()
                         .on_mouse_enter(move |_: &MouseEvent| hover.set(true))
                         .on_mouse_leave(move |_: &MouseEvent| hover.set(false))
-                        .child(copy_area(text_view()
-                    // A link opens in the browser (or the app it belongs to).
-                    .links(nsh_base::TextViewLinks::Open)
-                    // A copy button on each code block (under the pointer on the
-                    // desktop, always on the phone).
-                    .code_block_actions(vec![nsh_base::TextViewCodeAction::new("copy").with_label(crate::i18n::t("Copy"))])
-// While searching, the words found are marked in the
-                    // text itself, not only the message they are in.
-                    .markdown(move || {
-                        let body = text_of();
-                        let f = store::find();
-                        Some(SharedString::from(if f.open && hit.get() > 0 { mark_matches(&body, &f.query) } else { body }))
-                    })
-                    .options(move || MarkdownOptions { streaming: streaming.get(), ..MarkdownOptions::default() })
-                    .selectable(true)
-                    .gap_3()
-                    .text_size(tx(TEXT_CONTENT))
-                    .line_height(px(24.0))
-                    .text_color(FG)))
+                        .child(copy_area(dynamic(move || {
+                            let list = pieces.get();
+                            Some(untracked(move || {
+                                if !list.iter().any(|p| p.quoted.is_some()) {
+                                    return piece(Box::new(text_of)).into_element();
+                                }
+                                let mut column = view().gap(sp(S3));
+                                for p in list {
+                                    let shown = p.markdown.clone();
+                                    let el = piece(Box::new(move || shown.clone()));
+                                    column = column.child(match p.quoted {
+                                        Some(words) => quote_with_copy(el, words).into_element(),
+                                        None => el.into_element(),
+                                    });
+                                }
+                                column.into_element()
+                            }))
+                        })))
                         .child(
                             view()
                                 .absolute()
@@ -534,6 +559,123 @@ fn take_copy(e: &nsh_core::element::TextSelectionEvent) {
 
 /// `content` in a selectable area that reports its selection
 /// ([`take_copy`]): a rich text view reports none of its own.
+/// A part of a reply: its Markdown, and (a quote's) its words without the
+/// quote's marks, to copy.
+#[derive(Clone, Debug, PartialEq)]
+struct QuotePiece {
+    markdown: String,
+    quoted: Option<String>,
+}
+
+/// `text` cut where its quotes begin and end (a run of lines that start
+/// with `>`, outside code blocks), each part kept as it was written.
+fn quote_pieces(text: &str) -> Vec<QuotePiece> {
+    let mut pieces: Vec<QuotePiece> = Vec::new();
+    let mut fence: Option<&str> = None;
+    let mut push = |line: &str, quote: bool| {
+        let words = quote.then(|| {
+            let rest = line.trim_start().strip_prefix('>').unwrap_or("");
+            rest.strip_prefix(' ').unwrap_or(rest).to_owned()
+        });
+        match pieces.last_mut() {
+            Some(last) if last.quoted.is_some() == quote => {
+                last.markdown.push('\n');
+                last.markdown.push_str(line);
+                if let (Some(all), Some(w)) = (last.quoted.as_mut(), words) {
+                    all.push('\n');
+                    all.push_str(&w);
+                }
+            }
+            _ => pieces.push(QuotePiece { markdown: line.to_owned(), quoted: words }),
+        }
+    };
+    for line in text.lines() {
+        let lead = line.len() - line.trim_start().len();
+        let trimmed = line.trim_start();
+        // In a code block, a `>` is the code's.
+        if let Some(open) = fence {
+            if lead < 4 && trimmed.starts_with(open) {
+                fence = None;
+            }
+            push(line, false);
+            continue;
+        }
+        if lead < 4 && (trimmed.starts_with("```") || trimmed.starts_with("~~~")) {
+            fence = Some(&trimmed[..3]);
+            push(line, false);
+            continue;
+        }
+        push(line, lead < 4 && trimmed.starts_with('>'));
+    }
+    // The words between the quotes, without the blank lines at their ends;
+    // a quote's words without a trailing blank.
+    pieces
+        .into_iter()
+        .filter_map(|mut p| {
+            p.markdown = p.markdown.trim_matches('\n').to_owned();
+            if let Some(q) = p.quoted.as_mut() {
+                *q = q.trim().to_owned();
+            }
+            (!p.markdown.trim().is_empty()).then_some(p)
+        })
+        .collect()
+}
+
+/// A quote of a reply, a copy button at its corner under the pointer that
+/// copies its words alone (not the `>` of each line).
+fn quote_with_copy(quote: impl IntoElement, words: String) -> View {
+    let hover = signal(false);
+    view()
+        .on_mouse_enter(move |_: &MouseEvent| hover.set(true))
+        .on_mouse_leave(move |_: &MouseEvent| hover.set(false))
+        .child(quote)
+        .child(
+            view()
+                .absolute()
+                .top(px(-2.0))
+                .right(px(0.0))
+                .rounded(px(R_MD))
+                .bg(SURFACE0)
+                .opacity(move || if hover.get() { 1.0_f32 } else { 0.0 })
+                .transition_opacity()
+                .pointer_events(move || if hover.get() { nsh_core::PointerEvents::Auto } else { nsh_core::PointerEvents::None })
+                .child(icon_btn(Icon::Copy, Sz::Sm, t("Copy quote"), move || {
+                    set_clipboard(words.clone());
+                    store::notify(t("Copied").into());
+                })),
+        )
+}
+
+#[cfg(test)]
+mod quote_tests {
+    use super::{QuotePiece, quote_pieces};
+
+    fn piece(markdown: &str, quoted: Option<&str>) -> QuotePiece {
+        QuotePiece { markdown: markdown.into(), quoted: quoted.map(str::to_owned) }
+    }
+
+    #[test]
+    fn a_reply_is_cut_where_its_quotes_are() {
+        let text = "Use this one:\n\n> So true. Once agents can touch real data,\n> it changes.\n\nOr, lighter:\n\n>Agreed!\n";
+        assert_eq!(
+            quote_pieces(text),
+            [
+                piece("Use this one:", None),
+                piece("> So true. Once agents can touch real data,\n> it changes.", Some("So true. Once agents can touch real data,\nit changes.")),
+                piece("Or, lighter:", None),
+                piece(">Agreed!", Some("Agreed!")),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_reply_without_quotes_is_one_piece_and_code_keeps_its_marks() {
+        assert_eq!(quote_pieces("Just words.\n\nMore."), [piece("Just words.\n\nMore.", None)]);
+        let code = "Run:\n\n```sh\n> not a quote\n```";
+        assert_eq!(quote_pieces(code), [piece(code, None)]);
+    }
+}
+
 fn copy_area(content: impl IntoElement) -> View {
     view().selectable(true).on_text_selection_change(take_copy).child(content)
 }
@@ -905,7 +1047,10 @@ fn jump_buttons() -> impl IntoElement {
     let to_start = computed(move || live() && ends.with(|e| e.away_from_start));
     let to_end = computed(move || live() && ends.with(|e| e.away_from_end));
     // At the right, past the text's lines (centred they lay over the text).
-    let row = || view().absolute().left(px(0.0)).right(px(0.0)).items_end().pr(sp(S6));
+    // The row is as wide as the list: it takes no pointer of its own, or
+    // a strip across the conversation's first and last lines could not be
+    // pressed or selected from.
+    let row = || view().absolute().left(px(0.0)).right(px(0.0)).items_end().pr(sp(S6)).pointer_events(PointerEvents::BoxNone);
     view()
         .absolute()
         .top(px(0.0))
@@ -913,13 +1058,15 @@ fn jump_buttons() -> impl IntoElement {
         .left(px(0.0))
         .right(px(0.0))
         .pointer_events(PointerEvents::BoxNone)
-        .child(row().top(sp(S3)).child(hover_keeps(held, disc(Icon::ArrowUp, t("Go to the start"), store::jump_timeline_start, to_start))))
-        .child(row().bottom(px(if MOBILE { 196.0 } else { S3 })).child(hover_keeps(held, disc(Icon::ArrowDown, t("Go to the end"), store::jump_timeline_end, to_end))))
+        .child(row().top(sp(S3)).child(hover_keeps(held, to_start, disc(Icon::ArrowUp, t("Go to the start"), store::jump_timeline_start, to_start))))
+        .child(row().bottom(px(if MOBILE { 196.0 } else { S3 })).child(hover_keeps(held, to_end, disc(Icon::ArrowDown, t("Go to the end"), store::jump_timeline_end, to_end))))
 }
 
-/// `el`, `held` while the pointer is over it.
-fn hover_keeps(held: Signal<bool>, el: impl IntoElement) -> View {
+/// `el`, `held` while the pointer is over it. Hidden, it is not there to
+/// the pointer either: the text under it is pressed and selected through.
+fn hover_keeps(held: Signal<bool>, shown: Memo<bool>, el: impl IntoElement) -> View {
     view()
+        .pointer_events(move || if shown.get() { PointerEvents::Auto } else { PointerEvents::None })
         .on_mouse_enter(move |_: &MouseEvent| held.set(true))
         .on_mouse_leave(move |_: &MouseEvent| held.set(false))
         .child(el)
