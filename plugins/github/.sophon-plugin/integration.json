@@ -1,0 +1,29 @@
+{
+  "id": "github",
+  "name": "GitHub",
+  "description": "用这台电脑上 gh 的登录。提供触发器「有人请求我 review」",
+  "version": "0.6.0",
+  "status": "./watch status",
+  "triggers": [
+    {
+      "id": "review-requested",
+      "label": "有人请求我 review",
+      "description": "GitHub 上有人把你设为 PR 的 reviewer 时",
+      "probe": "./watch probe",
+      "everyMs": 120000,
+      "params": [
+        {
+          "name": "repos",
+          "type": "multi",
+          "label": "只处理这些仓库",
+          "hint": "不选就是所有请求你 review 的 PR",
+          "optionsFrom": "./watch repos",
+          "optional": true
+        }
+      ]
+    }
+  ],
+  "interface": {
+    "brandColor": "#24292f"
+  }
+}

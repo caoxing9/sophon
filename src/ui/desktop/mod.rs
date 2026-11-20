@@ -9,6 +9,7 @@ pub(crate) mod git;
 mod history;
 mod home;
 mod new_workspace;
+mod plugins;
 mod schedules;
 mod settings;
 pub(crate) mod shortcuts;
@@ -262,6 +263,8 @@ enum Main {
     Settings,
     History,
     Schedules,
+    Plugins,
+    Extensions,
     Usage,
     Workspace,
     Inbox,
@@ -276,6 +279,8 @@ fn main(compact: bool) -> impl IntoElement {
         Screen::Settings => Main::Settings,
         Screen::History => Main::History,
         Screen::Schedules => Main::Schedules,
+        Screen::Plugins => Main::Plugins,
+        Screen::Extensions => Main::Extensions,
         Screen::Usage => Main::Usage,
         Screen::Workspace(_) => Main::Workspace,
         Screen::Inbox => Main::Inbox,
@@ -300,6 +305,8 @@ fn main(compact: bool) -> impl IntoElement {
                 Main::Settings => settings::settings(compact).into_element(),
                 Main::History => history::history(compact).into_element(),
                 Main::Schedules => schedules::schedules(compact).into_element(),
+                Main::Plugins => plugins::plugins(compact, crate::daemon::connection::PluginKind::Integration).into_element(),
+                Main::Extensions => plugins::plugins(compact, crate::daemon::connection::PluginKind::Plugin).into_element(),
                 Main::Usage => crate::ui::shared::usage::usage_page(compact).into_element(),
                 Main::Workspace => workspace::workspace(compact).into_element(),
                 Main::Inbox => crate::ui::shared::github::inbox_page().into_element(),

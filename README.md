@@ -37,7 +37,7 @@ Mac or from your phone, all talking to the same daemon. It is written in Rust wi
 - **Terminals and files**: a VS Code-style terminal panel under the workspace (⌃` or ⌘J), a file tree and an editor;
   download any file of the workspace to the device you are on, from the Mac (a save panel) or the iPhone (Sophon's
   folder in the Files app), on the LAN or through the relay
-- **Schedules, history and usage**: cron schedules, archived agents, per-provider usage windows
+- **Automations, history and usage**: a conversation or a command started on time or when something happens, with plugins others share; archived agents, per-provider usage windows
 - **Everywhere**: pair your iPhone by QR code; connects on the LAN directly or anywhere through the relay,
   end-to-end encrypted (Noise)
 - **Keyboard first**: command palette (⌘K) and shortcuts, also while you type in the composer; desktop notifications
@@ -147,7 +147,7 @@ nsh package --target ios-simulator --icon assets/app-icon/icon-ios-1024.png
 | `src/store.rs` | UI state in signals |
 | `src/ui/kit/` | The design system: controls, icons, menus, tokens |
 | `src/ui/shared/` | Components both platforms use: the timeline, the composer, the agent pane, the project list, dialogs, settings sections |
-| `src/ui/desktop/` | The desktop's own shell and screens: sidebar, tabs, explorer, git, terminals, new workspaces, history, schedules, shortcuts |
+| `src/ui/desktop/` | The desktop's own shell and screens: sidebar, tabs, explorer, git, terminals, new workspaces, history, automations, plugins, shortcuts |
 | `src/ui/mobile/` | The phone's: pairing, the swipeable panels (workspaces, agent, changes), its settings |
 | `src/update.rs` | Self-update from GitHub Releases |
 | `App.test.tsx` | Headless UI tests of the root component, run by `nsh test` |

@@ -2,7 +2,13 @@
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
-use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command, time::Duration};
+use std::{
+    fs,
+    os::unix::fs::PermissionsExt,
+    path::{Path, PathBuf},
+    process::Command,
+    time::Duration,
+};
 use tokio::net::TcpStream;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
 
@@ -85,6 +91,14 @@ async fn read(socket: &mut Socket) -> Value {
         .unwrap()
         .unwrap();
     serde_json::from_str(frame.to_text().unwrap()).unwrap()
+}
+
+/// Where the manifest of `folder` goes, `kind` an `integration` or a
+/// `plugin`: the folder it is kept in is made.
+fn manifest(folder: &Path, kind: &str) -> PathBuf {
+    let kept = folder.join(".sophon-plugin");
+    fs::create_dir_all(&kept).unwrap();
+    kept.join(format!("{kind}.json"))
 }
 
 async fn ask(socket: &mut Socket, mut request: Value) -> Value {
@@ -699,6 +713,24 @@ async fn terminal_replay_and_file_conflicts_use_the_workspace() {
     })
     .await
     .expect("shell output");
+    // `sophon` is there to type: this service's, for a plugin's setup.
+    send(
+        &mut socket,
+        json!({"type":"session","message":{"type":"terminal_input","terminalId":terminal,
+        "message":{"type":"input","data":"sophon plugin list; echo SOPHON_CLI_$?\n"}}}),
+    )
+    .await;
+    let mut text = String::new();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !text.contains("SOPHON_CLI_0") {
+            let frame = socket.next().await.unwrap().unwrap();
+            if let Message::Binary(bytes) = frame {
+                text.push_str(&String::from_utf8_lossy(&bytes[2..]));
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("sophon in a terminal: {text}"));
 }
 
 #[tokio::test]
@@ -989,6 +1021,1041 @@ async fn paused_schedule_survives_restart_and_manual_run_is_logged() {
     let logs = ask(&mut socket, json!({"type":"schedule/logs","scheduleId":id})).await;
     assert_eq!(logs["payload"]["runs"][0]["status"], "completed");
     assert_eq!(logs["payload"]["runs"][0]["output"], "reply");
+}
+
+/// Reads `path` until it has `wanted` in it, and answers all of it.
+async fn file_with(path: &Path, wanted: &str) -> String {
+    for _ in 0..100 {
+        let text = fs::read_to_string(path).unwrap_or_default();
+        if text.contains(wanted) {
+            return text;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!(
+        "{} never had {wanted:?}: {:?}",
+        path.display(),
+        fs::read_to_string(path).unwrap_or_default()
+    );
+}
+
+#[tokio::test]
+async fn a_probe_s_new_event_starts_a_run_that_answers_who_caused_it() {
+    let service = Service(tempfile::tempdir().unwrap());
+    let work = tempfile::tempdir().unwrap();
+    let work = work.path().canonicalize().unwrap();
+    // A `codex` that also keeps what it was asked and the token of its run.
+    install_provider(service.0.path());
+    let cli = service.0.path().join("codex");
+    let script = fs::read_to_string(&cli).unwrap().replace(
+        "*'\"method\":\"turn/start\"'*)",
+        "*'\"method\":\"turn/start\"'*)\n            printf '%s\\n' \"$line\" >> \"$PWD/asked\"\n            printf '%s' \"$SOPHON_RUN_TOKEN\" > \"$PWD/token\"\n            command -v sophon > \"$PWD/sophon\"",
+    );
+    assert!(script.contains("SOPHON_RUN_TOKEN"));
+    fs::write(&cli, script).unwrap();
+    service.cli("start");
+    let mut socket = service.connect(true).await;
+    // What was there before the automation is not its business.
+    fs::write(
+        work.join("events"),
+        "{\"id\":\"old\",\"vars\":{\"url\":\"https://x/pull/1\"}}\n",
+    )
+    .unwrap();
+    let created = ask(&mut socket,json!({"type":"schedule/create","name":"Reviews","prompt":"Review {{url}}",
+        "cadence":{"type":"every","everyMs":300},
+        "probe":"cat events","reply":"printf '%s|%s|%s\\n' \"$SOPHON_ACTION\" \"$SOPHON_EVENT_ID\" \"$SOPHON_TEXT\" >> said",
+        "target":{"type":"new-agent","config":{"provider":"codex","cwd":work,"isolation":"local"}}})).await;
+    assert_eq!(created["type"], "schedule/create/response", "{created}");
+    let id = created["payload"]["schedule"]["id"].clone();
+    for _ in 0..100 {
+        let list = ask(&mut socket, json!({"type":"schedule/list"})).await;
+        if list["payload"]["schedules"][0]["primed"] == true {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let logs = ask(&mut socket, json!({"type":"schedule/logs","scheduleId":id})).await;
+    assert_eq!(logs["payload"]["runs"], json!([]), "{logs}");
+
+    // A new one starts a run, once, with what it carries in the prompt.
+    let mut events = fs::OpenOptions::new()
+        .append(true)
+        .open(work.join("events"))
+        .unwrap();
+    std::io::Write::write_all(
+        &mut events,
+        b"{\"id\":\"new\",\"vars\":{\"url\":\"https://x/pull/2\"}}\n",
+    )
+    .unwrap();
+    finished(&mut socket).await;
+    let asked = file_with(&work.join("asked"), "pull/2").await;
+    assert!(!asked.contains("pull/1"), "{asked}");
+    assert!(asked.contains("sophon reply"), "{asked}");
+    assert_eq!(
+        fs::read_to_string(work.join("sophon")).unwrap().trim(),
+        service.0.path().join("bin/sophon").to_str().unwrap()
+    );
+    let said = file_with(&work.join("said"), "done|new|reply").await;
+    assert!(said.starts_with("ack|new|\n"), "{said}");
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    let logs = ask(&mut socket, json!({"type":"schedule/logs","scheduleId":id})).await;
+    let runs = logs["payload"]["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 1, "{logs}");
+    assert_eq!(runs[0]["status"], "completed");
+    assert_eq!(runs[0]["event"]["id"], "new");
+    assert!(runs[0]["token"].is_null(), "{logs}");
+
+    // Its agent answers through `sophon`, with the token it was given.
+    let token = fs::read_to_string(work.join("token")).unwrap();
+    assert!(!token.is_empty());
+    let sophon = |args: &[&str], token: Option<&str>| {
+        let mut command = Command::new(service.0.path().join("bin/sophon"));
+        command
+            .args(args)
+            .env("SOPHON_SERVICE_HOME", service.0.path())
+            .env_remove("SOPHON_RUN_TOKEN");
+        if let Some(token) = token {
+            command.env("SOPHON_RUN_TOKEN", token);
+        }
+        let output = command.output().unwrap();
+        (
+            output.status.success(),
+            String::from_utf8_lossy(&output.stdout).into_owned()
+                + &String::from_utf8_lossy(&output.stderr),
+        )
+    };
+    assert_eq!(
+        sophon(&["reply", "looks", "good"], Some(&token)),
+        (true, "Sent\n".into())
+    );
+    assert_eq!(
+        sophon(&["react", "DONE"], Some(&token)),
+        (true, "Sent\n".into())
+    );
+    let said = file_with(&work.join("said"), "react|new|DONE").await;
+    assert!(said.contains("reply|new|looks good\n"), "{said}");
+    assert!(!sophon(&["reply", "hello"], Some("not-a-token")).0);
+    assert!(!sophon(&["reply", "hello"], None).0);
+    let logs = ask(&mut socket, json!({"type":"schedule/logs","scheduleId":id})).await;
+    assert_eq!(
+        logs["payload"]["runs"][0]["replies"][0]["text"], "looks good",
+        "{logs}"
+    );
+
+    // Another program causes a run by name; the same event twice is one.
+    let (ok, out) = sophon(
+        &[
+            "trigger",
+            "Reviews",
+            "--id",
+            "pushed",
+            "--var",
+            "url=https://x/pull/9",
+        ],
+        None,
+    );
+    assert!(ok && out.starts_with("Started run "), "{out}");
+    finished(&mut socket).await;
+    file_with(&work.join("asked"), "pull/9").await;
+    assert_eq!(
+        sophon(&["trigger", "Reviews", "--id", "pushed"], None),
+        (true, "Already had this event\n".into())
+    );
+    assert!(!sophon(&["trigger", "Nothing"], None).0);
+    let logs = ask(&mut socket, json!({"type":"schedule/logs","scheduleId":id})).await;
+    assert_eq!(
+        logs["payload"]["runs"].as_array().unwrap().len(),
+        2,
+        "{logs}"
+    );
+}
+
+/// The integration or plugin `id` in an answer that lists them.
+fn installed<'a>(answer: &'a Value, id: &str) -> &'a Value {
+    answer["payload"]["plugins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|plugin| plugin["id"] == id)
+        .unwrap_or_else(|| panic!("No plugin {id}: {answer}"))
+}
+
+#[tokio::test]
+async fn an_integration_starts_what_a_plugin_s_automation_does() {
+    let service = Service(tempfile::tempdir().unwrap());
+    let work = tempfile::tempdir().unwrap();
+    let work = work.path().canonicalize().unwrap();
+    install_provider(service.0.path());
+    // One that comes with the service: a folder of them it is told of.
+    let shipped = tempfile::tempdir().unwrap();
+    let shipped = shipped.path().canonicalize().unwrap();
+    fs::create_dir(shipped.join("builtin")).unwrap();
+    install(
+        &shipped.join("builtin"),
+        "look",
+        "#!/bin/sh\nprintf '%s|%s\\n' \"$SOPHON_PARAM_LOUD\" \"$SOPHON_PARAM_TOKEN\" > \"$SOPHON_PROJECT_DIR/builtin-saw\"\n",
+    );
+    fs::write(manifest(&shipped.join("builtin"), "integration"), r#"{"name":"Built in",
+        "params":[{"name":"token","label":"Token","value":"kept"}],
+        "triggers":[{"id":"look","label":"Something in the folder","probe":"./look","everyMs":3600000,
+            "params":[{"name":"loud","label":"Loud","type":"switch","value":false}]}]}"#).unwrap();
+    service.cli_with_env(
+        "start",
+        &[("SOPHON_BUNDLED_PLUGINS", shipped.to_str().unwrap())],
+    );
+    let mut socket = service.connect(true).await;
+    let sophon = |args: &[&str]| {
+        let output = Command::new(service.0.path().join("bin/sophon"))
+            .args(args)
+            .env("SOPHON_SERVICE_HOME", service.0.path())
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .unwrap();
+        (
+            output.status.success(),
+            String::from_utf8_lossy(&output.stdout).into_owned()
+                + &String::from_utf8_lossy(&output.stderr),
+        )
+    };
+    let author = tempfile::tempdir().unwrap();
+    let author = author.path().canonicalize().unwrap();
+    // An integration: a manifest beside the scripts it names. It signs in,
+    // and says what it watches for; what to do then is not its to say.
+    let hub = author.join("hub");
+    fs::create_dir(&hub).unwrap();
+    install(
+        &hub,
+        "probe",
+        "#!/bin/sh\nprintf '%s' \"$SOPHON_PARAM_ONLY\" > \"$SOPHON_PLUGIN_DATA/only\"\ncat \"$SOPHON_PROJECT_DIR/events\"\n",
+    );
+    install(
+        &hub,
+        "login",
+        "#!/bin/sh\nprintf '%s' \"${1:-from the app}\" > \"$SOPHON_PLUGIN_DATA/signed-in\"\necho signed in\n",
+    );
+    install(
+        &hub,
+        "whoami",
+        "#!/bin/sh\ncat \"$SOPHON_PLUGIN_DATA/signed-in\" 2>/dev/null || { echo 'not signed in' >&2; exit 1; }\n",
+    );
+    // How it answers for an automation that has no way of its own: through
+    // another integration, which the service runs as the one it is.
+    install(
+        &hub,
+        "thank",
+        "#!/bin/sh\n[ \"$SOPHON_ACTION\" = done ] && sophon use chat \"about $SOPHON_VAR_URL\" \"$SOPHON_TEXT\"\nexit 0\n",
+    );
+    fs::write(manifest(&hub, "integration"), r#"{"id":"hub","name":"Hub","description":"Where the pull requests are","setup":"./login","status":"./whoami",
+        "params":[{"name":"app_id","label":"App ID","value":"cli_shared"},{"name":"app_secret","label":"App Secret","value":"s3cret","secret":true},{"name":"repos","label":"Repositories"},{"name":"domain","label":"Domain","optional":true}],
+        "triggers":[{"id":"quiet","label":"Nothing ever","probe":"true"},
+            {"id":"sent","label":"Someone sends a pull request","probe":"./probe","reply":"./thank","everyMs":300,
+                "params":[{"name":"only","label":"Only these","optional":true}]}]}"#).unwrap();
+    assert!(
+        !sophon(&["plugin", "add", work.to_str().unwrap()]).0,
+        "a folder without a manifest is neither"
+    );
+    let (ok, out) = sophon(&["plugin", "add", hub.to_str().unwrap()]);
+    // What its author filled in comes with it; what is left is asked for.
+    assert_eq!(
+        out,
+        "Installed Hub (hub)\nNeeds Repositories: sophon plugin set hub repos=…\nSet it up once: sophon plugin setup hub\n"
+    );
+    assert!(ok);
+    assert_eq!(
+        sophon(&["integration", "set", "hub", "repos=acme/*"]),
+        (true, "Set\n".into())
+    );
+    assert!(!sophon(&["plugin", "set", "hub", "nothing=1"]).0);
+    assert!(
+        !sophon(&["plugin", "set", "hub", "only=x"]).0,
+        "what a trigger asks is each automation's to say"
+    );
+    // Its setup from a client has no terminal: it is run, and how it
+    // stands is said with the list.
+    let listed = ask(&mut socket, json!({"type":"plugin/list"})).await;
+    assert!(installed(&listed, "hub")["account"].is_null(), "{listed}");
+    let set_up = ask(
+        &mut socket,
+        json!({"type":"plugin/setup","pluginId":"hub"}),
+    )
+    .await;
+    assert_eq!(set_up["payload"]["said"], "signed in", "{set_up}");
+    assert_eq!(installed(&set_up, "hub")["account"], "from the app");
+    let (ok, out) = sophon(&["plugin", "setup", "hub", "ada"]);
+    assert!(ok, "{out}");
+    let kept = service.0.path().join("plugin-data/hub");
+    assert_eq!(fs::read_to_string(kept.join("signed-in")).unwrap(), "ada");
+    let listed = ask(&mut socket, json!({"type":"plugin/list"})).await;
+    let entry = installed(&listed, "hub");
+    assert_eq!(
+        (&entry["account"], &entry["uses"]),
+        (&json!("ada"), &json!(0)),
+        "{listed}"
+    );
+    assert_eq!(
+        (&entry["kind"], &entry["source"]),
+        (&json!("integration"), &json!("folder")),
+        "{listed}"
+    );
+    assert!(entry["automations"].is_null(), "{listed}");
+    // What it watches for has a name; its probe, and how it answers, are
+    // not a client's to read.
+    assert_eq!(
+        entry["triggers"][1],
+        json!({"id":"sent","label":"Someone sends a pull request","description":null,"everyMs":300,"replies":true,
+            "params":[{"name":"only","label":"Only these","hint":null,"type":"text","options":null,"secret":false,"optional":true,"value":"","dynamic":false}]}),
+        "{listed}"
+    );
+    assert_eq!(entry["triggers"][0]["replies"], false);
+    // A secret is said to be there, and not what it is.
+    let secret = &entry["params"][1];
+    assert_eq!(
+        (
+            &secret["name"],
+            &secret["secret"],
+            &secret["filled"],
+            &secret["value"]
+        ),
+        (
+            &json!("app_secret"),
+            &json!(true),
+            &json!(true),
+            &Value::Null
+        ),
+        "{listed}"
+    );
+    assert_eq!(entry["params"][2]["value"], "acme/*");
+
+    // A plugin: what to do when that trigger fires, packed to hand on. It
+    // answers its own way, in its own folder, with what is its own.
+    let plugin = author.join("watch");
+    fs::create_dir(&plugin).unwrap();
+    // Its automation is a folder of its own: what it is told, and the rest.
+    let review = plugin.join("automations/review");
+    fs::create_dir_all(&review).unwrap();
+    fs::write(review.join("prompt.md"), "Review {{url}}. {{tone}}\n").unwrap();
+    install(
+        &plugin,
+        "reply",
+        "#!/bin/sh\nprintf '%s|%s|%s\\n' \"$SOPHON_ACTION\" \"$SOPHON_VAR_URL\" \"$PWD\" >> \"$SOPHON_PLUGIN_DATA/said\"\nprintf '%s %s %s' \"$SOPHON_PARAM_PEOPLE\" \"$SOPHON_PARAM_TONE\" \"${SOPHON_PARAM_APP_SECRET:-none of the hub}\" > \"$SOPHON_PLUGIN_DATA/params\"\n",
+    );
+    fs::write(manifest(&plugin, "plugin"), r#"{"id":"watch","name":"Watch","description":"Reviews what it is sent","requires":["chat","mail"],
+        "params":[{"name":"people","label":"People","value":"ada"}]}"#).unwrap();
+    fs::write(review.join("automation.json"), r#"{"trigger":"hub/sent","reply":"./reply","modeId":"full-access","concurrency":2,
+        "params":[{"name":"tone","label":"Kindly","type":"switch","value":true,"prompt":{"yes":"Be kind.","no":"Be brief."}}]}"#).unwrap();
+    let (ok, out) = sophon(&["plugin", "add", plugin.to_str().unwrap()]);
+    assert_eq!(out, "Installed Watch (watch)\n");
+    assert!(ok);
+    let listed = ask(&mut socket, json!({"type":"plugin/list"})).await;
+    let entry = installed(&listed, "watch");
+    assert_eq!(entry["kind"], "plugin", "{listed}");
+    assert!(entry["triggers"].is_null(), "{listed}");
+    let offered = &entry["automations"][0];
+    assert_eq!(offered["prompt"], "Review {{url}}. {{tone}}");
+    assert_eq!(offered["trigger"], json!({"integration":"hub","id":"sent"}));
+    assert_eq!(offered["replies"], true);
+    assert_eq!(offered["params"][0]["name"], "tone");
+    assert!(offered["params"][0]["prompt"].is_null(), "{listed}");
+    // What it counts on, and how each of those stands.
+    assert_eq!(
+        entry["requires"],
+        json!([{"id":"chat","name":"chat","installed":false,"ready":false},{"id":"mail","name":"mail","installed":false,"ready":false},
+            {"id":"hub","name":"Hub","installed":true,"ready":true}]),
+        "{listed}"
+    );
+
+    // An automation of it needs only where to work: the rest is the
+    // plugin's, and what starts it the integration's.
+    fs::write(work.join("events"), "").unwrap();
+    let created = ask(&mut socket,json!({"type":"schedule/create","plugin":"watch","triggerOptions":{"only":"acme/app"},"options":{"tone":"no"},
+        "target":{"type":"new-agent","config":{"provider":"codex","cwd":work,"isolation":"local"}}})).await;
+    assert_eq!(created["type"], "schedule/create/response", "{created}");
+    let schedule = &created["payload"]["schedule"];
+    assert_eq!(schedule["name"], "Watch");
+    assert_eq!(schedule["prompt"], "Review {{url}}. {{tone}}");
+    assert_eq!(schedule["template"], "review");
+    assert_eq!(
+        (&schedule["integration"], &schedule["trigger"]),
+        (&json!("hub"), &json!("sent")),
+        "{schedule}"
+    );
+    assert_eq!(schedule["cadence"], json!({"type":"every","everyMs":300}));
+    assert_eq!(schedule["target"]["config"]["modeId"], "full-access");
+    assert!(
+        schedule["probe"].is_null(),
+        "the scripts stay whose they are: {schedule}"
+    );
+    let id = schedule["id"].clone();
+    for _ in 0..100 {
+        let list = ask(&mut socket, json!({"type":"schedule/list"})).await;
+        if list["payload"]["schedules"][0]["primed"] == true {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    fs::write(
+        work.join("events"),
+        "{\"id\":\"m1\",\"vars\":{\"url\":\"https://x/pull/7\"}}\n",
+    )
+    .unwrap();
+    finished(&mut socket).await;
+    let data = service.0.path().join("plugin-data/watch");
+    let said = file_with(&data.join("said"), "done|").await;
+    let folder = plugin.to_str().unwrap();
+    // Picked up and done are each said once (two scripts: in either order),
+    // by the plugin's script in the plugin's folder.
+    assert!(
+        said.contains(&format!("ack|https://x/pull/7|{folder}\n")),
+        "{said}"
+    );
+    let logs = ask(&mut socket, json!({"type":"schedule/logs","scheduleId":id})).await;
+    assert_eq!(logs["payload"]["runs"][0]["event"]["id"], "m1", "{logs}");
+    // It is told its own settings and this automation's choice, and
+    // nothing of the integration's; the probe is told the trigger's.
+    assert_eq!(
+        fs::read_to_string(data.join("params")).unwrap(),
+        "ada no none of the hub"
+    );
+    assert_eq!(fs::read_to_string(kept.join("only")).unwrap(), "acme/app");
+    let listed = ask(&mut socket, json!({"type":"plugin/list"})).await;
+    assert_eq!(installed(&listed, "hub")["uses"], 1, "{listed}");
+    assert_eq!(installed(&listed, "watch")["active"], 1, "{listed}");
+
+    // In use either stays; the automation gone, each goes, and what it
+    // kept with it.
+    for used in ["hub", "watch"] {
+        let (ok, out) = sophon(&["plugin", "remove", used]);
+        assert!(!ok && out.contains("automations use this"), "{out}");
+    }
+    ask(
+        &mut socket,
+        json!({"type":"schedule/delete","scheduleId":id}),
+    )
+    .await;
+    assert!(sophon(&["plugin", "remove", "watch"]).0);
+    assert!(
+        plugin.join("reply").exists(),
+        "a linked folder is its author's"
+    );
+    assert!(!data.exists(), "what it kept goes with it");
+
+    // An integration that is a connection and nothing else: a command to
+    // use. Another's script calls it through the service, which runs it
+    // as the one it is.
+    let chat = author.join("chat");
+    fs::create_dir(&chat).unwrap();
+    install(
+        &chat,
+        "say",
+        "#!/bin/sh\nprintf '%s|%s|%s\\n' \"$1\" \"$2\" \"$SOPHON_PARAM_LOUD\" >> \"$SOPHON_PLUGIN_DATA/sent\"\necho sent\n[ \"$1\" != fail ] || { echo refused >&2; exit 7; }\n",
+    );
+    install(
+        &chat,
+        "rooms",
+        "#!/bin/sh\necho general\necho '{\"value\":\"ops\",\"label\":\"Operations\"}'\n",
+    );
+    fs::write(manifest(&chat, "integration"), r#"{"id":"chat","name":"Chat","use":"./say",
+        "params":[{"name":"loud","label":"Loud","type":"switch","value":true},{"name":"rooms","label":"Rooms","type":"multi","optional":true,"optionsFrom":"./rooms"}]}"#).unwrap();
+    assert!(sophon(&["plugin", "add", chat.to_str().unwrap()]).0);
+    let listed = ask(&mut socket, json!({"type":"plugin/list"})).await;
+    let entry = installed(&listed, "chat");
+    assert_eq!(
+        (&entry["id"], &entry["triggers"]),
+        (&json!("chat"), &json!([])),
+        "{listed}"
+    );
+    assert_eq!(entry["params"][0]["type"], "switch");
+    assert_eq!(entry["params"][0]["value"], "yes");
+    assert_eq!(entry["params"][1]["dynamic"], true);
+    assert!(entry["params"][1]["optionsFrom"].is_null(), "{listed}");
+    let options = ask(
+        &mut socket,
+        json!({"type":"plugin/options","pluginId":"chat","name":"rooms"}),
+    )
+    .await;
+    assert_eq!(
+        options["payload"]["options"],
+        json!([{"value":"general","label":"general","hint":null},{"value":"ops","label":"Operations","hint":null}]),
+        "{options}"
+    );
+    // A trigger's own choices are asked for by naming the trigger.
+    let refused = ask(
+        &mut socket,
+        json!({"type":"plugin/options","pluginId":"hub","name":"only"}),
+    )
+    .await;
+    assert_eq!(refused["type"], "rpc_error", "{refused}");
+    let options = ask(
+        &mut socket,
+        json!({"type":"plugin/options","pluginId":"hub","trigger":"sent","name":"only"}),
+    )
+    .await;
+    assert_eq!(options["payload"]["options"], json!([]), "{options}");
+    assert_eq!(
+        sophon(&["use", "chat", "to ada", "hello there"]),
+        (true, "sent\n".into())
+    );
+    assert_eq!(
+        fs::read_to_string(service.0.path().join("plugin-data/chat/sent")).unwrap(),
+        "to ada|hello there|yes\n"
+    );
+    // Its failure is the caller's to hear, with what it said.
+    let (ok, out) = sophon(&["use", "chat", "fail", "x"]);
+    assert!(!ok && out.contains("refused"), "{out}");
+    assert!(
+        !sophon(&["use", "hub"]).0,
+        "one that offers nothing cannot be used"
+    );
+    // The plugin back: what it counts on is there now, and ready.
+    assert!(sophon(&["plugin", "add", plugin.to_str().unwrap()]).0);
+    let listed = ask(&mut socket, json!({"type":"plugin/list"})).await;
+    let watch = installed(&listed, "watch");
+    assert_eq!(
+        watch["requires"][0],
+        json!({"id":"chat","name":"Chat","installed":true,"ready":true}),
+        "{listed}"
+    );
+    assert_eq!(watch["uses"], 0);
+    fs::write(work.join("events"), "").unwrap();
+    // An automation of one's own on a trigger: one's own words to the
+    // agent, the integration's probe behind them, as often as that says,
+    // and no plugin in it. The integration answers for it.
+    let created = ask(&mut socket,json!({"type":"schedule/create","integration":"hub","trigger":"sent","prompt":"Look at {{url}} for me",
+        "target":{"type":"new-agent","config":{"provider":"codex","cwd":work,"isolation":"local"}}})).await;
+    assert_eq!(
+        created["payload"]["schedule"]["cadence"],
+        json!({"type":"every","everyMs":300}),
+        "{created}"
+    );
+    assert_eq!(
+        created["payload"]["schedule"]["prompt"],
+        "Look at {{url}} for me"
+    );
+    assert!(created["payload"]["schedule"]["plugin"].is_null(), "{created}");
+    let id = created["payload"]["schedule"]["id"].clone();
+    for _ in 0..100 {
+        let list = ask(&mut socket, json!({"type":"schedule/list"})).await;
+        if list["payload"]["schedules"][0]["primed"] == true {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    fs::write(
+        work.join("events"),
+        "{\"id\":\"m2\",\"vars\":{\"url\":\"https://x/pull/8\"}}\n",
+    )
+    .unwrap();
+    finished(&mut socket).await;
+    file_with(
+        &service.0.path().join("plugin-data/chat/sent"),
+        "about https://x/pull/8|reply|yes",
+    )
+    .await;
+    assert!(
+        !service.0.path().join("plugin-data/watch/said").exists(),
+        "the plugin has no part in an automation not made from it"
+    );
+    ask(
+        &mut socket,
+        json!({"type":"schedule/delete","scheduleId":id}),
+    )
+    .await;
+    // Neither is what the other is asked for as.
+    for wrong in [
+        json!({"plugin":"hub"}),
+        json!({"integration":"watch"}),
+        json!({"plugin":"missing"}),
+        json!({"integration":"hub","trigger":"never"}),
+        json!({"plugin":"watch","template":"never"}),
+    ] {
+        let mut request = json!({"type":"schedule/create","prompt":"Do it",
+            "target":{"type":"new-agent","config":{"provider":"codex","cwd":work,"isolation":"local"}}});
+        for (key, value) in wrong.as_object().unwrap() {
+            request[key] = value.clone();
+        }
+        let refused = ask(&mut socket, request).await;
+        assert_eq!(refused["type"], "rpc_error", "{wrong}: {refused}");
+    }
+    assert!(sophon(&["plugin", "remove", "watch"]).0);
+    assert!(sophon(&["plugin", "remove", "chat"]).0);
+    assert!(sophon(&["plugin", "remove", "hub"]).0);
+    assert!(!kept.exists(), "what it kept goes with it");
+
+    // Some come with Sophon: there without being installed, and not to be
+    // removed. An automation on its trigger says its own for what the
+    // trigger asks, and never for what is the integration's own.
+    let listed = ask(&mut socket, json!({"type":"plugin/list"})).await;
+    let own = installed(&listed, "builtin");
+    assert_eq!(
+        (&own["source"], &own["name"], &own["kind"]),
+        (&json!("builtin"), &json!("Built in"), &json!("integration")),
+        "{listed}"
+    );
+    assert_eq!(own["triggers"][0]["params"][0]["name"], "loud");
+    let created = ask(&mut socket,json!({"type":"schedule/create","integration":"builtin","name":"Watch the folder","prompt":"Look",
+        "triggerOptions":{"loud":"yes","token":"not an automation's"},
+        "target":{"type":"new-agent","config":{"provider":"codex","cwd":work,"isolation":"local"}}})).await;
+    assert_eq!(created["type"], "schedule/create/response", "{created}");
+    assert_eq!(created["payload"]["schedule"]["trigger"], "look");
+    let id = created["payload"]["schedule"]["id"].clone();
+    ask(
+        &mut socket,
+        json!({"type":"schedule/run-once","scheduleId":id}),
+    )
+    .await;
+    assert_eq!(
+        file_with(&work.join("builtin-saw"), "|").await,
+        "yes|kept\n"
+    );
+    // Turned off, it stays and nothing of it runs: its automation says why.
+    let off = ask(
+        &mut socket,
+        json!({"type":"plugin/enable","pluginId":"builtin","enabled":false}),
+    )
+    .await;
+    assert_eq!(installed(&off, "builtin")["enabled"], false, "{off}");
+    let refused = ask(
+        &mut socket,
+        json!({"type":"schedule/run-once","scheduleId":id}),
+    )
+    .await;
+    assert_eq!(refused["type"], "rpc_error", "{refused}");
+    assert!(
+        refused["payload"]["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("Built in is turned off"),
+        "{refused}"
+    );
+    let on = ask(
+        &mut socket,
+        json!({"type":"plugin/enable","pluginId":"builtin","enabled":true}),
+    )
+    .await;
+    assert_eq!(installed(&on, "builtin")["enabled"], true, "{on}");
+    // In use it stays.
+    assert!(!sophon(&["plugin", "remove", "builtin"]).0);
+    ask(
+        &mut socket,
+        json!({"type":"schedule/delete","scheduleId":id}),
+    )
+    .await;
+
+    // Its own settings are handed on as a line, and taken in from one: the
+    // secret with them.
+    assert!(sophon(&["plugin", "set", "builtin", "token=handed-on"]).0);
+    let (ok, line) = sophon(&["plugin", "export", "builtin"]);
+    assert!(ok && line.starts_with("sophon-integration:"), "{line}");
+    assert!(sophon(&["plugin", "set", "builtin", "token=changed"]).0);
+    assert_eq!(
+        sophon(&["plugin", "import", line.trim()]),
+        (true, "Set\n".into())
+    );
+    let listed = ask(&mut socket, json!({"type":"plugin/list"})).await;
+    assert_eq!(
+        installed(&listed, "builtin")["params"][0]["value"],
+        "handed-on",
+        "{listed}"
+    );
+    assert!(!sophon(&["plugin", "import", "sophon-integration:bm90IGpzb24"]).0);
+    assert!(!sophon(&["plugin", "import", "https://example.com/x.git"]).0);
+    // No automation uses it now: it is put away with what it kept, and can
+    // be brought back as it comes.
+    let gone = ask(
+        &mut socket,
+        json!({"type":"plugin/remove","pluginId":"builtin"}),
+    )
+    .await;
+    assert!(
+        gone["payload"]["plugins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|plugin| plugin["id"] != "builtin"),
+        "{gone}"
+    );
+    assert_eq!(gone["payload"]["away"][0]["id"], "builtin", "{gone}");
+    assert_eq!(gone["payload"]["away"][0]["kind"], "integration", "{gone}");
+    assert!(!service.0.path().join("plugin-data/builtin").exists());
+    let back = ask(
+        &mut socket,
+        json!({"type":"plugin/restore","pluginId":"builtin"}),
+    )
+    .await;
+    assert_eq!(
+        installed(&back, "builtin")["params"][0]["value"],
+        "kept",
+        "{back}"
+    );
+    assert_eq!(back["payload"]["away"], json!([]));
+    // Its settings pasted where it was put away or turned off bring it
+    // back themselves, on, whatever was said around the line.
+    ask(
+        &mut socket,
+        json!({"type":"plugin/remove","pluginId":"builtin"}),
+    )
+    .await;
+    let taken = ask(
+        &mut socket,
+        json!({"type":"plugin/import","config":format!("Here it is:\n{}\nthanks", line.trim())}),
+    )
+    .await;
+    assert_eq!(
+        installed(&taken, "builtin")["params"][0]["value"],
+        "handed-on",
+        "{taken}"
+    );
+    assert_eq!(taken["payload"]["away"], json!([]));
+    ask(
+        &mut socket,
+        json!({"type":"plugin/enable","pluginId":"builtin","enabled":false}),
+    )
+    .await;
+    let taken = ask(
+        &mut socket,
+        json!({"type":"plugin/import","config":line.trim()}),
+    )
+    .await;
+    assert_eq!(installed(&taken, "builtin")["enabled"], true, "{taken}");
+
+    // A plugin from a git address is a copy of its own, and what it
+    // brings with it is there while it is.
+    let brought = plugin.join("integrations/mail");
+    fs::create_dir_all(&brought).unwrap();
+    install(&brought, "send", "#!/bin/sh\necho mailed \"$1\"\n");
+    fs::write(
+        manifest(&brought, "integration"),
+        r#"{"name":"Mail","use":"./send"}"#,
+    )
+    .unwrap();
+    git(&plugin, &["init", "-q"]);
+    git(&plugin, &["add", "."]);
+    git(
+        &plugin,
+        &[
+            "-c",
+            "user.name=a",
+            "-c",
+            "user.email=a@b",
+            "commit",
+            "-qm",
+            "plugin",
+        ],
+    );
+    let (ok, out) = sophon(&["plugin", "add", &format!("file://{folder}")]);
+    assert!(ok, "{out}");
+    let listed = ask(&mut socket, json!({"type":"plugin/list"})).await;
+    assert_eq!(installed(&listed, "watch")["source"], "git", "{listed}");
+    assert!(service.0.path().join("plugins/watch/reply").is_file());
+    let mail = installed(&listed, "mail");
+    assert_eq!(
+        (&mail["kind"], &mail["source"], &mail["from"]),
+        (&json!("integration"), &json!("plugin"), &json!("watch")),
+        "{listed}"
+    );
+    assert_eq!(
+        installed(&listed, "watch")["requires"][1],
+        json!({"id":"mail","name":"Mail","installed":true,"ready":true}),
+        "{listed}"
+    );
+    assert_eq!(sophon(&["use", "mail", "ada"]), (true, "mailed ada\n".into()));
+    // All of it handed on as a file: the plugin's folder, the
+    // integration it brings riding in it. Read back it is shown first,
+    // and installed only when that is asked.
+    let packed = ask(
+        &mut socket,
+        json!({"type":"plugin/pack","pluginId":"watch"}),
+    )
+    .await;
+    assert_eq!(packed["payload"]["fileName"], "watch.sophon", "{packed}");
+    assert!(
+        !packed["payload"]["about"].to_string().contains("s3cret"),
+        "{packed}"
+    );
+    let read = ask(
+        &mut socket,
+        json!({"type":"plugin/unpack","archive":packed["payload"]["archive"]}),
+    )
+    .await;
+    let about = &read["payload"]["about"];
+    assert_eq!(about["root"], "watch", "{read}");
+    assert_eq!(about["packages"][0]["here"], "installed", "{read}");
+    assert!(
+        about["packages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|package| package["id"] == "mail" && package["included"] == true),
+        "{read}"
+    );
+    let token = read["payload"]["token"].clone();
+    let done = ask(
+        &mut socket,
+        json!({"type":"plugin/install","token":token}),
+    )
+    .await;
+    assert_eq!(done["payload"]["installed"]["root"], "watch", "{done}");
+    assert_eq!(installed(&done, "watch")["source"], "file", "{done}");
+    assert!(service.0.path().join("plugins/watch/reply").is_file());
+    assert_eq!(sophon(&["use", "mail", "ada"]), (true, "mailed ada\n".into()));
+    // A file is installed once: its token is gone with what was read.
+    let again = ask(
+        &mut socket,
+        json!({"type":"plugin/install","token":token}),
+    )
+    .await;
+    assert_eq!(again["type"], "rpc_error", "{again}");
+    let refused = ask(
+        &mut socket,
+        json!({"type":"plugin/unpack","archive":"bm90IGEgZmlsZQ=="}),
+    )
+    .await;
+    assert_eq!(refused["type"], "rpc_error", "{refused}");
+    // The same from a terminal: a file written, then added from.
+    let handed = author.join("handed.sophon");
+    let (ok, out) = sophon(&[
+        "plugin",
+        "pack",
+        "watch",
+        "--no-settings",
+        handed.to_str().unwrap(),
+    ]);
+    assert!(
+        ok && out.contains("watch\tplugin\tWatch\tin the file"),
+        "{out}"
+    );
+    let (ok, out) = sophon(&["plugin", "add", handed.to_str().unwrap()]);
+    assert!(ok && out.contains("Installed Watch"), "{out}");
+    // It goes when its plugin does, and not before.
+    let (ok, out) = sophon(&["plugin", "remove", "mail"]);
+    assert!(!ok && out.contains("came with the plugin watch"), "{out}");
+    assert!(sophon(&["plugin", "remove", "watch"]).0);
+    let listed = ask(&mut socket, json!({"type":"plugin/list"})).await;
+    assert!(
+        listed["payload"]["plugins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|package| package["id"] != "mail"),
+        "{listed}"
+    );
+}
+
+#[tokio::test]
+async fn a_command_runs_with_no_agent_and_only_so_often_a_day() {
+    let service = Service(tempfile::tempdir().unwrap());
+    let work = tempfile::tempdir().unwrap();
+    let work = work.path().canonicalize().unwrap();
+    // No `codex` here at all: a command needs no agent's CLI.
+    service.cli("start");
+    let mut socket = service.connect(true).await;
+    let sophon = |args: &[&str]| {
+        let output = Command::new(service.0.path().join("bin/sophon"))
+            .args(args)
+            .env("SOPHON_SERVICE_HOME", service.0.path())
+            .output()
+            .unwrap();
+        (
+            output.status.success(),
+            String::from_utf8_lossy(&output.stdout).into_owned()
+                + &String::from_utf8_lossy(&output.stderr),
+        )
+    };
+    let nothing = ask(&mut socket,json!({"type":"schedule/create","name":"Empty",
+        "target":{"type":"new-agent","config":{"provider":"codex","cwd":work,"isolation":"local"}}})).await;
+    assert_eq!(nothing["type"], "rpc_error", "{nothing}");
+    let created = ask(&mut socket,json!({"type":"schedule/create","name":"Sync","dailyLimit":2,
+        "command":"echo \"synced $SOPHON_VAR_WHAT in $PWD\"; echo ran >> ran",
+        "target":{"type":"new-agent","config":{"provider":"codex","cwd":work,"isolation":"local"}}})).await;
+    assert_eq!(created["type"], "schedule/create/response", "{created}");
+    let id = created["payload"]["schedule"]["id"].clone();
+    assert!(created["payload"]["schedule"]["nextRunAt"].is_null());
+    let run = |what: &str| sophon(&["trigger", "Sync", "--var", &format!("what={what}")]);
+    assert!(run("one").0);
+    assert!(run("two").0);
+    file_with(&work.join("ran"), "ran\nran\n").await;
+    // The day's two are had: a third is refused, and said so.
+    let (ok, out) = run("three");
+    assert!(!ok && out.contains("had its runs for today"), "{out}");
+    let logs = ask(&mut socket, json!({"type":"schedule/logs","scheduleId":id})).await;
+    let runs = logs["payload"]["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 2, "{logs}");
+    assert_eq!(runs[1]["status"], "completed", "{logs}");
+    assert_eq!(
+        runs[1]["output"],
+        format!("synced one in {}", work.display())
+    );
+    assert!(runs[1]["agentId"].is_null(), "{logs}");
+    let list = ask(&mut socket, json!({"type":"schedule/list"})).await;
+    assert_eq!(list["payload"]["schedules"][0]["runsToday"], 2, "{list}");
+    // Asked for by hand it runs all the same; a command that fails says why.
+    ask(
+        &mut socket,
+        json!({"type":"schedule/update","scheduleId":id,"command":"echo broken >&2; exit 4"}),
+    )
+    .await;
+    ask(
+        &mut socket,
+        json!({"type":"schedule/run-once","scheduleId":id}),
+    )
+    .await;
+    for _ in 0..100 {
+        let logs = ask(&mut socket, json!({"type":"schedule/logs","scheduleId":id})).await;
+        let last = &logs["payload"]["runs"][0];
+        if last["status"] == "failed" {
+            assert!(
+                last["error"].as_str().unwrap().ends_with("broken"),
+                "{logs}"
+            );
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("The failing command never ended");
+}
+
+#[tokio::test]
+async fn a_command_is_tried_before_it_is_kept() {
+    let service = Service(tempfile::tempdir().unwrap());
+    let work = tempfile::tempdir().unwrap();
+    let work = work.path().canonicalize().unwrap();
+    service.cli("start");
+    let mut socket = service.connect(true).await;
+    // Run where an automation would run it, and told what one is told.
+    let tried = ask(
+        &mut socket,
+        json!({"type":"automation/try","command":"echo \"in $PWD\"; echo \"dir $SOPHON_PROJECT_DIR\"; command -v sophon >/dev/null && echo reaches","cwd":work}),
+    )
+    .await;
+    assert_eq!(tried["type"], "automation/try/response", "{tried}");
+    assert_eq!(tried["payload"]["ok"], true, "{tried}");
+    let folder = work.to_str().unwrap();
+    assert_eq!(
+        tried["payload"]["output"],
+        format!("in {folder}\ndir {folder}\nreaches"),
+        "{tried}"
+    );
+    // One that fails says so, with the end of what it complained of.
+    let failed = ask(
+        &mut socket,
+        json!({"type":"automation/try","command":"echo nearly; echo broken >&2; exit 3","cwd":work}),
+    )
+    .await;
+    assert_eq!(failed["payload"]["ok"], false, "{failed}");
+    assert!(
+        failed["payload"]["output"].as_str().unwrap().ends_with("broken"),
+        "{failed}"
+    );
+    // Nothing is kept of either: no automation, no run.
+    let list = ask(&mut socket, json!({"type":"schedule/list"})).await;
+    assert_eq!(list["payload"]["schedules"], json!([]), "{list}");
+    // And it needs words to run, and somewhere to run them.
+    for wrong in [
+        json!({"type":"automation/try","command":"  ","cwd":work}),
+        json!({"type":"automation/try","command":"true","cwd":"/nowhere/at/all"}),
+    ] {
+        let refused = ask(&mut socket, wrong.clone()).await;
+        assert_eq!(refused["type"], "rpc_error", "{wrong}: {refused}");
+    }
+}
+
+/// The runs of the automation `id`, newest first.
+async fn runs_of(socket: &mut Socket, id: &Value) -> Vec<Value> {
+    ask(socket, json!({"type":"schedule/logs","scheduleId":id})).await["payload"]["runs"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn a_run_the_service_stopped_under_is_started_again() {
+    let service = Service(tempfile::tempdir().unwrap());
+    let work = tempfile::tempdir().unwrap();
+    let work = work.path().canonicalize().unwrap();
+    // A `codex` whose turn never ends: the run is underway when the
+    // service stops.
+    install_provider(service.0.path());
+    let cli = service.0.path().join("codex");
+    let script = fs::read_to_string(&cli).unwrap();
+    let hanging: String = script
+        .lines()
+        .filter(|line| !line.contains("turn/completed"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_ne!(hanging.len(), script.len());
+    fs::write(&cli, hanging).unwrap();
+    service.cli("start");
+    let mut socket = service.connect(true).await;
+    fs::write(work.join("events"), "").unwrap();
+    let created = ask(&mut socket,json!({"type":"schedule/create","name":"Reviews","prompt":"Review {{url}}",
+        "cadence":{"type":"every","everyMs":300},"probe":"cat events",
+        "target":{"type":"new-agent","config":{"provider":"codex","cwd":work,"isolation":"local"}}})).await;
+    let id = created["payload"]["schedule"]["id"].clone();
+    for _ in 0..100 {
+        let list = ask(&mut socket, json!({"type":"schedule/list"})).await;
+        if list["payload"]["schedules"][0]["primed"] == true {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    fs::write(
+        work.join("events"),
+        "{\"id\":\"pr-1\",\"vars\":{\"url\":\"https://x/pull/1\"}}\n",
+    )
+    .unwrap();
+    for _ in 0..100 {
+        if runs_of(&mut socket, &id).await.len() == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(runs_of(&mut socket, &id).await[0]["status"], "running");
+    // The service stops under it, and starts again (an update does this).
+    service.cli("stop");
+    service.cli("start");
+    let mut socket = service.connect(true).await;
+    // The one cut off is said to be, and what caused it starts another.
+    for _ in 0..100 {
+        if runs_of(&mut socket, &id).await.len() == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let all = runs_of(&mut socket, &id).await;
+    assert_eq!(all.len(), 2, "{all:?}");
+    assert_eq!(all[1]["status"], "failed");
+    assert_eq!(all[1]["error"], "The service stopped while it ran");
+    assert_eq!(all[0]["event"]["id"], "pr-1");
+    assert_eq!(all[0]["status"], "running");
+}
+
+#[tokio::test]
+async fn a_probe_that_keeps_failing_is_paused_with_why() {
+    let service = Service(tempfile::tempdir().unwrap());
+    install_provider(service.0.path());
+    service.cli("start");
+    let mut socket = service.connect(true).await;
+    let refused = ask(&mut socket,json!({"type":"schedule/create","prompt":"x","probe":"true",
+        "target":{"type":"new-agent","config":{"provider":"codex","cwd":service.0.path(),"isolation":"local"}}})).await;
+    assert_eq!(refused["type"], "rpc_error", "{refused}");
+    let created = ask(&mut socket,json!({"type":"schedule/create","prompt":"x",
+        "cadence":{"type":"every","everyMs":100},"probe":"echo gone >&2; exit 3",
+        "target":{"type":"new-agent","config":{"provider":"codex","cwd":service.0.path(),"isolation":"local"}}})).await;
+    assert_eq!(created["type"], "schedule/create/response", "{created}");
+    for _ in 0..200 {
+        let list = ask(&mut socket, json!({"type":"schedule/list"})).await;
+        let schedule = &list["payload"]["schedules"][0];
+        if schedule["status"] == "paused" {
+            assert_eq!(schedule["probeFailures"], 5);
+            assert!(
+                schedule["probeError"].as_str().unwrap().ends_with("gone"),
+                "{schedule}"
+            );
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("The automation went on");
 }
 
 /// The real `claude`, signed in on this machine, through a whole turn:
@@ -1605,6 +2672,14 @@ async fn background_work_a_fork_and_going_back() {
     assert_eq!(next["type"], "workspace.create.response", "{next}");
     finished(&mut socket).await;
 
+    // Where a client that has it all open stands in its stream.
+    let place = ask(
+        &mut socket,
+        json!({"type":"fetch_agent_timeline_request","agentId":agent}),
+    )
+    .await["payload"]["endCursor"]
+        .clone();
+
     // Back to before the second message, files and conversation both.
     let id = "rewind-1";
     send(
@@ -1640,6 +2715,22 @@ async fn background_work_a_fork_and_going_back() {
     )
     .await;
     let said: Vec<_> = timeline["payload"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["item"]["text"].clone())
+        .collect();
+    assert_eq!(said, ["one", "ok"]);
+    // A client that kept its place from before the rewind, in what was taken
+    // away, is given the conversation as it now is: "what came after" would
+    // leave the message taken back on its screen.
+    let kept = ask(
+        &mut socket,
+        json!({"type":"fetch_agent_timeline_request","agentId":agent,"direction":"after","cursor":place}),
+    )
+    .await;
+    assert_eq!(kept["payload"]["reset"], true, "{kept}");
+    let said: Vec<_> = kept["payload"]["entries"]
         .as_array()
         .unwrap()
         .iter()

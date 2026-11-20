@@ -1,0 +1,28 @@
+{
+  "category": "review",
+  "trigger": "github/review-requested",
+  "reply": "./notify reply",
+  "modeId": "auto",
+  "concurrency": 2,
+  "params": [
+    {
+      "name": "approve",
+      "type": "switch",
+      "label": "没有阻塞问题时直接 approve",
+      "hint": "关闭时只评论，结论写在评论里",
+      "value": false,
+      "var": "rule",
+      "prompt": {
+        "yes": "没有阻塞问题就用 gh pr review --approve 提交，正文用一两句话说明看了什么；有阻塞问题用 --comment 提交，逐条写清文件、行号和原因。不要用 --request-changes。",
+        "no": "只用 gh pr review --comment 提交，不要 approve，也不要 request changes。正文第二行写明结论：「没有发现阻塞问题」或「有需要处理的问题」，后面逐条写清文件、行号和原因。"
+      }
+    },
+    {
+      "name": "notify",
+      "type": "switch",
+      "label": "完成后在飞书通知 PR 作者",
+      "hint": "需要先在「集成」里连上飞书",
+      "value": true
+    }
+  ]
+}

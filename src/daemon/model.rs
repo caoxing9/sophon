@@ -334,7 +334,11 @@ impl Agent {
             requires_attention: v.get("requiresAttention").and_then(Value::as_bool).unwrap_or(false),
             attention_reason: str_of(v, "attentionReason"),
             archived: v.get("archivedAt").is_some_and(|a| !a.is_null()),
-            scheduled: ["sophon.schedule-id","paseo.schedule-id"].iter().any(|key| v["labels"].get(key).is_some_and(|value|!value.is_null())),
+            // Only the old service's: it made a workspace for each run and
+            // archived it after, so listed they came and went on their own.
+            // What an automation starts on this service is a conversation
+            // like any other: listed, to read and to go on with.
+            scheduled: v["labels"].get("paseo.schedule-id").is_some_and(|value| !value.is_null()),
             named: v.pointer("/labels/sophon.named").and_then(Value::as_str) == Some("1"),
             pinned: v.pointer("/labels/sophon.pinned").and_then(Value::as_str) == Some("1"),
             last_user_message_at: str_of(v, "lastUserMessageAt").unwrap_or_default(),
@@ -523,11 +527,7 @@ impl Item {
                 retry_of(&message).unwrap_or(Item::Notice { message })
             }
             "compaction" => Item::Notice {
-                message: if str_of(v, "status").as_deref() == Some("loading") {
-                    "Compacting context…".into()
-                } else {
-                    "Context compacted".into()
-                },
+                message: if str_of(v, "status").as_deref() == Some("loading") { COMPACTING.into() } else { COMPACTED.into() },
             },
             _ => return None,
         })
@@ -577,8 +577,36 @@ pub fn apply_live(items: &mut Vec<Item>, incoming: Item) {
             }
             items.push(incoming);
         }
+        // One compaction is one row: said once however often the agent says
+        // it is at it, and that row is the one that says it is done.
+        Item::Notice { ref message } if message == COMPACTING || message == COMPACTED => {
+            let under_way = items.iter().rposition(|i| matches!(i, Item::Notice { message } if message == COMPACTING));
+            match under_way {
+                Some(row) if message == COMPACTED => items[row] = incoming,
+                Some(_) => {}
+                None => items.push(incoming),
+            }
+        }
         other => items.push(other),
     }
+}
+
+/// What a compaction under way and one done are said as.
+const COMPACTING: &str = "Compacting context…";
+const COMPACTED: &str = "Context compacted";
+
+/// A page of the host's rows with each compaction as its one row, as
+/// `apply_live` leaves them: a record written before the host said it once
+/// has a row for every time the agent said it was at it.
+pub fn settled(rows: Vec<Item>) -> Vec<Item> {
+    let mut items = Vec::with_capacity(rows.len());
+    for row in rows {
+        match row {
+            Item::Notice { ref message } if message == COMPACTING || message == COMPACTED => apply_live(&mut items, row),
+            other => items.push(other),
+        }
+    }
+    items
 }
 
 /// The host's rows for a refetched timeline, keeping the images the rows
@@ -751,6 +779,25 @@ pub fn plan_of(input: &Value) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_compaction_is_one_row_however_often_it_is_said() {
+        let said = |status: &str| Item::from_json(&json!({ "type": "compaction", "status": status })).unwrap();
+        let mut items = vec![];
+        apply_live(&mut items, said("loading"));
+        apply_live(&mut items, Item::User { text: "and this".into(), message_id: None, images: vec![] });
+        apply_live(&mut items, said("loading"));
+        apply_live(&mut items, said("loading"));
+        assert_eq!(items.len(), 2);
+        apply_live(&mut items, said("completed"));
+        assert_eq!(items[0], Item::Notice { message: "Context compacted".into() });
+        assert_eq!(items.len(), 2);
+        // The next one is its own row, and a stored page reads the same.
+        apply_live(&mut items, said("loading"));
+        assert_eq!(items.len(), 3);
+        let page = settled(vec![said("loading"), said("loading"), said("completed"), said("completed")]);
+        assert_eq!(page, vec![Item::Notice { message: "Context compacted".into() }; 2]);
+    }
 
     #[test]
     fn a_retry_notice_reads_as_a_retry_and_a_run_of_them_as_its_last() {

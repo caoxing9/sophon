@@ -259,19 +259,22 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                 })))
                     .into_element(),
                 // The desktop: its actions show while the pointer is on it.
+                // They have a line of their own under the bubble, kept for
+                // them whether shown or not: nothing after the message is
+                // covered. And the pointer is "on it" over the bubble and
+                // that line alike, so reaching for an action does not lose it.
                 RowKind::User => {
                     let hover = signal(false);
-                    user_row(item, view()
-                    .on_mouse_enter(move |_: &MouseEvent| hover.set(true))
-                    .on_mouse_leave(move |_: &MouseEvent| hover.set(false))
-                    .child(user_actions(item).opacity(move || if hover.get() { 1.0_f32 } else { 0.0 }).transition_opacity())
-                    .px(px(14.0))
-                    .py(px(9.0))
-                    .rounded(px(18.0))
-                    .bg(tint(ACCENT, 0.10))
-                    .selectable(true)
-                    .on_text_selection_change(take_copy)
-                    .child(user_text(item, true)))
+                    user_row(
+                        item,
+                        view()
+                            .items_end()
+                            .gap(px(4.0))
+                            .on_mouse_enter(move |_: &MouseEvent| hover.set(true))
+                            .on_mouse_leave(move |_: &MouseEvent| hover.set(false))
+                            .child(view().px(px(14.0)).py(px(9.0)).rounded(px(18.0)).bg(tint(ACCENT, 0.10)).selectable(true).on_text_selection_change(take_copy).child(user_text(item, true)))
+                            .child(user_actions(item).opacity(move || if hover.get() { 1.0_f32 } else { 0.0 }).transition_opacity()),
+                    )
                     .into_element()
                 }
                 // A copy button floats at its corner: under the pointer on
@@ -769,7 +772,8 @@ fn user_actions(item: Memo<Option<Item>>) -> View {
             Some(Item::User { text, .. }) => Some(message_words(&text)),
             _ => None,
         });
-        return view().absolute().bottom(px(-12.0)).right(px(-4.0)).child(dynamic(move || {
+        // In the room kept under the bubble, as tall as its discs.
+        return view().h(px(22.0)).child(dynamic(move || {
             let body = body.get()?;
             let id = id.get();
             Some(untracked(move || {
@@ -1752,7 +1756,7 @@ fn thinking(running: Memo<bool>) -> impl IntoElement {
                 .flex_row()
                 .items_center()
                 .gap(sp(S2))
-                .child(eclipse(14.0))
+                .child(spark(14.0))
                 .child(text(format!("{verb}…")).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(ACCENT))
                 .child(text(detail).text_size(tx(TEXT_SM)).text_color(FG_FAINT))
                 .into_element()

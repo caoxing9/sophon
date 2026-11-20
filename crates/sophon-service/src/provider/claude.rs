@@ -77,6 +77,8 @@ struct Claude {
     fresh: bool,
     /// A notice about the endpoint not answering went out this turn.
     retried: bool,
+    /// Claude Code is compacting, and that was said.
+    compacting: bool,
     requests: u64,
     /// The model answering, the tokens its last request held, and what
     /// this process has cost so far.
@@ -106,6 +108,7 @@ pub async fn run(start: Start, mut inbox: UnboundedReceiver<Command>, emit: Emit
         spoke: false,
         fresh: false,
         retried: false,
+        compacting: false,
         requests: 0,
         model: String::new(),
         context: 0,
@@ -368,6 +371,9 @@ impl Claude {
                 args.extend([flag.to_owned(), value.clone()]);
             }
         }
+        for folder in &self.start.plugins {
+            args.extend(["--plugin-dir".to_owned(), folder.clone()]);
+        }
         for tool in self.start.settings["disallowedTools"]
             .as_array()
             .into_iter()
@@ -377,15 +383,22 @@ impl Claude {
                 args.extend(["--disallowedTools".to_owned(), tool.to_owned()]);
             }
         }
+        let mut env = vec![
+            ("CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS", "1"),
+            ("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "true"),
+        ];
+        env.extend(
+            self.start
+                .env
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_str())),
+        );
         self.process = Some(Process::spawn(
             "claude",
             &self.start.settings,
             &self.start.cwd,
             &args,
-            &[
-                ("CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS", "1"),
-                ("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "true"),
-            ],
+            &env,
         )?);
         self.states = false;
         self.introduced = Some(format!("sophon-{}", self.requests + 1));
@@ -644,9 +657,13 @@ impl Claude {
             }
             Some("status") => {
                 self.mode(&event["permissionMode"]);
-                if event["status"] == "compacting" {
+                // Said once: Claude Code says it is at it again and again
+                // while one compaction lasts.
+                let compacting = event["status"] == "compacting";
+                if compacting && !self.compacting {
                     self.item(json!({"type":"compaction","status":"loading"}));
                 }
+                self.compacting = compacting;
             }
             // An agent it started, as Claude Code keeps track of it.
             Some("task_started") => {
@@ -690,6 +707,7 @@ impl Claude {
                 (self.emit)(Event::Background(json!(tasks)));
             }
             Some("compact_boundary") => {
+                self.compacting = false;
                 self.item(json!({"type":"compaction","status":"completed"}))
             }
             Some("session_state_changed") => {

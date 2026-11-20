@@ -814,7 +814,7 @@ fn disc(running: Memo<bool>, busy: Memo<bool>, empty: Memo<bool>, submit: impl F
 /// A model the provider does not list (a default the daemon keeps, from
 /// another Claude Code version) by a short name: `claude-opus-5-5` as
 /// `Opus 5.5`; any other id as it is.
-fn model_name(id: &str) -> String {
+pub(crate) fn model_name(id: &str) -> String {
     let Some(rest) = id.strip_prefix("claude-") else { return id.to_owned() };
     let mut parts = rest.split('-');
     let Some(family) = parts.next().filter(|f| !f.is_empty() && f.chars().all(|c| c.is_ascii_alphabetic())) else {
@@ -830,7 +830,7 @@ fn model_name(id: &str) -> String {
 }
 
 /// The model picker ([`super::model_picker`]), showing the model's name.
-fn model_picker(live: bool) -> impl IntoElement {
+pub(crate) fn model_picker(live: bool) -> impl IntoElement {
     let name = computed(move || {
         let c = store::controls(live);
         let provider = store::provider(&c.provider);

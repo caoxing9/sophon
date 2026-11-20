@@ -33,9 +33,9 @@ fn row_status(status: impl Fn() -> Status + 'static) -> impl IntoElement {
                 if MOBILE || current != Status::Running {
                     return status_dot(move || current).into_element();
                 }
-                // Running: the app's own loading mark, as everywhere it
-                // waits (a ring of its own here was one more way to say so).
-                eclipse(13.0).label(current.label()).into_element()
+                // Running: the mark an agent at work has in its own
+                // conversation, the same here.
+                spark(13.0).label(current.label()).into_element()
             }))
         }))
 }

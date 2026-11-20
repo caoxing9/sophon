@@ -35,6 +35,10 @@ pub(crate) enum Screen {
     Settings,
     History,
     Schedules,
+    /// The integrations the host is connected to.
+    Plugins,
+    /// The plugins on the host: what was made of integrations, to hand on.
+    Extensions,
     Usage,
     Workspace(String),
     /// The open pull requests that involve the user (`crate::github`).
@@ -1396,6 +1400,16 @@ pub(crate) struct Queued {
 /// until they are sent on or taken back to be edited.
 #[derive(Clone, Default)]
 struct QueueHeld(std::collections::HashSet<String>);
+/// When Escape was last pressed in each agent's composer: another soon
+/// after is the second of two.
+#[derive(Clone, Default)]
+struct Escaped(HashMap<String, std::time::Instant>);
+/// The agents whose last message comes back into the composer as soon
+/// as they have stopped: Escape pressed twice while one was working.
+#[derive(Clone, Default)]
+struct TakingBack(std::collections::HashSet<String>);
+/// How soon after an Escape another is the second of two.
+const TWICE: std::time::Duration = std::time::Duration::from_millis(1500);
 #[derive(Clone, Default)]
 struct Commands(HashMap<String, Vec<SlashCommand>>);
 #[derive(Clone, Default)]
@@ -1446,8 +1460,15 @@ pub(crate) enum Modal {
     Palette,
     /// The open workspace's changed files, to open one's diff (⌘P).
     ChangedFiles,
-    NewSchedule,
-    EditSchedule(crate::daemon::connection::Schedule),
+    /// Picking some of the choices of a plugin's parameter.
+    /// Removing an integration, with what it kept: asked first.
+    RemovePlugin { id: String, name: String },
+    /// An integration or a plugin as a file to hand on: what goes in it.
+    HandOn { id: String },
+    /// A file someone handed on, read: what it holds, before it is installed.
+    TakeIn(crate::daemon::connection::HandedFile),
+    /// `draft`: for the automation in the editor, not for the plugin itself.
+    PluginChoices { plugin: String, param: crate::daemon::connection::PluginParam, draft: bool },
     AddProject,
     /// Another computer's folder, for the new conversation.
     ChooseFolder,
@@ -3817,26 +3838,49 @@ pub(crate) fn queue_held(agent_id: &str) -> bool {
 /// Escape in the open agent's composer, as Claude Code's: while the agent
 /// runs it stops it, and what is queued waits instead of being sent; once
 /// more, the queued messages come back into the composer to be edited.
+/// With nothing queued, twice in a row takes the last message sent back:
+/// the conversation goes to before it, and its words stand in the
+/// composer to be written again.
 pub(crate) fn escape_composer() {
     let Some(agent) = selected_agent() else { return };
     let queued = global::<Queues>().with_untracked(|q| q.0.get(&agent.id).cloned().unwrap_or_default());
+    let now = std::time::Instant::now();
+    let again = global::<Escaped>().with_untracked(|e| e.0.get(&agent.id).is_some_and(|last| now.duration_since(*last) < TWICE));
+    global::<Escaped>().update(|e| {
+        if again {
+            // The second of two is not the first of another two.
+            e.0.remove(&agent.id);
+        } else {
+            e.0.insert(agent.id.clone(), now);
+        }
+    });
     if agent.is_running() {
         if !queued.is_empty() {
             global::<QueueHeld>().update(|h| {
                 h.0.insert(agent.id.clone());
             });
+        } else if again {
+            // It was asked to stop a moment ago: its message comes back
+            // once it has.
+            global::<TakingBack>().update(|b| {
+                b.0.insert(agent.id.clone());
+            });
         }
         send(Command::Cancel(agent.id));
+        return;
+    }
+    if queued.is_empty() {
+        if again {
+            take_back(&agent);
+        } else if last_sent(&agent.id).is_some() {
+            notify(t("Esc again to take your last message back").into());
+        }
         return;
     }
     // Attachments stand as chips in the composer's text, which this would
     // replace: they are sent or removed first. Queued messages that carry
     // their own stay queued (their chips are gone from the composer).
-    if queued.is_empty()
-        || !pending_images().is_empty()
-        || !pending_files().is_empty()
-        || queued.iter().any(|m| !m.images.is_empty() || !m.attachments.is_empty())
-    {
+    if !pending_images().is_empty() || !pending_files().is_empty() || queued.iter().any(|m| !m.images.is_empty() || !m.attachments.is_empty()) {
         return;
     }
     global::<Queues>().update(|q| {
@@ -3852,6 +3896,52 @@ pub(crate) fn escape_composer() {
         text.push_str(&draft);
     }
     set_draft(&agent.id, &text);
+}
+
+/// The last message sent in `agent_id`'s open conversation that a rewind
+/// can name: its id, its words, and whether it carried pictures.
+fn last_sent(agent_id: &str) -> Option<(String, String, bool)> {
+    global::<Timeline>().with_untracked(|t| {
+        if t.agent_id.as_deref() != Some(agent_id) {
+            return None;
+        }
+        t.items.iter().rev().find_map(|i| match i {
+            Item::User { text, message_id: Some(id), images } if !text.trim().is_empty() => Some((id.clone(), text.clone(), !images.is_empty())),
+            _ => None,
+        })
+    })
+}
+
+/// Takes the last message sent back to be written again: the
+/// conversation goes to before it (the files stay as they are: the
+/// message's own menu rewinds those), and its words stand in the
+/// composer, before whatever was being typed there.
+fn take_back(agent: &Agent) {
+    let Some((message, text, pictured)) = last_sent(&agent.id) else { return };
+    // Its pictures would not come back with its words, and chips standing
+    // in the composer would be written over.
+    if pictured || !pending_images().is_empty() || !pending_files().is_empty() {
+        notify(t("This message has pictures or files with it: rewind from its own menu instead").into());
+        return;
+    }
+    send(Command::Rewind { agent: agent.id.clone(), message_id: message, mode: "conversation" });
+    let draft = draft(&agent.id);
+    set_draft(&agent.id, &if draft.trim().is_empty() { text } else { format!("{text}\n{draft}") });
+}
+
+/// `agent` as it stands now: one whose message was asked back while it
+/// worked gives it back once it has stopped.
+fn take_back_once_stopped(agent: &Agent) {
+    if agent.is_running() || !global::<TakingBack>().with_untracked(|b| b.0.contains(&agent.id)) {
+        return;
+    }
+    global::<TakingBack>().update(|b| {
+        b.0.remove(&agent.id);
+    });
+    // Only for the conversation that is open: its timeline is what names the message.
+    if selected_id().as_deref() == Some(agent.id.as_str()) {
+        take_back(agent);
+    }
 }
 
 /// Sends queued message `index` now, into the running turn (steer), as
@@ -4146,7 +4236,257 @@ pub(crate) fn schedule_op(id: &str, op: &'static str) {
     send(Command::ScheduleOp { id: id.to_owned(), op });
 }
 
-fn schedule_of(name: String, prompt: String, cadence: String, cwd: String, worktree: bool) -> crate::daemon::connection::NewSchedule {
+/// A command tried from the automation editor: on its way, or how it went.
+#[derive(Clone, Default, PartialEq)]
+pub(crate) enum Trial {
+    #[default]
+    None,
+    Running,
+    /// Whether it ended well, the end of what it wrote, and how long it took.
+    Done { ok: bool, output: String, took_ms: u64 },
+}
+
+pub(crate) fn trial() -> Trial {
+    global::<Trial>().get()
+}
+
+/// The editor opened on another automation, or the command changed: what
+/// the last try said is not about this one.
+pub(crate) fn reset_trial() {
+    if global::<Trial>().with_untracked(|trial| *trial != Trial::None && *trial != Trial::Running) {
+        global::<Trial>().set(Trial::None);
+    }
+}
+
+/// Runs `command` once on the host, in `cwd`, as an automation would;
+/// nothing is kept of it.
+pub(crate) fn try_command(command: &str, cwd: &str) {
+    if command.trim().is_empty() || global::<Trial>().with_untracked(|trial| *trial == Trial::Running) {
+        return;
+    }
+    global::<Trial>().set(Trial::Running);
+    send(Command::TryCommand { command: command.trim().to_owned(), cwd: cwd.to_owned() });
+}
+
+/// What the schedule's form asks beyond its prompt and cadence.
+pub(crate) struct ScheduleExtras {
+    pub cwd: String,
+    pub worktree: bool,
+    pub probe: String,
+    pub reply: String,
+    pub integration: String,
+    pub trigger: String,
+    pub trigger_options: Vec<(String, String)>,
+    pub plugin: String,
+    pub template: String,
+    pub options: Vec<(String, String)>,
+    pub command: String,
+    pub daily_limit: Option<u32>,
+    /// What it runs on was picked again in the editor.
+    pub repicked: bool,
+}
+
+/// The integrations and plugins on the host; none before it said.
+#[derive(Clone, Default)]
+struct PluginsState {
+    list: Vec<crate::daemon::connection::Plugin>,
+    /// Those whose setup is underway, and why the last one of each failed.
+    busy: std::collections::HashSet<String>,
+    failed: HashMap<String, String>,
+    /// Those whose settings are open on the page: kept here, since a
+    /// change of one redraws its card.
+    open: std::collections::HashSet<String>,
+    /// The choices asked of a plugin for a parameter, by plugin and
+    /// parameter: none while they are on their way.
+    choices: HashMap<(String, String), Option<Result<Vec<crate::daemon::connection::PluginChoice>, String>>>,
+    /// What the automation open in the editor says for what its trigger
+    /// and its plugin's automation ask, by what each is kept under
+    /// (`ParamOf::key`): kept with it when saved.
+    drafts: HashMap<String, String>,
+    /// Those that come with Sophon and were removed: id, name and which
+    /// of the two it is.
+    away: Vec<(String, String, crate::daemon::connection::PluginKind)>,
+}
+
+pub(crate) fn plugins() -> Vec<crate::daemon::connection::Plugin> {
+    global::<PluginsState>().with(|s| s.list.clone())
+}
+
+pub(crate) fn load_plugins() {
+    send(Command::Plugins);
+}
+
+pub(crate) fn open_extensions() {
+    global::<Nav>().update(|n| n.screen = Screen::Extensions);
+    load_plugins();
+}
+
+pub(crate) fn open_plugins() {
+    global::<Nav>().update(|n| n.screen = Screen::Plugins);
+    send(Command::WatchDiff(None));
+}
+
+/// Installs a plugin from a git address, or a folder of the host.
+pub(crate) fn add_plugin(source: &str) {
+    if !source.trim().is_empty() {
+        send(Command::AddPlugin(source.trim().to_owned()));
+    }
+}
+
+/// How an integration's settings handed on begin (the service's own word).
+const EXPORTED: &str = "sophon-integration:";
+
+/// What was typed where an integration is added: a line of settings
+/// someone handed on, else where to install one from.
+pub(crate) fn add_or_import_plugin(typed: &str) {
+    let typed = typed.trim();
+    if typed.contains(EXPORTED) {
+        send(Command::ImportPlugin(typed.to_owned()));
+    } else {
+        add_plugin(typed);
+    }
+}
+
+/// The integrations that come with Sophon and were removed.
+pub(crate) fn plugins_away(kind: crate::daemon::connection::PluginKind) -> Vec<(String, String)> {
+    global::<PluginsState>().with(|s| s.away.iter().filter(|(.., of)| *of == kind).map(|(id, name, _)| (id.clone(), name.clone())).collect())
+}
+
+pub(crate) fn enable_plugin(id: &str, enabled: bool) {
+    send(Command::EnablePlugin { id: id.to_owned(), enabled });
+}
+
+pub(crate) fn restore_plugin(id: &str) {
+    send(Command::RestorePlugin(id.to_owned()));
+}
+
+/// The integration's own settings, copied as a line to hand on.
+pub(crate) fn export_plugin(id: &str) {
+    send(Command::ExportPlugin(id.to_owned()));
+}
+
+/// The integration or plugin `id` as a file, saved on this device once
+/// the service made it: `settings` is `all`, `plain` (none of the
+/// secrets) or `none`; `schedule` an automation made with it, to go along.
+pub(crate) fn pack_plugin(id: &str, settings: &'static str, schedule: Option<String>) {
+    send(Command::PackPlugin { id: id.to_owned(), settings, schedule });
+}
+
+/// A file someone handed on, chosen on this device: read by the service
+/// and shown (`Modal::TakeIn`) before any of it is installed.
+pub(crate) fn choose_handed_file() {
+    spawn_detached(async move {
+        let picked = pick_files(nsh_core::picker::FilePickRequest::new(false, 1)).await;
+        let Some(file) = picked.into_iter().next() else { return };
+        let bytes = file.data.bytes().to_vec();
+        // As large as the service takes, carried whole in a message.
+        if bytes.len() > 8 * 1024 * 1024 {
+            notify(t("That file is too large to be one of Sophon's").to_owned());
+            return;
+        }
+        send(Command::UnpackPlugin(bytes));
+    });
+}
+
+/// Installs the file read under `token`; or lets go of it.
+pub(crate) fn install_handed(token: &str) {
+    send(Command::InstallPlugin(token.to_owned()));
+}
+
+pub(crate) fn discard_handed(token: &str) {
+    send(Command::DiscardPlugin(token.to_owned()));
+}
+
+/// The automation that came with a file just installed, for the
+/// automations page to open filled in.
+#[derive(Clone, Default)]
+struct Handed(Option<crate::daemon::connection::HandedAutomation>);
+
+/// That automation, while the automations page has not taken it.
+pub(crate) fn handed_automation() -> Option<crate::daemon::connection::HandedAutomation> {
+    global::<Handed>().with(|h| h.0.clone())
+}
+
+pub(crate) fn take_handed_automation() {
+    global::<Handed>().update(|h| h.0 = None);
+}
+
+pub(crate) fn remove_plugin(id: &str) {
+    send(Command::RemovePlugin(id.to_owned()));
+}
+
+pub(crate) fn update_plugin(id: &str) {
+    send(Command::UpdatePlugin(id.to_owned()));
+}
+
+pub(crate) fn set_plugin_params(id: &str, values: Vec<(String, String)>) {
+    send(Command::SetPluginParams { id: id.to_owned(), values });
+}
+
+/// Runs the plugin's setup on the host: its browser opens there.
+pub(crate) fn setup_plugin(id: &str) {
+    global::<PluginsState>().update(|s| {
+        s.busy.insert(id.to_owned());
+        s.failed.remove(id);
+    });
+    send(Command::SetupPlugin(id.to_owned()));
+}
+
+pub(crate) fn plugin_busy(id: &str) -> bool {
+    global::<PluginsState>().with(|s| s.busy.contains(id))
+}
+
+pub(crate) fn plugin_open(id: &str) -> bool {
+    global::<PluginsState>().with(|s| s.open.contains(id))
+}
+
+pub(crate) fn toggle_plugin_open(id: &str, open: bool) {
+    global::<PluginsState>().update(|s| {
+        if open {
+            s.open.insert(id.to_owned());
+        } else {
+            s.open.remove(id);
+        }
+    });
+}
+
+/// Asks `id` for the choices of `param`.
+pub(crate) fn load_plugin_choices(id: &str, param: &crate::daemon::connection::PluginParam) {
+    global::<PluginsState>().update(|s| {
+        s.choices.insert((id.to_owned(), param.of.key(&param.name)), None);
+    });
+    send(Command::PluginOptions { id: id.to_owned(), name: param.name.clone(), of: param.of.clone() });
+}
+
+/// Those choices: none while they are on their way.
+pub(crate) fn plugin_choices(id: &str, param: &crate::daemon::connection::PluginParam) -> Option<Result<Vec<crate::daemon::connection::PluginChoice>, String>> {
+    global::<PluginsState>().with(|s| s.choices.get(&(id.to_owned(), param.of.key(&param.name))).cloned().flatten())
+}
+
+/// What the automation in the editor says for the parameter kept under
+/// `name` (`ParamOf::key`): none while it has not said, and what its
+/// manifest gives stands.
+pub(crate) fn option_draft(name: &str) -> Option<String> {
+    global::<PluginsState>().with(|s| s.drafts.get(name).cloned())
+}
+
+pub(crate) fn set_option_draft(name: &str, value: String) {
+    global::<PluginsState>().update(|s| {
+        s.drafts.insert(name.to_owned(), value);
+    });
+}
+
+/// The editor opened on another automation: what the last one said goes.
+pub(crate) fn reset_option_drafts(said: Vec<(String, String)>) {
+    global::<PluginsState>().update(|s| s.drafts = said.into_iter().collect());
+}
+
+pub(crate) fn plugin_failed(id: &str) -> Option<String> {
+    global::<PluginsState>().with(|s| s.failed.get(id).cloned())
+}
+
+fn schedule_of(name: String, prompt: String, cadence: String, extras: ScheduleExtras) -> crate::daemon::connection::NewSchedule {
+    let ScheduleExtras { cwd, worktree, probe, reply, integration, trigger, trigger_options, plugin, template, options, command, daily_limit, repicked } = extras;
     let f = form();
     let provider = if f.provider.is_empty() { "claude".to_owned() } else { f.provider };
     crate::daemon::connection::NewSchedule {
@@ -4158,16 +4498,31 @@ fn schedule_of(name: String, prompt: String, cadence: String, cwd: String, workt
         provider,
         model: f.model,
         worktree,
+        // The mode the editor shows, which is the composer's own: auto
+        // where none was chosen, since nobody is there to answer a run.
+        // Left to a plugin to say, for an automation made from it.
+        mode: f.mode.or_else(|| plugin.is_empty().then(|| "auto".to_owned())),
+        probe,
+        reply,
+        integration,
+        trigger,
+        trigger_options,
+        plugin,
+        template,
+        options,
+        command,
+        daily_limit,
+        repicked,
     }
 }
 
-pub(crate) fn create_schedule(name: String, prompt: String, cadence: String, cwd: String, worktree: bool) {
-    send(Command::CreateSchedule(schedule_of(name, prompt, cadence, cwd, worktree)));
+pub(crate) fn create_schedule(name: String, prompt: String, cadence: String, extras: ScheduleExtras) {
+    send(Command::CreateSchedule(schedule_of(name, prompt, cadence, extras)));
 }
 
 /// Changes a schedule; its agent and model stay as they were.
-pub(crate) fn update_schedule(id: &str, name: String, prompt: String, cadence: String, cwd: String, worktree: bool) {
-    send(Command::UpdateSchedule { id: id.to_owned(), to: schedule_of(name, prompt, cadence, cwd, worktree) });
+pub(crate) fn update_schedule(id: &str, name: String, prompt: String, cadence: String, extras: ScheduleExtras) {
+    send(Command::UpdateSchedule { id: id.to_owned(), to: schedule_of(name, prompt, cadence, extras) });
 }
 
 #[derive(Clone, Default)]
@@ -6263,6 +6618,7 @@ pub(crate) fn apply(event: Event) {
         Event::AgentUpsert(agent) => {
             let archived = agent.archived;
             let id = agent.id.clone();
+            take_back_once_stopped(&agent);
             flush_queue(&agent);
             notify_attention(&agent);
             global::<Agents>().update(|a| {
@@ -6660,6 +7016,44 @@ pub(crate) fn apply(event: Event) {
                 send(Command::ScheduleRuns(id));
             }
             global::<SchedulesState>().update(|s| s.list = Some(list));
+        }
+        Event::Plugins(list) => {
+            global::<PluginsState>().update(|s| s.list = list);
+        }
+        Event::PluginsAway(list) => {
+            global::<PluginsState>().update(|s| s.away = list);
+        }
+        Event::PluginExported(config) => {
+            set_clipboard(config);
+            notify(crate::i18n::t("Copied. Whoever gets it pastes it under Integrations; it has the secrets in it").to_owned());
+        }
+        Event::PluginPacked { name, bytes } => save_download(name, bytes),
+        Event::PluginUnpacked(file) => open_modal(Modal::TakeIn(file)),
+        Event::PluginInstalled { root, automation } => {
+            let name = plugins().into_iter().find(|p| p.id == root).map(|p| p.name).unwrap_or(root);
+            notify(tf("Added “{}”", &[&name]));
+            // What came set up is opened as it was, for its project to be picked.
+            if let Some(automation) = automation {
+                global::<Handed>().update(|h| h.0 = Some(automation));
+                open_schedules();
+            }
+        }
+        Event::PluginOptions { id, name, result } => {
+            global::<PluginsState>().update(|s| {
+                s.choices.insert((id, name), Some(result));
+            });
+        }
+        Event::CommandTried { ok, output, took_ms } => {
+            global::<Trial>().set(Trial::Done { ok, output, took_ms });
+        }
+        Event::PluginSetup { id, error } => {
+            global::<PluginsState>().update(|s| {
+                s.busy.remove(&id);
+                match error {
+                    Some(error) => s.failed.insert(id, error),
+                    None => s.failed.remove(&id),
+                };
+            });
         }
         Event::ScheduleRuns { id, mut runs } => {
             runs.sort_by(|a, b| b.started.cmp(&a.started));

@@ -26,7 +26,7 @@ pub(crate) fn sidebar() -> View {
                     store::open_new_workspace(None)
                 }))
                 .child(nav_item(Icon::Search, t("Search"), || false, || store::open_modal(store::Modal::Palette)).child(hint("⌘K")))
-                .child(nav_item(Icon::CalendarClock, t("Schedules"), || store::screen() == Screen::Schedules, store::open_schedules))
+                .child(nav_item(Icon::CalendarClock, t("Automations"), || store::screen() == Screen::Schedules, store::open_schedules))
                 .child(more_menu()),
         )
         // The projects under a heading of their own, adding one beside it
@@ -194,10 +194,11 @@ fn nav_item(
         .child(text(label).text_size(tx(TEXT_BASE)).text_color(FG).flex_1())
 }
 
-/// Pull requests, History and Usage, less often wanted, behind "More" (the
-/// row shows which one is open, and a dot while a pull request is unseen).
+/// Pull requests, History and Usage, and what automations are made of
+/// (Integrations, Plugins): less often wanted, behind "More" (the row
+/// shows which one is open, and a dot while a pull request is unseen).
 fn more_menu() -> impl IntoElement {
-    let active = computed(|| matches!(store::screen(), Screen::Inbox | Screen::PullRequest { .. } | Screen::History | Screen::Usage));
+    let active = computed(|| matches!(store::screen(), Screen::Inbox | Screen::PullRequest { .. } | Screen::History | Screen::Usage | Screen::Plugins | Screen::Extensions));
     let width = (if window().width.0 < 600.0 { window().width.0 } else { store::sidebar_width() }) - 2.0 * S2;
     dropdown_wide(
         view()
@@ -215,6 +216,8 @@ fn more_menu() -> impl IntoElement {
                 Screen::Inbox | Screen::PullRequest { .. } => t("Pull requests"),
                 Screen::History => t("History"),
                 Screen::Usage => t("Usage"),
+                Screen::Plugins => t("Integrations"),
+                Screen::Extensions => t("Plugins"),
                 _ => t("More"),
             }).text_size(tx(TEXT_BASE)).text_color(FG).flex_1())
             .child(when(|| store::desk_inbox_items().iter().any(store::inbox_unseen), || view().w(px(6.0)).h(px(6.0)).mr(px(4.0)).rounded(px(R_FULL)).bg(DOT_RUNNING))),
@@ -223,6 +226,9 @@ fn more_menu() -> impl IntoElement {
     .child(menu_row(t("Pull requests"), Some(Icon::GitPullRequest), None, false, store::open_inbox))
     .child(menu_row(t("History"), Some(Icon::History), None, false, store::open_history))
     .child(menu_row(t("Usage"), Some(Icon::Activity), None, false, store::open_usage))
+    .child(menu_divider())
+    .child(menu_row(t("Integrations"), Some(Icon::Workflow), None, false, store::open_plugins))
+    .child(menu_row(t("Plugins"), Some(Icon::Layers), None, false, store::open_extensions))
 }
 
 /// A row's shortcut, faint at its end.
