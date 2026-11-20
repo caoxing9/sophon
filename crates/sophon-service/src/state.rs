@@ -31,6 +31,10 @@ pub struct State {
     pub schedules: BTreeMap<String, Value>,
     #[serde(default)]
     pub runs: BTreeMap<String, Vec<Value>>,
+    /// The events each automation has had, by their ids: one is acted
+    /// on once.
+    #[serde(default)]
+    pub seen: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub labels: BTreeMap<String, Value>,
     /// The agents each agent has started, as its provider told of them.

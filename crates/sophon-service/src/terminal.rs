@@ -87,6 +87,17 @@ fn create(shared: &Shared, cwd: &str) -> Result<Value, String> {
     let mut command = CommandBuilder::new_default_prog();
     command.cwd(cwd);
     command.env("TERM", "xterm-256color");
+    // `sophon` (a plugin's setup, a trigger by hand) is this service's.
+    let home = shared.borrow().home.clone();
+    command.env("SOPHON_SERVICE_HOME", &home);
+    command.env(
+        "PATH",
+        format!(
+            "{}:{}",
+            home.join("bin").display(),
+            std::env::var("PATH").unwrap_or_default()
+        ),
+    );
     let mut reader = pair
         .master
         .try_clone_reader()

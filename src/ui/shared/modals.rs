@@ -296,8 +296,20 @@ fn body(m: Modal) -> View {
         Modal::Commit => commit(),
         Modal::ReportIssue => report_issue(),
         Modal::Palette | Modal::ChangedFiles => view(),
-        Modal::NewSchedule => schedule_form(None),
-        Modal::EditSchedule(s) => schedule_form(Some(s)),
+        Modal::PluginChoices { plugin, param, draft } => plugin_choices(plugin, param, draft),
+        Modal::RemovePlugin { id, name } => sheet(t("Remove integration"))
+            .child(
+                text(tf("“{}” goes, and its sign-in and settings with it. To only stop it for now, turn it off", &[&name]))
+                    .text_size(tx(TEXT_BASE))
+                    .line_height(px(20.0))
+                    .text_color(FG_MUTED),
+            )
+            .child(actions(btn(t("Remove"), Variant::Destructive, Sz::Md, Some(Icon::Trash2), move || {
+                store::remove_plugin(&id);
+                store::close_modal();
+            }))),
+        Modal::HandOn { id } => hand_on(id),
+        Modal::TakeIn(file) => take_in(file),
         Modal::AddProject => add_project(),
         Modal::ChooseFolder => sheet(t("Choose a project folder")).w(px(520.0)).child(host_folders("Use “{}”", |path| {
             store::edit_form(|f| {
@@ -806,184 +818,295 @@ fn commit() -> View {
         .child(actions(btn(t("Commit"), Variant::Primary, Sz::Md, Some(Icon::GitCommitHorizontal), go)))
 }
 
-/// How a new schedule repeats, as the form asks it.
-#[derive(Clone, Copy, PartialEq)]
-enum Repeat {
-    Every,
-    Daily,
-    Weekly,
-    Custom,
+/// Some of the choices of a parameter: those its manifest gives and
+/// those the integration or plugin lists when asked, to search and tick.
+fn plugin_choices(plugin: String, param: crate::daemon::connection::PluginParam, draft: bool) -> View {
+    if param.dynamic {
+        store::load_plugin_choices(&plugin, &param);
+    }
+    let query = signal(String::new());
+    let picked = signal(param.value.split(',').map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned).collect::<Vec<_>>());
+    let (asked, name, listing, given) = (plugin.clone(), param.clone(), param.dynamic, param.options.clone());
+    // The automation's own is kept under whose the parameter is.
+    let (saved, saved_name) = (plugin.clone(), if draft { param.of.key(&param.name) } else { param.name.clone() });
+    sheet(&param.label)
+        .w(px(520.0))
+        .max_h(relative(0.9))
+        .child(field().value(move || query.get()).on_change(move |v: &str| query.set(v.to_owned())).placeholder(t("Search")).auto_focus(true))
+        .child(scroll().h(px(360.0)).child(dynamic(move || {
+            let listed = if listing { store::plugin_choices(&asked, &name) } else { Some(Ok(Vec::new())) };
+            let needle = query.get().trim().to_lowercase();
+            let given = given.clone();
+            Some(untracked(move || {
+                let mut col = view().gap(px(2.0));
+                let more = match listed {
+                    None => return col.child(loading()),
+                    Some(Err(error)) => {
+                        col = col.child(text(error).text_size(tx(TEXT_SM)).text_color(DANGER).px(sp(S2)).py(sp(S2)));
+                        Vec::new()
+                    }
+                    Some(Ok(more)) => more,
+                };
+                // What is picked already and no longer listed stays to untick.
+                let mut choices = given;
+                for choice in more {
+                    if !choices.iter().any(|known| known.value == choice.value) {
+                        choices.push(choice);
+                    }
+                }
+                for value in picked.get_untracked() {
+                    if !choices.iter().any(|known| known.value == value) {
+                        choices.insert(0, crate::daemon::connection::PluginChoice { label: value.clone(), value, hint: String::new() });
+                    }
+                }
+                let shown: Vec<_> = choices
+                    .into_iter()
+                    .filter(|c| needle.is_empty() || c.value.to_lowercase().contains(&needle) || c.label.to_lowercase().contains(&needle))
+                    .take(300)
+                    .collect();
+                if shown.is_empty() {
+                    return col.child(text(t("Nothing matches")).text_size(tx(TEXT_SM)).text_color(FG_MUTED).px(sp(S2)).py(sp(S2)));
+                }
+                for choice in shown {
+                    let (value, ticked) = (choice.value.clone(), choice.value.clone());
+                    col = col.child(
+                        nsh_base::button()
+                            .on_press(move || {
+                                picked.update(|list| match list.iter().position(|v| *v == value) {
+                                    Some(at) => {
+                                        list.remove(at);
+                                    }
+                                    None => list.push(value.clone()),
+                                })
+                            })
+                            .flex_row()
+                            .items_center()
+                            .gap(sp(S3))
+                            .min_h(sp(CONTROL_MD))
+                            .px(sp(S2))
+                            .rounded(px(R_LG))
+                            .hover(|s| s.bg(highlight()))
+                            .child(check_mark(move || picked.with(|list| list.contains(&ticked))))
+                            .child(text(choice.label.clone()).text_size(tx(TEXT_SM)).font_family(mono_font).number_of_lines(1).flex_1())
+                            .when(!choice.hint.is_empty(), |b| b.child(text(choice.hint.clone()).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1))),
+                    );
+                }
+                col
+            }))
+        })))
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap(sp(S2))
+                .child(text(move || tf("{} picked", &[&picked.with(Vec::len).to_string()])).text_size(tx(TEXT_SM)).text_color(FG_MUTED).flex_1())
+                .child(btn(t("Cancel"), Variant::Secondary, Sz::Md, None, store::close_modal))
+                .child(btn(t("Done"), Variant::Primary, Sz::Md, None, move || {
+                    // The automation's own, or the plugin's for everything of it.
+                    if draft {
+                        store::set_option_draft(&saved_name, picked.get_untracked().join(","));
+                    } else {
+                        store::set_plugin_params(&saved, vec![(saved_name.clone(), picked.get_untracked().join(","))]);
+                    }
+                    store::close_modal();
+                })),
+        )
 }
 
-/// The form of a schedule: a new one, or `existing` to change.
-fn schedule_form(existing: Option<crate::daemon::connection::Schedule>) -> View {
-    use crate::cadence::{self, Picked};
-    let editing = existing.as_ref().map(|s| s.id.clone());
-    // One that messages an agent it already has: no folder to pick.
-    let no_folder = existing.as_ref().is_some_and(|s| s.cwd.is_empty());
-    // What an existing one repeats on, back in the form's choices.
-    let was = existing.as_ref().map(|s| cadence::picked(&s.expression));
-    let first_project = || store::projects().into_iter().map(|p| p.root_path).find(|p| !p.is_empty()).unwrap_or_default();
-    let name = signal(existing.as_ref().map(|s| s.given_name.clone()).unwrap_or_default());
-    let prompt = signal(existing.as_ref().map(|s| s.prompt.clone()).unwrap_or_default());
-    let path = signal(existing.as_ref().map(|s| s.cwd.clone()).filter(|c| !c.is_empty()).unwrap_or_else(first_project));
-    let worktree = signal(existing.as_ref().is_some_and(|s| s.worktree));
-    let repeat = signal(match &was {
-        Some(Picked::Every { .. }) => Repeat::Every,
-        Some(Picked::Weekly(..)) => Repeat::Weekly,
-        Some(Picked::Custom(_)) => Repeat::Custom,
-        Some(Picked::Daily(..)) | None => Repeat::Daily,
-    });
-    // Every `count` of a unit: 1 a minute, 60 an hour, 1440 a day.
-    let (count, unit) = match &was {
-        Some(Picked::Every { count, unit }) => (count.to_string(), *unit),
-        _ => ("1".to_owned(), 60),
+/// A line of a dialog to tick or not: what it is, and a word more.
+fn ticked_row(on: impl Fn() -> bool + 'static, press: impl Fn() + 'static, label: impl Into<SharedString>, more: impl Into<SharedString>) -> nsh_base::ButtonElement {
+    let (label, more): (SharedString, SharedString) = (label.into(), more.into());
+    nsh_base::button()
+        .on_press(press)
+        .accessibility_label(label.clone())
+        .flex_row()
+        .items_start()
+        .gap(sp(S3))
+        .px(sp(S2))
+        .py(sp(S2))
+        .rounded(px(R_LG))
+        .hover(|s| s.bg(highlight()))
+        .child(view().pt(px(2.0)).child(check_mark(on)))
+        .child(
+            view()
+                .flex_1()
+                .min_w(px(0.0))
+                .gap(px(2.0))
+                .child(text(label).text_size(tx(TEXT_SM)))
+                .when(!more.is_empty(), |v| v.child(text(more).text_size(tx(TEXT_SM)).text_color(FG_MUTED))),
+        )
+}
+
+/// An integration or a plugin as a file to hand on: what goes in it is
+/// said, and chosen, before it is made. The file is saved on this device.
+fn hand_on(id: String) -> View {
+    let all = store::plugins();
+    let Some(plugin) = all.iter().find(|p| p.id == id).cloned() else {
+        return sheet(t("Save as a file")).child(actions(view()));
     };
-    let (count, unit) = (signal(count), signal(unit));
-    let minutes = computed(move || count.with(|c| c.trim().parse::<u32>().ok()).filter(|n| (1..=999).contains(n)).map(|n| n * unit.get()));
-    let time = signal(match &was {
-        Some(Picked::Daily(h, m) | Picked::Weekly(_, (h, m))) => format!("{h}:{m:02}"),
-        _ => "9:00".to_owned(),
-    });
-    // Monday to Friday; 0 is Sunday.
-    let days = signal(match &was {
-        Some(Picked::Weekly(days, _)) => days.clone(),
-        _ => vec![1u8, 2, 3, 4, 5],
-    });
-    let custom = signal(match was {
-        Some(Picked::Custom(c)) => c,
-        _ => "0 9 * * 1-5".to_owned(),
-    });
-    // The cron expression of what is picked, when it is whole.
-    let expression = computed(move || match repeat.get() {
-        Repeat::Every => minutes.get().map(cadence::every),
-        Repeat::Daily => time.with(|t| cadence::parse_time(t)).map(cadence::daily),
-        Repeat::Weekly => time.with(|t| cadence::parse_time(t)).and_then(|t| days.with(|d| cadence::weekly(d, t))),
-        Repeat::Custom => custom.with(|c| (c.split_whitespace().count() == 5).then(|| c.trim().to_owned())),
-    });
-    let is_edit = editing.is_some();
-    let create = move || {
-        let p = prompt.get_untracked();
-        let Some(cron) = expression.get_untracked() else { return };
-        if p.trim().is_empty() || (!no_folder && path.get_untracked().is_empty()) {
-            return;
-        }
-        let path = if no_folder { String::new() } else { path.get_untracked() };
-        let (name, worktree) = (name.get_untracked(), worktree.get_untracked());
-        match &editing {
-            Some(id) => store::update_schedule(id, name, p, cron, path, worktree),
-            None => store::create_schedule(name, p, cron, path, worktree),
-        }
-        store::close_modal();
+    // What the file is about: itself, and each integration it counts on.
+    let mut about = vec![plugin.clone()];
+    about.extend(plugin.requires.iter().filter_map(|need| all.iter().find(|p| p.id == need.id).cloned()));
+    // One that comes with Sophon is named and not packed; one a plugin
+    // brought rides in that plugin's folder.
+    let rides = |p: &crate::daemon::connection::Plugin| !p.from.is_empty() && about.iter().any(|other| other.id == p.from && !other.builtin);
+    let packed: Vec<String> = about.iter().filter(|p| (!p.builtin && p.from.is_empty()) || rides(p)).map(|p| p.name.clone()).collect();
+    let named: Vec<String> = about.iter().filter(|p| p.builtin).map(|p| p.name.clone()).collect();
+    // What is set on this computer, by whose it is: the plain and the secret.
+    let set = |secret: bool| -> Vec<String> {
+        about.iter().flat_map(|p| p.params.iter().filter(move |param| param.changed && param.filled && param.secret == secret).map(move |param| format!("{} · {}", p.name, param.label))).collect()
     };
-    let mut projects = view().flex_row().flex_wrap().gap(sp(S2));
-    for p in store::projects().into_iter().filter(|p| !p.root_path.is_empty()) {
-        let (a, b) = (p.root_path.clone(), p.root_path.clone());
-        projects = projects.child(chip(p.name.clone(), Some(Icon::Folder), move || path.get() == a, move || path.set(b.clone())));
+    let (plain, secret) = (set(false), set(true));
+    let sep = if crate::i18n::is_zh() { "、" } else { ", " };
+    // The automations made with it: one may go along, as it is set up.
+    let made: Vec<(String, String)> = store::schedules().unwrap_or_default().into_iter().filter(|s| s.plugin == id || s.integration == id).map(|s| (s.id, s.name)).collect();
+    let settings = signal(!plain.is_empty() || !secret.is_empty());
+    let secrets = signal(!secret.is_empty());
+    let automation = signal(None::<String>);
+    let (any_set, any_packed) = (!plain.is_empty() || !secret.is_empty(), !packed.is_empty());
+    // Whether the file would hold anything worth handing on.
+    let worth = computed(move || any_packed || (any_set && settings.get()) || automation.with(Option::is_some));
+    let mut body = sheet(&tf("Save “{}” as a file", &[&plugin.name])).w(px(520.0)).child(
+        text(t("One file with all of it, for someone to add on their computer: nothing to host, and no address to give")).text_size(tx(TEXT_BASE)).line_height(px(20.0)).text_color(FG_MUTED),
+    );
+    let mut lines = view().gap(px(2.0));
+    if any_packed {
+        lines = lines.child(view().px(sp(S2)).py(px(4.0)).child(text(tf("In the file: {}", &[&packed.join(sep)])).text_size(tx(TEXT_SM))));
     }
-    // A few characters beside a segmented control: as tall and as round as
-    // it, so the row reads as one line of controls.
-    let short = |width: f32| field().w(px(width)).h(sp(CONTROL_SM + 4.0)).rounded(px(R_FULL)).text_size(tx(TEXT_SM)).text_center();
-    let lead = |label: &'static str| text(label).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG_MUTED);
-    let time_row = move || {
+    if !named.is_empty() {
+        lines = lines.child(view().px(sp(S2)).py(px(4.0)).child(text(tf("Named, not packed, since it comes with Sophon: {}", &[&named.join(sep)])).text_size(tx(TEXT_SM)).text_color(FG_MUTED)));
+    }
+    if any_set {
+        let listed = plain.iter().chain(&secret).cloned().collect::<Vec<_>>().join(sep);
+        lines = lines.child(ticked_row(move || settings.get(), move || settings.update(|on| *on = !*on), t("The settings filled in here"), listed));
+    }
+    if !secret.is_empty() {
+        let listed = tf("Whoever has the file has these: {}", &[&secret.join(sep)]);
+        lines = lines.child(ticked_row(move || settings.get() && secrets.get(), move || secrets.update(|on| *on = !*on), t("The secrets among them"), listed).disabled(move || !settings.get()));
+    }
+    for (schedule, name) in made {
+        let (shown, pressed) = (schedule.clone(), schedule);
+        lines = lines.child(ticked_row(
+            move || automation.with(|picked| picked.as_deref() == Some(shown.as_str())),
+            move || automation.update(|picked| *picked = if picked.as_deref() == Some(pressed.as_str()) { None } else { Some(pressed.clone()) }),
+            tf("The automation “{}”, as it is set up", &[&name]),
+            t("Its instructions and choices. Which project it runs in is theirs to pick"),
+        ));
+    }
+    body = body
+        .child(lines)
+        // Why there is nothing to save, when there is not.
+        .child(when(move || !worth.get(), || text(t("Nothing to put in the file yet: it comes with Sophon, and nothing is set or made with it here")).text_size(tx(TEXT_SM)).text_color(WARNING)))
+        .child(text(t("A sign-in is never in the file: whoever adds it signs in themselves")).text_size(tx(TEXT_SM)).text_color(FG_MUTED));
+    let (saved, copied) = (id.clone(), id);
+    body.child(
         view()
             .flex_row()
             .items_center()
             .gap(sp(S2))
-            .child(lead(t("At")))
-            .child(short(76.0).value(move || time.get()).on_change(move |v: &str| time.set(v.to_owned())).placeholder("9:00"))
-    };
-    // What was picked, said back: the check that it was understood.
-    let summary = move || -> SharedString {
-        match expression.get() {
-            Some(cron) if repeat.get() == Repeat::Custom && cadence::describe(&cron).starts_with("cron ") => t("Runs on this cron expression").into(),
-            Some(cron) => format!("{}{}", t("Runs: "), cadence::describe(&cron)).into(),
-            None => match repeat.get() {
-                Repeat::Custom => t("Five fields: minute, hour, day, month, weekday").into(),
-                Repeat::Every => t("Type a number, like 45").into(),
-                Repeat::Weekly if days.with(Vec::is_empty) => t("Pick at least one day").into(),
-                _ => t("Type a time, like 9:30 or 18:00").into(),
-            },
-        }
-    };
-    sheet(if is_edit { t("Edit schedule") } else { t("New schedule") })
-        .w(px(520.0))
-        .child(field().value(move || name.get()).on_change(move |v: &str| name.set(v.to_owned())).placeholder(t("Name (optional)")))
-        .child(
-            field()
-                .multiline(true)
-                .h(px(96.0))
-                .py(sp(S2))
-                .value(move || prompt.get())
-                .on_change(move |v: &str| prompt.set(v.to_owned()))
-                .placeholder(t("What should the agent do each time?")),
-        )
-        .when(!no_folder, |v| {
-            v.child(section_label(t("Project")))
-                .child(projects)
-                .child(segmented(vec![(false, t("Local").into()), (true, t("Worktree").into())], move || worktree.get(), move |w| worktree.set(w)))
-        })
-        .child(section_label(t("Repeats")))
-        .child(segmented(
-            vec![
-                (Repeat::Every, t("Every so often").into()),
-                (Repeat::Daily, t("Every day").into()),
-                (Repeat::Weekly, t("Every week").into()),
-                (Repeat::Custom, t("Custom").into()),
-            ],
-            move || repeat.get(),
-            move |r| repeat.set(r),
-        ))
-        .child(dynamic(move || {
-            let r = repeat.get();
-            Some(untracked(move || match r {
-                Repeat::Every => view()
-                    .flex_row()
-                    .items_center()
-                    .gap(sp(S2))
-                    .child(lead(t("Every")))
-                    .child(short(56.0).value(move || count.get()).on_change(move |v: &str| count.set(v.to_owned())).placeholder("1"))
-                    .child(segmented(
-                        vec![(1u32, t("Minutes").into()), (60, t("Hours").into()), (1440, t("Days").into())],
-                        move || unit.get(),
-                        move |u| unit.set(u),
-                    )),
-                Repeat::Daily => time_row(),
-                Repeat::Weekly => {
-                    let zh = crate::i18n::is_zh();
-                    let mut row = view().flex_row().flex_wrap().gap(sp(S2));
-                    // Monday first.
-                    for d in [1u8, 2, 3, 4, 5, 6, 0] {
-                        row = row.child(chip(
-                            cadence::day_name(d, zh),
-                            None,
-                            move || days.with(|l| l.contains(&d)),
-                            move || {
-                                days.update(|l| match l.iter().position(|x| *x == d) {
-                                    Some(i) => {
-                                        l.remove(i);
-                                    }
-                                    None => l.push(d),
-                                })
-                            },
-                        ));
-                    }
-                    view().gap(sp(S3)).child(row).child(time_row())
-                }
-                Repeat::Custom => view().child(
-                    field()
-                        .value(move || custom.get())
-                        .on_change(move |v: &str| custom.set(v.to_owned()))
-                        .font_family(mono_font)
-                        .placeholder(t("Cron expression, e.g. 0 9 * * 1-5")),
+            // Its own settings alone, as a line to paste: quicker for one or two.
+            .when(plugin.params.iter().any(|param| param.filled), |v| {
+                v.child(btn(t("Copy settings as text"), Variant::Ghost, Sz::Md, Some(Icon::Copy), move || {
+                    store::export_plugin(&copied);
+                    store::close_modal();
+                }))
+            })
+            .child(view().flex_1())
+            .child(btn(t("Cancel"), Variant::Secondary, Sz::Md, None, store::close_modal))
+            .child(
+                btn(t("Save file…"), Variant::Primary, Sz::Md, Some(Icon::Download), move || {
+                    let which = match (settings.get_untracked(), secrets.get_untracked()) {
+                        (false, _) => "none",
+                        (true, false) => "plain",
+                        (true, true) => "all",
+                    };
+                    store::pack_plugin(&saved, which, automation.get_untracked());
+                    store::close_modal();
+                })
+                .disabled(move || !worth.get()),
+            ),
+    )
+}
+
+/// A file someone handed on, read: what it holds, shown before any of
+/// it is installed. What it installs runs its scripts on that computer,
+/// so nothing is until this is answered.
+fn take_in(file: crate::daemon::connection::HandedFile) -> View {
+    use crate::daemon::connection::PluginKind;
+    let mut list = view().gap(sp(S3));
+    let installs = file.packages.iter().any(|package| package.included);
+    for package in &file.packages {
+        let (words, tone) = match (package.included, package.here, package.builtin) {
+            (true, true, _) => (t("Replaces the one here"), WARNING),
+            (true, false, _) => (t("Will be installed"), FG_MUTED),
+            (false, _, true) => (t("Comes with Sophon"), FG_MUTED),
+            (false, true, false) => (t("Already here"), FG_MUTED),
+            (false, false, _) => (t("Not in the file and not here: add it yourself"), WARNING),
+        };
+        list = list.child(
+            view()
+                .flex_row()
+                .items_start()
+                .gap(sp(S3))
+                .child(view().pt(px(2.0)).child(icon(if package.kind == PluginKind::Plugin { Icon::Layers } else { Icon::Zap }, 16.0).text_color(FG_MUTED)))
+                .child(
+                    view()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .gap(px(2.0))
+                        .child(view().flex_row().items_center().gap(sp(S2)).child(text(package.name.clone()).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500))).child(text(words).text_size(tx(TEXT_SM)).text_color(tone)))
+                        .when(!package.description.is_empty(), |v| v.child(text(package.description.clone()).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(2))),
                 ),
-            }))
-        }))
-        .child(text(summary).text_size(tx(TEXT_SM)).text_color(FG_MUTED))
-        .child(actions(
-            btn(if is_edit { t("Save") } else { t("Create") }, Variant::Primary, Sz::Md, Some(Icon::CalendarClock), create)
-                .disabled(move || prompt.with(|p| p.trim().is_empty()) || (!no_folder && path.with(String::is_empty)) || expression.with(Option::is_none)),
-        ))
+        );
+    }
+    let sep = if crate::i18n::is_zh() { "、" } else { ", " };
+    if !file.settings.is_empty() {
+        let named: Vec<String> = file.settings.iter().map(|(whose, label, secret)| if *secret { tf("{} · {} (secret)", &[whose, label]) } else { format!("{whose} · {label}") }).collect();
+        list = list.child(
+            view()
+                .flex_row()
+                .items_start()
+                .gap(sp(S3))
+                .child(view().pt(px(2.0)).child(icon(Icon::Settings, 16.0).text_color(FG_MUTED)))
+                .child(view().flex_1().min_w(px(0.0)).gap(px(2.0)).child(text(t("Fills in these settings")).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500))).child(text(named.join(sep)).text_size(tx(TEXT_SM)).text_color(FG_MUTED))),
+        );
+    }
+    if let Some(automation) = &file.automation {
+        list = list.child(
+            view()
+                .flex_row()
+                .items_start()
+                .gap(sp(S3))
+                .child(view().pt(px(2.0)).child(icon(Icon::CalendarClock, 16.0).text_color(FG_MUTED)))
+                .child(
+                    view()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .gap(px(2.0))
+                        .child(text(tf("Opens the automation “{}”", &[automation])).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)))
+                        .child(text(t("Filled in as it was set up. It is made once you pick its project and create it")).text_size(tx(TEXT_SM)).text_color(FG_MUTED)),
+                ),
+        );
+    }
+    let (dropped, taken) = (file.token.clone(), file.token.clone());
+    sheet(&tf("Add “{}”", &[&file.name]))
+        .w(px(520.0))
+        .child(list)
+        .when(installs, |v| v.child(text(t("What it installs runs its scripts on that computer: add only what you trust")).text_size(tx(TEXT_SM)).line_height(px(18.0)).text_color(WARNING)))
+        .child(
+            view()
+                .flex_row()
+                .justify_end()
+                .gap(sp(S2))
+                .child(btn(t("Cancel"), Variant::Secondary, Sz::Md, None, move || {
+                    store::discard_handed(&dropped);
+                    store::close_modal();
+                }))
+                .child(btn(t("Add"), Variant::Primary, Sz::Md, Some(Icon::Download), move || {
+                    store::install_handed(&taken);
+                    store::close_modal();
+                })),
+        )
 }
 
 fn add_project() -> View {

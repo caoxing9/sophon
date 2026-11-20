@@ -1,0 +1,23 @@
+{
+  "id": "github-pr-watch",
+  "name": "GitHub PR 值守",
+  "description": "有人在 GitHub 上把你设为 reviewer 时，替你 review 这个 PR；结论提交在 PR 上，并在飞书通知作者",
+  "version": "0.6.0",
+  "requires": [
+    "github",
+    "feishu"
+  ],
+  "use": "./notify use",
+  "params": [
+    {
+      "name": "people",
+      "label": "GitHub 账号对应的飞书账号",
+      "hint": "格式：账号=飞书邮箱，逗号分隔。没写的由 AI 按名字在飞书里找到本人后记在这里（账号=飞书ID:名字），写错了可以直接改",
+      "value": "",
+      "optional": true
+    }
+  ],
+  "interface": {
+    "brandColor": "#1f883d"
+  }
+}

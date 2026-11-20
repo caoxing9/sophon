@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use super::rt::{self, Message};
 
-use super::model::{Agent, DiffFile, Item, Project, Provider, Workspace};
+use super::model::{settled, Agent, DiffFile, Item, Project, Provider, Workspace};
 
 /// What the UI asks the daemon to do.
 #[derive(Debug, Clone)]
@@ -180,10 +180,44 @@ pub enum Command {
     /// `op`: `pause`, `resume`, `delete` or `run-once`.
     ScheduleOp { id: String, op: &'static str },
     CreateSchedule(NewSchedule),
+    /// The integrations and plugins on the host.
+    Plugins,
+    /// Installs one from a git address or a folder of the host.
+    AddPlugin(String),
+    RemovePlugin(String),
+    /// Pulls a plugin installed from git.
+    UpdatePlugin(String),
+    /// Values for a plugin's parameters on this host; an empty one goes
+    /// back to what the plugin came with.
+    SetPluginParams { id: String, values: Vec<(String, String)> },
+    /// Runs a plugin's setup (a sign-in in the host's browser).
+    SetupPlugin(String),
+    /// Asks an integration or a plugin for the choices of one of its
+    /// parameters, or of one a trigger or an automation of it asks.
+    PluginOptions { id: String, name: String, of: ParamOf },
+    /// Turns an integration on or off.
+    EnablePlugin { id: String, enabled: bool },
+    /// Brings back one that comes with Sophon and was removed.
+    RestorePlugin(String),
+    /// An integration's own settings as a line to hand on.
+    ExportPlugin(String),
+    /// Takes such a line in.
+    ImportPlugin(String),
+    /// An integration or a plugin as a file to hand on: with all of its
+    /// settings (`all`), without the secret ones (`plain`) or with none
+    /// (`none`), and an automation made with it, if one is named.
+    PackPlugin { id: String, settings: &'static str, schedule: Option<String> },
+    /// Such a file's bytes, to be read and shown before any of it is installed.
+    UnpackPlugin(Vec<u8>),
+    /// Installs the file read under this token; or lets go of it.
+    InstallPlugin(String),
+    DiscardPlugin(String),
     /// Changes a schedule: its name, prompt, cadence, folder and isolation.
     UpdateSchedule { id: String, to: NewSchedule },
     /// Asks for a schedule's runs.
     ScheduleRuns(String),
+    /// Tries a command where an automation would run it, keeping nothing.
+    TryCommand { command: String, cwd: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -198,6 +232,413 @@ pub struct NewSchedule {
     pub provider: String,
     pub model: Option<String>,
     pub worktree: bool,
+    /// A script that says what there is to act on, a line of JSON an
+    /// event; empty for one that runs on its cadence alone.
+    pub probe: String,
+    /// A script the run's `sophon reply` and `sophon react` go through.
+    pub reply: String,
+    /// The access mode its agents start in; the provider's default without.
+    pub mode: Option<String>,
+    /// For a change of one there is: whether what it runs on (provider,
+    /// model, mode) was picked again, and so is to be kept over what it
+    /// was made with.
+    pub repicked: bool,
+    /// The integration whose trigger starts it, and which of its
+    /// triggers; empty for one that runs on its times alone.
+    pub integration: String,
+    pub trigger: String,
+    /// What it says for what that trigger asks of each automation.
+    pub trigger_options: Vec<(String, String)>,
+    /// The plugin it was made from, and which of that plugin's
+    /// automations; empty for one of the user's own.
+    pub plugin: String,
+    pub template: String,
+    /// What it says for what that automation asks.
+    pub options: Vec<(String, String)>,
+    /// A command it runs in place of starting an agent; empty for one
+    /// that starts a conversation with its prompt.
+    pub command: String,
+    /// The most runs it may start in a day; none without.
+    pub daily_limit: Option<u32>,
+}
+
+/// What an automation says for some parameters (`key` of it), each a text.
+fn said(v: &Value, key: &str) -> Vec<(String, String)> {
+    v.get(key).and_then(Value::as_object).into_iter().flatten().filter_map(|(name, value)| Some((name.clone(), value.as_str()?.to_owned()))).collect()
+}
+
+/// Whose a parameter is to say: its integration's or plugin's own, said
+/// once; or each automation's, for a trigger or for a plugin's
+/// automation (named by its id).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum ParamOf {
+    #[default]
+    Own,
+    Trigger(String),
+    Automation(String),
+}
+
+impl ParamOf {
+    /// What `name` is kept under while the editor has it: a trigger's
+    /// and an automation's may be called the same.
+    pub fn key(&self, name: &str) -> String {
+        match self {
+            ParamOf::Own => name.to_owned(),
+            ParamOf::Trigger(_) => format!("trigger/{name}"),
+            ParamOf::Automation(_) => format!("automation/{name}"),
+        }
+    }
+}
+
+/// What an integration or a plugin asks to be told: an app's id, which
+/// repositories.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PluginParam {
+    pub name: String,
+    pub label: String,
+    /// Never sent here: only whether it has a value (`filled`).
+    pub secret: bool,
+    pub optional: bool,
+    pub value: String,
+    pub filled: bool,
+    /// Set on this computer, over what its manifest gives.
+    pub changed: bool,
+    /// How it is asked for: `text`, `switch` (`yes`/`no`) or `multi`
+    /// (some of its choices, commas between).
+    pub kind: String,
+    pub hint: String,
+    /// The choices its manifest gives; more come from the host when
+    /// asked (`dynamic`).
+    pub options: Vec<PluginChoice>,
+    pub dynamic: bool,
+    pub of: ParamOf,
+}
+
+impl PluginParam {
+    fn from_json(p: &Value, of: ParamOf) -> Self {
+        let s = |k: &str| p.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
+        let flag = |k: &str| p.get(k) == Some(&Value::Bool(true));
+        Self {
+            name: s("name"),
+            label: s("label"),
+            secret: flag("secret"),
+            optional: flag("optional"),
+            value: s("value"),
+            filled: flag("filled"),
+            changed: flag("changed"),
+            kind: s("type"),
+            hint: s("hint"),
+            options: list_of(p, "options", PluginChoice::from_json),
+            dynamic: flag("dynamic"),
+            of,
+        }
+    }
+
+    fn list(v: &Value, of: ParamOf) -> Vec<Self> {
+        v.get("params").and_then(Value::as_array).into_iter().flatten().map(|p| Self::from_json(p, of.clone())).collect()
+    }
+}
+
+/// One of a parameter's choices.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PluginChoice {
+    pub value: String,
+    pub label: String,
+    pub hint: String,
+}
+
+impl PluginChoice {
+    fn from_json(v: &Value) -> Option<Self> {
+        let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
+        Some(Self { value: s("value"), label: s("label"), hint: s("hint") }).filter(|c| !c.value.is_empty())
+    }
+}
+
+/// Something an integration watches for, as a person reads it.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PluginTrigger {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    /// How often it suggests looking (0: it does not say).
+    pub every_ms: u64,
+    /// What each automation on it says for itself: which repositories.
+    pub params: Vec<PluginParam>,
+}
+
+/// An automation a plugin brings: what an automation made from it
+/// begins as.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PluginAutomation {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    /// `review`, or anything else for upkeep.
+    pub category: String,
+    /// The trigger that starts it: an integration's, and which. Empty
+    /// for one that runs on its times alone.
+    pub integration: String,
+    pub trigger: String,
+    pub prompt: String,
+    /// What each automation made from it chooses: whether to approve.
+    pub params: Vec<PluginParam>,
+}
+
+/// An integration another counts on, and how it stands.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PluginNeed {
+    pub id: String,
+    pub name: String,
+    pub installed: bool,
+    pub ready: bool,
+}
+
+/// Which of the two something installed is: what connects a service,
+/// or what was made of such connections to hand on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PluginKind {
+    #[default]
+    Integration,
+    Plugin,
+}
+
+impl PluginKind {
+    fn from_json(v: &Value) -> Self {
+        if v.get("kind").and_then(Value::as_str) == Some("plugin") { Self::Plugin } else { Self::Integration }
+    }
+}
+
+/// What a file someone handed on holds (a `.sophon`), as the service
+/// read it: shown before any of it is installed.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct HandedFile {
+    /// What it is installed by, once that is asked.
+    pub token: String,
+    /// The package it is about, by name.
+    pub name: String,
+    pub packages: Vec<HandedPackage>,
+    /// The settings it fills in: whose, which, and whether it is a secret.
+    pub settings: Vec<(String, String, bool)>,
+    /// The automation that comes with it, by name.
+    pub automation: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HandedPackage {
+    pub id: String,
+    pub kind: PluginKind,
+    pub name: String,
+    pub description: String,
+    /// Its folder is in the file: installing puts it here.
+    pub included: bool,
+    /// One of its id is here already; and whether that one comes with Sophon.
+    pub here: bool,
+    pub builtin: bool,
+}
+
+impl HandedFile {
+    fn from_json(payload: &Value) -> Option<Self> {
+        let about = payload.get("about")?;
+        let s = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
+        Some(Self {
+            token: payload.get("token")?.as_str()?.to_owned(),
+            name: s(about, "name"),
+            packages: about
+                .get("packages")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|p| HandedPackage {
+                    id: s(p, "id"),
+                    kind: PluginKind::from_json(p),
+                    name: s(p, "name"),
+                    description: s(p, "description"),
+                    included: p.get("included") == Some(&Value::Bool(true)),
+                    here: s(p, "here") != "no",
+                    builtin: s(p, "here") == "builtin",
+                })
+                .collect(),
+            settings: about.get("settings").and_then(Value::as_array).into_iter().flatten().map(|v| (s(v, "packageName"), s(v, "label"), v.get("secret") == Some(&Value::Bool(true)))).collect(),
+            automation: about.pointer("/automation/name").and_then(Value::as_str).map(str::to_owned),
+        })
+    }
+}
+
+/// An automation that came with such a file: as whoever handed it on
+/// had set it up, without where it ran (that is this computer's to say).
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct HandedAutomation {
+    pub name: String,
+    pub prompt: String,
+    pub command: String,
+    pub integration: String,
+    pub trigger: String,
+    pub trigger_options: Vec<(String, String)>,
+    pub plugin: String,
+    pub template: String,
+    pub options: Vec<(String, String)>,
+    /// A cron expression, or `every:<ms>`, as the form takes it.
+    pub expression: String,
+    pub daily_limit: Option<u32>,
+}
+
+impl HandedAutomation {
+    fn from_json(v: &Value) -> Option<Self> {
+        v.as_object()?;
+        let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
+        let said = |k: &str| -> Vec<(String, String)> { v.get(k).and_then(Value::as_object).into_iter().flatten().filter_map(|(name, value)| Some((name.clone(), value.as_str()?.to_owned()))).collect() };
+        Some(Self {
+            name: s("name"),
+            prompt: s("prompt"),
+            command: s("command"),
+            integration: s("integration"),
+            trigger: s("trigger"),
+            trigger_options: said("triggerOptions"),
+            plugin: s("plugin"),
+            template: s("template"),
+            options: said("options"),
+            expression: match v.pointer("/cadence/type").and_then(Value::as_str) {
+                Some("every") => format!("every:{}", v.pointer("/cadence/everyMs").and_then(Value::as_u64).unwrap_or(0)),
+                _ => v.pointer("/cadence/expression").and_then(Value::as_str).unwrap_or_default().to_owned(),
+            },
+            daily_limit: v.get("dailyLimit").and_then(Value::as_u64).filter(|n| *n > 0).map(|n| n as u32),
+        })
+    }
+}
+
+/// An integration or a plugin on the host.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Plugin {
+    pub id: String,
+    pub kind: PluginKind,
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    /// Installed from a git address, so it can be updated from there.
+    pub git: bool,
+    /// Whether it has a setup to run once (a sign-in), and what it calls that.
+    pub setup: bool,
+    pub setup_label: String,
+    /// Whose it is set up as, in its own words; none while it is not.
+    pub account: Option<String>,
+    /// How many of the schedules run it, and how many of those are not paused.
+    pub uses: u64,
+    pub active: u64,
+    /// Its own settings, said once.
+    pub params: Vec<PluginParam>,
+    /// A plugin's: the integrations it counts on.
+    pub requires: Vec<PluginNeed>,
+    /// An integration's: what it watches for, by name, which an
+    /// automation can start on.
+    pub triggers: Vec<PluginTrigger>,
+    /// A plugin's: the automations it brings.
+    pub automations: Vec<PluginAutomation>,
+    /// A plugin's: the skills it brings to the agents of those
+    /// automations, each its name and what it is for.
+    pub skills: Vec<(String, String)>,
+    /// A plugin's: the MCP servers it brings to those agents, by name.
+    pub mcp: Vec<String>,
+    /// How its card is marked: the colour it goes by (`#rrggbb`) and its
+    /// picture (a `data:` address), either empty when it says none.
+    pub color: String,
+    pub icon: String,
+    /// It comes with Sophon: there without being installed.
+    pub builtin: bool,
+    /// An integration a plugin brought: the plugin's id. It goes when
+    /// that does; empty for one there on its own.
+    pub from: String,
+    /// Turned on: off, it stays and nothing of it runs.
+    pub enabled: bool,
+    /// Why its manifest cannot be read.
+    pub error: Option<String>,
+}
+
+impl Plugin {
+    fn from_json(v: &Value) -> Option<Self> {
+        let s = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned);
+        Some(Self {
+            id: s("id")?,
+            kind: PluginKind::from_json(v),
+            name: s("name").unwrap_or_default(),
+            description: s("description").unwrap_or_default(),
+            version: s("version").unwrap_or_default(),
+            git: s("source").as_deref() == Some("git"),
+            setup: v.get("setup").is_some_and(Value::is_string),
+            setup_label: s("setupLabel").unwrap_or_default(),
+            account: s("account").filter(|a| !a.is_empty()),
+            uses: v.get("uses").and_then(Value::as_u64).unwrap_or(0),
+            active: v.get("active").and_then(Value::as_u64).unwrap_or(0),
+            params: PluginParam::list(v, ParamOf::Own),
+            triggers: v
+                .get("triggers")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|t| {
+                    let s = |k: &str| t.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
+                    PluginTrigger {
+                        id: s("id"),
+                        label: s("label"),
+                        description: s("description"),
+                        every_ms: t.get("everyMs").and_then(Value::as_u64).unwrap_or(0),
+                        params: PluginParam::list(t, ParamOf::Trigger(s("id"))),
+                    }
+                })
+                .collect(),
+            automations: v
+                .get("automations")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|a| {
+                    let s = |k: &str| a.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
+                    let starts = |k: &str| a.pointer(&format!("/trigger/{k}")).and_then(Value::as_str).unwrap_or_default().to_owned();
+                    PluginAutomation {
+                        id: s("id"),
+                        name: s("name"),
+                        description: s("description"),
+                        category: s("category"),
+                        integration: starts("integration"),
+                        trigger: starts("id"),
+                        prompt: s("prompt"),
+                        params: PluginParam::list(a, ParamOf::Automation(s("id"))),
+                    }
+                })
+                .collect(),
+            skills: v
+                .get("skills")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|k| {
+                    let s = |key: &str| k.get(key).and_then(Value::as_str).unwrap_or_default().to_owned();
+                    (s("name"), s("description"))
+                })
+                .collect(),
+            mcp: v.get("mcp").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect(),
+            color: s("color").unwrap_or_default(),
+            icon: s("icon").unwrap_or_default(),
+            builtin: s("source").as_deref() == Some("builtin"),
+            from: s("from").unwrap_or_default(),
+            enabled: v.get("enabled") != Some(&Value::Bool(false)),
+            requires: v
+                .get("requires")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|n| {
+                    let s = |k: &str| n.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
+                    PluginNeed { id: s("id"), name: s("name"), installed: n.get("installed") == Some(&Value::Bool(true)), ready: n.get("ready") == Some(&Value::Bool(true)) }
+                })
+                .collect(),
+            error: s("error"),
+        })
+    }
+
+    /// Its parameters nobody has filled in, by their labels.
+    pub fn needs(&self) -> Vec<String> {
+        self.params.iter().filter(|p| !p.filled).map(|p| p.label.clone()).collect()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -211,6 +652,12 @@ pub struct Schedule {
     pub next_run: Option<String>,
     pub last_run: Option<String>,
     pub target: String,
+    /// The model a new agent of it is started with; empty when the
+    /// provider's own choice.
+    pub model: String,
+    /// The provider and the access mode a new agent of it is started with.
+    pub provider: String,
+    pub mode: String,
     /// The cadence as the form takes it: a cron expression, or `every:<ms>`.
     pub expression: String,
     /// The name as given; empty when it has none.
@@ -218,6 +665,29 @@ pub struct Schedule {
     /// Where a new agent starts, when the schedule starts one.
     pub cwd: String,
     pub worktree: bool,
+    /// Its probe and reply scripts; empty without.
+    pub probe: String,
+    pub reply: String,
+    /// The integration whose trigger starts it, and which; empty without.
+    pub integration: String,
+    pub trigger: String,
+    /// Its own values for what that trigger asks.
+    pub trigger_options: Vec<(String, String)>,
+    /// The plugin it was made from, and which of its automations; empty
+    /// for one of the user's own.
+    pub plugin: String,
+    pub template: String,
+    /// Its own values for what that automation asks.
+    pub options: Vec<(String, String)>,
+    /// The command it runs in place of a conversation; empty without.
+    pub command: String,
+    /// The most runs a day, and how many it started today.
+    pub daily_limit: Option<u32>,
+    pub runs_today: u32,
+    /// Whether it runs at times of its own (else only when told).
+    pub timed: bool,
+    /// Why its probe last failed.
+    pub probe_error: Option<String>,
 }
 
 /// One time a schedule ran.
@@ -234,6 +704,10 @@ pub struct ScheduleRun {
     /// What the agent answered last, when the run ended with an answer.
     pub output: Option<String>,
     pub error: Option<String>,
+    /// The event that caused it, by its id.
+    pub event: Option<String>,
+    /// What its agent said to whoever caused it: `reply`/`react`, and the words.
+    pub replies: Vec<(String, String)>,
 }
 
 impl ScheduleRun {
@@ -248,6 +722,20 @@ impl ScheduleRun {
             workspace_id: s("workspaceId"),
             output: s("output").map(|o| o.trim().to_owned()).filter(|o| !o.is_empty()),
             error: s("error"),
+            // As a person reads it: the address it is about, when it has one.
+            event: v
+                .pointer("/event/vars/url")
+                .and_then(Value::as_str)
+                .filter(|url| !url.is_empty())
+                .or(v.pointer("/event/id").and_then(Value::as_str))
+                .map(str::to_owned),
+            replies: v
+                .get("replies")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|r| Some((r.get("action")?.as_str()?.to_owned(), r.get("text")?.as_str()?.to_owned())))
+                .collect(),
         })
     }
 }
@@ -280,13 +768,17 @@ impl Schedule {
             Some("new-agent") => {
                 let cwd = v.pointer("/target/config/cwd").and_then(Value::as_str).unwrap_or_default();
                 let provider = v.pointer("/target/config/provider").and_then(Value::as_str).unwrap_or_default();
-                format!("New {provider} agent in {}", super::model::folder_name(cwd))
+                if v.get("command").and_then(Value::as_str).is_some_and(|c| !c.trim().is_empty()) {
+                    format!("Command in {}", super::model::folder_name(cwd))
+                } else {
+                    format!("New {provider} agent in {}", super::model::folder_name(cwd))
+                }
             }
             _ => "An existing agent".to_owned(),
         };
         Some(Self {
             id: s("id")?,
-            name: s("name").filter(|n| !n.is_empty()).unwrap_or_else(|| "Untitled schedule".into()),
+            name: s("name").filter(|n| !n.is_empty()).unwrap_or_else(|| "Untitled automation".into()),
             prompt: s("prompt").unwrap_or_default(),
             cadence,
             expression: match v.pointer("/cadence/type").and_then(Value::as_str) {
@@ -296,10 +788,26 @@ impl Schedule {
             given_name: s("name").unwrap_or_default(),
             cwd: v.pointer("/target/config/cwd").and_then(Value::as_str).unwrap_or_default().to_owned(),
             worktree: v.pointer("/target/config/isolation").and_then(Value::as_str) == Some("worktree"),
+            probe: s("probe").unwrap_or_default(),
+            reply: s("reply").unwrap_or_default(),
+            integration: s("integration").unwrap_or_default(),
+            trigger: s("trigger").unwrap_or_default(),
+            trigger_options: said(v, "triggerOptions"),
+            plugin: s("plugin").unwrap_or_default(),
+            template: s("template").unwrap_or_default(),
+            options: said(v, "options"),
+            command: s("command").unwrap_or_default(),
+            daily_limit: v.get("dailyLimit").and_then(Value::as_u64).filter(|n| *n > 0).map(|n| n as u32),
+            runs_today: v.get("runsToday").and_then(Value::as_u64).unwrap_or(0) as u32,
+            timed: v.get("cadence").is_some_and(Value::is_object),
+            probe_error: s("probeError").filter(|e| !e.is_empty()),
             status: s("status").unwrap_or_default(),
             next_run: s("nextRunAt"),
             last_run: s("lastRunAt"),
             target,
+            model: v.pointer("/target/config/model").and_then(Value::as_str).unwrap_or_default().to_owned(),
+            provider: v.pointer("/target/config/provider").and_then(Value::as_str).unwrap_or_default().to_owned(),
+            mode: v.pointer("/target/config/modeId").and_then(Value::as_str).unwrap_or_default().to_owned(),
         })
     }
 }
@@ -740,6 +1248,25 @@ pub enum Event {
     GitDone { cwd: String, action: &'static str, error: Option<String>, url: Option<String> },
     History { search: String, agents: Vec<Agent> },
     Schedules(Vec<Schedule>),
+    Plugins(Vec<Plugin>),
+    /// A plugin's setup ended: done, or why not.
+    PluginSetup { id: String, error: Option<String> },
+    /// A command tried: whether it ended well, the end of what it wrote
+    /// (or why it could not run), and how long it took.
+    CommandTried { ok: bool, output: String, took_ms: u64 },
+    /// Those that come with Sophon and were removed, to bring back: id and name.
+    PluginsAway(Vec<(String, String, PluginKind)>),
+    /// An integration's settings as a line, to copy and hand on.
+    PluginExported(String),
+    /// One as a file, to save on this device.
+    PluginPacked { name: String, bytes: Vec<u8> },
+    /// What a file chosen holds, for the user to read before it is installed.
+    PluginUnpacked(HandedFile),
+    /// A file was installed: the package it is about, and the automation
+    /// that came with it, to open filled in.
+    PluginInstalled { root: String, automation: Option<HandedAutomation> },
+    /// The choices of a plugin's parameter, or why it could not list them.
+    PluginOptions { id: String, name: String, result: Result<Vec<PluginChoice>, String> },
     ScheduleRuns { id: String, runs: Vec<ScheduleRun> },
     Commits { cwd: String, commits: Vec<Commit>, error: Option<String> },
     Subagents { parent: String, list: Vec<Subagent> },
@@ -1151,7 +1678,7 @@ pub fn timeline_page(payload: &Value) -> (Vec<Item>, Option<Value>, Option<(Stri
     let items = payload
         .get("entries")
         .and_then(Value::as_array)
-        .map(|entries| entries.iter().filter_map(|e| e.get("item").and_then(Item::from_json)).collect())
+        .map(|entries| settled(entries.iter().filter_map(|e| e.get("item").and_then(Item::from_json)).collect()))
         .unwrap_or_default();
     let older = (payload.get("hasOlder").and_then(Value::as_bool) == Some(true))
         .then(|| payload.get("startCursor").cloned())
@@ -1222,6 +1749,9 @@ enum Pending {
     Schedules,
     ScheduleChange(&'static str),
     ScheduleRuns(String),
+    PluginSetup(String),
+    TryCommand,
+    PluginOptions(String, String),
     Project,
     /// The event subscription; `true` while asking for the newer events,
     /// retried without them on a daemon that refuses them.
@@ -2251,6 +2781,9 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
             if let Some(m) = n.model {
                 config["model"] = json!(m);
             }
+            if let Some(mode) = n.mode {
+                config["modeId"] = json!(mode);
+            }
             let mut msg = json!({
                 "type": "schedule/create",
                 "prompt": n.prompt,
@@ -2259,6 +2792,27 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
             });
             if !n.name.trim().is_empty() {
                 msg["name"] = json!(n.name.trim());
+            }
+            if let Some(limit) = n.daily_limit {
+                msg["dailyLimit"] = json!(limit);
+            }
+            for (key, said) in [("options", &n.options), ("triggerOptions", &n.trigger_options)] {
+                if !said.is_empty() {
+                    msg[key] = Value::Object(said.iter().map(|(name, value)| (name.clone(), json!(value))).collect());
+                }
+            }
+            for (key, script) in [
+                ("probe", &n.probe),
+                ("reply", &n.reply),
+                ("integration", &n.integration),
+                ("trigger", &n.trigger),
+                ("plugin", &n.plugin),
+                ("template", &n.template),
+                ("command", &n.command),
+            ] {
+                if !script.trim().is_empty() {
+                    msg[key] = json!(script.trim());
+                }
             }
             vec![request(pending, Pending::ScheduleChange("create"), msg)]
         }
@@ -2270,15 +2824,90 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
                 "name": if name.is_empty() { Value::Null } else { json!(name) },
                 "prompt": to.prompt,
                 "cadence": cadence_json(&to.cadence, to.timezone.as_deref()),
+                "probe": to.probe.trim(),
+                "reply": to.reply.trim(),
+                "integration": to.integration.trim(),
+                "trigger": to.trigger.trim(),
+                "triggerOptions": Value::Object(to.trigger_options.iter().map(|(name, value)| (name.clone(), json!(value))).collect()),
+                "plugin": to.plugin.trim(),
+                "template": to.template.trim(),
+                "options": Value::Object(to.options.iter().map(|(name, value)| (name.clone(), json!(value))).collect()),
+                "command": to.command.trim(),
+                "dailyLimit": to.daily_limit,
             });
             // Only a schedule that starts an agent has a folder to change.
             if !to.cwd.is_empty() {
                 msg["newAgentConfig"] = json!({ "cwd": to.cwd, "isolation": if to.worktree { "worktree" } else { "local" } });
             }
+            // What it runs on, when that was picked again: the rest of how
+            // it was made stays.
+            if to.repicked {
+                if !msg["newAgentConfig"].is_object() {
+                    msg["newAgentConfig"] = json!({});
+                }
+                msg["newAgentConfig"]["provider"] = json!(to.provider);
+                msg["newAgentConfig"]["model"] = json!(to.model);
+                msg["newAgentConfig"]["modeId"] = json!(to.mode);
+            }
             vec![request(pending, Pending::ScheduleChange("update"), msg)]
+        }
+        Command::Plugins => vec![request(pending, Pending::Other("load plugins"), json!({ "type": "plugin/list" }))],
+        Command::AddPlugin(source) => {
+            vec![request(pending, Pending::Other("install the plugin"), json!({ "type": "plugin/add", "source": source }))]
+        }
+        Command::RemovePlugin(id) => {
+            vec![request(pending, Pending::Other("remove the plugin"), json!({ "type": "plugin/remove", "pluginId": id }))]
+        }
+        Command::UpdatePlugin(id) => {
+            vec![request(pending, Pending::Other("update the plugin"), json!({ "type": "plugin/update", "pluginId": id }))]
+        }
+        Command::SetPluginParams { id, values } => {
+            let values: serde_json::Map<String, Value> = values.into_iter().map(|(name, value)| (name, json!(value))).collect();
+            vec![request(pending, Pending::Other("save the plugin's settings"), json!({ "type": "plugin/set", "pluginId": id, "values": values }))]
+        }
+        Command::PluginOptions { id, name, of } => {
+            let mut msg = json!({ "type": "plugin/options", "pluginId": id, "name": name });
+            match &of {
+                ParamOf::Own => {}
+                ParamOf::Trigger(trigger) => msg["trigger"] = json!(trigger),
+                ParamOf::Automation(automation) => msg["automation"] = json!(automation),
+            }
+            // Answered under what the editor keeps it as.
+            vec![request(pending, Pending::PluginOptions(id.clone(), of.key(&name)), msg)]
+        }
+        Command::EnablePlugin { id, enabled } => {
+            vec![request(pending, Pending::Other("turn the integration on or off"), json!({ "type": "plugin/enable", "pluginId": id, "enabled": enabled }))]
+        }
+        Command::RestorePlugin(id) => {
+            vec![request(pending, Pending::Other("bring the integration back"), json!({ "type": "plugin/restore", "pluginId": id }))]
+        }
+        Command::ExportPlugin(id) => {
+            vec![request(pending, Pending::Other("copy the integration's settings"), json!({ "type": "plugin/export", "pluginId": id }))]
+        }
+        Command::ImportPlugin(config) => {
+            vec![request(pending, Pending::Other("take in the integration's settings"), json!({ "type": "plugin/import", "config": config }))]
+        }
+        Command::PackPlugin { id, settings, schedule } => {
+            vec![request(pending, Pending::Other("make the file"), json!({ "type": "plugin/pack", "pluginId": id, "settings": settings, "scheduleId": schedule }))]
+        }
+        Command::UnpackPlugin(bytes) => {
+            use base64::Engine;
+            vec![request(pending, Pending::Other("read the file"), json!({ "type": "plugin/unpack", "archive": base64::engine::general_purpose::STANDARD.encode(bytes) }))]
+        }
+        Command::InstallPlugin(token) => {
+            vec![request(pending, Pending::Other("install what the file holds"), json!({ "type": "plugin/install", "token": token }))]
+        }
+        Command::DiscardPlugin(token) => {
+            vec![request(pending, Pending::Other("let go of the file"), json!({ "type": "plugin/discard", "token": token }))]
+        }
+        Command::SetupPlugin(id) => {
+            vec![request(pending, Pending::PluginSetup(id.clone()), json!({ "type": "plugin/setup", "pluginId": id }))]
         }
         Command::ScheduleRuns(id) => {
             vec![request(pending, Pending::ScheduleRuns(id.clone()), json!({ "type": "schedule/logs", "scheduleId": id }))]
+        }
+        Command::TryCommand { command, cwd } => {
+            vec![request(pending, Pending::TryCommand, json!({ "type": "automation/try", "command": command, "cwd": cwd }))]
         }
         // The record is read again: only what was appended to it, by a
         // service that can (`agent.history.sync`); else the whole of it,
@@ -2515,6 +3144,20 @@ fn handle(
                     let error = payload.get("error").and_then(Value::as_str).unwrap_or("request failed").to_owned();
                     return vec![Event::ResetCredits(Err(error))];
                 }
+                // Said where the command was tried.
+                Some(Pending::TryCommand) => {
+                    let error = payload.get("error").and_then(Value::as_str).unwrap_or("request failed").to_owned();
+                    return vec![Event::CommandTried { ok: false, output: error, took_ms: 0 }];
+                }
+                // Said on the plugin, where its setup was asked for.
+                Some(Pending::PluginSetup(id)) => {
+                    let error = payload.get("error").and_then(Value::as_str).unwrap_or("request failed").to_owned();
+                    return vec![Event::PluginSetup { id, error: Some(error) }];
+                }
+                Some(Pending::PluginOptions(id, name)) => {
+                    let error = payload.get("error").and_then(Value::as_str).unwrap_or("request failed").to_owned();
+                    return vec![Event::PluginOptions { id, name, result: Err(error) }];
+                }
                 Some(Pending::UseReset(provider)) => {
                     let error = payload.get("error").and_then(Value::as_str).unwrap_or("request failed").to_owned();
                     return vec![Event::ResetUsed { provider, result: Err(error) }];
@@ -2552,6 +3195,8 @@ fn handle(
                 Some(Pending::Explorer | Pending::ListDir(..)) => "read files",
                 Some(Pending::History(_)) => "load history",
                 Some(Pending::Schedules | Pending::ScheduleChange(_) | Pending::ScheduleRuns(_)) => "update schedules",
+                Some(Pending::PluginSetup(_) | Pending::PluginOptions(..)) => "set up the plugin",
+                Some(Pending::TryCommand) => "try the command",
                 Some(Pending::Project) => "add the project",
                 Some(Pending::Events(_)) => "subscribe to events",
                 Some(Pending::FileOp(_)) => "change the file",
@@ -3078,7 +3723,7 @@ fn handle(
             let items = ["rows", "entries"]
                 .iter()
                 .find_map(|k| payload.get(*k).and_then(Value::as_array))
-                .map(|e| e.iter().filter_map(|e| e.get("item").and_then(Item::from_json)).collect())
+                .map(|e| settled(e.iter().filter_map(|e| e.get("item").and_then(Item::from_json)).collect()))
                 .unwrap_or_default();
             vec![Event::SubagentTimeline { parent: s("parentAgentId"), id: s("subagentId"), items }]
         }
@@ -3141,6 +3786,52 @@ fn handle(
                 return vec![Event::Notice(format!("Could not load the schedule's runs: {e}"))];
             }
             vec![Event::ScheduleRuns { id, runs: list_of(payload, "runs", ScheduleRun::from_json) }]
+        }
+        "automation/try/response" => {
+            if let Some(id) = request_id {
+                pending.remove(id);
+            }
+            vec![Event::CommandTried {
+                ok: payload.get("ok") == Some(&Value::Bool(true)),
+                output: payload.get("output").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                took_ms: payload.get("tookMs").and_then(Value::as_u64).unwrap_or(0),
+            }]
+        }
+        "plugin/options/response" => {
+            let Some(Pending::PluginOptions(id, name)) = request_id.and_then(|id| pending.remove(id)) else { return vec![] };
+            vec![Event::PluginOptions { id, name, result: Ok(list_of(payload, "options", PluginChoice::from_json)) }]
+        }
+        // Each answer about plugins says which are installed now.
+        k if k.starts_with("plugin/") && k.ends_with("/response") => {
+            let mut events = vec![
+                Event::Plugins(list_of(payload, "plugins", Plugin::from_json)),
+                Event::PluginsAway(list_of(payload, "away", |v| {
+                    Some((v.get("id")?.as_str()?.to_owned(), v.get("name").and_then(Value::as_str).unwrap_or_default().to_owned(), PluginKind::from_json(v)))
+                })),
+            ];
+            if let Some(config) = payload.get("config").and_then(Value::as_str) {
+                events.push(Event::PluginExported(config.to_owned()));
+            }
+            // A file made, a file read, a file installed.
+            if let (Some(name), Some(archive)) = (payload.get("fileName").and_then(Value::as_str), payload.get("archive").and_then(Value::as_str)) {
+                use base64::Engine;
+                match base64::engine::general_purpose::STANDARD.decode(archive) {
+                    Ok(bytes) => events.push(Event::PluginPacked { name: name.to_owned(), bytes }),
+                    Err(_) => events.push(Event::Notice("Could not make the file".into())),
+                }
+            } else if let Some(file) = HandedFile::from_json(payload) {
+                events.push(Event::PluginUnpacked(file));
+            }
+            if let Some(installed) = payload.get("installed") {
+                events.push(Event::PluginInstalled {
+                    root: installed.get("root").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                    automation: installed.get("automation").and_then(HandedAutomation::from_json),
+                });
+            }
+            if let Some(Pending::PluginSetup(id)) = request_id.and_then(|id| pending.remove(id)) {
+                events.push(Event::PluginSetup { id, error: None });
+            }
+            events
         }
         k if k.starts_with("schedule/") && k.ends_with("/response") => {
             let what = match request_id.and_then(|id| pending.remove(id)) {
@@ -3635,6 +4326,41 @@ mod tests {
         assert!(!skip_lan(Some(true), Some(Route::Relay), true));
         assert!(!skip_lan(None, Some(Route::Relay), true));
     }
+    /// What the service answers about a file handed on: what it holds,
+    /// shown before it is installed, and the automation that came with
+    /// it, opened after.
+    #[test]
+    fn a_file_handed_on_is_read_as_the_service_says_it() {
+        let payload = json!({"token":"t-1","about":{"root":"watch","name":"Watch","packages":[
+            {"id":"watch","kind":"plugin","name":"Watch","description":"Reviews what it is sent","included":true,"here":"installed"},
+            {"id":"hub","kind":"integration","name":"Hub","included":false,"here":"builtin"},
+            {"id":"chat","kind":"integration","name":"Chat","included":false,"here":"no"}],
+            "settings":[{"package":"hub","packageName":"Hub","name":"app_secret","label":"App Secret","secret":true}],
+            "automation":{"name":"Watch mine"}}});
+        let file = HandedFile::from_json(&payload).unwrap();
+        assert_eq!((file.token.as_str(), file.name.as_str()), ("t-1", "Watch"));
+        let stands: Vec<_> = file.packages.iter().map(|p| (p.id.as_str(), p.kind, p.included, p.here, p.builtin)).collect();
+        assert_eq!(stands, [("watch", PluginKind::Plugin, true, true, false), ("hub", PluginKind::Integration, false, true, true), ("chat", PluginKind::Integration, false, false, false)]);
+        assert_eq!(file.settings, [("Hub".to_owned(), "App Secret".to_owned(), true)]);
+        assert_eq!(file.automation.as_deref(), Some("Watch mine"));
+        // An answer about plugins that is not about a file is no file.
+        assert!(HandedFile::from_json(&json!({"plugins":[]})).is_none());
+
+        let came = HandedAutomation::from_json(&json!({"name":"Watch mine","prompt":"Review {{url}}","integration":"hub","trigger":"asked",
+            "triggerOptions":{"repos":"a/b"},"plugin":"watch","template":"review","options":{"approve":"yes"},
+            "cadence":{"type":"every","everyMs":120000},"dailyLimit":5}))
+        .unwrap();
+        assert_eq!(came.expression, "every:120000");
+        assert_eq!(came.trigger_options, [("repos".to_owned(), "a/b".to_owned())]);
+        assert_eq!(came.options, [("approve".to_owned(), "yes".to_owned())]);
+        assert_eq!((came.plugin.as_str(), came.template.as_str(), came.daily_limit), ("watch", "review", Some(5)));
+        let timed = HandedAutomation::from_json(&json!({"name":"Daily","cadence":{"type":"cron","expression":"0 9 * * 1-5"}})).unwrap();
+        assert_eq!(timed.expression, "0 9 * * 1-5");
+        assert!(timed.integration.is_empty() && timed.daily_limit.is_none());
+        // A file with no automation says null.
+        assert!(HandedAutomation::from_json(&Value::Null).is_none());
+    }
+
     #[test]
     fn file_frames_follow_the_protocol() {
         let bytes = vec![7u8; FILE_CHUNK_BYTES + 3];

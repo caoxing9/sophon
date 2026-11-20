@@ -1,0 +1,68 @@
+#!/bin/sh
+# GitHub：Sophon 的集成。用这台电脑上 gh 的登录，不需要别的凭据。
+#
+#   watch status   GitHub 上登录的是谁；没登录就失败
+#   watch probe    触发器「有人请求我 review」：现在请求你 review 的 PR，每个输出一行 JSON 事件
+#   watch repos    你和你所在组织的仓库，给触发器的「只处理这些仓库」当选项
+#
+# 事件的 id 是「PR 地址 + 当前最新提交」：处理过的不会再触发，对方改完重新请求时
+# （有了新提交）会再来一次。拿这些 PR 做什么，不归这里管：那是自动化和插件的事。
+set -eu
+
+# Sophon 的服务不一定带着你终端里的 PATH。
+gh=$(command -v gh 2>/dev/null || true)
+for candidate in /opt/homebrew/bin/gh /usr/local/bin/gh "$HOME/.local/bin/gh"; do
+    [ -n "$gh" ] && break
+    [ -x "$candidate" ] && gh=$candidate
+done
+[ -n "$gh" ] || { echo "这台电脑上没有 gh：先安装 GitHub CLI 并运行 gh auth login" >&2; exit 1; }
+
+
+case "${1:-}" in
+status)
+    login=$("$gh" api user --jq .login 2>/dev/null) || { echo "gh 还没有登录：运行 gh auth login" >&2; exit 1; }
+    echo "GitHub 账号：$login"
+    ;;
+probe)
+    # 要找的：还开着、请求了我的 PR。WATCH_QUERY 只给测试用。
+    search="is:pr is:open archived:false ${WATCH_QUERY:-review-requested:@me}"
+    # 只认的仓库：owner/* 整个账号或组织，owner/repo 单个仓库；几个之间是「或」。
+    for pattern in $(printf '%s' "${SOPHON_PARAM_REPOS:-}" | tr ',' ' '); do
+        case "$pattern" in
+        *[!A-Za-z0-9._/*-]*) echo "仓库范围写得不对：$pattern" >&2; exit 1 ;;
+        */\*) search="$search user:${pattern%/\*}" ;;
+        */*) search="$search repo:$pattern" ;;
+        *) echo "仓库范围写得不对：$pattern（要 owner/* 或 owner/repo）" >&2; exit 1 ;;
+        esac
+    done
+    "$gh" api graphql -f q="$search" -f query='
+        query($q: String!) {
+          search(query: $q, type: ISSUE, first: 30) {
+            nodes { ... on PullRequest { url number isDraft headRefOid repository { nameWithOwner } author { login } } }
+          }
+        }' --jq '.data.search.nodes[] | select(.url != null and (.isDraft | not))
+            | {id: (.url + "@" + .headRefOid),
+               vars: {url, number: (.number | tostring), repo: .repository.nameWithOwner,
+                      author: (.author.login // "")}}'
+    ;;
+repos)
+    # 先是整个账号或组织（owner/*），再是最近有动静的 100 个仓库。
+    "$gh" api graphql -f query='
+        query {
+          viewer {
+            login
+            organizations(first: 50) { nodes { login } }
+            repositories(first: 100, orderBy: {field: PUSHED_AT, direction: DESC},
+                         affiliations: [OWNER, ORGANIZATION_MEMBER, COLLABORATOR]) {
+              nodes { nameWithOwner isArchived }
+            }
+          }
+        }' --jq '.data.viewer
+            | ([.login] + [.organizations.nodes[].login] | map({value: (. + "/*"), hint: "整个账号"})[]),
+              (.repositories.nodes[] | select(.isArchived | not) | {value: .nameWithOwner})'
+    ;;
+*)
+    echo "用法：watch status | probe | repos" >&2
+    exit 2
+    ;;
+esac

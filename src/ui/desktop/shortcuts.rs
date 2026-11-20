@@ -211,7 +211,7 @@ fn items() -> Vec<CommandItem> {
         CommandItem::new("new-workspace", t("New workspace")).group(t("Actions")).shortcut("mod+n"),
         CommandItem::new("settings", t("Settings")).group(t("Actions")).shortcut("mod+,"),
         CommandItem::new("history", t("History")).group(t("Actions")).keywords(["sessions", "archive"]),
-        CommandItem::new("schedules", t("Schedules")).group(t("Actions")).keywords(["cron", "automation"]),
+        CommandItem::new("schedules", t("Automations")).group(t("Actions")).keywords(["cron", "automation"]),
         CommandItem::new("usage", t("Usage")).group(t("Actions")).keywords(["limits", "quota", "cost"]),
         CommandItem::new("import", t("Import a session")).group(t("Actions")).keywords(["claude", "codex", "resume"]),
         CommandItem::new("toggle-sidebar", t("Toggle sidebar")).group(t("Actions")).shortcut("mod+b"),

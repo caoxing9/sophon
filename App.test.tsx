@@ -181,14 +181,90 @@ test("settings manage the spaces on this Mac", async () => {
   expect(app.texts()).toContain("New space…");
 });
 
-test("a new schedule is set without writing cron", async () => {
+test("a new automation is set without writing cron", async () => {
   const app = await open(".", { width: 1100, height: 900 });
-  await app.press("Schedules >> nth=0");
-  await app.waitFor("text:New schedule");
-  await app.press("New schedule >> nth=0");
+  await app.press("Automations >> nth=0");
+  // With none yet, the page offers a few to begin from.
+  await app.waitFor("text:Start from scratch");
+  expect(app.texts()).toContain("Find bugs in recent commits");
+  await app.press("Start from scratch");
   await app.waitFor("text:Repeats");
   // Every day at 9:00 to begin with, said back in words.
   expect(app.texts()).toContain("Runs: Every day at 9:00");
   expect(app.texts()).toContain("Every week");
   expect(app.texts()).not.toContain("Cron expression, e.g. 0 9 * * 1-5");
+});
+
+test("an automation can begin from a template and run a command", async () => {
+  const app = await open(".", { width: 1100, height: 900 });
+  await app.press("Automations >> nth=0");
+  await app.waitFor("text:Weekly changelog");
+  await app.press("Weekly changelog");
+  // Filled in from the template: when it runs, and what it is told.
+  await app.waitFor("text:Runs: Fri at 16:00");
+  expect(app.texts()).toContain("Instructions");
+  expect(app.texts()).toContain("Start a conversation");
+  expect(app.texts()).toContain("Runs a day");
+  // What starts it has a name: the one picked on a line, the others a press
+  // away. A script is a plugin's to bring, never typed in here.
+  await app.press("Change >> nth=0");
+  await app.waitFor("text:At the times you set below");
+  expect(app.texts()).not.toContain("A script of your own");
+  await app.press("On time");
+  await app.waitFor("text:Repeats");
+  // And what it does can be a command no agent has a part in.
+  await app.press("Run a command");
+  await app.waitFor("text:No conversation and no model: it does the same each time, and what it prints is kept with the run");
+});
+
+test("instructions are written as they read, and kept as Markdown", async () => {
+  const app = await open(".", { width: 1100, height: 900 });
+  await app.press("Automations >> nth=0");
+  await app.waitFor("text:Start from scratch");
+  await app.press("Start from scratch");
+  await app.waitFor("text:Repeats");
+  // The marks of Markdown become what they mean as they are typed: there
+  // is no other view of the instructions to switch to.
+  await app.type("label:Instructions", "## Steps");
+  await app.keyboard.press("enter");
+  await app.type("label:Instructions", "- run `gh pr view {{url}}`");
+  await app.keyboard.press("enter");
+  await app.type("label:Instructions", "say **only** what matters");
+  expect(app.texts()).toContain("Steps");
+  expect(app.texts()).not.toContain("## Steps");
+  expect(app.texts()).not.toContain("Preview");
+  expect(app.spanStyle("text:Steps")).toMatchObject({ fontSize: 18, fontWeight: 600 });
+  expect(app.spanStyle("text:only")).toMatchObject({ fontWeight: 600 });
+  expect(app.spanStyle("text:gh pr view").backgroundColor).toBeTruthy();
+  // What is kept is the Markdown: the editor made again reads it back as
+  // the same heading, list and code.
+  await app.press("Run a command");
+  await app.waitFor("text:No conversation and no model: it does the same each time, and what it prints is kept with the run");
+  await app.press("Start a conversation");
+  await app.waitFor("text:Steps");
+  expect(app.texts()).toContain("run gh pr view {{url}}");
+  expect(app.spanStyle("text:Steps")).toMatchObject({ fontSize: 18, fontWeight: 600 });
+  expect(app.spanStyle("text:gh pr view").backgroundColor).toBeTruthy();
+});
+
+test("integrations have a page of their own to set up and add", async () => {
+  const app = await open(".", { width: 1100, height: 900 });
+  // Behind More, with the pages less often wanted.
+  await app.press("More >> nth=0");
+  await app.waitFor("text:Integrations");
+  await app.press("Integrations >> nth=0");
+  await app.waitFor("text:Add an integration");
+  expect(app.texts()).toContain("Add");
+  expect(app.texts()).toContain("One someone shared with you, its settings filled in. It runs its scripts on that computer: add only what you trust");
+});
+
+test("plugins have a page of their own, apart from the integrations they count on", async () => {
+  const app = await open(".", { width: 1100, height: 900 });
+  await app.press("More >> nth=0");
+  await app.waitFor("text:Plugins");
+  await app.press("Plugins >> nth=0");
+  await app.waitFor("text:Add a plugin");
+  expect(app.texts()).toContain("A plugin runs its scripts on that computer, and so do the integrations it brings: add only what you trust");
+  // What connects a service is not listed here.
+  expect(app.texts()).not.toContain("Add an integration");
 });

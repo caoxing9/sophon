@@ -1,0 +1,95 @@
+#!/bin/sh
+# GitHub PR 值守：Sophon 的插件。触发它的是「GitHub」集成的「有人请求我 review」，
+# 这里只管 review 完之后的事：
+#
+#   notify reply    AI 说了结论后，在飞书通知 PR 作者（通过「飞书」集成）
+#   notify use pair 记下一个 GitHub 账号在飞书里是谁（sophon use github-pr-watch pair …）
+set -eu
+
+# Sophon 的服务不一定带着你终端里的 PATH。
+gh=$(command -v gh 2>/dev/null || true)
+for candidate in /opt/homebrew/bin/gh /usr/local/bin/gh "$HOME/.local/bin/gh"; do
+    [ -n "$gh" ] && break
+    [ -x "$candidate" ] && gh=$candidate
+done
+[ -n "$gh" ] || { echo "这台电脑上没有 gh：先安装 GitHub CLI 并运行 gh auth login" >&2; exit 1; }
+
+lower() { printf '%s' "$1" | tr 'A-Z' 'a-z'; }
+
+# 「GitHub 账号对应的飞书账号」里的每一条，一行一条：账号=邮箱，或 账号=open_id:名字。
+pairs() {
+    printf '%s\n' "${SOPHON_PARAM_PEOPLE:-}" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep . || true
+}
+
+# 这个账号（小写）对应的那一条里等号后面的部分；没有就什么也不输出。
+whom() {
+    pairs | while IFS= read -r pair; do
+        [ "$(lower "${pair%%=*}")" = "$1" ] && printf '%s\n' "${pair#*=}"
+    done | tail -1
+}
+
+case "${1:-}" in
+reply)
+    # 只在 AI 说了结论（sophon reply）时通知；接手、结束、失败不打扰对方。
+    [ "${SOPHON_ACTION:-}" = reply ] || exit 0
+    case "${SOPHON_PARAM_NOTIFY:-yes}" in yes | true | 1 | on) ;; *) exit 0 ;; esac
+    author=${SOPHON_VAR_AUTHOR:-}
+    [ -n "$author" ] || { echo "不知道这个 PR 的作者是谁，没有通知" >&2; exit 1; }
+    # 作者在飞书里是谁：先看记下的对应关系（你写的，或 AI 配对后记的），
+    # 没有就试 PR 提交记录里的邮箱。
+    to=$(whom "$(lower "$author")")
+    to=${to%%:*}
+    guessed=""
+    if [ -z "$to" ]; then
+        to=$("$gh" api "repos/${SOPHON_VAR_REPO}/pulls/${SOPHON_VAR_NUMBER}/commits" \
+            --jq '[.[] | select(.author.login == "'"$author"'") | .commit.author.email | select(test("noreply") | not)] | last // empty' 2>/dev/null || true)
+        guessed=$to
+    fi
+    # 不知道是谁：交给对话里的 AI 去配对（提示词里写了怎么做），配好再来一次。
+    unknown() {
+        echo "不知道 @$author 在飞书里是谁${guessed:+（提交记录里的邮箱 $guessed 在飞书里查不到）}。先配对（sophon use github-pr-watch pair $author <飞书 open_id> \"<飞书名字>\"），再重新运行一次 sophon reply" >&2
+        exit 1
+    }
+    case "$to" in
+    '') unknown ;;
+    ou_*) kind=--open-id ;;
+    *@*) kind=--email ;;
+    *)
+        echo "「GitHub 账号对应的飞书账号」里 $author 的那一条写得不对：要邮箱，或飞书 open_id" >&2
+        exit 1
+        ;;
+    esac
+    said=$(sophon use feishu send "$kind" "$to" --text "🤖 我的 AI 助手 review 了你的 PR #${SOPHON_VAR_NUMBER}：${SOPHON_TEXT}
+${SOPHON_VAR_URL}" 2>&1) || {
+        # 飞书不认这个人：提交代码用的邮箱多半不是飞书账号的邮箱（企业邮箱也不行）。
+        case "$said" in
+        *230001* | *"invalid receive_id"*) unknown ;;
+        *) printf '%s\n' "$said" >&2 ;;
+        esac
+        exit 1
+    }
+    printf '%s\n' "$said"
+    ;;
+use)
+    # 给自动化里的 AI 用的：sophon use github-pr-watch pair <GitHub 账号> <飞书 open_id> [飞书名字]
+    # 记下这个账号在飞书里是谁，写进「GitHub 账号对应的飞书账号」，以后直接通知。
+    usage() { echo "用法：sophon use github-pr-watch pair <GitHub 账号> <飞书 open_id> [飞书名字]" >&2; exit 2; }
+    [ "${2:-}" = pair ] || usage
+    login=$(lower "${3:-}")
+    id=${4:-}
+    name=$(printf '%s' "${5:-}" | tr -d ',=:\n\r')
+    case "$login" in '' | *[!a-z0-9-]*) usage ;; esac
+    case "$id" in ou_*) ;; *) usage ;; esac
+    case "$id" in *[!A-Za-z0-9_]*) usage ;; esac
+    kept=$(pairs | while IFS= read -r pair; do
+        [ "$(lower "${pair%%=*}")" = "$login" ] || printf '%s,' "$pair"
+    done)
+    plugin=$(basename "${SOPHON_PLUGIN_DATA:-github-pr-watch}")
+    sophon plugin set "$plugin" "people=${kept}${login}=${id}${name:+:$name}" >/dev/null
+    echo "记下了：@$login 是飞书上的 ${name:-$id}"
+    ;;
+*)
+    echo "用法：notify reply | use pair" >&2
+    exit 2
+    ;;
+esac

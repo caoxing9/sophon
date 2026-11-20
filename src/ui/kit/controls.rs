@@ -508,6 +508,48 @@ pub(crate) fn mark(size: f32, lift: Lift) -> View {
     .child(tile)
 }
 
+/// Working: Claude Code's own mark for it, the six it turns through (a
+/// dot opening into a flower and closing again), set one on another and
+/// each shown in its turn. Natively, as [`eclipse`]: an animated opacity
+/// for each, no layout or engine work per frame.
+pub(crate) fn spark(size: f32) -> View {
+    // The third has a sign after it that keeps it a drawn mark where a
+    // system would make an emoji of it.
+    const MARKS: [&str; 6] = ["·", "✢", "✳\u{fe0e}", "✶", "✻", "✽"];
+    /// How long each stays, as Claude Code's.
+    const STEP: f32 = 120.0;
+    // Out and back: whose turn each of the ten steps of a pass is.
+    let turns: Vec<usize> = (0..MARKS.len()).chain((1..MARKS.len() - 1).rev()).collect();
+    let mut mark = view().w(px(size)).h(px(size)).flex_shrink_0();
+    for (index, glyph) in MARKS.into_iter().enumerate() {
+        let shown = animated_value(if index == 0 { 1.0 } else { 0.0 });
+        Animation::sequence(turns.iter().flat_map(|turn| {
+            [
+                Animation::timing(&shown, if *turn == index { 1.0 } else { 0.0 }, nsh_core::element::Timing::new(0.0, Easing::Linear)),
+                Animation::delay(STEP),
+            ]
+        }))
+        .looped(None)
+        .start();
+        mark = mark.child(
+            view()
+                .absolute()
+                .top(px(0.0))
+                .left(px(0.0))
+                .right(px(0.0))
+                .bottom(px(0.0))
+                .items_center()
+                .justify_center()
+                .bind_opacity(&shown)
+                // One font for all six, so none sits higher or wider than
+                // the last: Menlo has them all, where a font someone picked
+                // for code has some and borrows the rest.
+                .child(text(glyph).text_size(px(size)).line_height(px(size)).font_family(MONO).text_color(ACCENT)),
+        );
+    }
+    mark
+}
+
 /// Loading: the mark with its corona running, under an optional line.
 pub(crate) fn loader(label: Option<&'static str>) -> View {
     view()

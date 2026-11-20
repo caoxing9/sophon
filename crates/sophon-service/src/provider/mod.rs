@@ -105,6 +105,12 @@ pub struct Start {
     pub thinking: Option<String>,
     pub mode: String,
     pub cost: f64,
+    /// What its CLI's environment has over the service's: an automation's
+    /// run is told which run it is, and where `sophon` is.
+    pub env: Vec<(String, String)>,
+    /// Folders its CLI loads as plugins of its own kind (Claude Code's
+    /// `--plugin-dir`): the skills the plugin of an automation brings.
+    pub plugins: Vec<String>,
 }
 
 pub type Emit = Box<dyn FnMut(Event)>;
@@ -480,7 +486,11 @@ mod tests {
             assert_eq!(offered, "auto");
             // One of the modes it lists, so a client can show it.
             assert!(
-                entry["modes"].as_array().unwrap().iter().any(|mode| mode["id"] == offered),
+                entry["modes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|mode| mode["id"] == offered),
                 "{entry}"
             );
         }

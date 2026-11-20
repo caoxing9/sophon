@@ -8,6 +8,8 @@ mod history;
 mod host;
 mod import;
 mod models;
+mod pack;
+mod plugin;
 mod projects;
 mod provider;
 mod schedule;
@@ -193,6 +195,29 @@ async fn session(stream: TcpStream, shared: Shared, token: Rc<String>) -> Result
                                 }
                             }
                             kind if kind.starts_with("schedule/") => schedule::handle(&shared,request),
+                            // A plugin comes from wherever git reaches.
+                            kind if kind.starts_with("plugin/") => {
+                                let (shared, request, done) = (shared.clone(), request.clone(), done.clone());
+                                tokio::task::spawn_local(async move {
+                                    let reply = plugin::handle(&shared, &request).await.unwrap_or_else(|error| {
+                                        envelope("rpc_error", json!({"requestId":request["requestId"],"error":error}))
+                                    });
+                                    let _ = done.send(Done::Reply(reply));
+                                });
+                                continue;
+                            }
+                            // A reply script may take as long as the
+                            // service it writes to.
+                            "automation/act" | "automation/trigger" | "automation/try" => {
+                                let (shared, request, done) = (shared.clone(), request.clone(), done.clone());
+                                tokio::task::spawn_local(async move {
+                                    let reply = schedule::asked(&shared, &request).await.unwrap_or_else(|error| {
+                                        envelope("rpc_error", json!({"requestId":request["requestId"],"error":error}))
+                                    });
+                                    let _ = done.send(Done::Reply(reply));
+                                });
+                                continue;
+                            }
                             "read_project_config_request" | "write_project_config_request" => {
                                 let mut payload = projects::settings(&shared,request).unwrap_or_else(|error|json!({"ok":false,"error":{"message":error},"repoRoot":request["repoRoot"]}));
                                 payload["requestId"] = request["requestId"].clone();
@@ -371,7 +396,12 @@ async fn serve(home: PathBuf) -> Result<(), Error> {
     let address = listener.local_addr()?;
     // Before anything is read: what the old service kept for this home.
     import::adopt(&home);
-    let host = Host::new(home.clone(), state::State::load(&home)?)?;
+    let mut kept = state::State::load(&home)?;
+    // Automations kept before integrations and plugins were told apart.
+    if schedule::adopt(&home, &mut kept.schedules) {
+        kept.save(&home)?;
+    }
+    let host = Host::new(home.clone(), kept)?;
     transfer::prune(&home);
     let token = Rc::new(state::id());
     state::write(&home, "local-credential", token.as_bytes())?;
@@ -380,6 +410,19 @@ async fn serve(home: PathBuf) -> Result<(), Error> {
         "sophon.pid",
         &serde_json::to_vec(&json!({"listen":address.to_string(),"pid":std::process::id()}))?,
     )?;
+    // `sophon` for the agents of automations: this program, under the
+    // name their prompts are told.
+    #[cfg(unix)]
+    {
+        let bin = home.join("bin");
+        let _ = fs::create_dir_all(&bin);
+        let _ = fs::remove_file(bin.join("sophon"));
+        if let Err(error) = environment::current_exe()
+            .and_then(|program| std::os::unix::fs::symlink(program, bin.join("sophon")))
+        {
+            eprintln!("`sophon` is not there for automations: {error}");
+        }
+    }
     let host = Rc::new(RefCell::new(host));
     let mut again = false;
     let mut poll = interval(Duration::from_millis(200));
@@ -440,6 +483,340 @@ async fn serve(home: PathBuf) -> Result<(), Error> {
     Ok(())
 }
 
+/// One request of the service running in `home`, as a client of it,
+/// and its answer.
+async fn request(home: &Path, mut message: Value) -> Result<Value, Error> {
+    let pid: Value = serde_json::from_slice(
+        &fs::read(home.join("sophon.pid")).map_err(|_| "The Sophon service is not running")?,
+    )?;
+    let token = fs::read_to_string(home.join("local-credential"))?;
+    let url = format!(
+        "ws://{}/ws",
+        pid["listen"].as_str().ok_or("No service address")?
+    );
+    let (mut socket, _) = timeout(
+        Duration::from_secs(8),
+        tokio_tungstenite::connect_async(url),
+    )
+    .await??;
+    let hello =
+        json!({"type":"hello","protocolVersion":1,"auth":{"kind":"localCredential","token":token}});
+    socket.send(Message::text(hello.to_string())).await?;
+    let id = state::id();
+    message["requestId"] = json!(id);
+    socket
+        .send(Message::text(
+            json!({"type":"session","message":message}).to_string(),
+        ))
+        .await?;
+    // As long as a reply script may take, and a little.
+    let answer = timeout(Duration::from_secs(40), async {
+        while let Some(frame) = socket.next().await {
+            let Ok(text) = frame?.into_text() else {
+                continue;
+            };
+            let Ok(frame) = serde_json::from_str::<Value>(&text) else {
+                continue;
+            };
+            if frame["type"] == "hello.rejected" {
+                return Err("The service refused this client".into());
+            }
+            if frame.pointer("/message/payload/requestId") == Some(&json!(id)) {
+                return Ok(frame["message"].clone());
+            }
+        }
+        Err::<Value, Error>("The service closed the connection".into())
+    })
+    .await??;
+    let _ = socket.close(None).await;
+    if answer["type"] == "rpc_error" {
+        return Err(answer["payload"]["error"]
+            .as_str()
+            .unwrap_or("The service refused")
+            .into());
+    }
+    Ok(answer["payload"].clone())
+}
+
+/// What a file handed on holds, a line each: its packages (and whether
+/// each is in it), the settings it fills in by name, and its automation.
+fn said_of_a_file(about: &Value) {
+    for package in about["packages"].as_array().into_iter().flatten() {
+        println!(
+            "{}\t{}\t{}\t{}",
+            package["id"].as_str().unwrap_or_default(),
+            package["kind"].as_str().unwrap_or_default(),
+            package["name"].as_str().unwrap_or_default(),
+            if package["included"] == true {
+                "in the file"
+            } else {
+                "named only"
+            }
+        );
+    }
+    for setting in about["settings"].as_array().into_iter().flatten() {
+        println!(
+            "setting\t{}.{}{}",
+            setting["package"].as_str().unwrap_or_default(),
+            setting["name"].as_str().unwrap_or_default(),
+            if setting["secret"] == true {
+                " (secret)"
+            } else {
+                ""
+            }
+        );
+    }
+    if let Some(name) = about["automation"]["name"].as_str() {
+        println!("automation\t{name}");
+    }
+}
+
+/// `sophon plugin list|add|update|remove`, for integrations and plugins
+/// alike: each is named by its id, whichever it is (`sophon integration`
+/// is the same command).
+async fn plugins(home: &Path, args: &[String]) -> Result<(), Error> {
+    let words: Vec<&str> = {
+        let mut words = Vec::new();
+        let mut rest = args.iter();
+        while let Some(arg) = rest.next() {
+            if arg == "--home" {
+                rest.next();
+            } else {
+                words.push(arg.as_str());
+            }
+        }
+        words
+    };
+    // Its one-time setup (a sign-in), run here where there is someone
+    // to answer it: the plugin's own command, with what follows the id.
+    if let ["setup", id, rest @ ..] = words.as_slice() {
+        let found = plugin::find(home, id).ok_or("Unknown plugin")?;
+        let setup = found["setup"]
+            .as_str()
+            .ok_or("There is nothing to set up here")?;
+        let data = plugin::data(home, id);
+        fs::create_dir_all(&data)?;
+        let status = Command::new("sh")
+            .arg("-c")
+            .arg(format!("{setup} \"$@\""))
+            .arg("sophon-plugin")
+            .args(rest)
+            .current_dir(found["dir"].as_str().unwrap_or_default())
+            .envs(plugin::environment(home, &found))
+            .status()?;
+        return if status.success() {
+            Ok(())
+        } else {
+            Err(format!("Setup ended with {status}").into())
+        };
+    }
+    // One as a file to hand on: the package, what it counts on and the
+    // settings of each, written where asked (its id's name, here, unless
+    // a file is named).
+    if let ["pack", id, rest @ ..] = words.as_slice() {
+        let settings = if rest.contains(&"--no-settings") {
+            "none"
+        } else if rest.contains(&"--no-secrets") {
+            "plain"
+        } else {
+            "all"
+        };
+        let answer = request(
+            home,
+            json!({"type":"plugin/pack","pluginId":id,"settings":settings}),
+        )
+        .await?;
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(answer["archive"].as_str().unwrap_or_default())?;
+        let file = rest
+            .iter()
+            .find(|word| !word.starts_with("--"))
+            .map(|file| (*file).to_owned())
+            .unwrap_or_else(|| {
+                answer["fileName"]
+                    .as_str()
+                    .unwrap_or("plugin.sophon")
+                    .to_owned()
+            });
+        fs::write(&file, bytes)?;
+        println!("Saved {file}");
+        said_of_a_file(&answer["about"]);
+        return Ok(());
+    }
+    // And such a file taken in: said first, then installed. Asking for
+    // it here is the saying so that a client waits for.
+    if let ["add", file] = words.as_slice()
+        && file.ends_with(".sophon")
+        && Path::new(file).is_file()
+    {
+        use base64::Engine;
+        let read = request(
+            home,
+            json!({"type":"plugin/unpack","archive":base64::engine::general_purpose::STANDARD.encode(fs::read(file)?)}),
+        )
+        .await?;
+        said_of_a_file(&read["about"]);
+        let done = request(home, json!({"type":"plugin/install","token":read["token"]})).await?;
+        println!(
+            "Installed {}",
+            read["about"]["name"].as_str().unwrap_or_default()
+        );
+        if let Some(name) = done["installed"]["automation"]["name"].as_str() {
+            println!(
+                "It came with the automation “{name}”: add the file in the app to have that opened, filled in"
+            );
+        }
+        return Ok(());
+    }
+    let message = match words.as_slice() {
+        ["list"] | [] => json!({"type":"plugin/list"}),
+        ["add", source] => {
+            // A folder is said in full: the service is somewhere else.
+            let folder = Path::new(source);
+            let source = match fs::canonicalize(folder) {
+                Ok(path) if path.is_dir() => path.display().to_string(),
+                _ => (*source).to_owned(),
+            };
+            json!({"type":"plugin/add","source":source})
+        }
+        ["update", id] => json!({"type":"plugin/update","pluginId":id}),
+        ["export", id] => json!({"type":"plugin/export","pluginId":id}),
+        ["import", config] => json!({"type":"plugin/import","config":config}),
+        ["set", id, pairs @ ..] if !pairs.is_empty() => {
+            let mut values = json!({});
+            for pair in pairs {
+                let (name, value) = pair.split_once('=').ok_or("Usage: sophon plugin set ID NAME=VALUE...")?;
+                values[name] = json!(value);
+            }
+            json!({"type":"plugin/set","pluginId":id,"values":values})
+        }
+        ["remove", id] => json!({"type":"plugin/remove","pluginId":id}),
+        ["restore", id] => json!({"type":"plugin/restore","pluginId":id}),
+        ["on", id] => json!({"type":"plugin/enable","pluginId":id,"enabled":true}),
+        ["off", id] => json!({"type":"plugin/enable","pluginId":id,"enabled":false}),
+        _ => return Err("Usage: sophon plugin list | add GIT_URL_OR_FOLDER | setup ID [ARGS] | set ID NAME=VALUE... | export ID | import SETTINGS | pack ID [--no-secrets | --no-settings] [FILE] | add FILE.sophon | on ID | off ID | update ID | remove ID | restore ID".into()),
+    };
+    let answer = request(home, message).await?;
+    if let Some(config) = answer["config"].as_str() {
+        println!("{config}");
+        return Ok(());
+    }
+    if words.first() == Some(&"import") {
+        println!("Set");
+        return Ok(());
+    }
+    if let Some(plugin) = answer["plugin"].as_object() {
+        if words.first() == Some(&"set") {
+            println!("Set");
+            return Ok(());
+        }
+        println!(
+            "Installed {} ({})",
+            plugin["name"].as_str().unwrap_or_default(),
+            plugin["id"].as_str().unwrap_or_default()
+        );
+        // What is left for this computer to fill in.
+        for param in plugin["params"].as_array().into_iter().flatten() {
+            if param["filled"] != true {
+                println!(
+                    "Needs {}: sophon plugin set {} {}=…",
+                    param["label"].as_str().unwrap_or_default(),
+                    plugin["id"].as_str().unwrap_or_default(),
+                    param["name"].as_str().unwrap_or_default()
+                );
+            }
+        }
+        // A sign-in is an integration's: a plugin has none to ask for.
+        if plugin.get("setup").is_some_and(Value::is_string) {
+            println!(
+                "Set it up once: sophon plugin setup {}",
+                plugin["id"].as_str().unwrap_or_default()
+            );
+        }
+        return Ok(());
+    }
+    for plugin in answer["plugins"].as_array().into_iter().flatten() {
+        let note = plugin["error"]
+            .as_str()
+            .or(plugin["description"].as_str())
+            .unwrap_or_default();
+        println!(
+            "{}\t{}\t{}\t{note}",
+            plugin["id"].as_str().unwrap_or_default(),
+            plugin["kind"].as_str().unwrap_or("unreadable"),
+            plugin["name"].as_str().unwrap_or_default()
+        );
+    }
+    Ok(())
+}
+
+/// `sophon reply|react|trigger`: what an automation's agent, or a
+/// program that wants one started, says to the service.
+async fn automation(home: &Path, action: &str, args: &[String]) -> Result<(), Error> {
+    let mut words = Vec::new();
+    let mut event = json!({"vars":{}});
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match (action, arg.as_str()) {
+            (_, "--home") => {
+                rest.next();
+            }
+            ("trigger", "--id") => event["id"] = json!(rest.next().ok_or("--id needs a value")?),
+            ("trigger", "--var") => {
+                let (name, value) = rest
+                    .next()
+                    .and_then(|pair| pair.split_once('='))
+                    .ok_or("--var needs name=value")?;
+                event["vars"][name] = json!(value);
+            }
+            _ => words.push(arg.as_str()),
+        }
+    }
+    if action == "trigger" {
+        let [automation] = words.as_slice() else {
+            return Err(
+                "Usage: sophon trigger AUTOMATION [--id EVENT_ID] [--var name=value]...".into(),
+            );
+        };
+        let answer = request(
+            home,
+            json!({"type":"automation/trigger","automation":automation,"event":event}),
+        )
+        .await?;
+        if answer["duplicate"] == true {
+            println!("Already had this event");
+        } else {
+            println!(
+                "Started run {}",
+                answer["runId"].as_str().unwrap_or_default()
+            );
+        }
+        return Ok(());
+    }
+    let token = environment::var("SOPHON_RUN_TOKEN")
+        .map_err(|_| "This is not an automation's run: there is nobody to answer")?;
+    let text = words.join(" ");
+    if text.trim().is_empty() {
+        return Err(format!(
+            "Usage: sophon {action} {}",
+            if action == "react" { "NAME" } else { "TEXT" }
+        )
+        .into());
+    }
+    let answer = request(
+        home,
+        json!({"type":"automation/act","token":token,"action":action,"text":text}),
+    )
+    .await?;
+    if answer["delivered"] == true {
+        println!("Sent");
+    } else {
+        println!("Noted on the run: this automation has no reply script to send it with");
+    }
+    Ok(())
+}
+
 fn main() -> Result<(), Error> {
     // Before the runtime: nothing else reads the environment yet.
     env::scrub();
@@ -495,6 +872,33 @@ async fn run() -> Result<(), Error> {
             state.agents.len()
         );
         return Ok(());
+    }
+    // What a plugin offers, used: its answer is this command's.
+    if args.first().is_some_and(|action| action == "use") {
+        let Some(id) = args.get(1) else {
+            return Err("Usage: sophon use PLUGIN [ARGUMENTS]".into());
+        };
+        let answer = request(
+            &home,
+            json!({"type":"plugin/use","pluginId":id,"args":&args[2..]}),
+        )
+        .await?;
+        print!("{}", answer["output"].as_str().unwrap_or_default());
+        eprint!("{}", answer["errors"].as_str().unwrap_or_default());
+        let code = answer["code"].as_i64().unwrap_or(1);
+        if code != 0 {
+            std::process::exit(code as i32);
+        }
+        return Ok(());
+    }
+    if args
+        .first()
+        .is_some_and(|action| action == "plugin" || action == "integration")
+    {
+        return plugins(&home, &args[1..]).await;
+    }
+    if let Some(action @ ("reply" | "react" | "trigger")) = args.first().map(String::as_str) {
+        return automation(&home, action, &args[1..]).await;
     }
     match args
         .first()

@@ -1,0 +1,32 @@
+{
+  "id": "feishu",
+  "name": "飞书",
+  "description": "用你本人的飞书身份登录一次，之后自动化可以通过它按名字找到同事、给同事发消息",
+  "version": "0.2.0",
+  "params": [
+    {
+      "name": "app_id",
+      "label": "飞书应用的 App ID",
+      "value": ""
+    },
+    {
+      "name": "app_secret",
+      "label": "飞书应用的 App Secret",
+      "value": "",
+      "secret": true
+    },
+    {
+      "name": "domain",
+      "label": "feishu 或 lark",
+      "value": "feishu",
+      "optional": true
+    }
+  ],
+  "setup": "./feishu.py login",
+  "setupLabel": "用飞书账号授权",
+  "status": "./feishu.py status",
+  "use": "./feishu.py",
+  "interface": {
+    "brandColor": "#3370ff"
+  }
+}

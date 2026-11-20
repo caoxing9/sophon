@@ -9,3 +9,13 @@ cargo build --locked --release --manifest-path "$ROOT/Cargo.toml" --target-dir "
 mkdir -p "$DEST"
 install -m 755 "$BUILD/release/sophon-service" "$DEST/sophon-service"
 rm -rf "$DEST/node"
+# The integrations and plugins that come with Sophon, beside the service
+# that runs them: a folder is one by the manifest in it.
+rm -rf "$DEST/plugins"
+mkdir -p "$DEST/plugins"
+for plugin in "$ROOT"/plugins/*/; do
+    [ -f "$plugin/.sophon-plugin/integration.json" ] || [ -f "$plugin/.sophon-plugin/plugin.json" ] || continue
+    cp -Rp "$plugin" "$DEST/plugins/$(basename "$plugin")"
+done
+find "$DEST/plugins" -name '__pycache__' -prune -exec rm -rf {} +
+find "$DEST/plugins" -name 'test_*' -delete

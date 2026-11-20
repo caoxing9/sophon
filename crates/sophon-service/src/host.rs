@@ -39,6 +39,8 @@ pub struct Host {
     commands: HashMap<(String, String), Value>,
     timelines: HashMap<String, Timeline>,
     pub terminals: crate::terminal::Terminals,
+    /// The automations whose probe is running now: one look at a time.
+    pub probing: HashSet<String>,
 }
 
 pub fn envelope(kind: &str, payload: Value) -> Value {
@@ -109,7 +111,32 @@ impl Host {
             restart: false,
             timelines: HashMap::new(),
             terminals: Default::default(),
+            probing: HashSet::new(),
         };
+        // A run the last service left underway ended with it: it would
+        // count as at work for good, and its automation start nothing.
+        // What caused it was not dealt with: its event is forgotten, so
+        // the automation's next look starts it again (a probe says again
+        // what is still there). A service that starts again for an
+        // update would else drop whatever it was in the middle of.
+        let mut again = Vec::new();
+        for (schedule, runs) in &mut host.state.runs {
+            for run in runs {
+                if run["status"] == "running" {
+                    run["status"] = json!("failed");
+                    run["error"] = json!("The service stopped while it ran");
+                    run["endedAt"] = now();
+                    if let Some(event) = run["event"]["id"].as_str() {
+                        again.push((schedule.clone(), event.to_owned()));
+                    }
+                }
+            }
+        }
+        for (schedule, event) in again {
+            if let Some(seen) = host.state.seen.get_mut(&schedule) {
+                seen.retain(|known| *known != event);
+            }
+        }
         for started in host.state.subagents.values_mut().flatten() {
             if started["status"] == "running" {
                 started["status"] = json!("canceled");
@@ -298,11 +325,29 @@ impl Host {
         ) {
             timeline.save().map_err(|error| error.to_string())?;
         }
+        let epoch = self.epoch(agent);
         self.publish(
             "agent_stream",
-            json!({"agentId":agent,"seq":seq,"epoch":agent,"event":{"type":"timeline","item":item}}),
+            json!({"agentId":agent,"seq":seq,"epoch":epoch,"event":{"type":"timeline","item":item}}),
         );
         Ok(seq)
+    }
+
+    /// What names `agent`'s stream to a client that keeps its place in
+    /// it. It is another after each cut: a place kept from before one may
+    /// lie in what was taken away, and "what came after it" would leave
+    /// that on the client's screen. Named anew, such a place is answered
+    /// with the conversation as it now is.
+    fn epoch(&self, agent: &str) -> String {
+        match self
+            .state
+            .agents
+            .get(agent)
+            .and_then(|record| record["cuts"].as_u64())
+        {
+            Some(cuts) if cuts > 0 => format!("{agent}.{cuts}"),
+            _ => agent.to_owned(),
+        }
     }
 
     /// The turn the agent was in is over.
@@ -372,6 +417,7 @@ impl Host {
                 "finished"
             });
         }
+        let mut closed = None;
         if let Some(schedule) = record
             .pointer("/labels/sophon.schedule-id")
             .and_then(Value::as_str)
@@ -382,9 +428,21 @@ impl Host {
                 .get_mut(&schedule)
                 .and_then(|runs| runs.iter_mut().rev().find(|run| run["agentId"] == agent))
         {
+            // Its first end is the run's; a turn the user adds to its
+            // conversation later is theirs.
+            let first = run["status"] == "running";
             run["endedAt"] = now();
             run["status"] = json!(ended);
             run["output"] = json!(reply.unwrap_or_default());
+            if let Outcome::Failed(message) = &outcome {
+                run["error"] = json!(message);
+            }
+            if first {
+                closed = Some((schedule, run.clone()));
+            }
+        }
+        if let Some((schedule, run)) = closed {
+            crate::schedule::ended(self, &schedule, &run);
         }
         if let Err(error) = self.persist() {
             eprintln!("Saving a turn: {error}");
@@ -437,6 +495,10 @@ impl Host {
                         self.timeline(agent)?
                             .cut(&message)
                             .map_err(|error| error.to_string())?;
+                        // The places kept of its stream are no longer its.
+                        if let Some(record) = self.state.agents.get_mut(agent) {
+                            record["cuts"] = json!(record["cuts"].as_u64().unwrap_or(0) + 1);
+                        }
                     }
                     Ok(())
                 });
@@ -580,6 +642,12 @@ fn session(
             .pointer("/lastUsage/totalCostUsd")
             .and_then(Value::as_f64)
             .unwrap_or(0.0),
+        env: crate::schedule::environment(host, agent),
+        plugins: if family == "claude" {
+            crate::schedule::brought(host, agent)
+        } else {
+            Vec::new()
+        },
     };
     let (shared, agent) = (shared.clone(), agent_id.to_owned());
     let commands = provider::start(
@@ -934,7 +1002,8 @@ fn answer(shared: &Shared, request: &Value, mut made: Option<Value>) -> Result<V
         }
         "fetch_agent_timeline_request" => {
             let agent = text(request, "agentId")?;
-            let mut page = host.timeline(agent)?.page(agent, request);
+            let epoch = host.epoch(agent);
+            let mut page = host.timeline(agent)?.page(&epoch, request);
             page["agent"] = host.state.agents[agent].clone();
             page
         }
@@ -1222,7 +1291,10 @@ fn answer(shared: &Shared, request: &Value, mut made: Option<Value>) -> Result<V
             {
                 if !workspace["archivedAt"].is_null() {
                     workspace["archivedAt"] = Value::Null;
-                    back.push(("workspace_update", json!({"kind":"upsert","workspace":workspace})));
+                    back.push((
+                        "workspace_update",
+                        json!({"kind":"upsert","workspace":workspace}),
+                    ));
                 }
                 if let Some(project) = workspace["projectId"]
                     .as_str()
@@ -1230,7 +1302,10 @@ fn answer(shared: &Shared, request: &Value, mut made: Option<Value>) -> Result<V
                     .filter(|project| !project["archivedAt"].is_null())
                 {
                     project["archivedAt"] = Value::Null;
-                    back.insert(0, ("project.update", json!({"kind":"upsert","project":project})));
+                    back.insert(
+                        0,
+                        ("project.update", json!({"kind":"upsert","project":project})),
+                    );
                 }
             }
             host.persist().map_err(|error| error.to_string())?;

@@ -270,12 +270,18 @@ impl Codex {
             }
         }
         args.push("app-server".to_owned());
+        let env: Vec<_> = self
+            .start
+            .env
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect();
         self.process = Some(Process::spawn(
             "codex",
             settings,
             &self.start.cwd,
             &args,
-            &[],
+            &env,
         )?);
         let opening = async {
             self.call(
