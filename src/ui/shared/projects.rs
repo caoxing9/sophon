@@ -148,10 +148,9 @@ fn group(g: ReadSignal<store::Group>, actions: bool) -> AnyElement {
         .into_element()
 }
 
-/// Where a level's guide runs: under its parent's chevron (the project's)
-/// or mark (a conversation's), in points from the row's left edge.
+/// Where a level's guide runs: under its project's chevron, in points
+/// from the row's left edge.
 const PROJECT_GUIDE: f32 = S2 + S1 + 6.0;
-const CONVERSATION_GUIDE: f32 = S2 + S2 + 7.0;
 
 /// The rows one level down, with a hairline down their left (as T3 Code's
 /// tree): what is under what reads at a glance, however deep. On the
@@ -253,75 +252,7 @@ fn draft_row(root: String) -> impl IntoElement {
     })
 }
 
-/// A conversation's row, and under it the agents it started (its
-/// sub-agents, as they are known: the conversation was opened here), one
-/// level further down. They fold away with the count beside its title.
 fn conversation_row(agent: ReadSignal<crate::daemon::Agent>, actions: bool) -> impl IntoElement {
-    let id = agent.with_untracked(|a| a.id.clone());
-    let subs = {
-        let id = id.clone();
-        computed(move || store::subagents(&id))
-    };
-    let open = signal(true);
-    view()
-        .child(conversation_line(agent, actions, subs, open))
-        .child(dynamic(move || {
-            let list = subs.get();
-            if list.is_empty() || !open.get() {
-                return None;
-            }
-            let parent = id.clone();
-            Some(untracked(move || {
-                let mut rows = view();
-                for sub in list {
-                    rows = rows.child(subagent_row(parent.clone(), sub));
-                }
-                view().child(rows.ml(px(CONVERSATION_GUIDE)).border_l(px(1.0)).border_color(tint(FG, 0.09)))
-            }))
-        }))
-}
-
-/// An agent a conversation started: its state and what it was asked; a
-/// press opens its own conversation beside its parent's.
-fn subagent_row(parent: String, sub: crate::daemon::connection::Subagent) -> impl IntoElement {
-    let (here_parent, here_id) = (parent.clone(), sub.id.clone());
-    let selected = computed(move || store::tab() == store::Tab::Subagent(here_parent.clone(), here_id.clone()));
-    let status = match sub.status.as_str() {
-        "running" => Status::Running,
-        "failed" => Status::Failed,
-        "completed" => Status::Done,
-        _ => Status::Idle,
-    };
-    let title = if sub.title.trim().is_empty() { sub.subtitle.clone() } else { sub.title.clone() };
-    let id = sub.id.clone();
-    button()
-        .on_press(move || store::open_tab(store::Tab::Subagent(parent.clone(), id.clone())))
-        .accessibility_label(title.clone())
-        .mx(sp(S2))
-        .mb(px(2.0))
-        .flex_row()
-        .items_center()
-        .gap(sp(S2))
-        .h(px(ROW_HEIGHT - 6.0))
-        .pl(sp(S2))
-        .pr(sp(S2))
-        .rounded(px(R_LG))
-        .bg(move || if selected.get() { SIDEBAR_SELECTED } else { tint(SIDEBAR, 0.0) })
-        .hover(|s| s.bg(sidebar_hover()))
-        .transition_colors()
-        .child(row_status(move || status))
-        .child(text(title).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1).flex_1())
-        .when(!sub.subtitle.is_empty() && !sub.title.trim().is_empty(), |v| {
-            v.child(text(sub.subtitle.clone()).text_size(tx(TEXT_XS)).text_color(FG_FAINT).number_of_lines(1).max_w(px(90.0)))
-        })
-}
-
-fn conversation_line(
-    agent: ReadSignal<crate::daemon::Agent>,
-    actions: bool,
-    subs: Memo<Vec<crate::daemon::connection::Subagent>>,
-    open: Signal<bool>,
-) -> impl IntoElement {
     let id = agent.with_untracked(|a| a.id.clone());
     let selected = {
         let id = id.clone();
@@ -339,34 +270,7 @@ fn conversation_line(
         .child(row_status(move || {
             agent.with(|agent| Status::of_agent(&agent.status, agent.requires_attention || !agent.pending.is_empty()))
         }))
-        .child(text(move || agent.with(store::conversation_title)).text_size(tx(TEXT_BASE)).text_color(FG).number_of_lines(1).flex_1())
-        // How many agents it started, pressed to fold them away or back.
-        .child(dynamic(move || {
-            let count = subs.with(Vec::len);
-            if count == 0 {
-                return None;
-            }
-            Some(untracked(move || {
-                button()
-                    .on_press(move || open.update(|o| *o = !*o))
-                    .accessibility_label(crate::i18n::tf("{} sub-agents", &[&count.to_string()]))
-                    .flex_row()
-                    .items_center()
-                    .gap(px(3.0))
-                    .h(px(20.0))
-                    .px(px(5.0))
-                    .rounded(px(R_FULL))
-                    .hover(|s| s.bg(highlight()))
-                    .child(icon(Icon::GitBranch, 12.0).text_color(FG_FAINT))
-                    .child(text(count.to_string()).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(FG_MUTED))
-                    .child(
-                        icon(Icon::ChevronDown, 11.0)
-                            .text_color(FG_FAINT)
-                            .rotate(move || Radians(if open.get() { 0.0 } else { -std::f32::consts::FRAC_PI_2 }))
-                            .transition_transform(),
-                    )
-            }))
-        }));
+        .child(text(move || agent.with(store::conversation_title)).text_size(tx(TEXT_BASE)).text_color(FG).number_of_lines(1).flex_1());
     let more = dropdown(
         view()
             .w(px(24.0))
