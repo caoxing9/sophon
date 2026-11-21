@@ -132,6 +132,8 @@ pub enum Command {
     UndoArchive(String),
     Commits(String),
     Subagents(String),
+    /// What a conversation made (`project`: every conversation of its project).
+    Artifacts { agent: String, project: bool },
     CommitFileDiff { cwd: String, sha: String, path: String },
     Usage,
     ReadProjectConfig(String),
@@ -929,6 +931,43 @@ pub struct RecentSession {
     pub last_activity: String,
 }
 
+/// A file a conversation made, as the host found it: where it is, what kind
+/// of file (`image` | `video` | `page` | `document`), whether it wrote it
+/// or named it, its size, when it last changed (Unix ms) and a picture's
+/// size.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Artifact {
+    pub path: String,
+    pub name: String,
+    pub folder: String,
+    pub extension: String,
+    pub kind: String,
+    pub source: String,
+    pub size: u64,
+    pub modified: i64,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+}
+
+impl Artifact {
+    fn from_json(v: &Value) -> Option<Self> {
+        let s = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned);
+        let n = |k: &str| v.get(k).and_then(Value::as_u64);
+        Some(Self {
+            path: s("path")?,
+            name: s("name").unwrap_or_default(),
+            folder: s("folder").unwrap_or_default(),
+            extension: s("extension").unwrap_or_default(),
+            kind: s("kind").unwrap_or_else(|| "document".into()),
+            source: s("source").unwrap_or_default(),
+            size: n("sizeBytes").unwrap_or(0),
+            modified: v.get("modifiedAt").and_then(Value::as_i64).unwrap_or(0),
+            width: n("width").map(|w| w as u32),
+            height: n("height").map(|h| h as u32),
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Subagent {
     pub id: String,
@@ -1270,6 +1309,7 @@ pub enum Event {
     ScheduleRuns { id: String, runs: Vec<ScheduleRun> },
     Commits { cwd: String, commits: Vec<Commit>, error: Option<String> },
     Subagents { parent: String, list: Vec<Subagent> },
+    Artifacts { agent: String, project: bool, list: Vec<Artifact> },
     Rewound { agent: String, error: Option<String> },
     /// Some of the sessions asked for with `seq` (one agent's).
     RecentSessions { seq: u64, list: Vec<RecentSession> },
@@ -2703,6 +2743,11 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
             Pending::Other("fork"),
             json!({ "type": "agent.fork_context.request", "agentId": agent }),
         )],
+        Command::Artifacts { agent, project } => vec![request(
+            pending,
+            Pending::Optional,
+            json!({ "type": "agent.artifacts.request", "agentId": agent, "scope": if project { "project" } else { "agent" } }),
+        )],
         Command::Subagents(parent) => vec![request(
             pending,
             Pending::Optional,
@@ -3704,6 +3749,14 @@ fn handle(
                 error: payload.get("error").and_then(Value::as_str).map(str::to_owned),
             }]
         }
+        "agent.artifacts.response" => {
+            request_id.and_then(|id| pending.remove(id));
+            vec![Event::Artifacts {
+                agent: payload.get("agentId").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                project: payload.get("scope").and_then(Value::as_str) == Some("project"),
+                list: list_of(payload, "artifacts", Artifact::from_json),
+            }]
+        }
         "agent.provider_subagents.list.response" => {
             request_id.and_then(|id| pending.remove(id));
             vec![Event::Subagents {
@@ -4614,7 +4667,7 @@ mod tests {
         assert!(follow_ups.is_empty());
         assert!(matches!(
             &events[..],
-            [Event::TimelineLive { cursor: Some((e, 9)), item: Item::Assistant { text }, .. }, Event::TimelineSynced { agent_id }]
+            [Event::TimelineLive { cursor: Some((e, 9)), item: Item::Assistant { text, .. }, .. }, Event::TimelineSynced { agent_id }]
                 if e == "e" && text == "hi" && agent_id == "a1"
         ));
     }
@@ -5027,7 +5080,7 @@ mod tests {
             Some("a1"),
             &mut follow,
         );
-        assert!(matches!(&events[..], [Event::TimelineLive { agent_id, item: Item::Assistant { text }, .. }] if agent_id == "a1" && text == "hi"));
+        assert!(matches!(&events[..], [Event::TimelineLive { agent_id, item: Item::Assistant { text, .. }, .. }] if agent_id == "a1" && text == "hi"));
         assert!(follow.is_empty());
     }
 

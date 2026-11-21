@@ -71,24 +71,6 @@ pub(crate) fn of_url(url: &str) -> Option<(String, u64)> {
     (pull == "pull" && valid_repo(&repo) && number > 0).then_some((repo, number))
 }
 
-/// The pull requests `text` links to (`github.com/<owner>/<repo>/pull/<n>`),
-/// in the order they come, each once.
-pub(crate) fn mentioned(text: &str) -> Vec<(String, u64)> {
-    let mut out: Vec<(String, u64)> = vec![];
-    let mut rest = text;
-    while let Some(at) = rest.find("github.com/") {
-        let tail = &rest[at..];
-        let end = tail.find(|c: char| c.is_whitespace() || "\"'<>()[]`,".contains(c)).unwrap_or(tail.len());
-        if let Some(pr) = of_url(&format!("https://{}", &tail[..end]))
-            && !out.contains(&pr)
-        {
-            out.push(pr);
-        }
-        rest = &tail["github.com/".len()..];
-    }
-    out
-}
-
 impl Op {
     /// Where its answer is kept (the views read it by this).
     pub fn key(&self) -> String {
@@ -252,42 +234,6 @@ impl Inbox {
     pub(crate) fn local_of(&self, repo: &str) -> Option<&str> {
         self.local.iter().find(|(r, _)| r.eq_ignore_ascii_case(repo)).map(|(_, p)| p.as_str())
     }
-}
-
-/// A pull request of a folder's repository (`Op::RepoPrs`).
-#[derive(Clone, Debug, PartialEq, Default)]
-pub(crate) struct RepoPr {
-    pub(crate) number: u64,
-    pub(crate) title: String,
-    /// `open`, `merged` or `closed`.
-    pub(crate) state: String,
-    pub(crate) draft: bool,
-    pub(crate) author: String,
-    pub(crate) updated_at: String,
-    pub(crate) head: String,
-}
-
-/// The repository and its pull requests of an `Op::RepoPrs` answer.
-pub(crate) fn repo_prs_of(v: &Value) -> (String, Vec<RepoPr>) {
-    let s = |x: &Value, k: &str| x.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
-    let items = v
-        .get("items")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|p| {
-            Some(RepoPr {
-                number: p.get("number")?.as_u64()?,
-                title: s(p, "title"),
-                state: s(p, "state"),
-                draft: p.get("draft").and_then(Value::as_bool).unwrap_or(false),
-                author: s(p, "author"),
-                updated_at: s(p, "updatedAt"),
-                head: s(p, "head"),
-            })
-        })
-        .collect();
-    (s(v, "repo"), items)
 }
 
 /// One pull request.
@@ -704,13 +650,6 @@ mod tests {
         assert_eq!(Op::from_json(&json!({ "op": "inbox" })), Ok(Op::Inbox { roots: vec![], state: "open".into(), limit: INBOX_PAGE }));
         // A limit past the most is the most.
         assert!(matches!(Op::from_json(&json!({ "op": "inbox", "limit": 100000 })), Ok(Op::Inbox { limit: INBOX_MAX, .. })));
-    }
-
-    #[test]
-    fn a_text_s_pull_requests_are_its_links_to_them() {
-        let text = "PR: https://github.com/caoxing9/sophon/pull/68\n(see https://github.com/caoxing9/sophon/pull/67), again https://github.com/caoxing9/sophon/pull/68 and \"https://github.com/a/b/pull/3#issuecomment-1\"; not https://github.com/a/b/issues/4";
-        assert_eq!(mentioned(text), [("caoxing9/sophon".to_owned(), 68), ("caoxing9/sophon".to_owned(), 67), ("a/b".to_owned(), 3)]);
-        assert!(mentioned("no links").is_empty());
     }
 
     #[test]

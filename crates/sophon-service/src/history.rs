@@ -75,7 +75,7 @@ pub fn claude(record: &str) -> Vec<Value> {
             Some("user") => {
                 if let Some(text) = content.as_str().and_then(typed) {
                     items
-                        .push(json!({"type":"user_message","text":text,"messageId":entry["uuid"]}));
+                        .push(json!({"type":"user_message","text":text,"messageId":entry["uuid"],"at":entry["timestamp"]}));
                 }
                 let mut words = Vec::new();
                 for block in content.as_array().into_iter().flatten() {
@@ -107,7 +107,7 @@ pub fn claude(record: &str) -> Vec<Value> {
                     }
                 }
                 if !words.is_empty() {
-                    items.push(json!({"type":"user_message","text":words.join("\n\n"),"messageId":entry["uuid"]}));
+                    items.push(json!({"type":"user_message","text":words.join("\n\n"),"messageId":entry["uuid"],"at":entry["timestamp"]}));
                 }
             }
             Some("assistant") if entry["message"]["model"] != "<synthetic>" => {
@@ -260,28 +260,36 @@ fn claude_record(settings: &Value, session: &str) -> Option<PathBuf> {
 /// `message` (by the id Claude Code recorded it under), and answers its
 /// id: a record beside the old one, the same lines under the new id.
 /// The old record is not changed.
-pub fn cut(settings: &Value, session: &str, message: &str) -> Result<String, String> {
+/// `None` when nothing would be left of the conversation (the message is
+/// its first): Claude Code resumes no session with no messages in it, so
+/// the conversation begins a session anew.
+pub fn cut(settings: &Value, session: &str, message: &str) -> Result<Option<String>, String> {
     let path =
         claude_record(settings, session).ok_or("Claude Code has no record of this conversation")?;
     let record = fs::read_to_string(&path).map_err(|error| error.to_string())?;
     let fresh = uuid::Uuid::new_v4().to_string();
     let mut kept = String::new();
     let mut found = false;
+    let mut said = false;
     for line in record.lines() {
         let entry = serde_json::from_str::<Value>(line).unwrap_or(Value::Null);
         if entry["uuid"] == message {
             found = true;
             break;
         }
+        said |= matches!(entry["type"].as_str(), Some("user" | "assistant"));
         kept.push_str(&line.replace(session, &fresh));
         kept.push('\n');
     }
     if !found {
         return Err("Claude Code's record does not have that message".into());
     }
+    if !said {
+        return Ok(None);
+    }
     fs::write(path.with_file_name(format!("{fresh}.jsonl")), kept)
         .map_err(|error| error.to_string())?;
-    Ok(fresh)
+    Ok(Some(fresh))
 }
 
 /// What was said in `session` of a provider of `family`, by its CLI's
@@ -323,6 +331,33 @@ pub fn read(family: &str, settings: &Value, session: &str) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cut_before_the_first_message_leaves_no_session_to_resume() {
+        let config = tempfile::tempdir().unwrap();
+        let folder = config.path().join("projects/-w");
+        fs::create_dir_all(&folder).unwrap();
+        let lines = [
+            json!({"type":"queue-operation","sessionId":"s1"}),
+            json!({"type":"user","uuid":"u1","sessionId":"s1","message":{"content":"hi"}}),
+            json!({"type":"assistant","uuid":"a1","sessionId":"s1","message":{"content":[{"type":"text","text":"hello"}]}}),
+            json!({"type":"user","uuid":"u2","sessionId":"s1","message":{"content":"more"}}),
+        ];
+        let record: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        fs::write(folder.join("s1.jsonl"), record).unwrap();
+        let settings = json!({"env":{"CLAUDE_CONFIG_DIR":config.path()}});
+        // Before the first message: nothing said would be left.
+        assert_eq!(cut(&settings, "s1", "u1"), Ok(None));
+        // Before a later one: a session with what came before, under its own id.
+        let fresh = cut(&settings, "s1", "u2").unwrap().unwrap();
+        let kept = fs::read_to_string(folder.join(format!("{fresh}.jsonl"))).unwrap();
+        assert_eq!(kept.lines().count(), 3);
+        assert!(!kept.contains("\"s1\"") && !kept.contains("u2"), "{kept}");
+        assert_eq!(
+            cut(&settings, "s1", "gone"),
+            Err("Claude Code's record does not have that message".to_owned())
+        );
+    }
 
     #[test]
     fn claude_code_s_record_is_what_was_said_and_done() {

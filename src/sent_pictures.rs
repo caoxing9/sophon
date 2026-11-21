@@ -124,7 +124,7 @@ pub(crate) fn restore(items: &mut [Item]) {
     // for them are not the ids they were kept under).
     let mut taken: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for item in items.iter_mut().rev() {
-        let Item::User { text, message_id, images } = item else { continue };
+        let Item::User { text, message_id, images, .. } = item else { continue };
         if !images.is_empty() {
             continue;
         }
@@ -179,7 +179,7 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        let message = |id: &str| Item::User { text: "[a.png] look".into(), message_id: Some(id.into()), images: vec![] };
+        let message = |id: &str| Item::User { text: "[a.png] look".into(), message_id: Some(id.into()), images: vec![], at: None };
         let mut items = vec![message("h-1"), message("h-2")];
         restore(&mut items);
         let pictures: Vec<_> = items.iter().map(|i| match i { Item::User { images, .. } => images.clone(), _ => vec![] }).collect();

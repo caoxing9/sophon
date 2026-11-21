@@ -198,7 +198,7 @@ mod tests {
     fn thinking_between_calls_folds_with_them() {
         let think = || Item::Reasoning { text: "hm".into() };
         let call = |id: &str| Item::Tool { call_id: id.into(), name: "Bash".into(), kind: "shell".into(), status: "completed".into(), summary: String::new(), detail: serde_json::Value::Null, error: None };
-        let say = || Item::Assistant { text: "done".into() };
+        let say = || Item::Assistant { text: "done".into(), at: None };
         // thinking, call, thinking, call, thinking, call, then words.
         let items = vec![think(), call("a"), think(), call("b"), think(), call("c"), say()];
         let rows = fold(&items, false, &HashMap::new());
@@ -226,7 +226,7 @@ mod tests {
     }
 
     fn said(text: &str) -> Item {
-        Item::Assistant { text: text.into() }
+        Item::Assistant { text: text.into(), at: None }
     }
 
     fn keys(rows: &[Row]) -> Vec<String> {
@@ -259,7 +259,7 @@ mod tests {
             tool("b", "shell", "completed", ""),
             // What the agent says splits runs; its thinking does not
             // (`thinking_between_calls_folds_with_them`).
-            Item::Assistant { text: "so".into() },
+            Item::Assistant { text: "so".into(), at: None },
             tool("c", "read", "completed", "x"),
             tool("d", "read", "completed", "y"),
             tool("e", "read", "completed", "z"),

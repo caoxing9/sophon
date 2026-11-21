@@ -20,7 +20,6 @@ enum Pane {
     Diff(Option<String>),
     File(String),
     Subagent(String, String),
-    CommitDiff(String, String),
 }
 
 pub(crate) fn workspace(compact: bool) -> impl IntoElement {
@@ -30,7 +29,6 @@ pub(crate) fn workspace(compact: bool) -> impl IntoElement {
         Tab::Diff(p) => Pane::Diff(p),
         Tab::File(p) => Pane::File(p),
         Tab::Subagent(parent, id) => Pane::Subagent(parent, id),
-        Tab::CommitDiff(sha, path) => Pane::CommitDiff(sha, path),
     });
     let fits = computed(move || !compact && window().width >= px(900.0));
     let show_explorer = computed(move || fits.get() && store::explorer_open());
@@ -55,7 +53,6 @@ pub(crate) fn workspace(compact: bool) -> impl IntoElement {
                         Pane::Diff(p) => explorer::diff_pane(p).into_element(),
                         Pane::File(p) => file_pane::file_pane(p).into_element(),
                         Pane::Subagent(parent, id) => timeline::subagent_pane(parent, id).into_element(),
-                        Pane::CommitDiff(sha, path) => explorer::commit_diff_pane(sha, path).into_element(),
                     }))
                 }))),
         )
@@ -79,9 +76,9 @@ pub(crate) fn workspace(compact: bool) -> impl IntoElement {
         .flex_1()
         .child(top)
         .child(when(store::terminal_panel_open, terminal::terminal_panel))
-        // At the window's foot (as monocode's): the context and the plan's
-        // limits.
-        .child(crate::ui::shared::composer::usage_bar(true))
+        // A narrow window has no room for the readings at the top right:
+        // they stay at its foot.
+        .when(compact, |v| v.child(crate::ui::shared::composer::usage_bar(true)))
 }
 
 const HEADER_MIN_HEIGHT: f32 = 40.0;
@@ -123,24 +120,9 @@ fn header(compact: bool, explorer_shown: Memo<bool>) -> impl IntoElement {
                 .flex_shrink(1.0),
         )
         .child(view().flex_1())
+        // What is left of each agent's plan, at the top right.
+        .when(!compact, |v| v.child(crate::ui::shared::composer::usage_summary()))
         .child(scripts_menu())
-        .child(super::git::git_controls())
-        // The repository's pull requests, in the side panel.
-        .when(!compact, |v| {
-            v.child(
-                nsh_base::button()
-                    .on_press(store::toggle_prs_panel)
-                    .accessibility_label(t("Pull requests"))
-                    .w(px(28.0))
-                    .h(px(28.0))
-                    .rounded(px(R_MD))
-                    .items_center()
-                    .justify_center()
-                    .bg(|| if store::explorer_open() && store::explorer_tab() == store::ExplorerTab::PullRequests { highlight() } else { tint(FG, 0.0) })
-                    .hover(|s| s.bg(highlight()))
-                    .child(icon(Icon::GitPullRequest, 15.0).text_color(FG_MUTED)),
-            )
-        })
         // The terminal panel, as VS Code's ⌃` and ⌘J.
         .when(!compact, |v| v.child(icon_btn(Icon::PanelBottom, Sz::Sm, t("Toggle terminal  ⌃`"), store::toggle_terminal_panel)))
         // The explorer has its own toggle while it shows.
@@ -154,7 +136,7 @@ fn header(compact: bool, explorer_shown: Memo<bool>) -> impl IntoElement {
 /// rows of the sidebar, not tabs; the one last open has a tab here to come
 /// back to.
 fn tabs() -> impl IntoElement {
-    let shown = computed(|| !store::open_files().is_empty() || matches!(store::tab(), Tab::File(_) | Tab::Diff(_) | Tab::CommitDiff(..) | Tab::Subagent(..)));
+    let shown = computed(|| !store::open_files().is_empty() || matches!(store::tab(), Tab::File(_) | Tab::Diff(_) | Tab::Subagent(..)));
     view().child(when(move || shown.get(), tab_strip))
 }
 
@@ -191,19 +173,6 @@ fn tab_strip() -> impl IntoElement {
             },
         ))
         .child(each(store::open_files, |p| p.clone(), |p, _| file_tab(p.get_untracked())))
-        .child(dynamic(|| {
-            let Tab::CommitDiff(sha, path) = store::tab() else { return None };
-            Some(untracked(move || {
-                tab_shell(true, || {})
-                    .child(icon(Icon::GitCommitHorizontal, 14.0).text_color(FG_MUTED))
-                    .child(text(format!("{} {}", sha.get(..7).unwrap_or(&sha), path.rsplit('/').next().unwrap_or(&path))).text_size(tx(TEXT_SM)).number_of_lines(1))
-                    .child(close_button(t("Close commit diff"), || {
-                        if let Some(w) = store::current_workspace() {
-                            store::open_workspace(&w.id);
-                        }
-                    }))
-            }))
-        }))
         .child(dynamic(|| {
             let Tab::Subagent(parent, id) = store::tab() else { return None };
             Some(untracked(move || {

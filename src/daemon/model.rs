@@ -417,8 +417,10 @@ impl Permission {
 pub enum Item {
     /// `images`: what was attached, as data URIs, for the bubble's
     /// thumbnails (the host's echo of a message carries its text only).
-    User { text: String, message_id: Option<String>, images: Vec<String> },
-    Assistant { text: String },
+    /// `at`: when it was sent (RFC 3339), as the host recorded it.
+    User { text: String, message_id: Option<String>, images: Vec<String>, at: Option<String> },
+    /// `at`: when it began to be written (RFC 3339), as the host recorded it.
+    Assistant { text: String, at: Option<String> },
     Reasoning { text: String },
     /// `kind` is the detail type: `shell`, `read`, `edit`, `write`, `search`, `fetch`, `sub_agent`, ...
     /// `detail`: the call's detail object as the daemon sent it (its
@@ -487,10 +489,10 @@ impl Item {
     pub fn from_json(v: &Value) -> Option<Self> {
         let text = || str_of(v, "text").unwrap_or_default();
         Some(match v.get("type")?.as_str()? {
-            "user_message" => Item::User { text: text(), message_id: str_of(v, "messageId"), images: vec![] },
+            "user_message" => Item::User { text: text(), message_id: str_of(v, "messageId"), images: vec![], at: str_of(v, "at") },
             "assistant_message" => match running_elsewhere(&text()) {
                 Some(session) => Item::Error { message: crate::i18n::tf(ELSEWHERE, &[&session, &session]) },
-                None => Item::Assistant { text: text() },
+                None => Item::Assistant { text: text(), at: str_of(v, "at") },
             },
             "reasoning" => Item::Reasoning { text: text() },
             "tool_call" => Item::Tool {
@@ -540,10 +542,15 @@ impl Item {
 /// that is already shown (sent from here) is not added twice.
 pub fn apply_live(items: &mut Vec<Item>, incoming: Item) {
     match incoming {
-        Item::Assistant { text } => match items.last_mut() {
-            Some(Item::Assistant { text: last }) => last.push_str(&text),
+        Item::Assistant { text, at } => match items.last_mut() {
+            Some(Item::Assistant { text: last, at: began }) => {
+                last.push_str(&text);
+                if began.is_none() {
+                    *began = at;
+                }
+            }
             _ if text.trim().is_empty() => {}
-            _ => items.push(Item::Assistant { text }),
+            _ => items.push(Item::Assistant { text, at }),
         },
         Item::Reasoning { text } => match items.last_mut() {
             Some(Item::Reasoning { text: last }) => last.push_str(&text),
@@ -617,7 +624,7 @@ pub fn carry_images(old: &[Item], new: &mut [Item]) {
     let had: Vec<(&Option<String>, &String, &Vec<String>)> = old
         .iter()
         .filter_map(|i| match i {
-            Item::User { text, message_id, images } if !images.is_empty() => Some((message_id, text, images)),
+            Item::User { text, message_id, images, .. } if !images.is_empty() => Some((message_id, text, images)),
             _ => None,
         })
         .collect();
@@ -625,7 +632,7 @@ pub fn carry_images(old: &[Item], new: &mut [Item]) {
         return;
     }
     for item in new.iter_mut() {
-        let Item::User { text, message_id, images } = item else { continue };
+        let Item::User { text, message_id, images, .. } = item else { continue };
         if !images.is_empty() {
             continue;
         }
@@ -785,7 +792,7 @@ mod tests {
         let said = |status: &str| Item::from_json(&json!({ "type": "compaction", "status": status })).unwrap();
         let mut items = vec![];
         apply_live(&mut items, said("loading"));
-        apply_live(&mut items, Item::User { text: "and this".into(), message_id: None, images: vec![] });
+        apply_live(&mut items, Item::User { text: "and this".into(), message_id: None, images: vec![], at: None });
         apply_live(&mut items, said("loading"));
         apply_live(&mut items, said("loading"));
         assert_eq!(items.len(), 2);
@@ -810,24 +817,24 @@ mod tests {
         );
         assert_eq!(notice("API retry soon"), Item::Notice { message: "API retry soon".into() });
 
-        let mut items = vec![Item::User { text: "hi".into(), message_id: None, images: vec![] }];
+        let mut items = vec![Item::User { text: "hi".into(), message_id: None, images: vec![], at: None }];
         apply_live(&mut items, first.clone());
         apply_live(&mut items, notice("API retry 2/10 · - unknown · 1200 ms"));
         assert_eq!(items.len(), 2);
         assert!(matches!(items[1], Item::Retry { attempt: 2, .. }));
 
-        let mut page = vec![first.clone(), first.clone(), Item::Assistant { text: "ok".into() }, first];
+        let mut page = vec![first.clone(), first.clone(), Item::Assistant { text: "ok".into(), at: None }, first];
         collapse_retries(&mut page);
         assert_eq!(page.len(), 3);
     }
 
     #[test]
     fn assistant_deltas_merge_into_one_row() {
-        let mut items = vec![Item::User { text: "hi".into(), message_id: None, images: vec![] }];
-        apply_live(&mut items, Item::Assistant { text: "Hel".into() });
-        apply_live(&mut items, Item::Assistant { text: "lo".into() });
+        let mut items = vec![Item::User { text: "hi".into(), message_id: None, images: vec![], at: None }];
+        apply_live(&mut items, Item::Assistant { text: "Hel".into(), at: None });
+        apply_live(&mut items, Item::Assistant { text: "lo".into(), at: None });
         assert_eq!(items.len(), 2);
-        assert_eq!(items[1], Item::Assistant { text: "Hello".into() });
+        assert_eq!(items[1], Item::Assistant { text: "Hello".into(), at: None });
     }
 
     #[test]
@@ -843,7 +850,7 @@ mod tests {
             summary: "ls".into(),
         };
         apply_live(&mut items, tool("running"));
-        apply_live(&mut items, Item::Assistant { text: "ok".into() });
+        apply_live(&mut items, Item::Assistant { text: "ok".into(), at: None });
         apply_live(&mut items, tool("completed"));
         assert_eq!(items.len(), 2);
         assert!(matches!(&items[0], Item::Tool { status, .. } if status == "completed"));
@@ -851,10 +858,10 @@ mod tests {
 
     #[test]
     fn a_refetch_keeps_the_images_sent_with_a_message() {
-        let old = vec![Item::User { text: "look".into(), message_id: Some("m1".into()), images: vec!["data:x".into()] }];
+        let old = vec![Item::User { text: "look".into(), message_id: Some("m1".into()), images: vec!["data:x".into()], at: None }];
         let mut new = vec![
-            Item::User { text: "look".into(), message_id: Some("m1".into()), images: vec![] },
-            Item::Assistant { text: "ok".into() },
+            Item::User { text: "look".into(), message_id: Some("m1".into()), images: vec![], at: None },
+            Item::Assistant { text: "ok".into(), at: None },
         ];
         carry_images(&old, &mut new);
         assert!(matches!(&new[0], Item::User { images, .. } if images == &vec!["data:x".to_owned()]));
@@ -862,8 +869,8 @@ mod tests {
 
     #[test]
     fn echoed_user_message_is_not_duplicated() {
-        let mut items = vec![Item::User { text: "fix it".into(), message_id: Some("m1".into()), images: vec![] }];
-        apply_live(&mut items, Item::User { text: "fix it".into(), message_id: Some("m1".into()), images: vec![] });
+        let mut items = vec![Item::User { text: "fix it".into(), message_id: Some("m1".into()), images: vec![], at: None }];
+        apply_live(&mut items, Item::User { text: "fix it".into(), message_id: Some("m1".into()), images: vec![], at: None });
         assert_eq!(items.len(), 1);
     }
 

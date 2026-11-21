@@ -59,8 +59,6 @@ pub(crate) enum Tab {
     File(String),
     /// A sub-agent of an agent, read-only: (parent, sub-agent).
     Subagent(String, String),
-    /// One file of a commit: (sha, path).
-    CommitDiff(String, String),
 }
 
 /// The workspace's file tree: listed directories and the expanded ones.
@@ -135,13 +133,6 @@ pub(crate) fn tree_rows() -> Vec<TreeRow> {
         walk(t, ROOT, 0, &mut rows);
         rows
     })
-}
-
-#[derive(Clone, Default)]
-struct CommitDiffState(Option<Result<crate::daemon::model::DiffFile, String>>);
-
-pub(crate) fn commit_diff() -> Option<Result<crate::daemon::model::DiffFile, String>> {
-    global::<CommitDiffState>().with(|c| c.0.clone())
 }
 
 #[derive(Clone, Default)]
@@ -395,55 +386,6 @@ pub(crate) fn refresh_pull_request(repo: &str, number: u64) {
     use crate::github::Op;
     github_fetch(Op::View { repo: repo.to_owned(), number });
     github_fetch(Op::Checks { repo: repo.to_owned(), number });
-}
-
-/// The pull requests of the open conversation: its branch's, then the ones
-/// it links to, the last linked first (at most 20).
-pub(crate) fn conversation_prs() -> Vec<(String, u64)> {
-    let mut out: Vec<(String, u64)> = vec![];
-    if let Some(pr) = git().pr.and_then(|p| crate::github::of_url(&p.url)) {
-        out.push(pr);
-    }
-    let found: Vec<(String, u64)> = global::<Timeline>().with(|t| {
-        let mut found = vec![];
-        for item in t.items.iter().rev() {
-            let text = match item {
-                Item::User { text, .. } | Item::Assistant { text } => std::borrow::Cow::Borrowed(text.as_str()),
-                Item::Tool { detail, .. } => std::borrow::Cow::Owned(detail.to_string()),
-                _ => continue,
-            };
-            if !text.contains("github.com/") {
-                continue;
-            }
-            let mut here = crate::github::mentioned(&text);
-            here.reverse();
-            found.extend(here);
-        }
-        found
-    });
-    for pr in found {
-        if !out.contains(&pr) {
-            out.push(pr);
-        }
-    }
-    out.truncate(20);
-    out
-}
-
-/// The open workspace's folder, as the side panel's PR tab reads its
-/// repository.
-pub(crate) fn workspace_dir() -> Option<String> {
-    current_workspace().map(|w| w.directory).filter(|d| !d.is_empty())
-}
-
-/// The pull requests of the open workspace's repository, asked for the
-/// first time.
-pub(crate) fn repo_prs(refresh: bool) {
-    let Some(cwd) = untracked(workspace_dir) else { return };
-    let key = format!("repo_prs:{cwd}");
-    if refresh || (github(&key).is_none() && !github_loading(&key)) {
-        github_fetch(crate::github::Op::RepoPrs { cwd });
-    }
 }
 
 /// The desktop inbox's filters, as monocode's: the states shown (none
@@ -991,16 +933,6 @@ struct CommitsState(Option<(Vec<crate::daemon::connection::Commit>, Option<Strin
 #[derive(Clone, Default)]
 struct BranchesState(Vec<String>);
 
-pub(crate) fn commits() -> Option<(Vec<crate::daemon::connection::Commit>, Option<String>)> {
-    global::<CommitsState>().with(|c| c.0.clone())
-}
-
-pub(crate) fn load_commits() {
-    if let Some(cwd) = current_workspace().map(|w| w.directory) {
-        send(Command::Commits(cwd));
-    }
-}
-
 pub(crate) fn branches() -> Vec<String> {
     global::<BranchesState>().with(|b| b.0.clone())
 }
@@ -1188,12 +1120,10 @@ pub(crate) struct Changes {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) enum ExplorerTab {
+    /// What the conversation made.
     #[default]
-    Changes,
+    Artifacts,
     Files,
-    Commits,
-    /// The conversation's pull requests.
-    PullRequests,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1204,7 +1134,7 @@ struct Explorer {
 
 impl Default for Explorer {
     fn default() -> Self {
-        Self { open: true, tab: ExplorerTab::Changes }
+        Self { open: true, tab: ExplorerTab::Artifacts }
     }
 }
 
@@ -1318,20 +1248,6 @@ pub(crate) fn toggle_explorer() {
     save_prefs();
 }
 
-/// The header's PR button: the side panel open on the repository's pull
-/// requests, or back to the changes when it already is.
-pub(crate) fn toggle_prs_panel() {
-    let showing = global::<Explorer>().with_untracked(|e| e.open && e.tab == ExplorerTab::PullRequests);
-    if showing {
-        set_explorer_tab(ExplorerTab::Changes);
-        return;
-    }
-    if !global::<Explorer>().with_untracked(|e| e.open) {
-        toggle_explorer();
-    }
-    set_explorer_tab(ExplorerTab::PullRequests);
-}
-
 pub(crate) fn explorer_tab() -> ExplorerTab {
     global::<Explorer>().with(|e| e.tab)
 }
@@ -1345,9 +1261,79 @@ pub(crate) fn set_explorer_tab(tab: ExplorerTab) {
         delete: None,
     });
     global::<Explorer>().update(|e| e.tab = tab);
-    if tab == ExplorerTab::Commits {
-        load_commits();
+    if tab == ExplorerTab::Artifacts {
+        load_artifacts();
     }
+}
+
+/// What conversations made, by (conversation, whether its whole project),
+/// as the host last said; and the scope and kind the panel shows.
+#[derive(Clone, Default)]
+struct Artifacts {
+    known: HashMap<(String, bool), Vec<crate::daemon::connection::Artifact>>,
+    project: bool,
+    kind: Option<String>,
+    /// The one picked for the card; the newest picture otherwise.
+    picked: Option<String>,
+}
+
+/// The open conversation's artifacts in the panel's scope, once known.
+pub(crate) fn artifacts() -> Option<Vec<crate::daemon::connection::Artifact>> {
+    let agent = selected_id()?;
+    global::<Artifacts>().with(|a| a.known.get(&(agent, a.project)).cloned())
+}
+
+pub(crate) fn artifacts_project() -> bool {
+    global::<Artifacts>().with(|a| a.project)
+}
+
+pub(crate) fn artifacts_kind() -> Option<String> {
+    global::<Artifacts>().with(|a| a.kind.clone())
+}
+
+pub(crate) fn picked_artifact() -> Option<String> {
+    global::<Artifacts>().with(|a| a.picked.clone())
+}
+
+pub(crate) fn pick_artifact(path: Option<String>) {
+    global::<Artifacts>().update(|a| a.picked = path);
+}
+
+pub(crate) fn set_artifacts_scope(project: bool) {
+    global::<Artifacts>().update(|a| a.project = project);
+    load_artifacts();
+}
+
+pub(crate) fn set_artifacts_kind(kind: Option<String>) {
+    global::<Artifacts>().update(|a| a.kind = kind);
+}
+
+/// Asks the host again what the open conversation (or its project) made.
+pub(crate) fn load_artifacts() {
+    let Some(agent) = selected_id() else { return };
+    send(Command::Artifacts { agent, project: artifacts_project() });
+}
+
+/// Shows `path` in the Finder (this Mac's files only).
+pub(crate) fn reveal_path(path: &str) {
+    #[cfg(target_os = "macos")]
+    if on_this_mac() {
+        let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
+        return;
+    }
+    let _ = path;
+    notify(t("That file is on the other computer").into());
+}
+
+/// Opens `path` in its own app (this Mac's files only).
+pub(crate) fn open_artifact(path: &str) {
+    #[cfg(target_os = "macos")]
+    if on_this_mac() {
+        let _ = std::process::Command::new("open").arg(path).spawn();
+        return;
+    }
+    let _ = path;
+    notify(t("That file is on the other computer").into());
 }
 
 #[derive(Clone, Default)]
@@ -2364,7 +2350,7 @@ fn ask_pictures(items: &[Item], agent_id: Option<&str>) {
     // The conversation's folder: where the host reads the agent's record.
     let cwd = agent_id.and_then(agent).map(|a| a.cwd).unwrap_or_default();
     for item in items {
-        let Item::User { text, message_id, images } = item else { continue };
+        let Item::User { text, message_id, images, .. } = item else { continue };
         if images.is_empty() && crate::sent_pictures::names_a_picture(text) {
             send(Command::AskPictures { message_id: message_id.clone().unwrap_or_default(), text: text.clone(), cwd: cwd.clone() });
         }
@@ -4021,33 +4007,68 @@ pub(crate) fn escape_composer() {
 
 /// The last message sent in `agent_id`'s open conversation that a rewind
 /// can name: its id, its words, and whether it carried pictures.
-fn last_sent(agent_id: &str) -> Option<(String, String, bool)> {
+fn last_sent(agent_id: &str) -> Option<(String, String, Vec<String>)> {
     global::<Timeline>().with_untracked(|t| {
         if t.agent_id.as_deref() != Some(agent_id) {
             return None;
         }
         t.items.iter().rev().find_map(|i| match i {
-            Item::User { text, message_id: Some(id), images } if !text.trim().is_empty() => Some((id.clone(), text.clone(), !images.is_empty())),
+            Item::User { text, message_id: Some(id), images, .. } if !text.trim().is_empty() || !images.is_empty() => {
+                Some((id.clone(), text.clone(), images.clone()))
+            }
             _ => None,
         })
     })
 }
 
-/// Takes the last message sent back to be written again: the
-/// conversation goes to before it (the files stay as they are: the
-/// message's own menu rewinds those), and its words stand in the
-/// composer, before whatever was being typed there.
+/// Takes the last message sent back to be written again (as
+/// [`edit_sent`]).
 fn take_back(agent: &Agent) {
-    let Some((message, text, pictured)) = last_sent(&agent.id) else { return };
-    // Its pictures would not come back with its words, and chips standing
-    // in the composer would be written over.
-    if pictured || !pending_images().is_empty() || !pending_files().is_empty() {
-        notify(t("This message has pictures or files with it: rewind from its own menu instead").into());
+    let Some((message, text, images)) = last_sent(&agent.id) else { return };
+    give_back(agent, &message, &text, &images);
+}
+
+/// Writes a message sent in the open conversation again, as T3 Code's
+/// "edit from here": the conversation goes back to before it (the files
+/// stay as they are: the message's own menu rewinds those), and its words
+/// and pictures stand in the composer, after whatever was being typed
+/// there, to be changed and sent as a new message. Not while the agent
+/// works.
+pub(crate) fn edit_sent(message_id: &str, text: &str, images: &[String]) {
+    let Some(agent) = selected_agent() else { return };
+    if agent.is_running() {
+        notify(t("The agent is working: stop it first").into());
         return;
     }
-    send(Command::Rewind { agent: agent.id.clone(), message_id: message, mode: "conversation" });
+    give_back(&agent, message_id, text, images);
+}
+
+/// A sent message's text without the pictures named in it (`[image.png]`).
+fn without_pictures(text: &str) -> String {
+    use crate::ui::shared::composer_doc::{Segment, is_image_name, segments};
+    let kept: String = segments(text)
+        .into_iter()
+        .map(|s| match s {
+            Segment::Chip(name) if is_image_name(&name) => String::new(),
+            Segment::Chip(name) => format!("[{name}]"),
+            Segment::Text(t) => t,
+        })
+        .collect();
+    kept.trim().to_owned()
+}
+
+fn give_back(agent: &Agent, message_id: &str, text: &str, images: &[String]) {
+    // Files waiting in the composer would be written over with its text.
+    if !pending_files().is_empty() {
+        notify(t("A file is waiting in the composer: send or remove it first").into());
+        return;
+    }
+    send(Command::Rewind { agent: agent.id.clone(), message_id: message_id.to_owned(), mode: "conversation" });
     let draft = draft(&agent.id);
-    set_draft(&agent.id, &if draft.trim().is_empty() { text } else { format!("{text}\n{draft}") });
+    // Its pictures come back as chips of their own; a file is named still.
+    let text = if images.is_empty() { text.to_owned() } else { without_pictures(text) };
+    set_draft(&agent.id, &if draft.trim().is_empty() { text } else { format!("{}\n\n{text}", draft.trim_end()) });
+    crate::ui::shared::composer::put_back_images(&agent.id, images);
 }
 
 /// `agent` as it stands now: one whose message was asked back while it
@@ -5200,16 +5221,12 @@ pub(crate) fn open_tab(tab: Tab) {
     }
     let agent_id = match &tab {
         Tab::Agent(id) => Some(id.clone()),
-        Tab::Draft | Tab::Diff(_) | Tab::File(_) | Tab::Subagent(..) | Tab::CommitDiff(..) => None,
+        Tab::Draft | Tab::Diff(_) | Tab::File(_) | Tab::Subagent(..) => None,
     };
-    if let (Tab::CommitDiff(sha, path), Some(cwd)) = (&tab, current_workspace().map(|w| w.directory)) {
-        global::<CommitDiffState>().update(|c| c.0 = None);
-        send(Command::CommitFileDiff { cwd, sha: sha.clone(), path: path.clone() });
-    }
     if let Tab::Subagent(parent, id) = &tab {
         send(Command::SubagentTimeline { parent: parent.clone(), id: id.clone() });
     }
-    if matches!(tab, Tab::Diff(_) | Tab::File(_) | Tab::Subagent(..) | Tab::CommitDiff(..)) {
+    if matches!(tab, Tab::Diff(_) | Tab::File(_) | Tab::Subagent(..)) {
         global::<Nav>().update(|n| n.tab = tab);
         return;
     }
@@ -5685,7 +5702,7 @@ pub(crate) fn conversation_context(agent_id: &str) -> Option<String> {
         .rev()
         .filter_map(|i| match i {
             Item::User { text, .. } => Some(("user", text)),
-            Item::Assistant { text } => Some(("assistant", text)),
+            Item::Assistant { text, .. } => Some(("assistant", text)),
             _ => None,
         })
         .filter(|(_, t)| !t.trim().is_empty())
@@ -5834,7 +5851,7 @@ fn deliver_with(agent_id: &str, text: &str, behavior: Option<&'static str>, imag
     let mut shown_here = false;
     global::<Timeline>().update(|t| {
         if t.agent_id.as_deref() == Some(agent_id) {
-            t.items.push(Item::User { text: shown.trim().to_owned(), message_id: Some(message_id.clone()), images: thumbs });
+            t.items.push(Item::User { text: shown.trim().to_owned(), message_id: Some(message_id.clone()), images: thumbs, at: None });
             shown_here = true;
         }
     });
@@ -6409,7 +6426,7 @@ pub(crate) fn find_matches() -> Vec<usize> {
             .iter()
             .enumerate()
             .filter(|(_, i)| match i {
-                Item::User { text, .. } | Item::Assistant { text } => text.to_lowercase().contains(&q),
+                Item::User { text, .. } | Item::Assistant { text, .. } => text.to_lowercase().contains(&q),
                 _ => false,
             })
             .map(|(n, _)| n)
@@ -6460,7 +6477,7 @@ pub(crate) fn turns() -> Vec<(usize, String, String)> {
         for (n, item) in t.items.iter().enumerate() {
             match item {
                 Item::User { text, .. } => out.push((n, text.lines().next().unwrap_or_default().to_owned(), String::new())),
-                Item::Assistant { text } => {
+                Item::Assistant { text, .. } => {
                     if let Some(last) = out.last_mut().filter(|l| l.2.is_empty()) {
                         // Its start, as plain words: no Markdown marks.
                         let plain: String = text.chars().filter(|c| !matches!(c, '#' | '*' | '`' | '>')).take(220).collect();
@@ -6831,7 +6848,7 @@ pub(crate) fn apply(event: Event) {
             }
             global::<Timeline>().update(|t| {
                 for item in t.items.iter_mut() {
-                    let Item::User { text: body, message_id: id, images } = item else { continue };
+                    let Item::User { text: body, message_id: id, images, .. } = item else { continue };
                     let same = if message_id.is_empty() { body.trim() == text.trim() } else { id.as_deref() == Some(message_id.as_str()) };
                     if same && images.is_empty() {
                         *images = pictures.clone();
@@ -7030,13 +7047,7 @@ pub(crate) fn apply(event: Event) {
                 Err(e) => c.error = Some(e),
             }
         }),
-        Event::CommitFileDiff { file, error, .. } => global::<CommitDiffState>().update(|c| {
-            c.0 = Some(match (file, error) {
-                (_, Some(e)) => Err(e),
-                (Some(f), None) => Ok(f),
-                (None, None) => Err("No text changes in this file".into()),
-            })
-        }),
+        Event::CommitFileDiff { .. } => {}
         Event::Uploaded { id, result } => uploaded(id, result),
         Event::Downloaded { id, result } => downloaded(id, result),
         Event::PairingOffer { url, relay_enabled, error } => global::<Pairing>().update(|p| {
@@ -7124,6 +7135,9 @@ pub(crate) fn apply(event: Event) {
                 (None, None) => notify(t("Nothing to fork yet").into()),
             }
         }
+        Event::Artifacts { agent, project, list } => global::<Artifacts>().update(|a| {
+            a.known.insert((agent, project), list);
+        }),
         Event::Subagents { parent, list } => global::<SubagentState>().update(|s| {
             s.by_parent.insert(parent, list);
         }),
@@ -7254,7 +7268,7 @@ pub(crate) fn close_current() {
     match tab() {
         Tab::File(path) => close_file(&path),
         Tab::Subagent(parent, _) => open_tab(Tab::Agent(parent)),
-        Tab::Diff(_) | Tab::CommitDiff(..) | Tab::Draft => {
+        Tab::Diff(_) | Tab::Draft => {
             if let Some(w) = current_workspace() {
                 open_workspace(&w.id);
             }

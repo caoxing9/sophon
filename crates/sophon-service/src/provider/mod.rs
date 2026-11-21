@@ -111,6 +111,43 @@ pub struct Start {
     /// Folders its CLI loads as plugins of its own kind (Claude Code's
     /// `--plugin-dir`): the skills the plugin of an automation brings.
     pub plugins: Vec<String>,
+    /// The service's own record of the conversation (its timeline's log):
+    /// what was said is taken from it when the CLI has lost its own.
+    pub record: Option<std::path::PathBuf>,
+}
+
+/// What was said in a conversation before its last message, from the
+/// service's record, as text a new session can be told: as T3 Code hands
+/// a conversation over when its CLI no longer has it. The most recent
+/// part only, at most about `limit` characters.
+pub fn earlier(record: &std::path::Path, limit: usize) -> Option<String> {
+    let timeline = crate::timeline::Timeline::load(record.to_path_buf()).ok()?;
+    let said: Vec<(&str, &str)> = timeline
+        .items()
+        .filter_map(|item| match item["type"].as_str() {
+            Some("user_message") => Some(("User", item["text"].as_str()?)),
+            Some("assistant_message") => Some(("Assistant", item["text"].as_str()?)),
+            _ => None,
+        })
+        .filter(|(_, text)| !text.trim().is_empty())
+        .collect();
+    // The last message is the one being sent again.
+    let last = said.iter().rposition(|(who, _)| *who == "User")?;
+    let mut lines = Vec::new();
+    let mut length = 0;
+    for (who, text) in said[..last].iter().rev() {
+        let line = format!("{who}: {}", text.trim());
+        length += line.chars().count();
+        if length > limit && !lines.is_empty() {
+            break;
+        }
+        lines.push(line);
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    lines.reverse();
+    Some(lines.join("\n\n"))
 }
 
 pub type Emit = Box<dyn FnMut(Event)>;

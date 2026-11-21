@@ -10,10 +10,7 @@ use nsh_core::{
 use crate::ui::kit::text;
 
 use crate::ui::kit::*;
-use crate::{
-    daemon::model::DiffFile,
-    store::{self, ExplorerTab, Tab},
-};
+use crate::store::{self, ExplorerTab, Tab};
 
 /// The explorer's edge: dragging it sets the width; dragged far enough
 /// out (narrower than it may be), the explorer folds away, as the sidebar
@@ -67,9 +64,6 @@ pub(crate) fn resize_handle() -> impl IntoElement {
 
 pub(crate) fn explorer() -> View {
     let tab = computed(store::explorer_tab);
-    // Only a switch to or from the pull requests redraws the head (the
-    // tabs' thumb slides between the others).
-    let on_prs = computed(move || tab.get() == ExplorerTab::PullRequests);
     let width = computed(store::explorer_width);
     let page = move || Length::from(px(width.get()));
     glass(view())
@@ -91,61 +85,34 @@ pub(crate) fn explorer() -> View {
                 .pt(sp(S2))
                 .pb(sp(S1))
                 .window_drag(true)
-                // The pull requests open from the header's button, with a
-                // title of their own here in place of the tabs.
-                .child(dynamic(move || {
-                    let prs = on_prs.get();
-                    Some(untracked(move || {
-                        if prs {
-                            view()
-                                .flex_row()
-                                .items_center()
-                                .gap(sp(S1))
-                                .child(icon_btn(Icon::ChevronLeft, Sz::Sm, t("Back"), || store::set_explorer_tab(ExplorerTab::Changes)))
-                                .child(icon(Icon::GitPullRequest, 14.0).text_color(FG_MUTED))
-                                .child(text(t("Pull requests")).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)))
-                                .into_element()
-                        } else {
-                            segmented(
-                                vec![
-                                    (ExplorerTab::Changes, t("Changes").into()),
-                                    (ExplorerTab::Files, t("Files").into()),
-                                    (ExplorerTab::Commits, t("Commits").into()),
-                                ],
-                                store::explorer_tab,
-                                store::set_explorer_tab,
-                            )
-                            .into_element()
-                        }
-                    }))
-                }))
+                .child(segmented(
+                    vec![(ExplorerTab::Artifacts, t("Artifacts").into()), (ExplorerTab::Files, t("Files").into())],
+                    store::explorer_tab,
+                    store::set_explorer_tab,
+                ))
                 .child(view().flex_1())
                 .child(icon_btn(Icon::PanelRight, Sz::Sm, t("Toggle explorer"), store::toggle_explorer)),
         )
-        // The three pages side by side, the row sliding to the picked one
-        // with the thumb above, as a pager does; each keeps its scroll.
+        // The pages side by side, the row sliding to the picked one with
+        // the thumb above, as a pager does; each keeps its scroll.
         .child(
             view().flex_1().overflow_hidden().child(
                 view()
                     .flex_1()
                     .flex_row()
-                    .w(move || Length::from(px(width.get() * 4.0)))
+                    .w(move || Length::from(px(width.get() * 2.0)))
                     // Moved by its frame, not a transform, so the pages
                     // coming in are laid out where they show; the switch's
                     // layout spring (the thumb's) carries it.
                     .ml(move || {
                         let i = match tab.get() {
-                            ExplorerTab::Changes => 0.0,
+                            ExplorerTab::Artifacts => 0.0,
                             ExplorerTab::Files => 1.0,
-                            ExplorerTab::Commits => 2.0,
-                            ExplorerTab::PullRequests => 3.0,
                         };
                         Length::from(px(-i * width.get()))
                     })
-                    .child(view().w(page).child(changes_view().flex_1()))
-                    .child(view().w(page).child(files_view().flex_1()))
-                    .child(view().w(page).child(commits_view().flex_1()))
-                    .child(view().w(page).child(prs_view(tab).flex_1())),
+                    .child(view().w(page).child(super::artifacts::artifacts_view(computed(move || tab.get() == ExplorerTab::Artifacts)).flex_1()))
+                    .child(view().w(page).child(files_view().flex_1())),
             ),
         )
 }
@@ -253,94 +220,9 @@ fn tree_row_body(row: Memo<Option<store::TreeRow>>) -> impl IntoElement {
         )
 }
 
-fn changes_view() -> View {
-    let changes = computed(store::changes);
-    view()
-        .flex_1()
-        .child(
-            view()
-                .flex_row()
-                .items_center()
-                .gap(sp(S2))
-                .h(px(32.0))
-                .px(sp(S4))
-                .child(
-                    text(move || changes.with(|c| match c.files.len() {
-                        0 => String::new(),
-                        1 => t("1 file").into(),
-                        n => tf("{} files", &[&n.to_string()]),
-                    }))
-                    .text_size(tx(TEXT_SM))
-                    .text_color(FG_MUTED),
-                )
-                .child(view().flex_1())
-                .child(text(move || {
-                    changes.with(|c| {
-                        let (a, d) = c.files.iter().fold((0, 0), |(a, d), f| (a + f.additions, d + f.deletions));
-                        if a + d == 0 { String::new() } else { format!("+{a} −{d}") }
-                    })
-                })
-                .text_size(tx(TEXT_SM))
-                .font_family(mono_font)
-                .text_color(FG_MUTED)),
-        )
-        .child(dynamic(move || {
-            let (loaded, empty, error) = changes.with(|c| (c.loaded, c.files.is_empty(), c.error.clone()));
-            Some(untracked(move || {
-                if let Some(e) = error.clone() {
-                    return git_error(e).into_element();
-                }
-                if !loaded {
-                    return loading_state().into_element();
-                }
-                if empty {
-                    return empty_state(Icon::CircleCheck, t("No uncommitted changes"), t("The working tree is clean")).into_element();
-                }
-                let count = move || changes.with(|c| c.files.len());
-                view()
-                    .flex_1()
-                    .child(
-                        view().px(sp(S2)).pt(sp(S2)).child(
-                            button()
-                                .on_press(|| store::open_tab(Tab::Diff(None)))
-                                .flex_row()
-                                .items_center()
-                                .gap(sp(S2))
-                                .h(px(30.0))
-                                .px(sp(S2))
-                                .rounded(px(R_LG))
-                                .hover(|s| s.bg(highlight()))
-                                .child(icon(Icon::FileDiff, 15.0).text_color(FG_MUTED))
-                                .child(text(t("All changes")).text_size(tx(TEXT_BASE))),
-                        ),
-                    )
-                    .child(
-                        virtual_list(count, move |at: nsh_core::element::Position| {
-                            let file = computed(move || changes.with(|c| c.files.get(at.index()).cloned()));
-                            file_row(file)
-                        })
-                        .keys(move || changes.with(|c| c.files.iter().map(|f| f.path.clone()).collect::<Vec<_>>()))
-                        .estimated_item_size(px(30.0))
-                        .content_padding_bottom(sp(S2))
-                        .flex_1(),
-                    )
-                    .into_element()
-            }))
-        }))
-}
-
-fn empty_note(glyph: Icon, message: String) -> View {
-    view()
-        .flex_row()
-        .gap(sp(S2))
-        .p(sp(S4))
-        .child(icon(glyph, 15.0).text_color(FG_FAINT))
-        .child(text(message).text_size(tx(TEXT_SM)).text_color(FG_MUTED).flex_1())
-}
-
 /// An empty panel's message, centered: a glyph on a soft disc, a title and
 /// a line under it.
-fn empty_state(glyph: Icon, title: &'static str, detail: &'static str) -> View {
+pub(super) fn empty_state(glyph: Icon, title: &'static str, detail: &'static str) -> View {
     view()
         .flex_1()
         .items_center()
@@ -363,104 +245,8 @@ fn empty_state(glyph: Icon, title: &'static str, detail: &'static str) -> View {
         .child(text(detail).text_size(tx(TEXT_SM)).line_height(px(19.0)).text_color(FG_MUTED).text_center())
 }
 
-/// Git could not answer: a folder outside Git says so in words (its files
-/// still browse), anything else shows the message.
-fn git_error(e: String) -> View {
-    if e.to_lowercase().contains("not a git repository") {
-        return empty_state(Icon::GitBranch, t("Not a Git repository"), t("Changes and commits show for folders under Git; the files are still here"))
-            .child(view().mt(sp(S2)).child(btn(t("Browse files"), Variant::Secondary, Sz::Sm, Some(Icon::FolderTree), || {
-                store::set_explorer_tab(ExplorerTab::Files)
-            })));
-    }
-    view()
-        .flex_1()
-        .items_center()
-        .justify_center()
-        .gap(sp(S2))
-        .px(sp(S6))
-        .child(icon(Icon::CircleAlert, 20.0).text_color(DANGER))
-        .child(text(t("Couldn't read Git")).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).text_color(FG))
-        .child(text(e).text_size(tx(TEXT_SM)).text_color(FG_MUTED).text_center().selectable(true))
-}
-
 fn loading_state() -> View {
     view().flex_1().items_center().justify_center().pb(px(48.0)).child(eclipse(28.0))
-}
-
-fn split_path(path: &str) -> (String, String) {
-    match path.rsplit_once('/') {
-        Some((dir, name)) => (name.to_owned(), dir.to_owned()),
-        None => (path.to_owned(), String::new()),
-    }
-}
-
-fn file_row(file: Memo<Option<DiffFile>>) -> impl IntoElement {
-    let selected = computed(move || {
-        let path = file.with(|f| f.as_ref().map(|f| f.path.clone()));
-        path.is_some() && store::tab() == Tab::Diff(path)
-    });
-    button()
-        .on_press(move || {
-            if let Some(f) = file.get_untracked() {
-                store::open_tab(Tab::Diff(Some(f.path)));
-            }
-        })
-        .mx(sp(S2))
-        .flex_row()
-        .items_center()
-        .gap(px(6.0))
-        .h(px(30.0))
-        .px(sp(S2))
-        .rounded(px(R_LG))
-        .bg(move || if selected.get() { highlight() } else { tint(SURFACE1, 0.0) })
-        .hover(|s| s.bg(highlight()))
-        .child(
-            text(move || {
-                file.with(|f| match f {
-                    Some(f) if f.is_new => "A",
-                    Some(f) if f.is_deleted => "D",
-                    Some(f) if f.old_path.is_some() => "R",
-                    _ => "M",
-                })
-            })
-            .w(px(12.0))
-            .text_size(tx(TEXT_XS))
-            .font_weight(FontWeight(600))
-            .font_family(mono_font)
-            .text_color(move || {
-                file.with(|f| match f {
-                    Some(f) if f.is_new => SUCCESS,
-                    Some(f) if f.is_deleted => DANGER,
-                    _ => WARNING,
-                })
-            }),
-        )
-        .child(
-            text(move || file.with(|f| f.as_ref().map(|f| split_path(&f.path).0).unwrap_or_default()))
-                .text_size(tx(TEXT_BASE))
-                .number_of_lines(1)
-                .flex_shrink_0()
-                .max_w(px(170.0)),
-        )
-        .child(
-            text(move || file.with(|f| f.as_ref().map(|f| split_path(&f.path).1).unwrap_or_default()))
-                .text_size(tx(TEXT_SM))
-                .text_color(FG_FAINT)
-                .number_of_lines(1)
-                .flex_1(),
-        )
-        .child(
-            text(move || file.with(|f| f.as_ref().map(|f| format!("+{}", f.additions)).unwrap_or_default()))
-                .text_size(tx(TEXT_XS))
-                .font_family(mono_font)
-                .text_color(SUCCESS),
-        )
-        .child(
-            text(move || file.with(|f| f.as_ref().map(|f| format!("−{}", f.deletions)).unwrap_or_default()))
-                .text_size(tx(TEXT_XS))
-                .font_family(mono_font)
-                .text_color(DANGER),
-        )
 }
 
 #[derive(Clone, Default)]
@@ -772,355 +558,3 @@ fn comment_shell() -> View {
         .shadow_sm()
 }
 
-/// The pull requests of the open workspace's repository: the branch's and
-/// the ones this conversation links to first, then the latest. A search
-/// and a filter (states, this conversation's only) over them; a press
-/// opens one in place, its checks and description under it.
-fn prs_view(tab: Memo<ExplorerTab>) -> View {
-    let shown_tab = computed(move || tab.get() == ExplorerTab::PullRequests);
-    let dir = computed(store::workspace_dir);
-    let answer = computed(move || dir.get().and_then(|d| store::github(&format!("repo_prs:{d}"))));
-    let busy = computed(move || dir.get().is_some_and(|d| store::github_loading(&format!("repo_prs:{d}"))));
-    let related = computed(move || if shown_tab.get() { store::conversation_prs() } else { vec![] });
-    let query = signal(String::new());
-    // Open, draft, merged, closed; and this conversation's only.
-    let status = signal([false; 4]);
-    let mine = signal(false);
-    let opened: Signal<Option<(String, u64)>> = signal(None);
-    // Another conversation's folder: back to its list.
-    effect(move || {
-        dir.get();
-        opened.set(None);
-    });
-    effect(move || {
-        if shown_tab.get() && dir.get().is_some() {
-            untracked(|| store::repo_prs(false));
-        }
-    });
-    let list = computed(move || {
-        let Some(Ok(v)) = answer.get() else { return (String::new(), vec![]) };
-        let (repo, items) = crate::github::repo_prs_of(&v);
-        let rel: Vec<u64> = related.get().into_iter().filter(|(r, _)| r.eq_ignore_ascii_case(&repo)).map(|(_, n)| n).collect();
-        let q = query.get().trim().to_lowercase();
-        let st = status.get();
-        let only_mine = mine.get();
-        let mut out: Vec<(crate::github::RepoPr, bool)> = items
-            .into_iter()
-            .map(|p| {
-                let r = rel.contains(&p.number);
-                (p, r)
-            })
-            .filter(|(p, r)| {
-                if only_mine && !r {
-                    return false;
-                }
-                if st.iter().any(|x| *x) {
-                    let i = match p.state.as_str() {
-                        "merged" => 2,
-                        "closed" => 3,
-                        _ if p.draft => 1,
-                        _ => 0,
-                    };
-                    if !st[i] {
-                        return false;
-                    }
-                }
-                q.is_empty()
-                    || p.title.to_lowercase().contains(&q)
-                    || format!("#{}", p.number).contains(&q)
-                    || p.author.to_lowercase().contains(&q)
-                    || p.head.to_lowercase().contains(&q)
-            })
-            .collect();
-        // This conversation's first, in the order it names them.
-        out.sort_by_key(|(p, r)| if *r { rel.iter().position(|n| *n == p.number).unwrap_or(0) } else { usize::MAX });
-        (repo, out)
-    });
-    let narrowed = move || status.get().iter().any(|x| *x) || mine.get();
-    let filters = {
-        let item = move |label: &'static str, checked: Box<dyn Fn() -> bool>, on_press: Box<dyn Fn()>| {
-            let checked: std::rc::Rc<dyn Fn() -> bool> = checked.into();
-            let c = checked.clone();
-            nsh_base::button()
-                .on_press(move || on_press())
-                .flex_row()
-                .items_center()
-                .gap(sp(S2))
-                .h(px(28.0))
-                .px(sp(S2))
-                .rounded(px(R_MD))
-                .hover(|s| s.bg(highlight()))
-                .child(text(label).text_size(tx(13.0)).text_color(FG).flex_1())
-                .child(icon(Icon::Check, 14.0).text_color(FG).opacity(move || if c() { 1.0_f32 } else { 0.0 }))
-        };
-        let open = signal(false);
-        let mut col = view().p(px(4.0)).child(item(t("This conversation's"), Box::new(move || mine.get()), Box::new(move || mine.update(|m| *m = !*m))));
-        col = col.child(text(t("Status").to_uppercase()).text_size(tx(10.0)).font_weight(FontWeight(600)).text_color(FG_FAINT).px(sp(S2)).pt(sp(S2)).pb(px(2.0)));
-        for (i, word) in [t("Open"), t("Draft"), t("Merged"), t("Closed")].into_iter().enumerate() {
-            col = col.child(item(word, Box::new(move || status.get()[i]), Box::new(move || status.update(|s| s[i] = !s[i]))));
-        }
-        nsh_base::popover()
-            .open(move || Some(open.get()))
-            .on_open_change(move |e: &nsh_base::PopoverEvent| {
-                if let nsh_base::PopoverEvent::OpenChange(next, _) = e {
-                    open.set(*next);
-                }
-            })
-            .align(nsh_core::overlay::Align::End)
-            .offset(px(4.0))
-            .popup_style(|s: nsh_core::element::StyleRefinement| s.bg(POPOVER).rounded(px(R_LG)).border_1().border_color(tint(FG, 0.10)).shadow_lg().w(px(200.0)))
-            .trigger(
-                view()
-                    .w(px(26.0))
-                    .h(px(26.0))
-                    .rounded(px(R_MD))
-                    .items_center()
-                    .justify_center()
-                    .bg(move || if narrowed() || open.get() { highlight() } else { tint(FG, 0.0) })
-                    .hover(|s| s.bg(highlight()))
-                    .label(t("Filter"))
-                    .child(icon(Icon::ListFilter, 13.0).text_color(move || if narrowed() { FG } else { FG_MUTED })),
-            )
-            .child(col)
-    };
-    view()
-        .flex_1()
-        .child(
-            view()
-                .flex_row()
-                .items_center()
-                .gap(px(4.0))
-                .mx(sp(S3))
-                .mb(sp(S2))
-                .h(px(32.0))
-                .px(sp(S2))
-                .rounded(px(R_MD))
-                .bg(tint(FG, 0.05))
-                .child(icon(Icon::Search, 13.0).text_color(FG_FAINT))
-                .child(
-                    input()
-                        .flex_1()
-                        .h(px(28.0))
-                        .px(px(4.0))
-                        .text_size(tx(TEXT_SM))
-                        .text_color(FG)
-                        .caret_color(|| color(ACCENT))
-                        .placeholder(move || match answer.get() {
-                            Some(Ok(v)) => tf("Search {}", &[&crate::github::repo_prs_of(&v).0]),
-                            _ => t("Search pull requests").to_owned(),
-                        })
-                        .value(move || query.get())
-                        .on_change(move |v: &str| query.set(v.to_owned())),
-                )
-                .child(filters)
-                .child(
-                    nsh_base::button()
-                        .on_press(|| store::repo_prs(true))
-                        .w(px(26.0))
-                        .h(px(26.0))
-                        .rounded(px(R_MD))
-                        .items_center()
-                        .justify_center()
-                        .hover(|s| s.bg(highlight()))
-                        .accessibility_label(t("Refresh"))
-                        .child(dynamic(move || {
-                            let b = busy.get();
-                            Some(untracked(move || if b { eclipse(13.0).into_element() } else { icon(Icon::RotateCw, 13.0).text_color(FG_MUTED).into_element() }))
-                        })),
-                ),
-        )
-        .child(scroll().flex_1().child(dynamic(move || {
-            let state = answer.get();
-            let (repo, items) = list.get();
-            let open = opened.get().filter(|(_, n)| *n > 0);
-            // One pull request, alone: its level, back to the list above.
-            if let Some((r, n)) = open {
-                return Some(untracked(move || {
-                    view()
-                        .child(
-                            nsh_base::button()
-                                .on_press(move || opened.set(None))
-                                .flex_row()
-                                .items_center()
-                                .gap(px(2.0))
-                                // As wide as its words, not the pane: a
-                                // full-width bar outweighed the title.
-                                .self_start()
-                                .mx(sp(S2))
-                                .mb(sp(S1))
-                                .pl(px(2.0))
-                                .pr(sp(S2))
-                                .h(px(24.0))
-                                .rounded(px(R_MD))
-                                .hover(|s| s.bg(highlight()))
-                                .child(icon(Icon::ChevronLeft, 14.0).text_color(FG_MUTED))
-                                .child(text(t("All pull requests")).text_size(tx(TEXT_SM)).text_color(FG_MUTED)),
-                        )
-                        .child(crate::ui::shared::github::panel_pull_request(r, n))
-                        .into_element()
-                }));
-            }
-            Some(untracked(move || match state {
-                None if dir.get_untracked().is_none() => empty_state(Icon::GitPullRequest, t("No pull requests here"), t("Open a conversation in a GitHub repository to see its pull requests")).into_element(),
-                None => view().py(sp(S8)).items_center().child(eclipse(20.0)).into_element(),
-                Some(Err(e)) => empty_state(Icon::GitPullRequest, t("No pull requests here"), t("This folder has no GitHub remote")).child(text(e).text_size(tx(TEXT_XS)).text_color(FG_FAINT)).into_element(),
-                Some(Ok(_)) if items.is_empty() => view().py(sp(S8)).items_center().child(text(t("None of them")).text_size(tx(TEXT_SM)).text_color(FG_MUTED)).into_element(),
-                Some(Ok(_)) => {
-                    let mut rows = view().gap(px(2.0)).pb(sp(S4));
-                    for (p, rel) in items {
-                        rows = rows.child(pr_row(repo.clone(), p, rel, false, opened));
-                    }
-                    rows.into_element()
-                }
-            }))
-        })))
-}
-
-fn pr_row(repo: String, p: crate::github::RepoPr, related: bool, open: bool, opened: Signal<Option<(String, u64)>>) -> impl IntoElement {
-    let (glyph, tone, state) = match p.state.as_str() {
-        "merged" => (Icon::GitMerge, VIOLET, t("Merged")),
-        "closed" => (Icon::GitPullRequestClosed, DANGER, t("Closed")),
-        _ if p.draft => (Icon::GitPullRequestDraft, FG_MUTED, t("Draft")),
-        _ => (Icon::GitPullRequest, SUCCESS, if crate::i18n::is_zh() { "开启" } else { t("Open") }),
-    };
-    let pr = (repo, p.number);
-    nsh_base::button()
-        .on_press(move || opened.set(Some(pr.clone())))
-        .mx(sp(S2))
-        .px(sp(S2))
-        .py(px(7.0))
-        .rounded(px(R_LG))
-        .when(open, |v| v.bg(highlight()))
-        .hover(|s| s.bg(highlight()))
-        .flex_row()
-        .items_start()
-        .gap(sp(S2))
-        .child(view().pt(px(2.0)).child(icon(glyph, 15.0).text_color(tone)))
-        .child(
-            view()
-                .flex_1()
-                .min_w(px(0.0))
-                .gap(px(3.0))
-                .child(text(p.title.clone()).text_size(tx(TEXT_BASE)).number_of_lines(if open { 0 } else { 2 }))
-                .child(
-                    view()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(6.0))
-                        .child(text(format!("#{}", p.number)).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(FG_MUTED))
-                        .child(text(state).text_size(tx(TEXT_XS)).font_weight(FontWeight(500)).text_color(tone))
-                        .child(text(format!("{} · {}", p.author, crate::ui::mobile::time::ago(&p.updated_at))).text_size(tx(TEXT_XS)).text_color(FG_FAINT).number_of_lines(1).flex_1().min_w(px(0.0)))
-                        .when(related, |v| {
-                            v.child(
-                                view()
-                                    .px(px(6.0))
-                                    .h(px(16.0))
-                                    .rounded(px(R_FULL))
-                                    .bg(tint(ACCENT, 0.12))
-                                    .justify_center()
-                                    .child(text(t("This conversation")).text_size(tx(10.0)).text_color(ACCENT)),
-                            )
-                        }),
-                ),
-        )
-        .child(view().pt(px(3.0)).child(icon(Icon::ChevronRight, 13.0).text_color(FG_FAINT)))
-}
-
-fn commits_view() -> View {
-    let data = computed(store::commits);
-    view().flex_1().child(dynamic(move || {
-        let state = data.get();
-        Some(untracked(move || match state.clone() {
-            None => loading_state().into_element(),
-            Some((_, Some(e))) => git_error(e).into_element(),
-            Some((list, None)) if list.is_empty() => empty_state(Icon::GitCommitHorizontal, t("No commits yet"), t("Commits show here once there are some")).into_element(),
-            Some((list, None)) => {
-                let mut col = view().gap(px(2.0)).py(sp(S1));
-                for c in list {
-                    let sha = c.sha.clone();
-                    let mut files = view().gap(px(1.0)).pt(px(4.0));
-                    for (path, add, del) in c.files.clone() {
-                        let (sha, p) = (sha.clone(), path.clone());
-                        files = files.child(
-                            nsh_base::button()
-                                .on_press(move || store::open_tab(Tab::CommitDiff(sha.clone(), p.clone())))
-                                .flex_row()
-                                .items_center()
-                                .gap(px(6.0))
-                                .h(px(24.0))
-                                .px(sp(S1))
-                                .rounded(px(R_MD))
-                                .hover(|s| s.bg(highlight()))
-                                .child(text(split_path(&path).0).text_size(tx(TEXT_SM)).number_of_lines(1).flex_1())
-                                .child(text(format!("+{add}")).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(SUCCESS))
-                                .child(text(format!("−{del}")).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(DANGER)),
-                        );
-                    }
-                    col = col.child(
-                        view()
-                            .mx(sp(S2))
-                            .px(sp(S2))
-                            .py(px(6.0))
-                            .rounded(px(R_LG))
-                            .hover(|s| s.bg(highlight()))
-                            .gap(px(2.0))
-                            .child(text(c.subject.clone()).text_size(tx(TEXT_BASE)).number_of_lines(2))
-                            .child(
-                                view()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap(px(6.0))
-                                    .child(text(c.short.clone()).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(FG_MUTED))
-                                    .child(
-                                        text(format!("{} · {}", c.author, c.date.get(..10).unwrap_or_default()))
-                                            .text_size(tx(TEXT_XS))
-                                            .text_color(FG_FAINT)
-                                            .number_of_lines(1)
-                                            .flex_1(),
-                                    )
-                                    .when(!c.pushed, |v| v.child(badge("local", WARNING))),
-                            )
-                            .child(files),
-                    );
-                }
-                scroll().flex_1().child(col).into_element()
-            }
-        }))
-    }))
-}
-
-/// One file of a commit, as a diff tab.
-pub(crate) fn commit_diff_pane(sha: String, path: String) -> impl IntoElement {
-    let data = computed(store::commit_diff);
-    let title = format!("{} · {}", sha.get(..7).unwrap_or(&sha), path);
-    let language = path.rsplit_once('.').map(|(_, e)| e.to_owned());
-    view()
-        .flex_1()
-        .child(
-            view()
-                .flex_row()
-                .items_center()
-                .gap(sp(S2))
-                .h(px(40.0))
-                .px(sp(S4))
-                .border_b_1()
-                .border_color(BORDER)
-                .child(icon(Icon::GitCommitHorizontal, 15.0).text_color(FG_MUTED))
-                .child(text(title).text_size(tx(TEXT_BASE)).font_family(mono_font).number_of_lines(1).flex_1()),
-        )
-        .child(dynamic(move || {
-            let d = data.get();
-            let language = language.clone();
-            Some(untracked(move || match d.clone() {
-                None => view().flex_1().items_center().justify_center().child(eclipse(36.0)).into_element(),
-                Some(Err(e)) => empty_note(Icon::Info, e).into_element(),
-                Some(Ok(f)) => {
-                    let mut v = diff_view().patch(SharedString::from(f.patch)).layout(DiffLayout::Unified).text_size(tx(TEXT_CODE)).flex_1();
-                    if let Some(l) = language.clone() {
-                        v = v.language(SharedString::from(l));
-                    }
-                    v.into_element()
-                }
-            }))
-        }))
-}

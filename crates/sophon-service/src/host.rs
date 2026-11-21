@@ -316,7 +316,12 @@ impl Host {
     /// Adds an item to the agent's conversation and its stream. What a
     /// reply is made of is saved with what follows it; anything else
     /// (a message sent, a call made) now.
-    fn append(&mut self, agent: &str, item: Value) -> Result<u64, String> {
+    fn append(&mut self, agent: &str, mut item: Value) -> Result<u64, String> {
+        // When a reply was written: its first words carry it, and the row
+        // they begin keeps it as more are joined to it.
+        if item["type"] == "assistant_message" && item["at"].is_null() {
+            item["at"] = now();
+        }
         let timeline = self.timeline(agent)?;
         let seq = timeline.push(&item);
         if !matches!(
@@ -553,6 +558,8 @@ impl Host {
                     json!({"agentId":agent,"event":{"type":"turn_started"}}),
                 );
             }
+            // None: its next message begins a session of its own.
+            Event::Session(session) if session.is_empty() => record["persistence"] = Value::Null,
             Event::Session(session) => record["persistence"] = json!({"sessionId":session}),
             Event::Mode(mode) => record["currentModeId"] = json!(mode),
             // Kept with the turn's end; a client sees it now.
@@ -648,6 +655,11 @@ fn session(
         } else {
             Vec::new()
         },
+        record: Some(
+            host.home
+                .join("timelines")
+                .join(format!("{agent_id}.jsonl")),
+        ),
     };
     let (shared, agent) = (shared.clone(), agent_id.to_owned());
     let commands = provider::start(
@@ -703,7 +715,7 @@ fn turn(
     }
     let seq = host.append(
         agent_id,
-        json!({"type":"user_message","text":prompt,"messageId":message_id}),
+        json!({"type":"user_message","text":prompt,"messageId":message_id,"at":now()}),
     )?;
     host.stopping.remove(agent_id);
     let record = host.state.agents.get_mut(agent_id).unwrap();
@@ -999,6 +1011,73 @@ fn answer(shared: &Shared, request: &Value, mut made: Option<Value>) -> Result<V
             host.sessions.retain(|agent, _| busy.contains(agent));
             host.publish("providers_snapshot_update", provider::snapshot(&config));
             json!({"config":config})
+        }
+        // What a conversation made (`scope` "agent"), or every conversation
+        // of its project ("project"): the files their records say they
+        // wrote or named, that are on this computer now, newest first.
+        "agent.artifacts.request" => {
+            let agent = text(request, "agentId")?;
+            let record = host
+                .state
+                .agents
+                .get(agent)
+                .ok_or("Unknown conversation")?
+                .clone();
+            let project = record["workspaceId"]
+                .as_str()
+                .and_then(|ws| host.state.workspaces.get(ws))
+                .and_then(|ws| ws["projectId"].as_str())
+                .map(str::to_owned);
+            let mut agents: Vec<(String, Value)> =
+                if request["scope"] == "project" && project.is_some() {
+                    let workspaces: Vec<String> = host
+                        .state
+                        .workspaces
+                        .iter()
+                        .filter(|(_, ws)| ws["projectId"].as_str() == project.as_deref())
+                        .map(|(id, _)| id.clone())
+                        .collect();
+                    host.state
+                        .agents
+                        .iter()
+                        .filter(|(_, a)| a["archivedAt"].is_null())
+                        .filter(|(_, a)| {
+                            a["workspaceId"]
+                                .as_str()
+                                .is_some_and(|ws| workspaces.iter().any(|w| w == ws))
+                        })
+                        .map(|(id, a)| (id.clone(), a.clone()))
+                        .collect()
+                } else {
+                    vec![(agent.to_owned(), record)]
+                };
+            // The latest conversations of a large project: their records
+            // are read to find them.
+            agents.sort_by(|a, b| b.1["updatedAt"].as_str().cmp(&a.1["updatedAt"].as_str()));
+            agents.truncate(60);
+            let mut artifacts: Vec<Value> = Vec::new();
+            for (id, record) in agents {
+                let Ok(timeline) = host.timeline(&id) else {
+                    continue;
+                };
+                let found = crate::artifacts::candidates(timeline.items());
+                let since = record["createdAt"]
+                    .as_str()
+                    .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+                    .map(|at| at.timestamp_millis());
+                let cwd = record["cwd"].as_str().unwrap_or_default();
+                for artifact in crate::artifacts::existing(&found, cwd, since, &id) {
+                    if !artifacts
+                        .iter()
+                        .any(|known| known["path"] == artifact["path"])
+                    {
+                        artifacts.push(artifact);
+                    }
+                }
+            }
+            artifacts.sort_by_key(|a| std::cmp::Reverse(a["modifiedAt"].as_i64().unwrap_or(0)));
+            artifacts.truncate(300);
+            json!({"agentId":agent,"scope":request["scope"],"artifacts":artifacts})
         }
         "fetch_agent_timeline_request" => {
             let agent = text(request, "agentId")?;

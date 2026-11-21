@@ -15,7 +15,10 @@ test("shows the sidebar and its entry points", async () => {
   // Projects' + says what it does to the screen reader alone.
   expect(app.count("label:Add project")).toBe(1);
   expect(app.texts()).toContain("New workspace");
-  expect(app.texts()).toContain("More");
+  // The less often wanted, in a row of icons at the foot.
+  expect(app.count("label:More")).toBe(1);
+  expect(app.count("label:Settings")).toBe(1);
+  expect(app.count("label:Usage")).toBe(1);
 });
 
 test("opens the new workspace screen", async () => {
@@ -134,10 +137,8 @@ test("settings lists the agents with their add buttons", async () => {
 
 test("opens the usage page from the sidebar", async () => {
   const app = await open(".", { width: 1100, height: 760 });
-  // Behind More, with Pull requests and History.
-  await app.press("More >> nth=0");
-  await app.waitFor("text:Usage");
-  await app.press("Usage >> nth=0");
+  // An icon of the foot's row, beside Settings and History.
+  await app.press("label:Usage >> nth=0");
   await app.waitFor("text:This computer's sessions");
   expect(app.texts()).toContain("This computer's sessions");
   expect(app.texts()).toContain("Plan limits");
@@ -250,7 +251,7 @@ test("instructions are written as they read, and kept as Markdown", async () => 
 test("integrations have a page of their own to set up and add", async () => {
   const app = await open(".", { width: 1100, height: 900 });
   // Behind More, with the pages less often wanted.
-  await app.press("More >> nth=0");
+  await app.press("label:More >> nth=0");
   await app.waitFor("text:Integrations");
   await app.press("Integrations >> nth=0");
   await app.waitFor("text:Add an integration");
@@ -260,7 +261,7 @@ test("integrations have a page of their own to set up and add", async () => {
 
 test("plugins have a page of their own, apart from the integrations they count on", async () => {
   const app = await open(".", { width: 1100, height: 900 });
-  await app.press("More >> nth=0");
+  await app.press("label:More >> nth=0");
   await app.waitFor("text:Plugins");
   await app.press("Plugins >> nth=0");
   await app.waitFor("text:Add a plugin");

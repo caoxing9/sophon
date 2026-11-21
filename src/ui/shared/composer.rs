@@ -290,7 +290,10 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                         .gap(px(2.0))
                         .flex_1()
                         .min_w(px(0.0))
-                .child(
+                // The desktop opens the file dialog at once (a picture
+                // chosen there goes as a picture, as one dropped does); the
+                // phone asks first, its photos being apart from its files.
+                .child(if MOBILE {
                     dropup(
                         view()
                             .w(sp(CONTROL_SM))
@@ -304,8 +307,20 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                     )
                     .child(menu_row(t("Choose images…"), Some(Icon::Image), None, false, with_key(pick_images_into)))
                     .child(menu_row(t("Choose files…"), Some(Icon::File), None, false, with_key(pick_files_into)))
-
-                )
+                    .into_element()
+                } else {
+                    nsh_base::button()
+                        .on_press(with_key(pick_any_into))
+                        .accessibility_label(t("Attach"))
+                        .w(sp(CONTROL_SM))
+                        .h(sp(CONTROL_SM))
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(R_FULL))
+                        .hover(|s| s.bg(highlight()))
+                        .child(icon(Icon::Paperclip, 16.0).text_color(FG_MUTED))
+                        .into_element()
+                })
                 .child(mic_button(doc))
                 .child(model_picker(live))
                 // What the agent may do without asking, beside its model:
@@ -900,6 +915,123 @@ pub(crate) fn usage_bar(live: bool) -> impl IntoElement {
     }))
 }
 
+/// What is left of each agent's plan this week, at the top right (as T3
+/// Code's): "This week left", then each agent with a reading, its ring and
+/// what is left of its weekly limit (else of its 5-hour one). Green while
+/// there is plenty, amber under 25%, red under 10%. The chevron opens each
+/// one's windows and when they start again; a press on the readings opens
+/// the usage page.
+pub(crate) fn usage_summary() -> impl IntoElement {
+    let readings = computed(|| {
+        let now = store::minute().max(crate::usage::now());
+        store::usage()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|p| {
+                let week = limit_window(&p.windows, 7 * 86_400);
+                let hours = limit_window(&p.windows, 5 * 3600);
+                let (used, _) = week.or(hours)?;
+                let name = match p.id.as_str() {
+                    "codex" => "Codex".to_owned(),
+                    "claude" => "Claude".to_owned(),
+                    _ if !p.name.is_empty() => p.name.clone(),
+                    _ => p.id.clone(),
+                };
+                let windows: Vec<(&'static str, f64, Option<i64>)> = [(t("5h"), hours), (t("Week"), week)]
+                    .into_iter()
+                    .filter_map(|(word, w)| w.map(|(pct, resets)| (word, pct, resets.map(|at| at - now))))
+                    .collect();
+                Some((p.id.clone(), name, (100.0 - used).clamp(0.0, 100.0), windows))
+            })
+            .collect::<Vec<_>>()
+    });
+    view().child(dynamic(move || {
+        let list = readings.get();
+        if list.is_empty() {
+            return None;
+        }
+        Some(untracked(move || {
+            let left_tone = |left: f64| if left < 10.0 { DANGER } else if left < 25.0 { WARNING } else { SUCCESS };
+            let mut shown = button()
+                .on_press(store::open_usage)
+                .accessibility_label(t("Usage"))
+                .flex_row()
+                .items_center()
+                .gap(sp(S3))
+                .h(px(28.0))
+                .pl(sp(S3))
+                .pr(sp(S1))
+                .child(text(t("This week left")).text_size(tx(TEXT_XS)).text_color(FG_FAINT));
+            for (_, name, left, _) in &list {
+                shown = shown.child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(5.0))
+                        .child(ring(*left).text_color(left_tone(*left)))
+                        .child(text(name.clone()).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG))
+                        .child(text(format!("{left:.0}%")).text_size(tx(TEXT_SM)).font_family(mono_font).text_color(left_tone(*left))),
+                );
+            }
+            // Each one's windows, and when they start again.
+            let mut card = view().w(px(300.0)).p(sp(S2)).gap(sp(S1));
+            for (id, name, _, windows) in list.clone() {
+                let mut block = view().px(sp(S2)).py(sp(S2)).gap(px(6.0)).child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap(sp(S2))
+                        .child(crate::ui::shared::model_picker::mark(&id, 14.0))
+                        .child(text(name).text_size(tx(TEXT_SM)).font_weight(FontWeight(600)).flex_1()),
+                );
+                for (word, used, left) in windows {
+                    let rest = (100.0 - used).clamp(0.0, 100.0);
+                    block = block.child(
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .gap(sp(S2))
+                            .child(text(word).text_size(tx(TEXT_XS)).text_color(FG_MUTED).w(px(42.0)))
+                            .child(
+                                view()
+                                    .flex_1()
+                                    .h(px(5.0))
+                                    .rounded(px(R_FULL))
+                                    .bg(SURFACE3)
+                                    .child(view().h_full().w(relative((rest / 100.0) as f32)).rounded(px(R_FULL)).bg(left_tone(rest))),
+                            )
+                            .child(text(format!("{rest:.0}%")).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(left_tone(rest)).w(px(36.0)).text_right())
+                            .child(text(left.filter(|s| *s > 0).map(time_left).unwrap_or_default()).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(FG_FAINT).w(px(54.0)).text_right()),
+                    );
+                }
+                card = card.child(block);
+            }
+            card = card.child(menu_divider()).child(menu_row(t("Open usage"), Some(Icon::Activity), None, false, store::open_usage)).child(menu_row(
+                t("Refresh"),
+                Some(Icon::RotateCw),
+                None,
+                false,
+                store::refresh_usage,
+            ));
+            view()
+                .flex_row()
+                .items_center()
+                .rounded(px(R_FULL))
+                .border_1()
+                .border_color(BORDER)
+                .bg(SURFACE0)
+                .hover(|s| s.bg(highlight()))
+                .child(shown)
+                .child(
+                    dropdown(view().w(px(24.0)).h(px(24.0)).mr(px(2.0)).items_center().justify_center().rounded(px(R_FULL)).hover(|s| s.bg(highlight())).child(icon(Icon::ChevronDown, 13.0).text_color(FG_MUTED)))
+                        .align(nsh_core::overlay::Align::End)
+                        .child(card),
+                )
+                .into_element()
+        }))
+    }))
+}
+
 /// The open agent's context beside Send: a ring and its percentage; under
 /// the pointer, a card: "Context", "6% used", a bar, and the tokens
 /// (`6.1万 / 100万`, `61K / 1M`). Amber from 80%, red from 90%.
@@ -1079,6 +1211,26 @@ fn insert_images(key: &str, images: Vec<crate::daemon::connection::ImageInput>) 
     insert_into(key, &chips);
 }
 
+/// A sent message's pictures (data URIs) back in conversation `agent`'s
+/// composer, as chips after its text: a moment later, once the text given
+/// back has reached the editor (it would be written over otherwise).
+pub(crate) fn put_back_images(agent: &str, uris: &[String]) {
+    let images: Vec<_> = uris
+        .iter()
+        .enumerate()
+        .filter_map(|(i, uri)| {
+            let (head, data) = uri.strip_prefix("data:")?.split_once(";base64,")?;
+            let ext = head.rsplit('/').next().unwrap_or("png");
+            Some(crate::daemon::connection::ImageInput { name: format!("image-{}.{ext}", i + 1), mime: head.to_owned(), data: data.to_owned() })
+        })
+        .collect();
+    if images.is_empty() {
+        return;
+    }
+    let key = format!("agent:{agent}");
+    set_timeout(std::time::Duration::from_millis(30), move || insert_images(&key, images));
+}
+
 /// Starts uploading a file and puts its chip in composer `key`'s text.
 fn insert_file(key: &str, name: String, mime: String, bytes: Vec<u8>) {
     if let Some(id) = store::attach_file(name.clone(), mime.clone(), bytes) {
@@ -1163,6 +1315,28 @@ fn take_photo_into(key: String) {
                 data: base64::engine::general_purpose::STANDARD.encode(&bytes),
             }]);
         });
+    });
+}
+
+/// Anything from the computer, in one dialog: a picture goes with the
+/// message as a picture, any other file is uploaded as an attachment.
+fn pick_any_into(key: String) {
+    store::spawn_detached(async move {
+        use base64::Engine;
+        let picked = pick_files(nsh_core::picker::FilePickRequest::new(true, 10)).await;
+        for f in picked {
+            let bytes = f.data.bytes().to_vec();
+            let mime = if f.mime.starts_with("image/") { f.mime.clone() } else { nsh_core::picker::mime_for_file(&f.name, &bytes).to_owned() };
+            if mime.starts_with("image/") {
+                insert_images(&key, vec![crate::daemon::connection::ImageInput {
+                    name: f.name.clone(),
+                    mime,
+                    data: base64::engine::general_purpose::STANDARD.encode(&bytes),
+                }]);
+            } else {
+                insert_file(&key, f.name.clone(), mime, bytes);
+            }
+        }
     });
 }
 

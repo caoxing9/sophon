@@ -101,6 +101,15 @@ fn manifest(folder: &Path, kind: &str) -> PathBuf {
     kept.join(format!("{kind}.json"))
 }
 
+/// A row's item without when it was written, to compare with what it says.
+fn without_time(item: &Value) -> Value {
+    let mut item = item.clone();
+    if let Some(item) = item.as_object_mut() {
+        item.remove("at");
+    }
+    item
+}
+
 async fn ask(socket: &mut Socket, mut request: Value) -> Value {
     let id = uuid::Uuid::new_v4().to_string();
     request["requestId"] = json!(id);
@@ -293,8 +302,10 @@ async fn a_turn_streams_asks_before_a_command_and_keeps_what_happened() {
     )
     .await;
     let rows = live["payload"]["entries"].as_array().unwrap();
+    // A reply says when it began to be written.
+    assert!(rows[1]["item"]["at"].is_string(), "{live}");
     assert_eq!(
-        rows[1]["item"],
+        without_time(&rows[1]["item"]),
         json!({"type":"assistant_message","text":"Hello"})
     );
     assert_eq!(
@@ -646,7 +657,7 @@ async fn authenticated_conversation_survives_service_restart() {
     assert_eq!(timeline["payload"]["entries"].as_array().unwrap().len(), 4);
     assert_eq!(timeline["payload"]["entries"][2]["item"]["text"], "second");
     assert_eq!(
-        timeline["payload"]["entries"][3]["item"],
+        without_time(&timeline["payload"]["entries"][3]["item"]),
         json!({"type":"assistant_message","text":"reply"})
     );
     assert_eq!(
@@ -1274,11 +1285,7 @@ async fn an_integration_starts_what_a_plugin_s_automation_does() {
     // stands is said with the list.
     let listed = ask(&mut socket, json!({"type":"plugin/list"})).await;
     assert!(installed(&listed, "hub")["account"].is_null(), "{listed}");
-    let set_up = ask(
-        &mut socket,
-        json!({"type":"plugin/setup","pluginId":"hub"}),
-    )
-    .await;
+    let set_up = ask(&mut socket, json!({"type":"plugin/setup","pluginId":"hub"})).await;
     assert_eq!(set_up["payload"]["said"], "signed in", "{set_up}");
     assert_eq!(installed(&set_up, "hub")["account"], "from the app");
     let (ok, out) = sophon(&["plugin", "setup", "hub", "ada"]);
@@ -1531,7 +1538,10 @@ async fn an_integration_starts_what_a_plugin_s_automation_does() {
         created["payload"]["schedule"]["prompt"],
         "Look at {{url}} for me"
     );
-    assert!(created["payload"]["schedule"]["plugin"].is_null(), "{created}");
+    assert!(
+        created["payload"]["schedule"]["plugin"].is_null(),
+        "{created}"
+    );
     let id = created["payload"]["schedule"]["id"].clone();
     for _ in 0..100 {
         let list = ask(&mut socket, json!({"type":"schedule/list"})).await;
@@ -1758,7 +1768,10 @@ async fn an_integration_starts_what_a_plugin_s_automation_does() {
         json!({"id":"mail","name":"Mail","installed":true,"ready":true}),
         "{listed}"
     );
-    assert_eq!(sophon(&["use", "mail", "ada"]), (true, "mailed ada\n".into()));
+    assert_eq!(
+        sophon(&["use", "mail", "ada"]),
+        (true, "mailed ada\n".into())
+    );
     // All of it handed on as a file: the plugin's folder, the
     // integration it brings riding in it. Read back it is shown first,
     // and installed only when that is asked.
@@ -1789,21 +1802,16 @@ async fn an_integration_starts_what_a_plugin_s_automation_does() {
         "{read}"
     );
     let token = read["payload"]["token"].clone();
-    let done = ask(
-        &mut socket,
-        json!({"type":"plugin/install","token":token}),
-    )
-    .await;
+    let done = ask(&mut socket, json!({"type":"plugin/install","token":token})).await;
     assert_eq!(done["payload"]["installed"]["root"], "watch", "{done}");
     assert_eq!(installed(&done, "watch")["source"], "file", "{done}");
     assert!(service.0.path().join("plugins/watch/reply").is_file());
-    assert_eq!(sophon(&["use", "mail", "ada"]), (true, "mailed ada\n".into()));
+    assert_eq!(
+        sophon(&["use", "mail", "ada"]),
+        (true, "mailed ada\n".into())
+    );
     // A file is installed once: its token is gone with what was read.
-    let again = ask(
-        &mut socket,
-        json!({"type":"plugin/install","token":token}),
-    )
-    .await;
+    let again = ask(&mut socket, json!({"type":"plugin/install","token":token})).await;
     assert_eq!(again["type"], "rpc_error", "{again}");
     let refused = ask(
         &mut socket,
@@ -1943,7 +1951,10 @@ async fn a_command_is_tried_before_it_is_kept() {
     .await;
     assert_eq!(failed["payload"]["ok"], false, "{failed}");
     assert!(
-        failed["payload"]["output"].as_str().unwrap().ends_with("broken"),
+        failed["payload"]["output"]
+            .as_str()
+            .unwrap()
+            .ends_with("broken"),
         "{failed}"
     );
     // Nothing is kept of either: no automation, no run.
@@ -2971,13 +2982,19 @@ async fn a_conversation_restored_brings_its_workspace_back() {
     // Archived: neither is listed, both are in the history.
     assert!(ids(ask(&mut socket, json!({"type":"fetch_workspaces_request"})).await).is_empty());
     assert!(ids(ask(&mut socket, json!({"type":"fetch_agents_request"})).await).is_empty());
-    assert_eq!(ids(ask(&mut socket, json!({"type":"fetch_agent_history_request"})).await).len(), 2);
+    assert_eq!(
+        ids(ask(&mut socket, json!({"type":"fetch_agent_history_request"})).await).len(),
+        2
+    );
     let restored = ask(
         &mut socket,
         json!({"type":"refresh_agent_request","agentId":"kept","restore":true}),
     )
     .await;
-    assert!(restored["payload"]["agent"]["archivedAt"].is_null(), "{restored}");
+    assert!(
+        restored["payload"]["agent"]["archivedAt"].is_null(),
+        "{restored}"
+    );
     assert_eq!(
         ids(ask(&mut socket, json!({"type":"fetch_workspaces_request"})).await),
         ["w1"]
@@ -3028,4 +3045,159 @@ async fn a_folder_that_is_no_project_lists_its_folders_alone() {
     }
     assert!(!outside.join("made").exists());
     service.cli("stop");
+}
+
+#[tokio::test]
+async fn a_conversation_s_artifacts_are_the_files_it_made_that_are_there() {
+    let service = Service(tempfile::tempdir().unwrap());
+    // A `codex` whose turn writes a page and says where a picture is.
+    install(
+        service.0.path(),
+        "codex",
+        r#"#!/bin/sh
+case " $* " in *" app-server "*) ;; *) exit 2 ;; esac
+say() { printf '%s\n' "$1"; }
+while IFS= read -r line; do
+    id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+    case "$line" in
+        *'"method":"initialize"'*) say "{\"id\":$id,\"result\":{}}" ;;
+        *'"method":"thread/start"'*) say "{\"id\":$id,\"result\":{\"thread\":{\"id\":\"t-1\"}}}" ;;
+        *'"method":"turn/start"'*)
+            mkdir -p out && printf '<p>hi</p>' > out/page.html && printf 'x' > shot.png
+            say "{\"id\":$id,\"result\":{\"turn\":{\"id\":\"turn-1\"}}}"
+            say '{"method":"turn/started","params":{"turn":{"id":"turn-1"}}}'
+            say "{\"method\":\"item/completed\",\"params\":{\"item\":{\"type\":\"fileChange\",\"id\":\"f1\",\"status\":\"completed\",\"changes\":[{\"path\":\"$PWD/out/page.html\",\"kind\":{\"type\":\"add\"},\"diff\":\"<p>hi</p>\"}]}}}"
+            say '{"method":"item/completed","params":{"item":{"type":"agentMessage","id":"m1","text":"Saved `shot.png` and the page; see also missing.png"}}}'
+            say '{"method":"turn/completed","params":{"turn":{"id":"turn-1","status":"completed"}}}' ;;
+    esac
+done
+"#,
+    );
+    service.cli("start");
+    let mut socket = service.connect(true).await;
+    let created = ask(&mut socket, json!({"type":"workspace.create.request","source":{"kind":"directory","path":service.0.path()},
+        "agent":{"config":{"provider":"codex"},"initialPrompt":"make it"}})).await;
+    let agent = created["payload"]["agent"]["id"].clone();
+    finished(&mut socket).await;
+    for scope in ["agent", "project"] {
+        let answer = ask(
+            &mut socket,
+            json!({"type":"agent.artifacts.request","agentId":agent,"scope":scope}),
+        )
+        .await;
+        assert_eq!(answer["type"], "agent.artifacts.response", "{answer}");
+        let mut names: Vec<_> = answer["payload"]["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| {
+                (
+                    a["name"].as_str().unwrap().to_owned(),
+                    a["kind"].as_str().unwrap().to_owned(),
+                    a["source"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                (
+                    "page.html".to_owned(),
+                    "page".to_owned(),
+                    "written".to_owned()
+                ),
+                (
+                    "shot.png".to_owned(),
+                    "image".to_owned(),
+                    "named".to_owned()
+                ),
+            ],
+            "{answer}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_session_claude_code_no_longer_has_goes_on_in_a_new_one() {
+    let service = Service(tempfile::tempdir().unwrap());
+    // A `claude` that resumes no session: asked to, it says it has none
+    // and stops; started afresh, it begins `fresh-N` and replies.
+    install(
+        service.0.path(),
+        "claude",
+        r#"#!/bin/sh
+printf '%s\n' "$*" >> args
+say() { printf '%s\n' "$1"; }
+n=$(cat starts 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > starts
+while IFS= read -r line; do
+    case "$line" in *'"type":"user"'*)
+        printf '%s\n' "$line" >> sent
+        case " $* " in
+            *" --resume "*)
+                say '{"type":"result","is_error":true,"errors":["No conversation found with session ID: gone"]}'
+                exit 1 ;;
+        esac
+        say "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"fresh-$n\"}"
+        say '{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m","content":[{"type":"text","text":"ok"}]}}'
+        say '{"type":"result","is_error":false}' ;;
+    esac
+done
+"#,
+    );
+    service.cli("start");
+    let mut socket = service.connect(true).await;
+    let created = ask(&mut socket, json!({"type":"workspace.create.request","source":{"kind":"directory","path":service.0.path()},
+        "agent":{"config":{"provider":"claude"},"initialPrompt":"first"}})).await;
+    let agent = created["payload"]["agent"]["id"].clone();
+    finished(&mut socket).await;
+    // Its process gone, the next message resumes `fresh-1`, which it has not.
+    service.cli("stop");
+    service.cli("start");
+    let mut socket = service.connect(true).await;
+    ask(
+        &mut socket,
+        json!({"type":"send_agent_message_request","agentId":agent,"text":"second"}),
+    )
+    .await;
+    finished(&mut socket).await;
+    let timeline = ask(
+        &mut socket,
+        json!({"type":"fetch_agent_timeline_request","agentId":agent}),
+    )
+    .await;
+    let kinds: Vec<_> = timeline["payload"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["item"]["type"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "user_message",
+            "assistant_message",
+            "user_message",
+            "notification",
+            "assistant_message"
+        ],
+        "{timeline}"
+    );
+    assert_eq!(
+        timeline["payload"]["agent"]["persistence"]["sessionId"],
+        "fresh-3"
+    );
+    let args = fs::read_to_string(service.0.path().join("args")).unwrap();
+    assert_eq!(args.matches("--resume fresh-1").count(), 1, "{args}");
+    // The new session is told what was said before, as T3 Code hands over.
+    let sent = fs::read_to_string(service.0.path().join("sent")).unwrap();
+    let last: Value = serde_json::from_str(sent.lines().last().unwrap()).unwrap();
+    let told = last["message"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        told.contains("User: first\n\nAssistant: ok\n</earlier_conversation>"),
+        "{last}"
+    );
+    assert!(!told.contains("second"), "{last}");
 }
