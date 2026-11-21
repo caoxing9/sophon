@@ -1,4 +1,5 @@
-//! Notices over the main surface, with an undo for archiving.
+//! Notices over the main surface, with an undo for archiving: at the top,
+//! under the title bar, clear of the composer.
 
 use crate::i18n::t;
 use nsh_core::prelude::*;
@@ -7,7 +8,7 @@ use crate::store;
 use crate::ui::kit::*;
 use crate::ui::kit::text;
 
-pub(crate) fn notice_bar(archive_top: Memo<Length>) -> impl IntoElement {
+pub(crate) fn notice_bar(top: Memo<Length>) -> impl IntoElement {
     let message = computed(store::notice);
     // Each notice goes after a while. Timed here, where the bar lives: a
     // timer started where the notice was raised ends with that place (a
@@ -20,12 +21,11 @@ pub(crate) fn notice_bar(archive_top: Memo<Length>) -> impl IntoElement {
     });
     view().child(dynamic(move || {
         let (m, action) = message.get()?;
-        let archived = matches!(action, Some(store::NoticeAction::UndoArchive(_)));
         Some(untracked(move || {
             view()
                 .absolute()
-                .when(archived, |view| view.top(move || archive_top.get()).px(sp(S2)))
-                .when(!archived, |view| view.bottom(px(96.0)))
+                .top(move || top.get())
+                .px(sp(S2))
                 .left(px(0.0))
                 .right(px(0.0))
                 .items_center()

@@ -3,9 +3,9 @@
 //! at a time. What only the desktop has (tabs, the explorer, git, terminals,
 //! new workspaces, history, schedules, shortcuts) lives here.
 
+mod artifacts;
 mod explorer;
 mod file_pane;
-pub(crate) mod git;
 mod history;
 mod home;
 mod new_workspace;
@@ -286,7 +286,7 @@ fn main(compact: bool) -> impl IntoElement {
         Screen::Inbox => Main::Inbox,
         Screen::PullRequest { .. } => Main::PullRequest,
     });
-    let archive_top = computed(move || {
+    let notice_top = computed(move || {
         let header_inset = if which.get() == Main::Workspace {
             workspace::header_inset(compact)
         } else {
@@ -313,6 +313,6 @@ fn main(compact: bool) -> impl IntoElement {
                 Main::PullRequest => crate::ui::shared::github::pull_request_screen().into_element(),
             }))
         }))
-        .child(notice::notice_bar(archive_top))
+        .child(notice::notice_bar(notice_top))
 }
 

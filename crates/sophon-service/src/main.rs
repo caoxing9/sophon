@@ -1,4 +1,5 @@
 mod account;
+mod artifacts;
 mod claude_usage;
 mod config;
 mod env;

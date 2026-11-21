@@ -282,7 +282,7 @@ fn run(id: &str) {
         "new-terminal" => store::new_terminal(),
         "toggle-terminal" => store::toggle_terminal_panel(),
         "toggle-explorer" => store::toggle_explorer(),
-        "changes" => store::set_explorer_tab(ExplorerTab::Changes),
+        "changes" => store::open_modal(Modal::ChangedFiles),
         "changed-files" => store::open_modal(Modal::ChangedFiles),
         "files" => store::set_explorer_tab(ExplorerTab::Files),
         "commit" => store::open_modal(Modal::Commit),

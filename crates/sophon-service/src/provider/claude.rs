@@ -74,6 +74,10 @@ struct Claude {
     /// The last item sent was reply text, and a block of it has begun
     /// with nothing sent yet: the next text starts a new paragraph.
     spoke: bool,
+    /// The user message last sent, to send again in a new session.
+    sent: Option<Value>,
+    /// This turn already went on in a new session.
+    renewed: bool,
     fresh: bool,
     /// A notice about the endpoint not answering went out this turn.
     retried: bool,
@@ -106,6 +110,8 @@ pub async fn run(start: Start, mut inbox: UnboundedReceiver<Command>, emit: Emit
         streamed: HashSet::new(),
         asks: HashMap::new(),
         spoke: false,
+        sent: None,
+        renewed: false,
         fresh: false,
         retried: false,
         compacting: false,
@@ -324,9 +330,60 @@ impl Claude {
             .ok_or("This conversation has not started")?;
         self.close();
         let fresh = crate::history::cut(&self.start.settings, &session, message)?;
-        self.start.session = Some(fresh.clone());
-        (self.emit)(Event::Session(fresh));
+        // Back to before the first message: the next one begins a session.
+        self.start.session = fresh.clone();
+        (self.emit)(Event::Session(fresh.unwrap_or_default()));
         Ok(())
+    }
+
+    /// Claude Code has no record of the session it was asked to resume
+    /// (removed, or never written): once a turn, the conversation goes on in
+    /// a session of its own, the message sent again.
+    fn lost(&self, event: &Value) -> bool {
+        let said = event["result"]
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| event["errors"].to_string());
+        event["is_error"] == true
+            && !self.renewed
+            && self.sent.is_some()
+            && said.contains("No conversation found with session ID")
+    }
+
+    async fn renew(&mut self) -> io::Result<()> {
+        self.renewed = true;
+        self.close();
+        self.start.session = None;
+        (self.emit)(Event::Session(String::new()));
+        let Some(mut message) = self.sent.clone() else {
+            return Ok(());
+        };
+        // What was said before goes with the message, as text: the new
+        // session knows it from that (T3 Code's handoff).
+        let earlier = self
+            .start
+            .record
+            .as_deref()
+            .and_then(|record| super::earlier(record, 60_000));
+        self.item(json!({"type":"notification","message": if earlier.is_some() {
+            "Claude Code no longer has this conversation's record: it goes on in a new session, told what was said before."
+        } else {
+            "Claude Code no longer has this conversation's record: it goes on in a new session, without what was said before."
+        }}));
+        if let Some(earlier) = earlier {
+            let content = &mut message["message"]["content"];
+            if let Some(text) = content.as_str() {
+                *content = json!([{"type":"text","text":text}]);
+            }
+            if let Some(content) = content.as_array_mut() {
+                content.insert(0, json!({"type":"text","text":format!(
+                    "This conversation began in a session that is no longer there. What was said in it, for context (do not answer it; answer the message after it):\n\n<earlier_conversation>\n{earlier}\n</earlier_conversation>"
+                )}));
+            }
+        }
+        message["session_id"] = json!("");
+        self.open().await?;
+        self.send(message).await
     }
 
     /// Lets the process go; what it cost stays counted.
@@ -410,6 +467,7 @@ impl Claude {
         self.stopping = false;
         self.outcome = Outcome::Completed;
         self.retried = false;
+        self.renewed = false;
         (self.emit)(Event::Busy);
     }
 
@@ -483,6 +541,7 @@ impl Claude {
                 if uuid::Uuid::parse_str(&id).is_ok() {
                     message["uuid"] = json!(id);
                 }
+                self.sent = Some(message.clone());
                 self.send(message).await
             }
             Command::Interrupt => {
@@ -595,6 +654,7 @@ impl Claude {
             Some("stream_event") if own => self.streaming(&event["event"]),
             Some("assistant") => self.said(&event, within),
             Some("user") if event["isReplay"] != true => self.returned(&event),
+            Some("result") if self.lost(&event) => self.renew().await?,
             Some("result") => self.result(&event),
             Some("control_request") => {
                 let id = event["request_id"].as_str().unwrap_or_default().to_owned();

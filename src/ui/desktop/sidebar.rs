@@ -26,8 +26,7 @@ pub(crate) fn sidebar() -> View {
                     store::open_new_workspace(None)
                 }))
                 .child(nav_item(Icon::Search, t("Search"), || false, || store::open_modal(store::Modal::Palette)).child(hint("⌘K")))
-                .child(nav_item(Icon::CalendarClock, t("Automations"), || store::screen() == Screen::Schedules, store::open_schedules))
-                .child(more_menu()),
+                .child(nav_item(Icon::CalendarClock, t("Automations"), || store::screen() == Screen::Schedules, store::open_schedules)),
         )
         // The projects under a heading of their own, adding one beside it
         // (monocode's sidebar): "New workspace" above is the only other +.
@@ -45,7 +44,6 @@ pub(crate) fn sidebar() -> View {
                 }
             }))
         }))
-        .child(update_pill())
         .child(footer())
 }
 
@@ -194,43 +192,6 @@ fn nav_item(
         .child(text(label).text_size(tx(TEXT_BASE)).text_color(FG).flex_1())
 }
 
-/// Pull requests, History and Usage, and what automations are made of
-/// (Integrations, Plugins): less often wanted, behind "More" (the row
-/// shows which one is open, and a dot while a pull request is unseen).
-fn more_menu() -> impl IntoElement {
-    let active = computed(|| matches!(store::screen(), Screen::Inbox | Screen::PullRequest { .. } | Screen::History | Screen::Usage | Screen::Plugins | Screen::Extensions));
-    let width = (if window().width.0 < 600.0 { window().width.0 } else { store::sidebar_width() }) - 2.0 * S2;
-    dropdown_wide(
-        view()
-            .flex_row()
-            .items_center()
-            .gap(sp(S2))
-            .h(sp(CONTROL_MD))
-            .my(px(1.0))
-            .px(sp(S2))
-            .rounded(px(R_LG))
-            .bg(move || if active.get() { SIDEBAR_SELECTED } else { tint(SIDEBAR, 0.0) })
-            .hover(|s| s.bg(sidebar_hover()))
-            .child(icon(Icon::Ellipsis, 16.0).text_color(FG_MUTED))
-            .child(text(move || match store::screen() {
-                Screen::Inbox | Screen::PullRequest { .. } => t("Pull requests"),
-                Screen::History => t("History"),
-                Screen::Usage => t("Usage"),
-                Screen::Plugins => t("Integrations"),
-                Screen::Extensions => t("Plugins"),
-                _ => t("More"),
-            }).text_size(tx(TEXT_BASE)).text_color(FG).flex_1())
-            .child(when(|| store::desk_inbox_items().iter().any(store::inbox_unseen), || view().w(px(6.0)).h(px(6.0)).mr(px(4.0)).rounded(px(R_FULL)).bg(DOT_RUNNING))),
-        width,
-    )
-    .child(menu_row(t("Pull requests"), Some(Icon::GitPullRequest), None, false, store::open_inbox))
-    .child(menu_row(t("History"), Some(Icon::History), None, false, store::open_history))
-    .child(menu_row(t("Usage"), Some(Icon::Activity), None, false, store::open_usage))
-    .child(menu_divider())
-    .child(menu_row(t("Integrations"), Some(Icon::Workflow), None, false, store::open_plugins))
-    .child(menu_row(t("Plugins"), Some(Icon::Layers), None, false, store::open_extensions))
-}
-
 /// A row's shortcut, faint at its end.
 fn hint(keys: &'static str) -> impl IntoElement {
     text(keys).text_size(tx(TEXT_XS)).text_color(FG_FAINT).mr(px(2.0))
@@ -283,88 +244,120 @@ fn service_status() -> impl IntoElement {
     }))
 }
 
-/// The foot: Settings alone, as monocode's, with a quiet way to report
-/// an issue beside it.
+/// The foot, a row of icons (as T3 Code's): Settings, Usage, History and
+/// the rest behind "…" (pull requests, integrations, plugins, feedback);
+/// at its right end the way to a newer version, while there is one. Each
+/// shows which page is open, and pull requests a dot while one is unseen.
 fn footer() -> impl IntoElement {
+    let tool = |glyph: Icon, label: &'static str, tip: &'static str, on: fn() -> bool, open: fn()| {
+        view().tooltip(text(tip).text_size(tx(TEXT_XS)).px(sp(S2)).py(px(3.0)).rounded(px(R_MD)).bg(SURFACE0).border_1().border_color(BORDER).into_element()).child(
+            button()
+                .on_press(open)
+                .accessibility_label(label)
+                .w(px(30.0))
+                .h(px(30.0))
+                .rounded(px(R_LG))
+                .items_center()
+                .justify_center()
+                .bg(move || if on() { SIDEBAR_SELECTED } else { tint(SIDEBAR, 0.0) })
+                .hover(|s| s.bg(sidebar_hover()))
+                .active(|s| s.opacity(0.7))
+                .child(icon(glyph, 16.0).text_color(move || if on() { FG } else { FG_MUTED })),
+        )
+    };
+    let elsewhere = computed(|| matches!(store::screen(), Screen::Inbox | Screen::PullRequest { .. } | Screen::Plugins | Screen::Extensions));
+    let more = dropdown(
+        view()
+            .w(px(30.0))
+            .h(px(30.0))
+            .rounded(px(R_LG))
+            .items_center()
+            .justify_center()
+            .bg(move || if elsewhere.get() { SIDEBAR_SELECTED } else { tint(SIDEBAR, 0.0) })
+            .hover(|s| s.bg(sidebar_hover()))
+            .label(t("More"))
+            .child(icon(Icon::Ellipsis, 16.0).text_color(FG_MUTED))
+            .child(when(
+                || store::desk_inbox_items().iter().any(store::inbox_unseen),
+                || view().absolute().top(px(5.0)).right(px(5.0)).w(px(6.0)).h(px(6.0)).rounded(px(R_FULL)).bg(DOT_RUNNING),
+            )),
+    )
+    .placement(nsh_core::overlay::Placement::Top)
+    .align(nsh_core::overlay::Align::Start)
+    .child(menu_row(t("Pull requests"), Some(Icon::GitPullRequest), None, false, store::open_inbox))
+    .child(menu_divider())
+    .child(menu_row(t("Integrations"), Some(Icon::Workflow), None, false, store::open_plugins))
+    .child(menu_row(t("Plugins"), Some(Icon::Layers), None, false, store::open_extensions))
+    .child(menu_divider())
+    .child(menu_row(t("Feedback"), Some(Icon::MessageSquare), None, false, || store::open_modal(store::Modal::ReportIssue)));
     view()
         .flex_row()
         .items_center()
-        .gap(sp(S1))
-        .px(sp(S2))
+        .gap(px(2.0))
+        .mx(sp(S2))
+        .px(sp(S1))
         .py(sp(S2))
-        .child(view().flex_1().child(nav_item(Icon::Settings, t("Settings"), || store::screen() == Screen::Settings, store::open_settings).child(hint("⌘,"))))
-        .child(icon_btn(Icon::MessageSquare, Sz::Sm, t("Feedback"), || store::open_modal(store::Modal::ReportIssue)))
+        .border_t_1()
+        .border_color(tint(BORDER, 0.6))
+        .child(tool(Icon::Settings, t("Settings"), t("Settings  ⌘,"), || store::screen() == Screen::Settings, store::open_settings))
+        .child(tool(Icon::Activity, t("Usage"), t("Usage"), || store::screen() == Screen::Usage, store::open_usage))
+        .child(tool(Icon::History, t("History"), t("History"), || store::screen() == Screen::History, store::open_history))
+        .child(more)
+        .child(view().flex_1())
+        .child(update_button())
 }
 
-/// A newer version on offer, above the footer: press to download, install
-/// and restart.
-fn update_pill() -> impl IntoElement {
+/// The way to a newer version, at the foot's right end: a round arrow, in
+/// the accent with a dot while one is a press away (its words under the
+/// pointer: "Update to 0.2.45", "Downloading 40%"); quiet otherwise, where
+/// it opens the same dialog to check.
+fn update_button() -> impl IntoElement {
     use crate::update::{self, Phase};
     let st = computed(update::state);
-    // Offered once it is one restart away (fetched in the background), or
-    // when there is only a page to open, or to retry.
-    let shown = computed(move || {
+    let offered = computed(move || {
         st.with(|s| {
             s.version.is_some()
                 && match s.phase {
-                    Phase::Ready | Phase::Installing | Phase::Failed(_) => true,
+                    Phase::Ready | Phase::Installing | Phase::Downloading(_) | Phase::Failed(_) => true,
                     Phase::Available => !s.can_install,
                     _ => false,
                 }
         })
     });
-    when(shown, move || {
-        let label = move || {
-            st.with(|s| {
-                let v = s.version.clone().unwrap_or_default();
-                match &s.phase {
-                    Phase::Downloading(p) => crate::i18n::tf("Downloading {}%", &[&((p * 100.0).round() as u32).to_string()]),
-                    Phase::Installing => crate::i18n::t("Installing…").to_owned(),
-                    Phase::Failed(_) => crate::i18n::t("Update failed · Retry").to_owned(),
-                    _ if !s.can_install => crate::i18n::tf("Get {}", &[&v]),
-                    _ => crate::i18n::tf("Update to {}", &[&v]),
+    let label = move || -> String {
+        st.with(|s| {
+            let v = s.version.clone().unwrap_or_default();
+            match &s.phase {
+                _ if s.version.is_none() => crate::i18n::tf("Sophon {}", &[&s.current]),
+                Phase::Downloading(p) => crate::i18n::tf("Downloading {}%", &[&((p * 100.0).round() as u32).to_string()]),
+                Phase::Installing => crate::i18n::t("Installing…").to_owned(),
+                Phase::Failed(_) => crate::i18n::t("Update failed · Retry").to_owned(),
+                _ if !s.can_install => crate::i18n::tf("Get {}", &[&v]),
+                _ => crate::i18n::tf("Update to {}", &[&v]),
+            }
+        })
+    };
+    let busy = computed(move || st.with(|s| matches!(s.phase, Phase::Downloading(_) | Phase::Installing)));
+    view().tooltip(dynamic(move || {
+        let words = label();
+        Some(untracked(move || text(words).text_size(tx(TEXT_XS)).px(sp(S2)).py(px(3.0)).rounded(px(R_MD)).bg(SURFACE0).border_1().border_color(BORDER)))
+    }).into_element()).child(
+        button()
+            .on_press(move || {
+                if !busy.get_untracked() {
+                    store::open_modal(store::Modal::Update)
                 }
             })
-        };
-        let busy = computed(move || st.with(|s| matches!(s.phase, Phase::Downloading(_) | Phase::Installing)));
-        let share = computed(move || st.with(|s| match s.phase {
-            Phase::Downloading(p) => p,
-            Phase::Installing => 1.0,
-            _ => 0.0,
-        }));
-        view().px(sp(S2)).pb(sp(S2)).child(
-            button()
-                .on_press(move || {
-                    if !busy.get_untracked() {
-                        store::open_modal(store::Modal::Update)
-                    }
-                })
-                .accessibility_label(crate::i18n::t("Update the app"))
-                .flex_row()
-                .items_center()
-                .gap(sp(S2))
-                .h(px(36.0))
-                .px(sp(S3))
-                .rounded(px(R_LG))
-                .overflow_hidden()
-                .bg(tint(ACCENT, 0.12))
-                .border_1()
-                .border_color(tint(ACCENT, 0.22))
-                .hover(|s| s.bg(tint(ACCENT, 0.18)))
-                .transition_colors()
-                .child(
-                    // The download's progress, filling the pill.
-                    view()
-                        .absolute()
-                        .top(px(0.0))
-                        .bottom(px(0.0))
-                        .left(px(0.0))
-                        .w(move || Length::from(relative(share.get())))
-                        .bg(tint(ACCENT, 0.16)),
-                )
-                .child(icon(Icon::CircleArrowUp, 16.0).text_color(ACCENT))
-                .child(text(label).text_size(tx(TEXT_SM)).font_weight(FontWeight(600)).text_color(FG).flex_1().number_of_lines(1))
-                .child(text(move || format!("v{}", st.with(|s| s.current.clone()))).text_size(tx(TEXT_XS)).text_color(FG_MUTED)),
-        )
-    })
+            .accessibility_label(crate::i18n::t("Update the app"))
+            .w(px(30.0))
+            .h(px(30.0))
+            .rounded(px(R_LG))
+            .items_center()
+            .justify_center()
+            .bg(tint(SIDEBAR, 0.0))
+            .hover(|s| s.bg(sidebar_hover()))
+            .active(|s| s.opacity(0.7))
+            .child(icon(Icon::CircleArrowUp, 16.0).text_color(move || if offered.get() { ACCENT } else { FG_MUTED }))
+            .child(when(move || offered.get() && !busy.get(), || view().absolute().top(px(5.0)).right(px(5.0)).w(px(6.0)).h(px(6.0)).rounded(px(R_FULL)).bg(DANGER))),
+    )
 }

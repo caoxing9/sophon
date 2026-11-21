@@ -77,6 +77,9 @@ pub(crate) fn timeline() -> impl IntoElement {
                 .element_ref(&list)
                 .keys(move || rows.with(|r| store::row_keys(r)))
                 .estimated_item_size(px(80.0))
+                // The turns' rail down the left is the desktop's map of the
+                // conversation: no scroll bar beside it.
+                .scrollbar(MOBILE)
                 .initial_scroll_index(count.saturating_sub(1))
                 .follow_end(px(FOLLOW_END))
                 // How far from its end the list is, for what depends on
@@ -202,8 +205,9 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
     let streaming = computed(move || running.get() && last.get());
     let text_of = move || {
         item.with(|i| match i {
-            Some(Item::User { text, .. } | Item::Assistant { text } | Item::Reasoning { text }) => text.clone(),
-            Some(Item::Error { message } | Item::Notice { message }) => message.clone(),
+            Some(Item::User { text, .. } | Item::Assistant { text, .. } | Item::Reasoning { text }) => text.clone(),
+            Some(Item::Error { message }) => message.clone(),
+            Some(Item::Notice { message }) => crate::i18n::tr(message),
             Some(retry @ Item::Retry { .. }) => retry_words(retry, streaming.get()),
             _ => String::new(),
         })
@@ -355,25 +359,10 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                                 column.into_element()
                             }))
                         })))
-                        .child(
-                            view()
-                                .absolute()
-                                .top(px(-6.0))
-                                .right(px(0.0))
-                                .rounded(px(R_MD))
-                                .bg(SURFACE0)
-                                .opacity(move || if !streaming.get() && hover.get() { 1.0_f32 } else { 0.0 })
-                                .transition_opacity()
-                                .pointer_events(move || if !streaming.get() && hover.get() { nsh_core::PointerEvents::Auto } else { nsh_core::PointerEvents::None })
-                                .flex_row()
-                                .child(icon_btn(Icon::TextQuote, Sz::Sm, t("Attach as context"), move || {
-                                    crate::ui::shared::composer::attach_as_context(&text_of())
-                                }))
-                                .child(icon_btn(Icon::Copy, Sz::Sm, t("Copy"), move || {
-                                    set_clipboard(text_of());
-                                    store::notify(t("Copied").into());
-                                })),
-                        )
+                        // Under the reply (as T3 Code's): copy it, fork the
+                        // conversation, quote it in the next message, and when
+                        // it was written; there under the pointer once written.
+                        .child(reply_actions(item, text_of, computed(move || !streaming.get() && hover.get())))
                         .into_element()
                 }
                 // The agent's thinking, folded to one line ("Thinking"):
@@ -902,53 +891,142 @@ fn reply_sheet(body: String, index: Option<usize>) {
 }
 
 /// Rewind from a user message (the message menu).
+/// The row under a written reply: copy, fork, quote, and its time, each
+/// named under the pointer.
+fn reply_actions(item: Memo<Option<Item>>, text_of: impl Fn() -> String + Copy + 'static, shown: Memo<bool>) -> impl IntoElement {
+    let at = computed(move || match item.get() {
+        Some(Item::Assistant { at, .. }) => at.as_deref().and_then(sent_at),
+        _ => None,
+    });
+    let tip = |label: &'static str| text(label).text_size(tx(TEXT_XS)).px(sp(S2)).py(px(3.0)).rounded(px(R_MD)).bg(SURFACE0).border_1().border_color(BORDER).into_element();
+    let action = move |glyph: Icon, label: &'static str, press: Box<dyn Fn()>| {
+        view().tooltip(tip(label)).child(
+            nsh_base::button()
+                .on_press(move || press())
+                .accessibility_label(label)
+                .w(px(26.0))
+                .h(px(26.0))
+                .rounded(px(R_MD))
+                .items_center()
+                .justify_center()
+                .hover(|s| s.bg(highlight()))
+                .child(icon(glyph, 14.0).text_color(FG_MUTED)),
+        )
+    };
+    view()
+        .flex_row()
+        .items_center()
+        .gap(px(2.0))
+        .h(px(28.0))
+        .mt(px(2.0))
+        .ml(px(-6.0))
+        .opacity(move || if shown.get() { 1.0_f32 } else { 0.0 })
+        .transition_opacity()
+        .pointer_events(move || if shown.get() { nsh_core::PointerEvents::Auto } else { nsh_core::PointerEvents::None })
+        .child(action(
+            Icon::Copy,
+            t("Copy message"),
+            Box::new(move || {
+                set_clipboard(text_of());
+                store::notify(t("Copied").into());
+            }),
+        ))
+        .child(action(Icon::GitBranch, t("Fork conversation"), Box::new(store::fork_selected)))
+        .child(action(Icon::TextQuote, t("Quote in a message"), Box::new(move || crate::ui::shared::composer::attach_as_context(&text_of()))))
+        .child(text(move || at.get().unwrap_or_default()).text_size(tx(TEXT_XS)).text_color(FG_FAINT).ml(sp(S1)))
+}
+
+/// When a message was sent, short: its time today ("8:38"), else its day
+/// too ("11/20 8:38"), else its date.
+fn sent_at(at: &str) -> Option<String> {
+    let utc = crate::usage::parse::rfc3339(at)?;
+    let local = utc + crate::usage::local_offset(utc);
+    let now = crate::usage::now();
+    let today = (now + crate::usage::local_offset(now)).div_euclid(86_400);
+    let day = local.div_euclid(86_400);
+    let (h, m) = (local.rem_euclid(86_400) / 3600, local.rem_euclid(3600) / 60);
+    let (year, month, date) = crate::usage::civil(day);
+    let (this_year, _, _) = crate::usage::civil(today);
+    Some(if day == today {
+        format!("{h}:{m:02}")
+    } else if year == this_year {
+        format!("{month}/{date} {h}:{m:02}")
+    } else {
+        format!("{year}/{month}/{date}")
+    })
+}
+
 fn user_actions(item: Memo<Option<Item>>) -> View {
     let id = computed(move || match item.get() {
         Some(Item::User { message_id: Some(id), .. }) => Some(id),
         _ => None,
     });
-    // The desktop: Copy, always, and the rewinds when the host knows the
-    // message. The phone copies from the bubble's own sheet.
+    // The desktop, under the bubble (as T3 Code's): when it was sent, then
+    // edit it (the conversation goes back to before it, its words in the
+    // composer), copy it, and the other rewinds, each named under the
+    // pointer. The phone copies from the bubble's own sheet.
     if !MOBILE {
         let body = computed(move || match item.get() {
-            Some(Item::User { text, .. }) => Some(message_words(&text)),
+            Some(Item::User { text, images, at, .. }) => Some((message_words(&text), images, at)),
             _ => None,
         });
-        // In the room kept under the bubble, as tall as its discs.
-        return view().h(px(22.0)).child(dynamic(move || {
-            let body = body.get()?;
+        return view().h(px(28.0)).child(dynamic(move || {
+            let (words, pictures, at) = body.get()?;
             let id = id.get();
             Some(untracked(move || {
-                let disc = |glyph: Icon, label: &'static str| {
-                    view()
-                        .w(px(22.0))
-                        .h(px(22.0))
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(R_FULL))
-                        .bg(SURFACE0)
-                        .border_1()
-                        .border_color(BORDER)
-                        .label(label)
-                        .child(icon(glyph, 12.0).text_color(FG_MUTED))
+                let tip = |label: &'static str| {
+                    text(label).text_size(tx(TEXT_XS)).px(sp(S2)).py(px(3.0)).rounded(px(R_MD)).bg(SURFACE0).border_1().border_color(BORDER).into_element()
                 };
-                let mut row = view().flex_row().gap(px(4.0)).child(
-                    nsh_base::button()
-                        .on_press(move || {
-                            set_clipboard(body.clone());
-                            store::notify(t("Copied").into());
-                        })
-                        .child(disc(Icon::Copy, t("Copy"))),
-                );
+                let action = |glyph: Icon, label: &'static str, press: Box<dyn Fn()>| {
+                    view().tooltip(tip(label)).child(
+                        nsh_base::button()
+                            .on_press(move || press())
+                            .accessibility_label(label)
+                            .w(px(26.0))
+                            .h(px(26.0))
+                            .rounded(px(R_MD))
+                            .items_center()
+                            .justify_center()
+                            .hover(|s| s.bg(highlight()))
+                            .child(icon(glyph, 14.0).text_color(FG_MUTED)),
+                    )
+                };
+                let mut row = view().flex_row().items_center().gap(px(2.0));
+                if let Some(at) = at.as_deref().and_then(sent_at) {
+                    row = row.child(text(at).text_size(tx(TEXT_XS)).text_color(FG_FAINT).mr(sp(S1)));
+                }
+                if let Some(id) = id.clone() {
+                    let (again, said) = (id.clone(), words.clone());
+                    row = row.child(action(Icon::Pencil, t("Edit message"), Box::new(move || store::edit_sent(&again, &said, &pictures))));
+                }
+                let copied = words.clone();
+                row = row.child(action(
+                    Icon::Copy,
+                    t("Copy message"),
+                    Box::new(move || {
+                        set_clipboard(copied.clone());
+                        store::notify(t("Copied").into());
+                    }),
+                ));
                 if let Some(id) = id {
                     let (a, b, c) = (id.clone(), id.clone(), id);
                     row = row.child(
-                        dropdown(disc(Icon::Ellipsis, t("Message actions")))
-                            .align(nsh_core::overlay::Align::End)
-                            .child(menu_heading(t("Rewind to here")))
-                            .child(menu_row(t("Conversation only"), Some(Icon::Undo2), None, false, move || store::rewind(&a, "conversation")))
-                            .child(menu_row(t("Files only"), Some(Icon::FileText), None, false, move || store::rewind(&b, "files")))
-                            .child(menu_row(t("Conversation and files"), Some(Icon::RotateCw), None, false, move || store::rewind(&c, "both"))),
+                        dropdown(
+                            view()
+                                .w(px(26.0))
+                                .h(px(26.0))
+                                .rounded(px(R_MD))
+                                .items_center()
+                                .justify_center()
+                                .hover(|s| s.bg(highlight()))
+                                .label(t("Message actions"))
+                                .child(icon(Icon::Ellipsis, 14.0).text_color(FG_MUTED)),
+                        )
+                        .align(nsh_core::overlay::Align::End)
+                        .child(menu_heading(t("Rewind to here")))
+                        .child(menu_row(t("Conversation only"), Some(Icon::Undo2), None, false, move || store::rewind(&a, "conversation")))
+                        .child(menu_row(t("Files only"), Some(Icon::FileText), None, false, move || store::rewind(&b, "files")))
+                        .child(menu_row(t("Conversation and files"), Some(Icon::RotateCw), None, false, move || store::rewind(&c, "both"))),
                     );
                 }
                 row.into_element()
@@ -1645,7 +1723,7 @@ pub(crate) fn subagent_pane(parent: String, id: String) -> impl IntoElement {
 fn static_row(item: Item) -> AnyElement {
     match item {
         Item::User { text: t, .. } => {
-            let item = computed(move || Some(Item::User { text: t.clone(), message_id: None, images: vec![] }));
+            let item = computed(move || Some(Item::User { text: t.clone(), message_id: None, images: vec![], at: None }));
             view()
                 .self_end()
                 .max_w(relative(0.82))
@@ -1656,7 +1734,7 @@ fn static_row(item: Item) -> AnyElement {
                 .child(user_text(item, true))
                 .into_element()
         }
-        Item::Assistant { text: t } => copy_area(text_view()
+        Item::Assistant { text: t, .. } => copy_area(text_view()
             // A link opens in the browser (or the app it belongs to).
             .links(nsh_base::TextViewLinks::Open)
                     // A copy button on each code block (under the pointer on the
@@ -1853,7 +1931,7 @@ fn thinking(running: Memo<bool>) -> impl IntoElement {
         for i in (0..count).rev() {
             match store::item_at(i) {
                 Some(Item::User { .. }) | None => break,
-                Some(Item::Assistant { text } | Item::Reasoning { text }) => tokens += tokens_in(&text),
+                Some(Item::Assistant { text, .. } | Item::Reasoning { text }) => tokens += tokens_in(&text),
                 Some(Item::Tool { summary, detail, .. }) => tokens += tokens_in(&summary) + tokens_in(&detail.to_string()) / 4,
                 Some(_) => {}
             }

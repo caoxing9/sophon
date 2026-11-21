@@ -313,12 +313,7 @@ fn context_bar() -> impl IntoElement {
             (add + del > 0).then(|| {
                 untracked(move || {
                     nsh_base::button()
-                        .on_press(|| {
-                            if !store::explorer_open() {
-                                store::toggle_explorer();
-                            }
-                            store::set_explorer_tab(store::ExplorerTab::Changes);
-                        })
+                        .on_press(|| store::open_modal(store::Modal::ChangedFiles))
                         .accessibility_label(t("Show changes"))
                         .flex_row()
                         .items_center()
