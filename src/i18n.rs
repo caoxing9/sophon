@@ -198,7 +198,6 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("This week left", "本周剩余"),
     ("Open usage", "打开用量"),
     ("Settings  ⌘,", "设置  ⌘,"),
-    ("{} sub-agents", "{} 个子智能体"),
     ("Artifacts", "产物"),
     ("This project", "本项目"),
     ("Nothing made yet", "还没有产物"),
