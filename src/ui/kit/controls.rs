@@ -378,39 +378,16 @@ pub(crate) fn glass_strong(v: View) -> View {
         .shadow_xl()
 }
 
-/// The ambient light behind the glass: soft warm glows on the base surface.
+/// The base behind the glass: the plain page surface, a solid color with
+/// no glows, so a chosen background reads as chosen.
 pub(crate) fn ambient() -> View {
-    let glow = |color: AdaptiveColor, top: Option<f32>, left: Option<f32>, size: f32| {
-        let mut v = view()
-            .absolute()
-            .w(px(size))
-            .h(px(size))
-            .rounded(px(R_FULL))
-            .bg_radial()
-            .gradient_from(color)
-            .gradient_to(tint(color, 0.0))
-            // Transparent by the inscribed circle, so no edge shows.
-            .gradient_to_position(nsh_core::geometry::Percentage(0.68));
-        v = match top {
-            Some(t) => v.top(px(t)),
-            None => v.bottom(px(-size * 0.35)),
-        };
-        match left {
-            Some(l) => v.left(px(l)),
-            None => v.right(px(-size * 0.3)),
-        }
-    };
     view()
         .absolute()
         .top(px(0.0))
         .left(px(0.0))
         .right(px(0.0))
         .bottom(px(0.0))
-        .overflow_hidden()
         .bg(SURFACE0())
-        .child(glow(tint(ACCENT(), 0.16), Some(-220.0), None, 760.0))
-        .child(glow(tint(DOT_WARNING, 0.12), None, Some(-200.0), 700.0))
-        .child(glow(tint(ACCENT(), 0.07), Some(260.0), Some(420.0), 520.0))
 }
 
 /// Loading: an eclipse passing, drawn rather than the icon's layers (no
