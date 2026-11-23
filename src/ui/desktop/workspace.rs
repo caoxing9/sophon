@@ -180,7 +180,9 @@ fn tab_strip() -> impl IntoElement {
                 let back = parent.clone();
                 tab_shell(true, || {})
                     .child(icon(Icon::Bot, 14.0).text_color(FG_MUTED))
-                    .child(text(title).text_size(tx(TEXT_SM)).text_color(FG).number_of_lines(1))
+                    // A long title ends in an ellipsis inside the tab, its
+                    // close button kept in it.
+                    .child(text(title).text_size(tx(TEXT_SM)).text_color(FG).number_of_lines(1).flex_shrink(1.0).min_w(px(0.0)))
                     .child(close_button(t("Close sub-agent"), move || store::open_tab(Tab::Agent(back.clone()))))
             }))
         }))
@@ -190,7 +192,7 @@ fn tab_strip() -> impl IntoElement {
                 let label = path.as_deref().map(|p| p.rsplit('/').next().unwrap_or(p).to_owned()).unwrap_or_else(|| t("All changes").into());
                 tab_shell(true, || {})
                     .child(icon(Icon::FileDiff, 14.0).text_color(FG_MUTED))
-                    .child(text(label).text_size(tx(TEXT_SM)).text_color(FG).number_of_lines(1))
+                    .child(text(label).text_size(tx(TEXT_SM)).text_color(FG).number_of_lines(1).flex_shrink(1.0).min_w(px(0.0)))
                     .child(
                         button()
                             .on_press(|| {
