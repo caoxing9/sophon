@@ -128,6 +128,10 @@ fn open(path: &str, reveal: bool) {
     }
 }
 
+/// A chip's height: under the line's (24), so a line with one is no
+/// taller than one without.
+const CHIP_H: f32 = 20.0;
+
 /// A file's custom node drawn: a chip a line high, its kind and name.
 /// Another custom node: its text.
 pub(crate) fn chip(node: &nsh_base::text_view::CustomNode) -> AnyElement {
@@ -173,8 +177,13 @@ pub(crate) fn chip(node: &nsh_base::text_view::CustomNode) -> AnyElement {
         .border_1()
         .border_color(BORDER())
         .into_element();
+    // An inline element sits on the baseline: moved down (drawing only)
+    // so its middle meets the middle of the line's letters, ~0.36 em up
+    // (CJK and capitals alike), as nsh centres inline images.
+    let em = TEXT_CONTENT * crate::store::ui_scale().0;
     view()
         .tooltip(tip)
+        .translate_y(px(CHIP_H / 2.0 - 0.36 * em))
         .child(
             view()
                 .on_press(move |e: &nsh_core::element::PressEvent| open(&path, e.modifiers.cmd))
@@ -182,9 +191,7 @@ pub(crate) fn chip(node: &nsh_base::text_view::CustomNode) -> AnyElement {
                 .flex_row()
                 .items_center()
                 .gap(px(5.0))
-                // Under the line's height (24), so a line with a chip is
-                // no taller than one without.
-                .h(px(20.0))
+                .h(px(CHIP_H))
                 .pl(px(3.0))
                 .pr(px(6.0))
                 .mx(px(2.0))

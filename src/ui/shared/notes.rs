@@ -158,7 +158,8 @@ pub(crate) fn selection_layer(chosen: Signal<Chosen>, open: Signal<Chosen>) -> i
                     .border_1()
                     .border_color(BORDER())
                     .shadow_md()
-                    .hover(|s| s.bg(highlight()))
+                    // Solid, so the chosen words under it don't show through.
+                    .hover(|s| s.bg(SURFACE3()).border_color(BORDER_STRONG()))
                     .child(icon(Icon::MessageSquare, 13.0).text_color(FG()))
                     .child(text(t("Note")).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG()))
                     .into_element()
