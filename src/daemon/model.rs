@@ -297,6 +297,9 @@ pub struct Agent {
     pub pinned: bool,
     /// When the user last sent it a message.
     pub last_user_message_at: String,
+    /// What the user will likely say next (Claude Code's guess once a turn
+    /// is over): offered in the empty composer, Tab takes it.
+    pub prompt_suggestion: Option<String>,
 }
 
 impl Agent {
@@ -342,6 +345,7 @@ impl Agent {
             named: v.pointer("/labels/sophon.named").and_then(Value::as_str) == Some("1"),
             pinned: v.pointer("/labels/sophon.pinned").and_then(Value::as_str) == Some("1"),
             last_user_message_at: str_of(v, "lastUserMessageAt").unwrap_or_default(),
+            prompt_suggestion: str_of(v, "promptSuggestion").filter(|s| !s.trim().is_empty()),
             updated_at: str_of(v, "updatedAt").unwrap_or_default(),
             session_id: v.pointer("/persistence/sessionId").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned),
             pending: v

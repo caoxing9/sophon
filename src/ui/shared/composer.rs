@@ -55,6 +55,20 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         Target::Form => Some("form".to_owned()),
     });
     let doc = Doc { key, rev: signal(0_u64) };
+    // What the agent guesses comes next (Claude Code's prompt suggestion),
+    // while it is not working: the empty composer offers it, Tab takes it.
+    let suggestion = computed(move || {
+        if !live {
+            return None;
+        }
+        store::selected_agent().filter(|a| !a.is_running()).and_then(|a| a.prompt_suggestion)
+    });
+    effect(move || {
+        let offered = suggestion.get();
+        if let Some(key) = key.get() {
+            composer_doc::set_suggestion(&key, offered);
+        }
+    });
     // The draft as text: the agent's kept draft, or the form's prompt. The
     // editor writes it on every change; a change from elsewhere (the form
     // cleared once its agent starts) replaces the editor's text.
@@ -170,7 +184,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                     // lands in it, not on the bar.
                     .child(
                         view()
-                            .child(editor(doc, text_value, placeholder, TEXT_LG, 160.0, changed).px(sp(S1)).min_h(px(34.0)))
+                            .child(editor(doc, text_value, placeholder, suggestion, TEXT_LG, 160.0, changed).px(sp(S1)).min_h(px(34.0)))
                             .child(hold_to_talk(doc, empty)),
                     )
                     .child(
@@ -297,7 +311,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                 .hover(|s| s.bg(highlight()))
                 .child(icon(Icon::Plus, 18.0).text_color(FG_MUTED())),
         )
-        .child(view().flex_1().min_w(px(0.0)).min_h(sp(CONTROL_SM)).justify_center().child(editor(doc, text_value, placeholder, TEXT_CONTENT, 220.0, changed).mx(sp(S1))))
+        .child(view().flex_1().min_w(px(0.0)).min_h(sp(CONTROL_SM)).justify_center().child(editor(doc, text_value, placeholder, suggestion, TEXT_CONTENT, 220.0, changed).mx(sp(S1))))
         .child(view().flex_shrink_0().child(mic_button(doc)))
         .child(when(stoppable, || {
             button()
@@ -338,6 +352,7 @@ fn editor(
     doc: Doc,
     text_value: Memo<String>,
     placeholder: &'static str,
+    suggestion: Memo<Option<String>>,
     size: f32,
     max_height: f32,
     changed: impl Fn() + Copy + 'static,
@@ -371,7 +386,7 @@ fn editor(
         let classes = classes.clone();
         Some(untracked(move || {
             let session = composer_doc::session(&key, || text_value.get_untracked());
-            let mut el = rich_editor()
+            let el = rich_editor()
                 .editor(session)
                 .styles(styles)
                 .classes(classes.clone())
@@ -385,14 +400,41 @@ fn editor(
                 .w_full()
                 .flex_row()
                 .min_h(px(22.0))
-                .max_h(px(max_height));
-            if !placeholder.is_empty() {
-                el = el.placeholder(SharedString::from(placeholder));
-            }
-            el
+                .max_h(px(max_height))
+                // Clear of the guess's Tab key at the end of the line.
+                .pr(move || Length::from(px(if suggestion.with(Option::is_some) { 44.0 } else { 0.0 })));
+            // The agent's guess at the next message stands where the
+            // placeholder does.
+            el.placeholder(move || SharedString::from(suggestion.get().unwrap_or_else(|| placeholder.to_owned())))
         }))
     }))
+    // The guess's key at the end of the line while it shows: pressed (the
+    // phone has no Tab), it is taken as Tab takes it.
+    .child(when(
+        move || suggestion.with(Option::is_some) && text_value.with(|t| t.trim().is_empty()),
+        move || {
+            nsh_base::button()
+                .on_press(move || {
+                    if let Some(key) = key.get_untracked() {
+                        composer_doc::take_suggestion(&key);
+                    }
+                })
+                .accessibility_label(t("Use the suggestion"))
+                .absolute()
+                .top(px(0.0))
+                .right(px(0.0))
+                .h(px(22.0))
+                .px(px(6.0))
+                .rounded(px(R_SM))
+                .items_center()
+                .justify_center()
+                .bg(tint(FG(), 0.06))
+                .hover(|s| s.bg(tint(FG(), 0.1)))
+                .child(text(if MOBILE { t("Use") } else { "Tab" }).text_size(tx(TEXT_XS)).font_weight(FontWeight(500)).text_color(FG_MUTED()))
+        },
+    ))
 }
+
 /// The agent's settings in a line: model · thinking · mode.
 fn settings_summary(live: bool) -> String {
     let c = store::controls(live);

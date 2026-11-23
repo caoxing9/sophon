@@ -459,7 +459,10 @@ impl Claude {
         )?);
         self.states = false;
         self.introduced = Some(format!("sophon-{}", self.requests + 1));
-        self.control(json!({"subtype":"initialize"})).await
+        // Its guess at the next message, once a turn is over (an option a
+        // CLI without it ignores).
+        self.control(json!({"subtype":"initialize","promptSuggestions":true}))
+            .await
     }
 
     fn begin(&mut self) {
@@ -654,6 +657,15 @@ impl Claude {
             Some("stream_event") if own => self.streaming(&event["event"]),
             Some("assistant") => self.said(&event, within),
             Some("user") if event["isReplay"] != true => self.returned(&event),
+            Some("prompt_suggestion") if own => {
+                if let Some(text) = event["suggestion"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                {
+                    (self.emit)(Event::Suggestion(text.to_owned()));
+                }
+            }
             Some("result") if self.lost(&event) => self.renew().await?,
             Some("result") => self.result(&event),
             Some("control_request") => {

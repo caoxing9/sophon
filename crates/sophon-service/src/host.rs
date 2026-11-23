@@ -546,7 +546,16 @@ impl Host {
                 }
                 return;
             }
+            Event::Suggestion(text) => {
+                // Only while nothing runs: a turn begun since has its own.
+                if record["status"] == "running" {
+                    return;
+                }
+                record["promptSuggestion"] = json!(text);
+                return self.update_agent(agent);
+            }
             Event::Busy => {
+                record["promptSuggestion"] = Value::Null;
                 if record["status"] == "running" {
                     return;
                 }

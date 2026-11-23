@@ -361,7 +361,34 @@ fn menu_key(key: &str) -> bool {
     true
 }
 
+/// What the agent guesses its user will say next, offered in composer
+/// `key` while it is empty: Tab takes it (as Claude Code's own does).
+pub(crate) fn set_suggestion(key: &str, text: Option<String>) {
+    SUGGESTIONS.with_borrow_mut(|s| match text {
+        Some(text) => {
+            s.insert(key.to_owned(), text);
+        }
+        None => {
+            s.remove(key);
+        }
+    });
+}
+
+/// Puts composer `key`'s suggestion in it, if it is empty and has one:
+/// `true` if it did.
+pub(crate) fn take_suggestion(key: &str) -> bool {
+    let Some(session) = existing(key) else { return false };
+    if !outgoing(session.state().doc()).is_empty() {
+        return false;
+    }
+    let Some(text) = SUGGESTIONS.with_borrow(|s| s.get(key).cloned()) else { return false };
+    set_text(&session, &text);
+    session.focus();
+    true
+}
+
 thread_local! {
+    static SUGGESTIONS: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
     static MENU: RefCell<Option<Menu>> = const { RefCell::new(None) };
     /// The app's shortcuts (`nsh/keymap` syntax) for the editor to run
     /// ([`set_app_keys`]).
@@ -436,9 +463,32 @@ fn new_session(key: &str, text: &str) -> EditorSession {
         bindings.push(("Ctrl-k".into(), command(kill_line)));
     }
     // The suggestions' keys, while they show; the editor's own otherwise.
-    for (name, what) in [("ArrowDown", "down"), ("ArrowUp", "up"), ("Tab", "pick")] {
+    for (name, what) in [("ArrowDown", "down"), ("ArrowUp", "up")] {
         bindings.push((name.into(), command(move |_, dispatch| dispatch.is_some() && menu_key(what))));
     }
+    // Tab picks from the suggestions; in an empty composer it takes the
+    // agent's guess at the next message.
+    let here = key.to_owned();
+    bindings.push((
+        "Tab".into(),
+        command(move |state, dispatch| {
+            if dispatch.is_none() {
+                return false;
+            }
+            if menu_key("pick") {
+                return true;
+            }
+            let offered = outgoing(state.doc()).is_empty() && SUGGESTIONS.with_borrow(|s| s.contains_key(&here));
+            if offered {
+                // After the key, as the send is.
+                let key = here.clone();
+                set_timeout(Duration::ZERO, move || {
+                    take_suggestion(&key);
+                });
+            }
+            offered
+        }),
+    ));
     if !MOBILE {
         // Enter sends, Shift+Enter breaks the line (bound above). The
         // keymap runs inside the editor's key handling, so the send waits
