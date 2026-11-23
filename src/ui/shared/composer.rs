@@ -586,6 +586,9 @@ fn trigger_at(session: &EditorSession) -> Option<(Trigger, usize)> {
     Some((trigger_of(&before)?, head))
 }
 
+/// The rows the slash-command or file list shows before it scrolls.
+const MENU_ROWS: usize = 8;
+
 /// The slash-command or file list over the composer.
 fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
     let trigger = computed(move || doc.tracked().and_then(|s| trigger_at(&s)).map(|(t, _)| t));
@@ -609,7 +612,6 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
                 store::commands(&agent)
                     .into_iter()
                     .filter(|c| c.name.to_lowercase().starts_with(&prefix.to_lowercase()) && !crate::slash::hidden(&c.name))
-                    .take(8)
                     .map(|c| {
                         let insert = format!("/{} ", c.name);
                         // Where it opens, when Sophon does it.
@@ -688,7 +690,22 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
         composer_doc::set_menu(Some(composer_doc::Menu { count: rows.len(), pick: choose.clone() }));
         Some(untracked(move || {
             let selected = computed(|| global::<composer_doc::MenuSelected>().with(|s| s.0));
-            let mut list = card().mb(sp(S2)).p(sp(S1)).bg(POPOVER()).shadow_md();
+            // Eight rows show at a time; the rest scroll, and the keyboard's
+            // row is scrolled into the window when it leaves it.
+            let row_h = (CONTROL_MD * crate::store::ui_scale().1).round();
+            let scroller = element_ref();
+            let first = signal(0usize);
+            effect({
+                let scroller = scroller.clone();
+                move || {
+                    let sel = selected.get();
+                    let top = first.get_untracked();
+                    let top = if sel < top { sel } else if sel >= top + MENU_ROWS { sel + 1 - MENU_ROWS } else { return };
+                    first.set(top);
+                    scroller.scroll_to(nsh_core::geometry::point(px(0.0), px(top as f32 * row_h)), false);
+                }
+            });
+            let mut list = view().flex_col();
             for (i, (glyph, label, detail, _, _, code)) in rows.clone().into_iter().enumerate() {
                 let choose = choose.clone();
                 list = list.child(
@@ -713,7 +730,12 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
                         .child(text(detail).text_size(tx(TEXT_SM)).text_color(FG_MUTED()).number_of_lines(1).flex_shrink_0().when(!code, |t| t.ml(sp(S2))).when(code, |t| t.flex_1())),
                 );
             }
-            list
+            card()
+                .mb(sp(S2))
+                .p(sp(S1))
+                .bg(POPOVER())
+                .shadow_md()
+                .child(scroll().max_h(px(row_h * MENU_ROWS as f32)).element_ref(&scroller).child(list))
         }))
     }))
 }
