@@ -166,6 +166,9 @@ pub(crate) struct Summary {
     pub(crate) read: usize,
     pub(crate) searches: usize,
     pub(crate) fetches: usize,
+    pub(crate) agents: usize,
+    /// Plans and to-do lists written.
+    pub(crate) plans: usize,
     pub(crate) other: usize,
     pub(crate) running: usize,
     pub(crate) failed: usize,
@@ -175,7 +178,7 @@ pub(crate) fn summarize(run: &[Item]) -> Summary {
     let mut s = Summary::default();
     let (mut edited, mut read) = (HashSet::new(), HashSet::new());
     for (n, item) in run.iter().enumerate() {
-        let Item::Tool { kind, status, summary, error, .. } = item else { continue };
+        let Item::Tool { kind, name, status, summary, error, .. } = item else { continue };
         // A call without a path is a file of its own.
         let file = if summary.is_empty() { format!("#{n}") } else { summary.clone() };
         match kind.as_str() {
@@ -188,6 +191,9 @@ pub(crate) fn summarize(run: &[Item]) -> Summary {
             }
             "search" => s.searches += 1,
             "fetch" => s.fetches += 1,
+            "sub_agent" => s.agents += 1,
+            "plan" => s.plans += 1,
+            _ if name.to_lowercase().contains("todo") => s.plans += 1,
             _ => s.other += 1,
         }
         match status.as_str() {
@@ -214,6 +220,8 @@ impl Summary {
             ("read 1 file", "read {} files", self.read),
             ("ran 1 search", "ran {} searches", self.searches),
             ("fetched 1 page", "fetched {} pages", self.fetches),
+            ("ran 1 agent", "ran {} agents", self.agents),
+            ("updated the plan", "updated the plan {} times", self.plans),
             ("1 other action", "{} other actions", self.other),
         ]
         .into_iter()
@@ -230,6 +238,24 @@ impl Summary {
             .collect::<Vec<_>>()
             .join(t(", "));
         capitalize(&text)
+    }
+
+    /// The kinds of call made and how many of each, in the order the
+    /// summary names them: a folded row shows them as icons.
+    pub(crate) fn counts(&self) -> Vec<(&'static str, usize)> {
+        [
+            ("shell", self.commands),
+            ("edit", self.edited),
+            ("read", self.read),
+            ("search", self.searches),
+            ("fetch", self.fetches),
+            ("sub_agent", self.agents),
+            ("plan", self.plans),
+            ("other", self.other),
+        ]
+        .into_iter()
+        .filter(|(_, n)| *n > 0)
+        .collect()
     }
 
     /// "1 failed", or nothing.
@@ -410,9 +436,11 @@ mod tests {
             tool("6", "read", "completed", "a.rs"),
             tool("7", "search", "completed", "fn"),
             tool("8", "sub_agent", "completed", ""),
+            tool("9", "plan", "completed", ""),
+            tool("10", "mcp", "completed", ""),
         ];
         let s = summarize(&run);
-        assert_eq!((s.commands, s.edited, s.read, s.searches, s.fetches, s.other), (2, 2, 1, 1, 0, 1));
+        assert_eq!((s.commands, s.edited, s.read, s.searches, s.fetches, s.agents, s.plans, s.other), (2, 2, 1, 1, 0, 1, 1, 1));
         assert_eq!(
             s.phrases(),
             vec![
@@ -420,6 +448,8 @@ mod tests {
                 ("edited 1 file", "edited {} files", 2),
                 ("read 1 file", "read {} files", 1),
                 ("ran 1 search", "ran {} searches", 1),
+                ("ran 1 agent", "ran {} agents", 1),
+                ("updated the plan", "updated the plan {} times", 1),
                 ("1 other action", "{} other actions", 1),
             ]
         );
