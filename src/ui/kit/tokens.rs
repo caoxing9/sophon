@@ -329,7 +329,11 @@ pub(crate) const MOBILE: bool = cfg!(any(target_os = "ios", target_os = "android
 pub(crate) const CONTROL_MD: f32 = if MOBILE { 44.0 } else { 32.0 };
 pub(crate) const CONTROL_SM: f32 = if MOBILE { 32.0 } else { 28.0 };
 
-pub(crate) const CONTENT_MAX_WIDTH: f32 = 820.0;
+/// The conversation column's widest, as the width setting says.
+#[allow(non_snake_case)]
+pub(crate) fn CONTENT_MAX_WIDTH() -> f32 {
+    crate::store::content_width().points()
+}
 pub(crate) const SIDEBAR_WIDTH: f32 = 272.0;
 
 /// The code font, unless the settings name another (`mono_font`).

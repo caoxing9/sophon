@@ -415,7 +415,7 @@ pub(crate) fn diff_pane(path: Option<String>) -> impl IntoElement {
         .items_center()
         .gap(sp(S2))
         .w_full()
-        .max_w(px(CONTENT_MAX_WIDTH))
+        .max_w(px(CONTENT_MAX_WIDTH()))
         .self_center()
         .h(px(48.0))
         .pl(sp(S4))

@@ -185,7 +185,7 @@ pub(crate) fn draft_pane() -> AnyElement {
         .child(
             view()
                 .w_full()
-                .max_w(px(CONTENT_MAX_WIDTH))
+                .max_w(px(CONTENT_MAX_WIDTH()))
                 .self_center()
                 .px(sp(S2))
                 .child(text(t("New agent")).text_size(tx(TEXT_2XL)).font_weight(FontWeight(500))),

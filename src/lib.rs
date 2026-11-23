@@ -25,6 +25,7 @@ mod follow;
 mod i18n;
 mod lan;
 mod mcp;
+mod notes;
 mod platform;
 mod prompt_link;
 mod sent_pictures;

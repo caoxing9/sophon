@@ -121,9 +121,13 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         }
         match target {
             Target::Agent => {
+                // The notes on replies go ahead of the words.
+                let notes = store::selected_id().map(|id| untracked(|| store::notes(&id))).unwrap_or_default();
+                let message = crate::notes::with_notes(&notes, &out.message);
                 if let Some(id) = store::selected_id()
-                    && store::send_message(&out.message)
+                    && store::send_message(&message)
                 {
+                    store::clear_notes(&id);
                     store::set_draft(&id, "");
                     // Its attachments went with it (sent, or queued with
                     // it): their chips go from the composer.
@@ -256,7 +260,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
     // agent's settings and its context under the card, at the right.
     view()
         .w_full()
-        .max_w(px(CONTENT_MAX_WIDTH))
+        .max_w(px(CONTENT_MAX_WIDTH()))
         .self_center()
         .child(elsewhere_bar(live))
         .child(queue_track(live))
@@ -275,11 +279,11 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         })
         .rounded(px(22.0))
         .border_color(move || if over.get() { ACCENT().into() } else { glass_edge() })
-        .flex_row()
-        .items_end()
-        .gap(sp(S1))
         .px(sp(S2))
         .py(sp(S2))
+        // The notes on replies waiting for this message, over its text.
+        .child(super::notes::composer_notes(live))
+        .child(view().w_full().flex_row().items_end().gap(sp(S1))
         .child(
             nsh_base::button()
                 .on_press(with_key(pick_any_into))
@@ -308,7 +312,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                 .justify_center()
                 .hover(|s| s.opacity(0.85))
                 .child(view().w(px(9.0)).h(px(9.0)).rounded(px(2.0)).bg(SURFACE0()))
-        })))
+        }))))
         .child(
             view()
                 .flex_row()
@@ -1167,7 +1171,7 @@ pub(crate) fn thinking_options(live: bool) -> Vec<crate::daemon::model::Opt> {
 /// A hint line under a composer (errors, where it starts).
 pub(crate) fn hint(message: impl Fn() -> Option<(String, bool)> + 'static) -> impl IntoElement {
     let message = computed(message);
-    view().w_full().max_w(px(CONTENT_MAX_WIDTH)).self_center().px(sp(S2)).child(dynamic(move || {
+    view().w_full().max_w(px(CONTENT_MAX_WIDTH())).self_center().px(sp(S2)).child(dynamic(move || {
         let (m, error) = message.get()?;
         Some(untracked(move || {
             view()

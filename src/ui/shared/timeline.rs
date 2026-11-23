@@ -233,7 +233,7 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
         // Close together: a turn's steps and words read as one piece.
         .py(px(if MOBILE { 6.0 } else { 2.0 }))
         .w_full()
-        .max_w(px(CONTENT_MAX_WIDTH + 2.0 * S6))
+        .max_w(px(CONTENT_MAX_WIDTH() + 2.0 * S6))
         .self_center()
         .rounded(px(R_LG))
         .bg(move || match hit.get() {
@@ -317,6 +317,26 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                 RowKind::Assistant => {
                     let hover = signal(false);
                     let chosen = signal(Chosen::default());
+                    // Words chosen in it offer a note where the pointer let
+                    // them go; a press on that opens the note's card there.
+                    let pointer = signal((0.0_f32, 0.0_f32));
+                    let offer = signal(None::<(f32, f32, String)>);
+                    let noting = signal(None::<(f32, f32, String)>);
+                    effect(move || {
+                        let c = chosen.get();
+                        if c.cleared.is_none() && !c.words.trim().is_empty() {
+                            let (x, y) = pointer.get_untracked();
+                            offer.set(Some((x, y, c.words.trim().to_owned())));
+                        } else {
+                            // A moment later: the press on "Note" itself
+                            // lets the words go first.
+                            set_timeout(std::time::Duration::from_millis(400), move || {
+                                if chosen.with_untracked(|c| c.cleared.is_some() || c.words.trim().is_empty()) {
+                                    offer.set(None);
+                                }
+                            });
+                        }
+                    });
                     // One piece of the reply as Markdown, as the whole is shown.
                     let piece = move |markdown: Box<dyn Fn() -> String>| {
                         text_view()
@@ -351,6 +371,7 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                     view()
                         .on_mouse_enter(move |_: &MouseEvent| hover.set(true))
                         .on_mouse_leave(move |_: &MouseEvent| hover.set(false))
+                        .on_mouse_move(move |e: &MouseEvent| pointer.set((e.position.x.0, e.position.y.0)))
                         .child(copy_area_choosing(chosen, dynamic(move || {
                             let list = pieces.get();
                             Some(untracked(move || {
@@ -373,6 +394,8 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                         // conversation, quote it in the next message, and when
                         // it was written; there under the pointer once written.
                         .child(when(turn_end, move || reply_actions(item, text_of, chosen, computed(move || !streaming.get() && hover.get()))))
+                        // Over the reply, so last.
+                        .child(super::notes::selection_layer(offer, noting))
                         .into_element()
                 }
                 // The agent's thinking, folded to one line ("Thinking"):
@@ -544,6 +567,7 @@ pub(crate) fn mark_matches(markdown: &str, query: &str) -> String {
 /// A user message as copied: what was written, without another
 /// conversation's words sent along with it (`store::conversation_context`).
 fn message_words(text: &str) -> String {
+    let text = crate::notes::body(text);
     match text.find(CONTEXT_MARK) {
         Some(at) => text[..at].trim_end().to_owned(),
         None => text.to_owned(),
@@ -735,6 +759,8 @@ fn user_text(item: Memo<Option<Item>>, selectable: bool) -> impl IntoElement {
         });
         // Another conversation's words sent with it (`store::conversation_
         // context`) are the agent's to read, not the bubble's to show.
+        // Its notes show as a chip above it (`user_row`).
+        let body = crate::notes::body(&body).to_owned();
         let body = match body.find(CONTEXT_MARK) {
             Some(at) => body[..at].trim_end().to_owned(),
             None => body,
@@ -823,9 +849,13 @@ fn user_row(item: Memo<Option<Item>>, bubble: impl IntoElement + 'static) -> imp
                 .iter()
                 .filter(|s| matches!(s, crate::ui::shared::composer_doc::Segment::Chip(n) if crate::ui::shared::composer_doc::is_image_name(n)))
                 .count();
-            (images.iter().skip(named).cloned().collect::<Vec<_>>(), !text.trim().is_empty())
+            (images.iter().skip(named).cloned().collect::<Vec<_>>(), !crate::notes::body(text).trim().is_empty())
         }
         _ => (vec![], true),
+    });
+    let notes = item.with_untracked(|i| match i {
+        Some(Item::User { text, .. }) => crate::notes::split(text).0,
+        _ => Vec::new(),
     });
     let mut thumbs = view().flex_row().flex_wrap().justify_end().gap(px(6.0));
     for uri in &images {
@@ -844,6 +874,7 @@ fn user_row(item: Memo<Option<Item>>, bubble: impl IntoElement + 'static) -> imp
         .items_end()
         .gap(px(6.0))
         .max_w(relative(0.82))
+        .when(!notes.is_empty(), |v| v.child(super::notes::sent_notes(notes)))
         .when(!images.is_empty(), |v| v.child(thumbs))
         .when(has_text, |v| v.child(bubble))
 }
@@ -1418,7 +1449,7 @@ fn todo_card(item: Memo<Option<Item>>) -> impl IntoElement {
 /// form, a plan to approve, or a tool to allow.
 pub(crate) fn permissions() -> View {
     let pending = computed(|| store::selected_agent().map(|a| a.pending).unwrap_or_default());
-    view().w_full().max_w(px(CONTENT_MAX_WIDTH)).self_center().child(dynamic(move || {
+    view().w_full().max_w(px(CONTENT_MAX_WIDTH())).self_center().child(dynamic(move || {
         let first = pending.get().into_iter().next()?;
         Some(untracked(move || {
             let questions = first.input.as_ref().and_then(questions_of).filter(|q| !q.is_empty());
@@ -1632,7 +1663,7 @@ pub(crate) fn tracks() -> View {
     let work = computed(|| store::selected_id().map(|id| store::background(&id)).unwrap_or_default());
     view()
         .w_full()
-        .max_w(px(CONTENT_MAX_WIDTH))
+        .max_w(px(CONTENT_MAX_WIDTH()))
         .self_center()
         .child(dynamic(move || {
             let lines = todos.get()?;
@@ -1775,7 +1806,7 @@ pub(crate) fn subagent_pane(parent: String, id: String) -> impl IntoElement {
             Some(untracked(move || match list.clone() {
                 None => view().flex_1().items_center().justify_center().child(loader(None)).into_element(),
                 Some(list) => {
-                    let mut col = view().gap(sp(S2)).px(sp(S6)).py(sp(S4)).w_full().max_w(px(CONTENT_MAX_WIDTH + 2.0 * S6)).self_center();
+                    let mut col = view().gap(sp(S2)).px(sp(S6)).py(sp(S4)).w_full().max_w(px(CONTENT_MAX_WIDTH() + 2.0 * S6)).self_center();
                     for item in list {
                         col = col.child(static_row(item));
                     }
@@ -2038,7 +2069,7 @@ fn thinking(running: Memo<bool>) -> impl IntoElement {
             };
             view()
                 .w_full()
-                .max_w(px(CONTENT_MAX_WIDTH + 2.0 * S6))
+                .max_w(px(CONTENT_MAX_WIDTH() + 2.0 * S6))
                 .self_center()
                 // The rows' own inset, so the words line up with the text.
                 .px(sp(S6))

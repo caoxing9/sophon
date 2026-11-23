@@ -87,6 +87,22 @@ pub(crate) fn appearance_card() -> View {
                 .child(icon_btn(Icon::Plus, Sz::Sm, t("Larger"), || store::set_font_size(store::look().0 + 1.0))),
             false,
         ))
+        .when(!MOBILE, |card| {
+            card.child(row(
+                t("Content width"),
+                t("How wide the conversation and the composer go"),
+                segmented(
+                    vec![
+                        (store::ContentWidth::Standard, t("Standard").into()),
+                        (store::ContentWidth::Wide, t("Wide").into()),
+                        (store::ContentWidth::Full, t("Full width").into()),
+                    ],
+                    store::content_width_tracked,
+                    store::set_content_width,
+                ),
+                false,
+            ))
+        })
         .child(row(
             t("Compact"),
             t("Tighter rows and gaps: more on screen"),

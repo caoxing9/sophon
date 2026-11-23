@@ -10,6 +10,7 @@ pub(crate) mod markdown_editor;
 pub(crate) mod modals;
 pub(crate) mod model_picker;
 pub(crate) mod notice;
+pub(crate) mod notes;
 pub(crate) mod preview;
 pub(crate) mod projects;
 pub(crate) mod settings;
