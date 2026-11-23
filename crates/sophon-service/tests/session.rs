@@ -79,17 +79,20 @@ async fn send(socket: &mut Socket, data: Value) {
     socket.send(Message::text(data.to_string())).await.unwrap();
 }
 
-/// How long a frame is waited for: a moment with the stand-in CLIs,
-/// as long as a model takes with the real ones.
-static PATIENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(5);
+/// How long a frame is waited for at most: a frame that comes returns at
+/// once, so this only bounds a hang. With the stand-in CLIs a frame takes
+/// well under a second, but CI's runners, with every test's service and
+/// `git` at once, have been seen to stall one for over 5 s; the real CLIs
+/// take as long as a model does.
+static PATIENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(30);
 
 async fn read(socket: &mut Socket) -> Value {
     let patience = Duration::from_secs(PATIENCE.load(std::sync::atomic::Ordering::Relaxed));
     let frame = tokio::time::timeout(patience, socket.next())
         .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
+        .unwrap_or_else(|_| panic!("no frame within {patience:?}"))
+        .expect("the socket closed")
+        .expect("a frame");
     serde_json::from_str(frame.to_text().unwrap()).unwrap()
 }
 
