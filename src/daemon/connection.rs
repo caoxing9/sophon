@@ -3787,7 +3787,9 @@ fn handle(
                 Some(BackgroundItem {
                     id: s("id")?,
                     kind: s("kind").unwrap_or_default(),
-                    label: s("command").or_else(|| s("description")).unwrap_or_else(|| "Background task".into()),
+                    // What it is for, as the agent put it (empty when it did
+                    // not say); the command itself is not shown.
+                    label: s("description").filter(|d| !d.trim().is_empty()).unwrap_or_default(),
                     stop_token: (i.get("canStop").and_then(Value::as_bool) != Some(false)).then(|| s("stopToken")).flatten(),
                 })
             });

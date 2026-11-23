@@ -1064,6 +1064,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Daily 9:00", "每天 9:00"),
     ("Weekdays 9:00", "工作日 9:00"),
     ("Background", "后台"),
+    ("Background task", "后台任务"),
     ("Outline", "大纲"),
     // Generic
     ("Cancel", "取消"),
