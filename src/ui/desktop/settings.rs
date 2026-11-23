@@ -20,6 +20,7 @@ pub(crate) fn settings(compact: bool) -> impl IntoElement {
             view()
                 .child(section(t("Appearance"), appearance_card()))
                 .child(section(t("Sending"), sending_card()))
+                .child(section(t("Keyboard"), shortcuts_card()))
                 .when(cfg!(target_os = "macos"), |v| v.child(section(t("Dictation"), dictation_card())))
                 .child(section(t("Storage"), storage_card()))
                 .child(section(t("Power"), keep_awake_card()))
@@ -109,7 +110,7 @@ fn spaces_card() -> impl IntoElement {
             };
             let switch_btn = |id: Option<String>, here: bool| -> AnyElement {
                 if here {
-                    text(t("In use")).text_size(tx(TEXT_SM)).text_color(FG_MUTED).into_element()
+                    text(t("In use")).text_size(tx(TEXT_SM)).text_color(FG_MUTED()).into_element()
                 } else {
                     btn(t("Switch"), Variant::Outline, Sz::Sm, None, move || store::switch_host(id.clone())).into_element()
                 }
@@ -272,12 +273,12 @@ fn relay_row() -> impl IntoElement {
             .py(sp(S4))
             .gap(sp(S2))
             .border_t_1()
-            .border_color(BORDER)
+            .border_color(BORDER())
             .child(text(t("Relay server")).text_size(tx(TEXT_BASE)))
             .child(
                 text(t("Enter your relay address for access away from home. Leave empty for LAN only."))
                     .text_size(tx(TEXT_SM))
-                    .text_color(FG_MUTED),
+                    .text_color(FG_MUTED()),
             )
             .child(
                 view()

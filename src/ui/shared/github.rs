@@ -33,13 +33,13 @@ fn chip(word: impl Into<SharedString>, tone: AdaptiveColor) -> View {
 }
 
 fn message(words: impl Into<SharedString>) -> View {
-    view().py(sp(S8)).items_center().child(text(words.into()).text_size(tx(TEXT_BASE)).text_color(FG_MUTED).text_center())
+    view().py(sp(S8)).items_center().child(text(words.into()).text_size(tx(TEXT_BASE)).text_color(FG_MUTED()).text_center())
 }
 
 /// What the inbox shows the first time it is asked for: rows as its own
 /// will be, their words still grey bars.
 fn skeleton() -> View {
-    let bar = |w: f32, h: f32| view().w(px(w)).h(px(h)).rounded(px(R_FULL)).bg(tint(FG, 0.08));
+    let bar = |w: f32, h: f32| view().w(px(w)).h(px(h)).rounded(px(R_FULL)).bg(tint(FG(), 0.08));
     let mut c = card();
     for (i, w) in [240.0, 190.0, 260.0, 170.0, 220.0].into_iter().enumerate() {
         c = c.child(
@@ -49,8 +49,8 @@ fn skeleton() -> View {
                 .gap(sp(S3))
                 .px(sp(S4))
                 .py(sp(S3))
-                .when(i > 0, |v| v.border_t(px(1.0)).border_color(BORDER))
-                .child(view().w(px(16.0)).h(px(16.0)).rounded(px(R_FULL)).bg(tint(FG, 0.08)))
+                .when(i > 0, |v| v.border_t(px(1.0)).border_color(BORDER()))
+                .child(view().w(px(16.0)).h(px(16.0)).rounded(px(R_FULL)).bg(tint(FG(), 0.08)))
                 .child(view().flex_1().min_w(px(0.0)).gap(px(6.0)).child(bar(w, 12.0)).child(bar(140.0, 9.0))),
         );
     }
@@ -180,14 +180,14 @@ fn group_head(repo: &str, local: Option<String>, count: usize) -> View {
         .items_center()
         .gap(sp(S2))
         .px(sp(S1))
-        .child(icon(if rest.is_empty() { Icon::GitPullRequest } else { Icon::Folder }, 14.0).text_color(FG_MUTED))
+        .child(icon(if rest.is_empty() { Icon::GitPullRequest } else { Icon::Folder }, 14.0).text_color(FG_MUTED()))
         .child(text(name).text_size(tx(TEXT_SM)).font_weight(FontWeight(600)))
-        .when(!rest.is_empty(), |v| v.child(text(rest).text_size(tx(TEXT_XS)).text_color(FG_FAINT)))
-        .child(text(count.to_string()).text_size(tx(TEXT_XS)).text_color(FG_FAINT))
+        .when(!rest.is_empty(), |v| v.child(text(rest).text_size(tx(TEXT_XS)).text_color(FG_FAINT())))
+        .child(text(count.to_string()).text_size(tx(TEXT_XS)).text_color(FG_FAINT()))
 }
 
 fn inbox_row(item: InboxItem, divider: bool, tone: AdaptiveColor, open: impl Fn(InboxItem) + 'static) -> impl IntoElement {
-    let tone = if item.draft { FG_MUTED } else { tone };
+    let tone = if item.draft { FG_MUTED() } else { tone };
     let pressed = item.clone();
     button()
         .on_press(move || open(pressed.clone()))
@@ -196,7 +196,7 @@ fn inbox_row(item: InboxItem, divider: bool, tone: AdaptiveColor, open: impl Fn(
         .gap(sp(S3))
         .px(sp(S4))
         .py(sp(S3))
-        .when(divider, |v| v.border_t(px(1.0)).border_color(BORDER))
+        .when(divider, |v| v.border_t(px(1.0)).border_color(BORDER()))
         .hover(|s| s.bg(highlight()))
         .active(|s| s.opacity(0.7))
         .child(icon(Icon::GitPullRequest, 16.0).text_color(tone))
@@ -209,12 +209,12 @@ fn inbox_row(item: InboxItem, divider: bool, tone: AdaptiveColor, open: impl Fn(
                 .child(
                     text(format!("#{} · {} · {}", item.number, item.author, ago(&item.updated_at)))
                         .text_size(tx(TEXT_XS))
-                        .text_color(FG_MUTED)
+                        .text_color(FG_MUTED())
                         .number_of_lines(1),
                 ),
         )
         .when(item.review_requested, |v| v.child(chip(t("Review requested"), WARNING)))
-        .when(item.draft, |v| v.child(chip(t("Draft"), FG_MUTED)))
+        .when(item.draft, |v| v.child(chip(t("Draft"), FG_MUTED())))
 }
 
 /// The desktop's inbox screen.
@@ -234,10 +234,10 @@ pub(crate) fn inbox_page() -> impl IntoElement {
         .w(px(340.0))
         .flex_shrink_0()
         .border_r(px(1.0))
-        .border_color(BORDER)
+        .border_color(BORDER())
         // The source: GitHub (monocode's tabs of sources).
         .child(
-            view().flex_row().items_center().h(px(40.0)).px(sp(S2)).border_b(px(1.0)).border_color(BORDER).window_drag(true).child(
+            view().flex_row().items_center().h(px(40.0)).px(sp(S2)).border_b(px(1.0)).border_color(BORDER()).window_drag(true).child(
                 view()
                     .flex_row()
                     .items_center()
@@ -247,7 +247,7 @@ pub(crate) fn inbox_page() -> impl IntoElement {
                     .flex_1()
                     .rounded(px(R_MD))
                     .bg(highlight())
-                    .child(icon(Icon::Github, 14.0).text_color(FG))
+                    .child(icon(Icon::Github, 14.0).text_color(FG()))
                     .child(text("GitHub").text_size(tx(TEXT_SM)).font_weight(FontWeight(500))),
             ),
         )
@@ -260,16 +260,16 @@ pub(crate) fn inbox_page() -> impl IntoElement {
                 .h(px(40.0))
                 .px(sp(S2))
                 .border_b(px(1.0))
-                .border_color(BORDER)
-                .child(icon(Icon::Search, 13.0).text_color(FG_FAINT).ml(px(6.0)))
+                .border_color(BORDER())
+                .child(icon(Icon::Search, 13.0).text_color(FG_FAINT()).ml(px(6.0)))
                 .child(
                     nsh_base::input()
                         .flex_1()
                         .h(px(28.0))
                         .px(px(6.0))
                         .text_size(tx(TEXT_SM))
-                        .text_color(FG)
-                        .caret_color(|| color(ACCENT))
+                        .text_color(FG())
+                        .caret_color(|| color(ACCENT()))
                         .placeholder(t("Filter inbox"))
                         .value(move || filters.with(|f| f.query.clone()))
                         .on_change(|v: &str| {
@@ -291,7 +291,7 @@ pub(crate) fn inbox_page() -> impl IntoElement {
                         .hover(|s| s.bg(highlight()))
                         .child(dynamic(move || {
                             let busy = loading.get();
-                            Some(untracked(move || if busy { eclipse(13.0).into_element() } else { icon(Icon::RotateCw, 13.0).text_color(FG_MUTED).into_element() }))
+                            Some(untracked(move || if busy { eclipse(13.0).into_element() } else { icon(Icon::RotateCw, 13.0).text_color(FG_MUTED()).into_element() }))
                         })),
                 ),
         )
@@ -320,7 +320,7 @@ pub(crate) fn inbox_page() -> impl IntoElement {
                         None if narrowed => t("No pull requests match these filters").to_owned(),
                         None => t("No pull requests involve you").to_owned(),
                     };
-                    return text(words).text_size(tx(TEXT_SM)).text_color(FG_MUTED).px(sp(S3)).py(sp(S2)).into_element();
+                    return text(words).text_size(tx(TEXT_SM)).text_color(FG_MUTED()).px(sp(S3)).py(sp(S2)).into_element();
                 }
                 let mut col = view().gap(px(2.0)).p(px(6.0));
                 for item in list {
@@ -357,7 +357,7 @@ fn tool_button(glyph: Icon, label: &'static str, enabled: impl Fn() -> bool + Co
         .justify_center()
         .opacity(move || if enabled() { 1.0_f32 } else { 0.35 })
         .hover(|s| s.bg(highlight()))
-        .child(icon(glyph, 14.0).text_color(FG_MUTED))
+        .child(icon(glyph, 14.0).text_color(FG_MUTED()))
 }
 
 /// The inbox's filters (monocode's menu): the states, how recent, asked
@@ -372,7 +372,7 @@ fn filters_menu(filters: Memo<store::DeskInbox>, all: Memo<Vec<InboxItem>>) -> i
         r
     });
     let section = |words: &'static str| {
-        text(words.to_uppercase()).text_size(tx(10.0)).font_weight(FontWeight(600)).text_color(FG_FAINT).px(sp(S2)).pt(sp(S2)).pb(px(2.0))
+        text(words.to_uppercase()).text_size(tx(10.0)).font_weight(FontWeight(600)).text_color(FG_FAINT()).px(sp(S2)).pt(sp(S2)).pb(px(2.0))
     };
     let item = |label: SharedString, checked: Box<dyn Fn() -> bool>, on_press: Box<dyn Fn()>| {
         let checked: std::rc::Rc<dyn Fn() -> bool> = checked.into();
@@ -386,10 +386,10 @@ fn filters_menu(filters: Memo<store::DeskInbox>, all: Memo<Vec<InboxItem>>) -> i
             .px(sp(S2))
             .rounded(px(R_MD))
             .hover(|s| s.bg(highlight()))
-            .child(text(label).text_size(tx(13.0)).text_color(FG).number_of_lines(1).flex_1().min_w(px(0.0)))
-            .child(icon(Icon::Check, 14.0).text_color(FG).opacity(move || if c() { 1.0_f32 } else { 0.0 }))
+            .child(text(label).text_size(tx(13.0)).text_color(FG()).number_of_lines(1).flex_1().min_w(px(0.0)))
+            .child(icon(Icon::Check, 14.0).text_color(FG()).opacity(move || if c() { 1.0_f32 } else { 0.0 }))
     };
-    let divider = || view().h(px(1.0)).my(px(4.0)).bg(tint(FG, 0.08));
+    let divider = || view().h(px(1.0)).my(px(4.0)).bg(tint(FG(), 0.08));
     nsh_base::popover()
         .open(move || Some(open.get()))
         .on_open_change(move |e: &nsh_base::PopoverEvent| {
@@ -400,7 +400,7 @@ fn filters_menu(filters: Memo<store::DeskInbox>, all: Memo<Vec<InboxItem>>) -> i
         .align(nsh_core::overlay::Align::Start)
         .offset(px(4.0))
         .popup_style(|s: nsh_core::element::StyleRefinement| {
-            s.bg(POPOVER).rounded(px(R_LG)).border_1().border_color(tint(FG, 0.10)).shadow_lg().overflow_hidden().w(px(240.0))
+            s.bg(POPOVER()).rounded(px(R_LG)).border_1().border_color(tint(FG(), 0.10)).shadow_lg().overflow_hidden().w(px(240.0))
         })
         .trigger(
             view()
@@ -409,10 +409,10 @@ fn filters_menu(filters: Memo<store::DeskInbox>, all: Memo<Vec<InboxItem>>) -> i
                 .rounded(px(R_MD))
                 .items_center()
                 .justify_center()
-                .bg(move || if active() || open.get() { highlight() } else { tint(FG, 0.0) })
+                .bg(move || if active() || open.get() { highlight() } else { tint(FG(), 0.0) })
                 .hover(|s| s.bg(highlight()))
                 .label(t("Filter inbox"))
-                .child(icon(Icon::ListFilter, 13.0).text_color(move || if active() { FG } else { FG_MUTED })),
+                .child(icon(Icon::ListFilter, 13.0).text_color(move || if active() { FG() } else { FG_MUTED() })),
         )
         .child(scroll().max_h(px(480.0)).child({
             let mut col = view().p(px(4.0)).child(item(
@@ -472,7 +472,7 @@ fn filters_menu(filters: Memo<store::DeskInbox>, all: Memo<Vec<InboxItem>>) -> i
                         .rounded(px(R_MD))
                         .justify_center()
                         .hover(|s| s.bg(highlight()))
-                        .child(text(t("Clear filters")).text_size(tx(13.0)).text_color(FG_MUTED)),
+                        .child(text(t("Clear filters")).text_size(tx(13.0)).text_color(FG_MUTED())),
                 )
             }))
         }))
@@ -483,7 +483,7 @@ fn status_mark(state: &str, draft: bool) -> (Icon, AdaptiveColor, &'static str) 
     match state.to_ascii_lowercase().as_str() {
         "merged" => (Icon::GitMerge, VIOLET, t("Merged")),
         "closed" => (Icon::GitPullRequestClosed, DANGER, t("Closed")),
-        _ if draft => (Icon::GitPullRequestDraft, FG_MUTED, t("Draft")),
+        _ if draft => (Icon::GitPullRequestDraft, FG_MUTED(), t("Draft")),
         _ => (Icon::GitPullRequest, SUCCESS, if crate::i18n::is_zh() { "开启" } else { t("Open") }),
     }
 }
@@ -494,10 +494,10 @@ fn label_chip(name: String) -> View {
         .px(px(6.0))
         .h(px(18.0))
         .rounded(px(R_FULL))
-        .bg(tint(FG, 0.06))
+        .bg(tint(FG(), 0.06))
         .items_center()
         .justify_center()
-        .child(text(name).text_size(tx(TEXT_XS)).text_color(FG_MUTED).number_of_lines(1))
+        .child(text(name).text_size(tx(TEXT_XS)).text_color(FG_MUTED()).number_of_lines(1))
 }
 
 /// A card of the inbox's list (monocode's `InboxCard`).
@@ -527,10 +527,10 @@ fn inbox_card(item: InboxItem, on: bool) -> impl IntoElement {
                 .flex_row()
                 .items_center()
                 .gap(px(6.0))
-                .child(icon(Icon::Github, 13.0).text_color(FG))
+                .child(icon(Icon::Github, 13.0).text_color(FG()))
                 .child(icon(glyph, 12.0).text_color(tone))
-                .child(text(format!("{} · #{}", t("Pull request"), item.number)).text_size(tx(TEXT_XS)).text_color(FG_MUTED).number_of_lines(1).flex_1().min_w(px(0.0)))
-                .child(text(crate::ui::mobile::time::ago_long(&item.updated_at)).text_size(tx(TEXT_XS)).text_color(FG_FAINT))
+                .child(text(format!("{} · #{}", t("Pull request"), item.number)).text_size(tx(TEXT_XS)).text_color(FG_MUTED()).number_of_lines(1).flex_1().min_w(px(0.0)))
+                .child(text(crate::ui::mobile::time::ago_long(&item.updated_at)).text_size(tx(TEXT_XS)).text_color(FG_FAINT()))
                 .child(when(move || unseen.get(), || view().w(px(6.0)).h(px(6.0)).rounded(px(R_FULL)).bg(DOT_RUNNING))),
         )
         .child(text(item.title.clone()).text_size(tx(TEXT_SM)).font_weight(FontWeight(600)).number_of_lines(1).mt(px(4.0)))
@@ -540,7 +540,7 @@ fn inbox_card(item: InboxItem, on: bool) -> impl IntoElement {
                 .items_center()
                 .gap(sp(S2))
                 .mt(px(4.0))
-                .child(text(item.repo.clone()).text_size(tx(TEXT_XS)).text_color(FG_FAINT).number_of_lines(1).flex_1().min_w(px(0.0)))
+                .child(text(item.repo.clone()).text_size(tx(TEXT_XS)).text_color(FG_FAINT()).number_of_lines(1).flex_1().min_w(px(0.0)))
                 .when(item.review_requested, |v| v.child(chip(t("Review requested"), WARNING)))
                 .child(labels),
         )
@@ -629,7 +629,7 @@ pub(crate) fn pull_request(repo: String, number: u64, agent: Option<String>, fix
                         // The head, fixed over what scrolls.
                         view()
                             .border_b(px(1.0))
-                            .border_color(BORDER)
+                            .border_color(BORDER())
                             .child(
                                 view()
                                     .px(if MOBILE { sp(S1) } else { px(32.0) })
@@ -660,14 +660,14 @@ fn person(login: &str, size: f32) -> View {
                 .h(px(size))
                 .rounded(px(R_FULL))
                 .overflow_hidden()
-                .bg(tint(FG, 0.08))
+                .bg(tint(FG(), 0.08))
                 .child(image(SharedString::from(format!("https://github.com/{login}.png?size={}", (size * 2.0) as u32))).w(px(size)).h(px(size)).object_fit(nsh_core::ResizeMode::Cover)),
         )
-        .child(text(login.to_owned()).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1))
+        .child(text(login.to_owned()).text_size(tx(TEXT_SM)).text_color(FG_MUTED()).number_of_lines(1))
 }
 
 fn dot() -> nsh_core::element::Text {
-    text("·").text_size(tx(TEXT_SM)).text_color(FG_FAINT)
+    text("·").text_size(tx(TEXT_SM)).text_color(FG_FAINT())
 }
 
 /// Its kind, number, state and repository; the title; who, when, the
@@ -678,7 +678,7 @@ fn head(repo: &str, d: &Detail) -> View {
         "APPROVED" => (t("Approved"), SUCCESS),
         "CHANGES_REQUESTED" => (t("Changes requested"), DANGER),
         "REVIEW_REQUIRED" => (t("Review required"), WARNING),
-        _ => ("", FG_MUTED),
+        _ => ("", FG_MUTED()),
     };
     let head_branch = d.head.clone();
     let mut meta = view().flex_row().flex_wrap().items_center().gap(px(8.0));
@@ -686,7 +686,7 @@ fn head(repo: &str, d: &Detail) -> View {
         meta = meta.child(person(&d.author, 16.0)).child(dot());
     }
     meta = if d.assignees.is_empty() {
-        meta.child(text(t("Unassigned")).text_size(tx(TEXT_SM)).text_color(FG_MUTED))
+        meta.child(text(t("Unassigned")).text_size(tx(TEXT_SM)).text_color(FG_MUTED()))
     } else {
         let mut people = view().flex_row().gap(px(8.0));
         for a in &d.assignees {
@@ -695,17 +695,17 @@ fn head(repo: &str, d: &Detail) -> View {
         meta.child(people)
     };
     if !d.created_at.is_empty() {
-        meta = meta.child(dot()).child(text(tf("Created {}", &[&crate::ui::mobile::time::ago_long(&d.created_at)])).text_size(tx(TEXT_SM)).text_color(FG_MUTED));
+        meta = meta.child(dot()).child(text(tf("Created {}", &[&crate::ui::mobile::time::ago_long(&d.created_at)])).text_size(tx(TEXT_SM)).text_color(FG_MUTED()));
     }
-    meta = meta.child(dot()).child(text(tf("Updated {}", &[&crate::ui::mobile::time::ago_long(&d.updated_at)])).text_size(tx(TEXT_SM)).text_color(FG_MUTED));
+    meta = meta.child(dot()).child(text(tf("Updated {}", &[&crate::ui::mobile::time::ago_long(&d.updated_at)])).text_size(tx(TEXT_SM)).text_color(FG_MUTED()));
     if !d.base.is_empty() && !d.head.is_empty() {
         meta = meta.child(dot()).child(
             view()
                 .flex_row()
                 .items_center()
                 .gap(px(4.0))
-                .child(icon(Icon::GitCompare, 12.0).text_color(FG_MUTED))
-                .child(text(format!("{} ← {}", d.base, d.head)).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1))
+                .child(icon(Icon::GitCompare, 12.0).text_color(FG_MUTED()))
+                .child(text(format!("{} ← {}", d.base, d.head)).text_size(tx(TEXT_SM)).text_color(FG_MUTED()).number_of_lines(1))
                 .child(
                     nsh_base::button()
                         .on_press(move || {
@@ -719,7 +719,7 @@ fn head(repo: &str, d: &Detail) -> View {
                         .items_center()
                         .justify_center()
                         .hover(|s| s.bg(highlight()))
-                        .child(icon(Icon::Copy, 11.0).text_color(FG_FAINT)),
+                        .child(icon(Icon::Copy, 11.0).text_color(FG_FAINT())),
                 ),
         );
     }
@@ -733,11 +733,11 @@ fn head(repo: &str, d: &Detail) -> View {
                 .flex_row()
                 .items_center()
                 .gap(px(6.0))
-                .child(icon(Icon::Github, 14.0).text_color(FG_MUTED))
-                .child(text(format!("{} #{}", t("Pull request"), d.number)).text_size(tx(TEXT_SM)).text_color(FG_MUTED))
+                .child(icon(Icon::Github, 14.0).text_color(FG_MUTED()))
+                .child(text(format!("{} #{}", t("Pull request"), d.number)).text_size(tx(TEXT_SM)).text_color(FG_MUTED()))
                 .child(icon(glyph, 13.0).text_color(tone))
                 .child(text(state).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(tone))
-                .child(text(repo.to_owned()).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1)),
+                .child(text(repo.to_owned()).text_size(tx(TEXT_SM)).text_color(FG_MUTED()).number_of_lines(1)),
         )
         .child(text(d.title.clone()).text_size(tx(20.0)).font_weight(FontWeight(600)).line_height(px(26.0)).number_of_lines(2).selectable(true))
         .child(meta)
@@ -769,10 +769,10 @@ fn outline(label: &'static str, glyph: Icon, danger: bool, on_press: impl Fn() +
         .px(sp(S3))
         .rounded(px(R_MD))
         .border_1()
-        .border_color(BORDER_STRONG)
+        .border_color(BORDER_STRONG())
         .hover(move |s| if danger { s.bg(tint(DANGER, 0.08)) } else { s.bg(highlight()) })
-        .child(icon(glyph, 14.0).text_color(FG))
-        .child(text(label).text_size(tx(TEXT_SM)).text_color(FG))
+        .child(icon(glyph, 14.0).text_color(FG()))
+        .child(text(label).text_size(tx(TEXT_SM)).text_color(FG()))
 }
 
 /// Merge (its way picked beside it), draft or ready, close or reopen, ask
@@ -799,7 +799,7 @@ fn actions(repo: &str, d: &Detail, busy: Memo<bool>) -> View {
                 .h(px(28.0))
                 .rounded(px(R_MD))
                 .overflow_hidden()
-                .bg(FG)
+                .bg(FG())
                 .child(
                     nsh_base::button()
                         .on_press(move || confirm.set(Some(way.get_untracked())))
@@ -808,8 +808,8 @@ fn actions(repo: &str, d: &Detail, busy: Memo<bool>) -> View {
                         .gap(px(6.0))
                         .px(sp(S3))
                         .hover(|s| s.opacity(0.85))
-                        .child(icon(Icon::GitMerge, 14.0).text_color(SURFACE0))
-                        .child(text(way_word).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(SURFACE0)),
+                        .child(icon(Icon::GitMerge, 14.0).text_color(SURFACE0()))
+                        .child(text(way_word).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(SURFACE0())),
                 )
                 .child(dynamic(move || {
                     way.get();
@@ -821,9 +821,9 @@ fn actions(repo: &str, d: &Detail, busy: Memo<bool>) -> View {
                                 .items_center()
                                 .justify_center()
                                 .border_l(px(1.0))
-                                .border_color(tint(SURFACE0, 0.25))
+                                .border_color(tint(SURFACE0(), 0.25))
                                 .label(t("Merge options"))
-                                .child(icon(Icon::ChevronDown, 12.0).text_color(SURFACE0)),
+                                .child(icon(Icon::ChevronDown, 12.0).text_color(SURFACE0())),
                         )
                         .child(pick("merge", t("Create a merge commit"), t("All commits from this branch will be added to the base branch via a merge commit.")))
                         .child(pick("squash", t("Squash and merge"), t("The commits from this branch will be combined into one commit in the base branch.")))
@@ -861,8 +861,8 @@ fn actions(repo: &str, d: &Detail, busy: Memo<bool>) -> View {
                 .px(sp(S2))
                 .rounded(px(R_MD))
                 .hover(|s| s.bg(highlight()))
-                .child(icon(Icon::ExternalLink, 14.0).text_color(FG_MUTED))
-                .child(text(t("Review on GitHub")).text_size(tx(TEXT_SM)).text_color(FG_MUTED)),
+                .child(icon(Icon::ExternalLink, 14.0).text_color(FG_MUTED()))
+                .child(text(t("Review on GitHub")).text_size(tx(TEXT_SM)).text_color(FG_MUTED())),
         )
         .child(when(move || busy.get(), || eclipse(16.0)));
     let conflicting = open && d.mergeable.eq_ignore_ascii_case("CONFLICTING");
@@ -879,7 +879,7 @@ fn actions(repo: &str, d: &Detail, busy: Memo<bool>) -> View {
                 let tone = match action {
                     "close" => DANGER,
                     "merge" | "squash" | "rebase" => SUCCESS,
-                    _ => FG,
+                    _ => FG(),
                 };
                 view()
                     .max_w(px(380.0))
@@ -887,11 +887,11 @@ fn actions(repo: &str, d: &Detail, busy: Memo<bool>) -> View {
                     .gap(px(4.0))
                     .rounded(px(R_LG))
                     .border_1()
-                    .border_color(BORDER_STRONG)
-                    .bg(POPOVER)
+                    .border_color(BORDER_STRONG())
+                    .bg(POPOVER())
                     .shadow_lg()
                     .child(text(title).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)))
-                    .child(text(detail).text_size(tx(TEXT_SM)).text_color(FG_MUTED))
+                    .child(text(detail).text_size(tx(TEXT_SM)).text_color(FG_MUTED()))
                     .child(
                         view()
                             .flex_row()
@@ -932,10 +932,10 @@ fn tab_button(label: impl IntoReactive<SharedString>, on: impl Fn() -> bool + Co
                 .items_center()
                 .gap(px(6.0))
                 .flex_1()
-                .child(text(label).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(move || if on() { FG } else { FG_MUTED }))
+                .child(text(label).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(move || if on() { FG() } else { FG_MUTED() }))
                 .when_some(lead, |v, l| v.child(l)),
         )
-        .child(view().h(px(2.0)).rounded(px(1.0)).bg(move || if on() { FG } else { tint(FG, 0.0) }))
+        .child(view().h(px(2.0)).rounded(px(1.0)).bg(move || if on() { FG() } else { tint(FG(), 0.0) }))
 }
 
 fn tabs(tab: Signal<PrTab>, checks: Memo<Option<Vec<Check>>>) -> View {
@@ -996,7 +996,7 @@ fn summary(d: &Detail) -> View {
             .gap(px(20.0))
             .when(!d.labels.is_empty(), |v| v.child(labels))
             .child(if body.is_empty() {
-                text(t("No description")).text_size(tx(TEXT_SM)).text_color(FG_MUTED).into_element()
+                text(t("No description")).text_size(tx(TEXT_SM)).text_color(FG_MUTED()).into_element()
             } else {
                 text_view()
                     .links(nsh_base::TextViewLinks::Open)
@@ -1006,7 +1006,7 @@ fn summary(d: &Detail) -> View {
                     .gap_3()
                     .text_size(tx(TEXT_CONTENT))
                     .line_height(px(24.0))
-                    .text_color(FG)
+                    .text_color(FG())
                     .into_element()
             })
             .when(!d.comments.is_empty(), |v| {
@@ -1015,8 +1015,8 @@ fn summary(d: &Detail) -> View {
                         .gap(sp(S3))
                         .pt(sp(S2))
                         .border_t(px(1.0))
-                        .border_color(BORDER)
-                        .child(text(tf("{} comments", &[&d.comments.len().to_string()])).text_size(tx(TEXT_XS)).font_weight(FontWeight(500)).text_color(FG_MUTED).pt(sp(S2)))
+                        .border_color(BORDER())
+                        .child(text(tf("{} comments", &[&d.comments.len().to_string()])).text_size(tx(TEXT_XS)).font_weight(FontWeight(500)).text_color(FG_MUTED()).pt(sp(S2)))
                         .child(thread),
                 )
             })
@@ -1030,7 +1030,7 @@ fn comment_view(c: crate::github::Comment) -> impl IntoElement {
     let review = match c.review.as_str() {
         "APPROVED" => Some((t("approved"), SUCCESS)),
         "CHANGES_REQUESTED" => Some((t("requested changes"), DANGER)),
-        "COMMENTED" => Some((t("reviewed"), FG_MUTED)),
+        "COMMENTED" => Some((t("reviewed"), FG_MUTED())),
         _ => None,
     };
     view()
@@ -1042,7 +1042,7 @@ fn comment_view(c: crate::github::Comment) -> impl IntoElement {
                 .gap(px(8.0))
                 .child(person(&c.author, 20.0))
                 .when_some(review, |v, (w, tone)| v.child(text(w).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(tone)))
-                .child(text(crate::ui::mobile::time::ago_long(&c.at)).text_size(tx(TEXT_XS)).text_color(FG_FAINT)),
+                .child(text(crate::ui::mobile::time::ago_long(&c.at)).text_size(tx(TEXT_XS)).text_color(FG_FAINT())),
         )
         .when(!c.body.trim().is_empty(), |v| {
             v.child(
@@ -1054,7 +1054,7 @@ fn comment_view(c: crate::github::Comment) -> impl IntoElement {
                         .gap_2()
                         .text_size(tx(TEXT_SM))
                         .line_height(px(21.0))
-                        .text_color(FG),
+                        .text_color(FG()),
                 ),
             )
         })
@@ -1078,14 +1078,14 @@ fn comment_form(url: String, number: u64) -> impl IntoElement {
         .p(sp(S3))
         .rounded(px(R_LG))
         .border_1()
-        .border_color(BORDER)
+        .border_color(BORDER())
         .child(
             nsh_base::input()
                 .multiline(true)
                 .min_h(px(56.0))
                 .text_size(tx(TEXT_SM))
-                .text_color(FG)
-                .caret_color(|| color(ACCENT))
+                .text_color(FG())
+                .caret_color(|| color(ACCENT()))
                 .placeholder(t("Leave a comment"))
                 .value(move || words.get())
                 .on_change(move |v: &str| words.set(v.to_owned()))
@@ -1182,7 +1182,7 @@ fn check_row(c: Check, divider: bool) -> impl IntoElement {
         CheckState::Passed => (Icon::CircleCheck, SUCCESS, t("Passed")),
         CheckState::Failed => (Icon::CircleX, DANGER, t("Failed")),
         CheckState::Running => (Icon::CircleDot, WARNING, t("Running")),
-        CheckState::Skipped => (Icon::Minus, FG_FAINT, t("Skipped")),
+        CheckState::Skipped => (Icon::Minus, FG_FAINT(), t("Skipped")),
     };
     let url = c.url.clone();
     button()
@@ -1196,7 +1196,7 @@ fn check_row(c: Check, divider: bool) -> impl IntoElement {
         .gap(sp(S3))
         .px(sp(S4))
         .py(sp(S3))
-        .when(divider, |v| v.border_t(px(1.0)).border_color(BORDER))
+        .when(divider, |v| v.border_t(px(1.0)).border_color(BORDER()))
         .hover(|s| s.bg(highlight()))
         .child(icon(glyph, 15.0).text_color(tone))
         .child(
@@ -1204,10 +1204,10 @@ fn check_row(c: Check, divider: bool) -> impl IntoElement {
                 .flex_1()
                 .min_w(px(0.0))
                 .child(text(c.name.clone()).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).number_of_lines(1))
-                .when(!c.workflow.is_empty(), |v| v.child(text(c.workflow.clone()).text_size(tx(TEXT_XS)).text_color(FG_MUTED))),
+                .when(!c.workflow.is_empty(), |v| v.child(text(c.workflow.clone()).text_size(tx(TEXT_XS)).text_color(FG_MUTED()))),
         )
         .child(text(word).text_size(tx(TEXT_XS)).text_color(tone))
-        .when(!c.url.is_empty(), |v| v.child(icon(Icon::ExternalLink, 12.0).text_color(FG_FAINT)))
+        .when(!c.url.is_empty(), |v| v.child(icon(Icon::ExternalLink, 12.0).text_color(FG_FAINT())))
 }
 
 #[cfg(test)]

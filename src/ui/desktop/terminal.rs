@@ -33,7 +33,7 @@ pub(crate) fn terminal_pane(id: String) -> impl IntoElement {
         });
     }
     let (input_id, resize_id) = (id.clone(), id.clone());
-    view().flex_1().bg(SURFACE0).p(sp(S3)).child(
+    view().flex_1().bg(SURFACE0()).p(sp(S3)).child(
         terminal()
             .component_ref(&term)
             .accessibility_label(t("Terminal"))
@@ -41,14 +41,14 @@ pub(crate) fn terminal_pane(id: String) -> impl IntoElement {
             .font_size(13.0)
             .line_height(18.0)
             .scrollback(5000)
-            .cursor_style(|s| s.bg(tint(FG, 0.55)))
+            .cursor_style(|s| s.bg(tint(FG(), 0.55)))
             .on_data(move |data: &SharedString| store::terminal_input(&input_id, data))
             .on_resize(move |e: &TerminalEvent| {
                 if let TerminalEvent::Resize(cols, rows) = e {
                     store::terminal_resize(&resize_id, *rows as u16, *cols as u16);
                 }
             })
-            .text_color(FG)
+            .text_color(FG())
             .flex_1(),
     )
 }
@@ -68,8 +68,8 @@ pub(crate) fn terminal_panel() -> impl IntoElement {
         .flex_shrink_0()
         .h(move || Length::from(px(store::terminal_panel_height())))
         .border_t_1()
-        .border_color(BORDER)
-        .bg(SURFACE0)
+        .border_color(BORDER())
+        .bg(SURFACE0())
         .child(height_handle())
         .child(
             view()
@@ -80,7 +80,7 @@ pub(crate) fn terminal_panel() -> impl IntoElement {
                 .pl(sp(S3))
                 .pr(sp(S2))
                 .border_b_1()
-                .border_color(tint(BORDER, 0.6))
+                .border_color(tint(BORDER(), 0.6))
                 .child(each(store::terminals, |t| t.id.clone(), move |t, _| terminal_chip(t.get_untracked(), active)))
                 .child(icon_btn(Icon::Plus, Sz::Sm, t("New terminal  ⌃⇧`"), store::new_terminal))
                 .child(view().flex_1())
@@ -111,13 +111,13 @@ fn terminal_chip(info: crate::daemon::connection::TerminalInfo, active: Memo<Opt
         .pr(px(4.0))
         .max_w(px(220.0))
         .rounded(px(R_MD))
-        .bg(move || if on.get() { highlight() } else { tint(SURFACE0, 0.0) })
+        .bg(move || if on.get() { highlight() } else { tint(SURFACE0(), 0.0) })
         .hover(|s| s.bg(highlight()))
-        .child(icon(Icon::SquareTerminal, 13.0).text_color(FG_MUTED))
+        .child(icon(Icon::SquareTerminal, 13.0).text_color(FG_MUTED()))
         .child(
             text(label)
                 .text_size(tx(TEXT_SM))
-                .text_color(move || if on.get() { FG } else { FG_MUTED })
+                .text_color(move || if on.get() { FG() } else { FG_MUTED() })
                 .number_of_lines(1)
                 .flex_shrink(1.0),
         )
@@ -131,7 +131,7 @@ fn terminal_chip(info: crate::daemon::connection::TerminalInfo, active: Memo<Opt
                 .items_center()
                 .justify_center()
                 .hover(|s| s.bg(highlight()))
-                .child(icon(Icon::X, 11.0).text_color(FG_MUTED)),
+                .child(icon(Icon::X, 11.0).text_color(FG_MUTED())),
         )
 }
 
@@ -167,6 +167,6 @@ fn height_handle() -> impl IntoElement {
             view()
                 .w_full()
                 .h(px(2.0))
-                .bg(move || tint(ACCENT, if dragging.get() { 0.9 } else if hover.get() { 0.5 } else { 0.0 })),
+                .bg(move || tint(ACCENT(), if dragging.get() { 0.9 } else if hover.get() { 0.5 } else { 0.0 })),
         )
 }

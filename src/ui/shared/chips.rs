@@ -68,8 +68,8 @@ fn chip_box(el: nsh_base::ButtonElement) -> nsh_base::ButtonElement {
         .mr(px(4.0))
         .rounded(px(R_MD))
         .border_1()
-        .border_color(tint(ACCENT, 0.18))
-        .bg(tint(ACCENT, 0.06))
+        .border_color(tint(ACCENT(), 0.18))
+        .bg(tint(ACCENT(), 0.06))
 }
 
 struct AttachmentView {
@@ -101,10 +101,10 @@ impl NodeView for AttachmentView {
         let lead = if image {
             match thumbnail(&id) {
                 Some(uri) => image_el(uri).w(px(14.0)).h(px(14.0)).rounded(px(3.0)).object_fit(ResizeMode::Cover).into_element(),
-                None => icon(Icon::Image, 13.0).text_color(FG_MUTED).into_element(),
+                None => icon(Icon::Image, 13.0).text_color(FG_MUTED()).into_element(),
             }
         } else {
-            icon(Icon::FileText, 13.0).text_color(FG_MUTED).into_element()
+            icon(Icon::FileText, 13.0).text_color(FG_MUTED()).into_element()
         };
         let open = id.clone();
         chip_box(button())
@@ -112,13 +112,13 @@ impl NodeView for AttachmentView {
             .accessibility_label(name.clone())
             .pl(px(if image { 3.0 } else { 6.0 }))
             .pr(px(7.0))
-            .border_color(move || if selected.get() { tint(ACCENT, 0.9) } else { tint(ACCENT, 0.18) })
-            .bg(move || if selected.get() { tint(ACCENT, 0.18) } else { tint(ACCENT, 0.06) })
-            .hover(|s| s.bg(tint(ACCENT, 0.12)))
-            .active(|s| s.bg(tint(ACCENT, 0.16)))
+            .border_color(move || if selected.get() { tint(ACCENT(), 0.9) } else { tint(ACCENT(), 0.18) })
+            .bg(move || if selected.get() { tint(ACCENT(), 0.18) } else { tint(ACCENT(), 0.06) })
+            .hover(|s| s.bg(tint(ACCENT(), 0.12)))
+            .active(|s| s.bg(tint(ACCENT(), 0.16)))
             .bind_opacity(&fade)
             .child(lead)
-            .child(text(chip_name(&name)).text_size(tx(TEXT_SM)).line_height(px(16.0)).text_color(FG).number_of_lines(1))
+            .child(text(chip_name(&name)).text_size(tx(TEXT_SM)).line_height(px(16.0)).text_color(FG()).number_of_lines(1))
             .into_element()
     }
 }
@@ -153,11 +153,11 @@ impl NodeView for MentionView {
             .px(px(5.0))
             .rounded(px(R_MD))
             .border_1()
-            .border_color(move || if selected.get() { tint(ACCENT, 0.9) } else { tint(ACCENT, 0.18) })
-            .bg(move || if selected.get() { tint(ACCENT, 0.18) } else { tint(ACCENT, 0.06) })
+            .border_color(move || if selected.get() { tint(ACCENT(), 0.9) } else { tint(ACCENT(), 0.18) })
+            .bg(move || if selected.get() { tint(ACCENT(), 0.18) } else { tint(ACCENT(), 0.06) })
             .label(label)
-            .child(icon(glyph, 12.0).text_color(ACCENT))
-            .child(text(chip_name(&tail)).text_size(tx(TEXT_SM)).line_height(px(16.0)).font_family(mono_font).text_color(ACCENT).number_of_lines(1))
+            .child(icon(glyph, 12.0).text_color(ACCENT()))
+            .child(text(chip_name(&tail)).text_size(tx(TEXT_SM)).line_height(px(16.0)).font_family(mono_font).text_color(ACCENT()).number_of_lines(1))
             .into_element()
     }
 }
@@ -311,8 +311,8 @@ fn file_card(composer: String, file: store::PendingFile) -> impl IntoElement {
         view()
             .flex_row()
             .gap(sp(S3))
-            .child(text(t(label)).text_size(tx(TEXT_BASE)).text_color(FG_MUTED).w(px(64.0)))
-            .child(text(value).text_size(tx(TEXT_BASE)).text_color(FG).flex_1().number_of_lines(2).selectable(true))
+            .child(text(t(label)).text_size(tx(TEXT_BASE)).text_color(FG_MUTED()).w(px(64.0)))
+            .child(text(value).text_size(tx(TEXT_BASE)).text_color(FG()).flex_1().number_of_lines(2).selectable(true))
     };
     let id = file.id.clone();
     dialog().animation(ModalAnimation::Fade).on_cancel(close_preview).flex_1().child(
@@ -339,10 +339,10 @@ fn file_card(composer: String, file: store::PendingFile) -> impl IntoElement {
                                     .w(px(36.0))
                                     .h(px(36.0))
                                     .rounded(px(R_LG))
-                                    .bg(tint(ACCENT, 0.08))
+                                    .bg(tint(ACCENT(), 0.08))
                                     .items_center()
                                     .justify_center()
-                                    .child(icon(Icon::FileText, 18.0).text_color(ACCENT)),
+                                    .child(icon(Icon::FileText, 18.0).text_color(ACCENT())),
                             )
                             .child(text(file.name.clone()).text_size(tx(TEXT_LG)).font_weight(FontWeight(500)).flex_1().number_of_lines(2)),
                     )
@@ -356,7 +356,7 @@ fn file_card(composer: String, file: store::PendingFile) -> impl IntoElement {
                                 Some(untracked(move || {
                                     text(if up { t("Uploading…") } else { t("Ready to send") })
                                         .text_size(tx(TEXT_BASE))
-                                        .text_color(if up { FG_MUTED } else { SUCCESS })
+                                        .text_color(if up { FG_MUTED() } else { SUCCESS })
                                 }))
                             }))),
                     )

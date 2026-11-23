@@ -163,7 +163,7 @@ fn panel(title: Option<String>, items: Vec<SheetItem>) -> impl IntoElement {
                     liquid_glass(view())
                         .rounded(px(28.0))
                         .overflow_hidden()
-                        .child(view().items_center().pt(sp(S2)).child(view().w(px(36.0)).h(px(5.0)).rounded(px(R_FULL)).bg(tint(FG, 0.18))))
+                        .child(view().items_center().pt(sp(S2)).child(view().w(px(36.0)).h(px(5.0)).rounded(px(R_FULL)).bg(tint(FG(), 0.18))))
                         .when_some(title, |v, title| {
                             v.child(
                                 text(title)
@@ -172,7 +172,7 @@ fn panel(title: Option<String>, items: Vec<SheetItem>) -> impl IntoElement {
                                     .pb(sp(S1))
                                     .text_size(tx(TEXT_SM))
                                     .font_weight(FontWeight(600))
-                                    .text_color(FG_MUTED)
+                                    .text_color(FG_MUTED())
                                     .number_of_lines(1),
                             )
                         })
@@ -194,7 +194,7 @@ fn panel(title: Option<String>, items: Vec<SheetItem>) -> impl IntoElement {
 }
 
 fn row(item: SheetItem, divider: bool) -> impl IntoElement {
-    let ink = if item.destructive { DANGER } else { FG };
+    let ink = if item.destructive { DANGER } else { FG() };
     let run = item.run.clone();
     button()
         // The action runs once the sheet has gone, so the next sheet
@@ -207,7 +207,7 @@ fn row(item: SheetItem, divider: bool) -> impl IntoElement {
         .px(sp(S4))
         .active(|s| s.bg(highlight()))
         .child(match item.glyph {
-            Some(g) => view().w(px(22.0)).items_center().child(icon(g, 20.0).text_color(if item.destructive { DANGER } else { FG_MUTED })),
+            Some(g) => view().w(px(22.0)).items_center().child(icon(g, 20.0).text_color(if item.destructive { DANGER } else { FG_MUTED() })),
             None => view(),
         })
         .child(
@@ -219,7 +219,7 @@ fn row(item: SheetItem, divider: bool) -> impl IntoElement {
                 .child(text(item.label).text_size(tx(TEXT_LG)).text_color(ink).number_of_lines(2)),
         )
         .child(match item.checked {
-            true => icon(Icon::Check, 18.0).text_color(ACCENT).into_element(),
+            true => icon(Icon::Check, 18.0).text_color(ACCENT()).into_element(),
             false => view().into_element(),
         })
 }

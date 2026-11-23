@@ -89,9 +89,9 @@ pub(crate) fn conn_banner(top: f32) -> impl IntoElement {
                 .h(px(30.0))
                 .px(sp(S3))
                 .rounded(px(R_FULL))
-                .bg(FG)
+                .bg(FG())
                 .shadow_md()
-                .child(text(said).text_size(tx(TEXT_SM)).text_color(SURFACE0).number_of_lines(1));
+                .child(text(said).text_size(tx(TEXT_SM)).text_color(SURFACE0()).number_of_lines(1));
             // After a failure the next attempt comes by itself; the press
             // makes it now.
             if k == 2 {
@@ -102,11 +102,11 @@ pub(crate) fn conn_banner(top: f32) -> impl IntoElement {
                         .px(sp(S2))
                         .h(px(22.0))
                         .rounded(px(R_FULL))
-                        .bg(tint(SURFACE0, 0.18))
+                        .bg(tint(SURFACE0(), 0.18))
                         .items_center()
                         .justify_center()
                         .active(|s| s.opacity(0.6))
-                        .child(text(t("Retry")).text_size(tx(TEXT_SM)).font_weight(FontWeight(600)).text_color(SURFACE0)),
+                        .child(text(t("Retry")).text_size(tx(TEXT_SM)).font_weight(FontWeight(600)).text_color(SURFACE0())),
                 );
             }
             view()

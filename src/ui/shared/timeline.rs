@@ -145,9 +145,9 @@ fn turn_rail() -> impl IntoElement {
                         .rounded(px(R_XL))
                         .shadow_lg()
                         .pointer_events(PointerEvents::None)
-                        .child(text(message).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).text_color(FG).number_of_lines(1))
+                        .child(text(message).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).text_color(FG()).number_of_lines(1))
                         .when(!reply.is_empty(), |v| {
-                            v.child(text(reply).text_size(tx(TEXT_SM)).line_height(px(18.0)).text_color(FG_MUTED).number_of_lines(3))
+                            v.child(text(reply).text_size(tx(TEXT_SM)).line_height(px(18.0)).text_color(FG_MUTED()).number_of_lines(3))
                         })
                         .opacity(move || if over.get() == Some(row) { 1.0_f32 } else { 0.0 })
                         .transition_opacity();
@@ -170,7 +170,7 @@ fn turn_rail() -> impl IntoElement {
                                             .h(px(2.0))
                                             .w(px(width))
                                             .rounded(px(1.0))
-                                            .bg(move || if over.get() == Some(row) { FG } else { tint(FG, 0.22) })
+                                            .bg(move || if over.get() == Some(row) { FG() } else { tint(FG(), 0.22) })
                                             .transition_colors(),
                                     ),
                             )
@@ -225,17 +225,21 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
             None => 0,
         }
     });
+    // The end of a turn (worked out with the rows): the reply's actions
+    // show under it alone, not under each piece said between tool calls.
+    let turn_end = computed(move || matches!(shown.get(), Some(Row::Item { turn_end: true, .. })));
     view()
         .px(sp(S6))
-        .py(px(6.0))
+        // Close together: a turn's steps and words read as one piece.
+        .py(px(if MOBILE { 6.0 } else { 2.0 }))
         .w_full()
         .max_w(px(CONTENT_MAX_WIDTH + 2.0 * S6))
         .self_center()
         .rounded(px(R_LG))
         .bg(move || match hit.get() {
-            2 => tint(ACCENT, 0.14),
+            2 => tint(ACCENT(), 0.14),
             1 => tint(DOT_WARNING, 0.10),
-            _ => tint(ACCENT, 0.0),
+            _ => tint(ACCENT(), 0.0),
         })
         .child(dynamic(
         move || {
@@ -246,7 +250,7 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                 RowKind::User if MOBILE => user_row(item, view().child(dynamic(move || {
                     let selecting = index.get().is_some() && selecting_text() == index.get();
                     Some(untracked(move || {
-                        let bubble = view().px(px(14.0)).py(px(9.0)).rounded(px(18.0)).bg(tint(ACCENT, 0.10));
+                        let bubble = view().px(px(14.0)).py(px(9.0)).rounded(px(18.0)).bg(tint(ACCENT(), 0.10));
                         if selecting {
                             select_in_place(bubble.child(user_text(item, true))).items_end().into_element()
                         } else {
@@ -276,7 +280,7 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                             .gap(px(4.0))
                             .on_mouse_enter(move |_: &MouseEvent| hover.set(true))
                             .on_mouse_leave(move |_: &MouseEvent| hover.set(false))
-                            .child(view().px(px(14.0)).py(px(9.0)).rounded(px(18.0)).bg(tint(ACCENT, 0.10)).selectable(true).on_text_selection_change(take_copy).child(user_text(item, true)))
+                            .child(view().px(px(14.0)).py(px(9.0)).rounded(px(18.0)).bg(tint(ACCENT(), 0.10)).selectable(true).on_text_selection_change(take_copy).child(user_text(item, true)))
                             .child(user_actions(item).opacity(move || if hover.get() { 1.0_f32 } else { 0.0 }).transition_opacity()),
                     )
                     .into_element()
@@ -297,7 +301,7 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                             .gap_3()
                             .text_size(tx(TEXT_CONTENT))
                             .line_height(px(24.0))
-                            .text_color(FG);
+                            .text_color(FG());
                         if selecting {
                             select_in_place(view().child(reply)).into_element()
                         } else {
@@ -332,7 +336,7 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                             .gap_3()
                             .text_size(tx(TEXT_CONTENT))
                             .line_height(px(24.0))
-                            .text_color(FG)
+                            .text_color(FG())
                     };
                     // Written, a reply with quotes in it shows each quote apart,
                     // with a copy button of its own (a reply drafted for someone
@@ -362,7 +366,7 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                         // Under the reply (as T3 Code's): copy it, fork the
                         // conversation, quote it in the next message, and when
                         // it was written; there under the pointer once written.
-                        .child(reply_actions(item, text_of, computed(move || !streaming.get() && hover.get())))
+                        .child(when(turn_end, move || reply_actions(item, text_of, computed(move || !streaming.get() && hover.get()))))
                         .into_element()
                 }
                 // The agent's thinking, folded to one line ("Thinking"):
@@ -391,16 +395,16 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                                 .h(px(24.0))
                                 .self_start()
                                 .group()
-                                .child(icon(Icon::Brain, 15.0).text_color(FG_FAINT))
+                                .child(icon(Icon::Brain, 15.0).text_color(FG_FAINT()))
                                 .child(
                                     text(move || if streaming.get() { t("Thinking…") } else { t("Thinking") }.to_owned())
                                         .text_size(px(13.0))
-                                        .text_color(FG_FAINT)
-                                        .group_hover(|s| s.text_color(FG_MUTED)),
+                                        .text_color(FG_FAINT())
+                                        .group_hover(|s| s.text_color(FG_MUTED())),
                                 )
                                 .child(
                                     icon(Icon::ChevronRight, 12.0)
-                                        .text_color(FG_FAINT)
+                                        .text_color(FG_FAINT())
                                         .rotate(move || Radians(if open.get() { std::f32::consts::FRAC_PI_2 } else { 0.0 }))
                                         .transition_transform(),
                                 ),
@@ -411,7 +415,7 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                                     .text_size(px(13.0))
                                     .line_height(px(19.0))
                                     .italic()
-                                    .text_color(FG_MUTED),
+                                    .text_color(FG_MUTED()),
                             )
                         }))
                         .into_element()
@@ -434,7 +438,7 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                             .selectable(true)
                             .on_text_selection_change(take_copy)
                             .flex_1()
-                            .child(text(text_of).text_size(tx(TEXT_SM)).line_height(px(19.0)).text_color(FG_MUTED)),
+                            .child(text(text_of).text_size(tx(TEXT_SM)).line_height(px(19.0)).text_color(FG_MUTED())),
                     )
                     // The turn ended on it: its message sent again.
                     .child(when(computed(move || last.get() && !running.get()), move || retry_button(DANGER)))
@@ -456,7 +460,7 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                     .into_element(),
                 RowKind::Notice => text(text_of)
                     .text_size(tx(TEXT_SM))
-                    .text_color(FG_FAINT)
+                    .text_color(FG_FAINT())
                     .text_center()
                     .into_element(),
             }))
@@ -628,7 +632,7 @@ fn quote_with_copy(quote: impl IntoElement, words: String) -> View {
                 .top(px(-2.0))
                 .right(px(0.0))
                 .rounded(px(R_MD))
-                .bg(SURFACE0)
+                .bg(SURFACE0())
                 .opacity(move || if hover.get() { 1.0_f32 } else { 0.0 })
                 .transition_opacity()
                 .pointer_events(move || if hover.get() { nsh_core::PointerEvents::Auto } else { nsh_core::PointerEvents::None })
@@ -690,7 +694,7 @@ fn user_text(item: Memo<Option<Item>>, selectable: bool) -> impl IntoElement {
         };
         let f = store::find();
         Some(untracked(move || {
-            let mut line = text("").text_size(tx(TEXT_CONTENT)).line_height(px(22.0)).text_color(FG).selectable(selectable);
+            let mut line = text("").text_size(tx(TEXT_CONTENT)).line_height(px(22.0)).text_color(FG()).selectable(selectable);
             let mut pictures = images.into_iter();
             let needle = if f.open { f.query.trim().to_lowercase() } else { String::new() };
             for segment in segments(&body) {
@@ -733,22 +737,22 @@ fn sent_chip(name: String, thumb: Option<String>) -> View {
         .pr(px(7.0))
         .translate_y(px(crate::ui::shared::chips::CHIP_LIFT))
         .rounded(px(R_MD))
-        .bg(SURFACE0)
+        .bg(SURFACE0())
         .border_1()
-        .border_color(tint(ACCENT, 0.35));
+        .border_color(tint(ACCENT(), 0.35));
     let chip = match &thumb {
         Some(uri) => chip.child(
             image(SharedString::from(uri.clone())).w(px(16.0)).h(px(16.0)).object_fit(nsh_core::ResizeMode::Cover).rounded(px(3.0)),
         ),
-        None => chip.child(icon(if crate::ui::shared::composer_doc::is_image_name(&name) { Icon::Image } else { Icon::File }, 13.0).text_color(FG_MUTED)),
+        None => chip.child(icon(if crate::ui::shared::composer_doc::is_image_name(&name) { Icon::Image } else { Icon::File }, 13.0).text_color(FG_MUTED())),
     };
     let chip_name = name.clone();
-    let chip = chip.child(text(crate::ui::shared::chips::chip_name(&name)).text_size(tx(TEXT_SM)).text_color(FG).number_of_lines(1));
+    let chip = chip.child(text(crate::ui::shared::chips::chip_name(&name)).text_size(tx(TEXT_SM)).text_color(FG()).number_of_lines(1));
     // A picture's chip opens it large (and shows it under the pointer).
     let chip = match thumb {
         Some(uri) => {
             let (open_name, open_uri) = (chip_name, uri.clone());
-            chip.hover(|s| s.border_color(ACCENT))
+            chip.hover(|s| s.border_color(ACCENT()))
                 .on_press(move |_: &PressEvent| store::open_modal(store::Modal::Picture { name: open_name.clone(), uri: open_uri.clone() }))
                 .tooltip(
                     glass_strong(view()).p(sp(S1)).rounded(px(R_LG)).child(
@@ -785,7 +789,7 @@ fn user_row(item: Memo<Option<Item>>, bubble: impl IntoElement + 'static) -> imp
                 .object_fit(nsh_core::ResizeMode::Cover)
                 .rounded(px(14.0))
                 .border_1()
-                .border_color(tint(BORDER, 0.8)),
+                .border_color(tint(BORDER(), 0.8)),
         );
     }
     view()
@@ -902,7 +906,7 @@ fn reply_actions(item: Memo<Option<Item>>, text_of: impl Fn() -> String + Copy +
         Some(Item::Assistant { at, .. }) => at.as_deref().and_then(sent_at),
         _ => None,
     });
-    let tip = |label: &'static str| text(label).text_size(tx(TEXT_XS)).px(sp(S2)).py(px(3.0)).rounded(px(R_MD)).bg(SURFACE0).border_1().border_color(BORDER).into_element();
+    let tip = |label: &'static str| text(label).text_size(tx(TEXT_XS)).px(sp(S2)).py(px(3.0)).rounded(px(R_MD)).bg(SURFACE0()).border_1().border_color(BORDER()).into_element();
     let action = move |glyph: Icon, label: &'static str, press: Box<dyn Fn()>| {
         view().tooltip(tip(label)).child(
             nsh_base::button()
@@ -914,7 +918,7 @@ fn reply_actions(item: Memo<Option<Item>>, text_of: impl Fn() -> String + Copy +
                 .items_center()
                 .justify_center()
                 .hover(|s| s.bg(highlight()))
-                .child(icon(glyph, 14.0).text_color(FG_MUTED)),
+                .child(icon(glyph, 14.0).text_color(FG_MUTED())),
         )
     };
     view()
@@ -937,7 +941,7 @@ fn reply_actions(item: Memo<Option<Item>>, text_of: impl Fn() -> String + Copy +
         ))
         .child(action(Icon::GitBranch, t("Fork conversation"), Box::new(store::fork_selected)))
         .child(action(Icon::TextQuote, t("Quote in a message"), Box::new(move || crate::ui::shared::composer::attach_as_context(&text_of()))))
-        .child(text(move || at.get().unwrap_or_default()).text_size(tx(TEXT_XS)).text_color(FG_FAINT).ml(sp(S1)))
+        .child(text(move || at.get().unwrap_or_default()).text_size(tx(TEXT_XS)).text_color(FG_FAINT()).ml(sp(S1)))
 }
 
 /// When a message was sent, short: its time today ("8:38"), else its day
@@ -979,7 +983,7 @@ fn user_actions(item: Memo<Option<Item>>) -> View {
             let id = id.get();
             Some(untracked(move || {
                 let tip = |label: &'static str| {
-                    text(label).text_size(tx(TEXT_XS)).px(sp(S2)).py(px(3.0)).rounded(px(R_MD)).bg(SURFACE0).border_1().border_color(BORDER).into_element()
+                    text(label).text_size(tx(TEXT_XS)).px(sp(S2)).py(px(3.0)).rounded(px(R_MD)).bg(SURFACE0()).border_1().border_color(BORDER()).into_element()
                 };
                 let action = |glyph: Icon, label: &'static str, press: Box<dyn Fn()>| {
                     view().tooltip(tip(label)).child(
@@ -992,12 +996,12 @@ fn user_actions(item: Memo<Option<Item>>) -> View {
                             .items_center()
                             .justify_center()
                             .hover(|s| s.bg(highlight()))
-                            .child(icon(glyph, 14.0).text_color(FG_MUTED)),
+                            .child(icon(glyph, 14.0).text_color(FG_MUTED())),
                     )
                 };
                 let mut row = view().flex_row().items_center().gap(px(2.0));
                 if let Some(at) = at.as_deref().and_then(sent_at) {
-                    row = row.child(text(at).text_size(tx(TEXT_XS)).text_color(FG_FAINT).mr(sp(S1)));
+                    row = row.child(text(at).text_size(tx(TEXT_XS)).text_color(FG_FAINT()).mr(sp(S1)));
                 }
                 if let Some(id) = id.clone() {
                     let (again, said) = (id.clone(), words.clone());
@@ -1024,7 +1028,7 @@ fn user_actions(item: Memo<Option<Item>>) -> View {
                                 .justify_center()
                                 .hover(|s| s.bg(highlight()))
                                 .label(t("Message actions"))
-                                .child(icon(Icon::Ellipsis, 14.0).text_color(FG_MUTED)),
+                                .child(icon(Icon::Ellipsis, 14.0).text_color(FG_MUTED())),
                         )
                         .align(nsh_core::overlay::Align::End)
                         .child(menu_heading(t("Rewind to here")))
@@ -1061,10 +1065,10 @@ fn user_actions(item: Memo<Option<Item>>) -> View {
                     .items_center()
                     .justify_center()
                     .rounded(px(R_FULL))
-                    .bg(SURFACE0)
+                    .bg(SURFACE0())
                     .border_1()
-                    .border_color(BORDER)
-                    .child(icon(Icon::Ellipsis, 14.0).text_color(FG_MUTED))
+                    .border_color(BORDER())
+                    .child(icon(Icon::Ellipsis, 14.0).text_color(FG_MUTED()))
                     .into_element();
             }
             dropdown(
@@ -1074,11 +1078,11 @@ fn user_actions(item: Memo<Option<Item>>) -> View {
                     .items_center()
                     .justify_center()
                     .rounded(px(R_FULL))
-                    .bg(SURFACE0)
+                    .bg(SURFACE0())
                     .border_1()
-                    .border_color(BORDER)
+                    .border_color(BORDER())
                     .label(t("Message actions"))
-                    .child(icon(Icon::Ellipsis, 13.0).text_color(FG_MUTED)),
+                    .child(icon(Icon::Ellipsis, 13.0).text_color(FG_MUTED())),
             )
             .align(nsh_core::overlay::Align::End)
             .child(menu_heading(t("Rewind to here")))
@@ -1123,7 +1127,7 @@ fn jump_buttons() -> impl IntoElement {
             .opacity(move || if shown.get() { 1.0_f32 } else { 0.0 })
             .transition_opacity()
             .pointer_events(move || if shown.get() { PointerEvents::Auto } else { PointerEvents::None })
-            .child(icon(glyph, 15.0).text_color(FG_MUTED).group_hover(|s| s.text_color(FG)))
+            .child(icon(glyph, 15.0).text_color(FG_MUTED()).group_hover(|s| s.text_color(FG())))
     };
     let live = move || store::timeline_scrolling() || held.get();
     let to_start = computed(move || live() && ends.with(|e| e.away_from_start));
@@ -1170,19 +1174,19 @@ fn group_row(group: Memo<Option<Group>>) -> impl IntoElement {
         .items_center()
         .gap(sp(S2))
         .px(sp(S2))
-        .h(px(30.0))
+        .h(px(26.0))
         .rounded(px(R_LG))
         .hover(|s| s.bg(highlight()))
         .child(
             icon(Icon::ChevronRight, 13.0)
-                .text_color(FG_FAINT)
+                .text_color(FG_FAINT())
                 .rotate(move || Radians(if open.get() { std::f32::consts::FRAC_PI_2 } else { 0.0 }))
                 .transition_transform(),
         )
         .child(
             text(move || summary.with(|s| s.describe()))
                 .text_size(tx(TEXT_BASE))
-                .text_color(FG_MUTED)
+                .text_color(FG_MUTED())
                 .number_of_lines(1)
                 .flex_shrink(1.0),
         )
@@ -1253,25 +1257,25 @@ fn tool_row(item: Memo<Option<Item>>) -> impl IntoElement {
         .items_center()
         .gap(sp(S2))
         .px(sp(S2))
-        .h(px(30.0))
+        .h(px(26.0))
         .rounded(px(R_LG))
         .hover(|s| s.bg(highlight()))
         .child(dynamic(move || {
             let g = glyph.get();
-            Some(untracked(move || icon(g, 15.0).text_color(FG_MUTED)))
+            Some(untracked(move || icon(g, 15.0).text_color(FG_MUTED())))
         }))
         .child(
             text(move || tool.with(|(n, ..)| n.clone()))
                 .text_size(tx(TEXT_BASE))
                 .font_weight(FontWeight(500))
-                .text_color(FG)
+                .text_color(FG())
                 .flex_shrink_0(),
         )
         .child(
             text(move || tool.with(|(.., s)| s.clone()))
                 .text_size(tx(TEXT_CODE))
                 .font_family(mono_font)
-                .text_color(FG_MUTED)
+                .text_color(FG_MUTED())
                 .number_of_lines(1)
                 .flex_1(),
         )
@@ -1283,7 +1287,7 @@ fn tool_row(item: Memo<Option<Item>>) -> impl IntoElement {
             expandable.then(|| {
                 untracked(move || {
                     icon(Icon::ChevronRight, 13.0)
-                        .text_color(FG_FAINT)
+                        .text_color(FG_FAINT())
                         .rotate(move || Radians(if open.get() { std::f32::consts::FRAC_PI_2 } else { 0.0 }))
                         .transition_transform()
                         .into_element()
@@ -1295,7 +1299,7 @@ fn tool_row(item: Memo<Option<Item>>) -> impl IntoElement {
             Some(untracked(move || match status.as_str() {
                 "running" => status_dot(|| Status::Running).into_element(),
                 "failed" => icon(Icon::X, 14.0).text_color(DANGER).into_element(),
-                "canceled" => icon(Icon::CircleX, 14.0).text_color(FG_FAINT).into_element(),
+                "canceled" => icon(Icon::CircleX, 14.0).text_color(FG_FAINT()).into_element(),
                 _ => icon(Icon::Check, 14.0).text_color(SUCCESS).into_element(),
             }))
         }));
@@ -1338,12 +1342,12 @@ fn todo_card(item: Memo<Option<Item>>) -> impl IntoElement {
                         .child(icon(if done { Icon::CircleCheck } else { Icon::CircleDot }, 15.0).text_color(if done {
                             SUCCESS
                         } else {
-                            FG_FAINT
+                            FG_FAINT()
                         }))
                         .child(
                             text(t)
                                 .text_size(tx(TEXT_BASE))
-                                .text_color(if done { FG_MUTED } else { FG })
+                                .text_color(if done { FG_MUTED() } else { FG() })
                                 .flex_1(),
                         ),
                 );
@@ -1420,13 +1424,13 @@ fn tool_card(p: Permission) -> View {
         .child(card_title(Icon::TriangleAlert, WARNING, p.title.clone()))
         .when(!p.description.is_empty(), |v| {
             v.child(
-                view().px(sp(S3)).py(sp(S2)).rounded(px(R_LG)).bg(SURFACE2).child(
+                view().px(sp(S3)).py(sp(S2)).rounded(px(R_LG)).bg(SURFACE2()).child(
                     text(p.description.clone())
                         .text_size(tx(TEXT_CODE))
                         .font_family(mono_font)
                         .line_height(px(18.0))
                         .number_of_lines(8)
-                        .text_color(FG)
+                        .text_color(FG())
                         .selectable(true),
                 ),
             )
@@ -1439,7 +1443,7 @@ fn plan_card(p: Permission, plan: String) -> View {
         .mb(sp(S2))
         .p(sp(S4))
         .gap(sp(S3))
-        .child(card_title(Icon::ListTodo, ACCENT, t("Plan ready for review").into()))
+        .child(card_title(Icon::ListTodo, ACCENT(), t("Plan ready for review").into()))
         .child(
             scroll().max_h(px(320.0)).child(copy_area(
                 text_view()
@@ -1453,7 +1457,7 @@ fn plan_card(p: Permission, plan: String) -> View {
                     .gap_2()
                     .text_size(tx(TEXT_BASE))
                     .line_height(px(21.0))
-                    .text_color(FG),
+                    .text_color(FG()),
             )),
         )
         .child(action_buttons(&p))
@@ -1517,7 +1521,7 @@ fn question_card(p: Permission, questions: Vec<Question>) -> View {
         .mb(sp(S2))
         .p(sp(S4))
         .gap(sp(S4))
-        .child(card_title(Icon::CircleDot, ACCENT, p.title.clone()))
+        .child(card_title(Icon::CircleDot, ACCENT(), p.title.clone()))
         .child(scroll().max_h(px(380.0)).child(body))
         .child(
             view()
@@ -1588,9 +1592,9 @@ pub(crate) fn tracks() -> View {
                     .flex_row()
                     .items_center()
                     .gap(sp(S2))
-                    .child(icon(Icon::ListTodo, 15.0).text_color(ACCENT))
+                    .child(icon(Icon::ListTodo, 15.0).text_color(ACCENT()))
                     .child(text(tf("Tasks {}/{}", &[&done.to_string(), &lines.len().to_string()])).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)))
-                    .child(text(next).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1).flex_1())
+                    .child(text(next).text_size(tx(TEXT_SM)).text_color(FG_MUTED()).number_of_lines(1).flex_1())
             }))
         }))
         .child(dynamic(move || {
@@ -1619,7 +1623,7 @@ pub(crate) fn tracks() -> View {
                         .flex_row()
                         .items_center()
                         .gap(sp(S1))
-                        .child(icon(if open { Icon::ChevronDown } else { Icon::ChevronRight }, 13.0).text_color(FG_MUTED))
+                        .child(icon(if open { Icon::ChevronDown } else { Icon::ChevronRight }, 13.0).text_color(FG_MUTED()))
                         .child(section_label(label)),
                 );
                 if !open {
@@ -1649,7 +1653,7 @@ pub(crate) fn tracks() -> View {
                             .hover(|st| st.bg(highlight()))
                             .child(status_dot(move || status))
                             .child(text(s.title.clone()).text_size(tx(TEXT_BASE)).number_of_lines(1).flex_shrink(1.0))
-                            .child(text(s.subtitle.clone()).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1).flex_1()),
+                            .child(text(s.subtitle.clone()).text_size(tx(TEXT_SM)).text_color(FG_MUTED()).number_of_lines(1).flex_1()),
                     );
                 }
                 // Three rows at most, so the fold above stays on screen
@@ -1704,10 +1708,10 @@ pub(crate) fn subagent_pane(parent: String, id: String) -> impl IntoElement {
                 .h(px(40.0))
                 .px(sp(S6))
                 .border_b_1()
-                .border_color(BORDER)
-                .child(icon(Icon::Bot, 15.0).text_color(FG_MUTED))
+                .border_color(BORDER())
+                .child(icon(Icon::Bot, 15.0).text_color(FG_MUTED()))
                 .child(text(move || info.with(|i| i.as_ref().map(|i| i.title.clone()).unwrap_or_default())).text_size(tx(TEXT_BASE)).number_of_lines(1).flex_1())
-                .child(text(move || info.with(|i| i.as_ref().map(|i| i.status.clone()).unwrap_or_default())).text_size(tx(TEXT_SM)).text_color(FG_MUTED)),
+                .child(text(move || info.with(|i| i.as_ref().map(|i| i.status.clone()).unwrap_or_default())).text_size(tx(TEXT_SM)).text_color(FG_MUTED())),
         )
         .child(dynamic(move || {
             let list = items.get();
@@ -1734,7 +1738,7 @@ fn static_row(item: Item) -> AnyElement {
                 .px(px(14.0))
                 .py(px(9.0))
                 .rounded(px(18.0))
-                .bg(SURFACE2)
+                .bg(SURFACE2())
                 .child(user_text(item, true))
                 .into_element()
         }
@@ -1749,7 +1753,7 @@ fn static_row(item: Item) -> AnyElement {
             .gap_3()
             .text_size(tx(TEXT_CONTENT))
             .line_height(px(24.0))
-            .text_color(FG))
+            .text_color(FG()))
             .into_element(),
         Item::Tool { name, kind, summary, .. } => view()
             .flex_row()
@@ -1757,13 +1761,13 @@ fn static_row(item: Item) -> AnyElement {
             .gap(sp(S2))
             .px(sp(S2))
             .h(px(30.0))
-            .child(icon(tool_icon(&kind, &name), 15.0).text_color(FG_MUTED))
+            .child(icon(tool_icon(&kind, &name), 15.0).text_color(FG_MUTED()))
             .child(text(name).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)))
-            .child(text(summary).text_size(tx(TEXT_CODE)).font_family(mono_font).text_color(FG_MUTED).number_of_lines(1).flex_1())
+            .child(text(summary).text_size(tx(TEXT_CODE)).font_family(mono_font).text_color(FG_MUTED()).number_of_lines(1).flex_1())
             .into_element(),
-        Item::Reasoning { text: t } => text(t).text_size(px(13.0)).italic().number_of_lines(3).text_color(FG_MUTED).into_element(),
+        Item::Reasoning { text: t } => text(t).text_size(px(13.0)).italic().number_of_lines(3).text_color(FG_MUTED()).into_element(),
         Item::Error { message } => text(message).text_size(tx(TEXT_BASE)).text_color(DANGER).into_element(),
-        Item::Notice { message } => text(message).text_size(tx(TEXT_SM)).text_color(FG_FAINT).into_element(),
+        Item::Notice { message } => text(message).text_size(tx(TEXT_SM)).text_color(FG_FAINT()).into_element(),
         retry @ Item::Retry { .. } => text(retry_words(&retry, false)).text_size(tx(TEXT_SM)).text_color(WARNING).into_element(),
         Item::Todo { lines } => text(lines.iter().map(|(d, t)| format!("{} {t}", if *d { "☑" } else { "☐" })).collect::<Vec<_>>().join("\n"))
             .text_size(tx(TEXT_BASE))
@@ -1837,7 +1841,7 @@ pub(crate) fn find_bar() -> impl IntoElement {
             .shadow_lg();
         let panel = if MOBILE { panel.mx(sp(S2)).mb(sp(S2)) } else { panel.absolute().top(sp(S2)).right(sp(S6)).w(px(360.0)) };
         panel
-            .child(icon(Icon::Search, 15.0).text_color(FG_MUTED))
+            .child(icon(Icon::Search, 15.0).text_color(FG_MUTED()))
             .child(
                 nsh_core::element::input()
                     .value(|| store::find().query)
@@ -1848,8 +1852,8 @@ pub(crate) fn find_bar() -> impl IntoElement {
                     .placeholder(t("Find in conversation"))
                     .auto_focus(true)
                     .text_size(tx(TEXT_BASE))
-                    .text_color(FG)
-                    .caret_color(|| color(ACCENT))
+                    .text_color(FG())
+                    .caret_color(|| color(ACCENT()))
                     .h(px(28.0))
                     .ml(sp(S1))
                     .flex_1()
@@ -1862,12 +1866,12 @@ pub(crate) fn find_bar() -> impl IntoElement {
                     (n, _) => format!("{} / {n}", cur.get().min(n - 1) + 1),
                 })
                 .text_size(tx(TEXT_SM))
-                .text_color(FG_MUTED)
+                .text_color(FG_MUTED())
                 .tabular_nums()
                 .number_of_lines(1)
                 .flex_shrink_0(),
             )
-            .child(view().w(px(1.0)).h(px(18.0)).mx(sp(S1)).bg(BORDER))
+            .child(view().w(px(1.0)).h(px(18.0)).mx(sp(S1)).bg(BORDER()))
             .child(icon_btn(Icon::ChevronUp, Sz::Sm, t("Previous match"), move || previous(false)))
             .child(icon_btn(Icon::ChevronDown, Sz::Sm, t("Next match"), move || next(true)))
             .child(icon_btn(Icon::X, Sz::Sm, t("Close find"), store::toggle_find))
@@ -1986,8 +1990,8 @@ fn thinking(running: Memo<bool>) -> impl IntoElement {
                 .items_center()
                 .gap(sp(S2))
                 .child(spark(14.0))
-                .child(text(format!("{verb}…")).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(ACCENT))
-                .child(text(detail).text_size(tx(TEXT_SM)).text_color(FG_FAINT))
+                .child(text(format!("{verb}…")).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(ACCENT()))
+                .child(text(detail).text_size(tx(TEXT_SM)).text_color(FG_FAINT()))
                 .into_element()
         }))
     }))

@@ -163,7 +163,7 @@ fn tab_strip() -> impl IntoElement {
         .pl(sp(S4))
         .pr(sp(S3))
         .border_b_1()
-        .border_color(tint(BORDER, 0.6))
+        .border_color(tint(BORDER(), 0.6))
         .child(each(
             move || agents.get(),
             |a| a.id.clone(),
@@ -179,10 +179,10 @@ fn tab_strip() -> impl IntoElement {
                 let title = store::subagent(&parent, &id).map(|s| s.title).unwrap_or_else(|| t("Sub-agent").into());
                 let back = parent.clone();
                 tab_shell(true, || {})
-                    .child(icon(Icon::Bot, 14.0).text_color(FG_MUTED))
+                    .child(icon(Icon::Bot, 14.0).text_color(FG_MUTED()))
                     // A long title ends in an ellipsis inside the tab, its
                     // close button kept in it.
-                    .child(text(title).text_size(tx(TEXT_SM)).text_color(FG).number_of_lines(1).flex_shrink(1.0).min_w(px(0.0)))
+                    .child(text(title).text_size(tx(TEXT_SM)).text_color(FG()).number_of_lines(1).flex_shrink(1.0).min_w(px(0.0)))
                     .child(close_button(t("Close sub-agent"), move || store::open_tab(Tab::Agent(back.clone()))))
             }))
         }))
@@ -191,8 +191,8 @@ fn tab_strip() -> impl IntoElement {
             Some(untracked(move || {
                 let label = path.as_deref().map(|p| p.rsplit('/').next().unwrap_or(p).to_owned()).unwrap_or_else(|| t("All changes").into());
                 tab_shell(true, || {})
-                    .child(icon(Icon::FileDiff, 14.0).text_color(FG_MUTED))
-                    .child(text(label).text_size(tx(TEXT_SM)).text_color(FG).number_of_lines(1).flex_shrink(1.0).min_w(px(0.0)))
+                    .child(icon(Icon::FileDiff, 14.0).text_color(FG_MUTED()))
+                    .child(text(label).text_size(tx(TEXT_SM)).text_color(FG()).number_of_lines(1).flex_shrink(1.0).min_w(px(0.0)))
                     .child(
                         button()
                             .on_press(|| {
@@ -207,7 +207,7 @@ fn tab_strip() -> impl IntoElement {
                             .items_center()
                             .justify_center()
                             .hover(|s| s.bg(highlight()))
-                            .child(icon(Icon::X, 12.0).text_color(FG_MUTED)),
+                            .child(icon(Icon::X, 12.0).text_color(FG_MUTED())),
                     )
             }))
         }))
@@ -224,13 +224,13 @@ fn tab_strip() -> impl IntoElement {
                     .justify_center()
                     .rounded(px(R_FULL))
                     .hover(|s| s.bg(highlight()))
-                    .child(icon(Icon::Plus, 16.0).text_color(FG_MUTED));
+                    .child(icon(Icon::Plus, 16.0).text_color(FG_MUTED()));
                 let mut row = view().flex_row().items_center().gap(sp(S1)).ml(px(2.0));
                 if draft {
                     row = row.child(
                         tab_shell(true, || store::open_tab(Tab::Draft))
-                            .child(icon(Icon::SquarePen, 14.0).text_color(FG_MUTED))
-                            .child(text(t("New chat")).text_size(tx(TEXT_SM)).text_color(FG)),
+                            .child(icon(Icon::SquarePen, 14.0).text_color(FG_MUTED()))
+                            .child(text(t("New chat")).text_size(tx(TEXT_SM)).text_color(FG())),
                     );
                 }
                 row.child(plus).into_element()
@@ -255,7 +255,7 @@ fn tab_shell(selected: bool, on_press: impl Fn() + 'static) -> nsh_base::ButtonE
         .min_w(px(0.0))
         .flex_shrink(1.0)
         .rounded(px(R_FULL))
-        .bg(if selected { tint(ACCENT, 0.10) } else { tint(SURFACE0, 0.0) })
+        .bg(if selected { tint(ACCENT(), 0.10) } else { tint(SURFACE0(), 0.0) })
         .hover(|s| s.bg(highlight()))
         .transition_colors()
 }
@@ -270,7 +270,7 @@ fn close_button(label: &'static str, on_press: impl Fn() + 'static) -> impl Into
         .items_center()
         .justify_center()
         .hover(|s| s.bg(highlight()))
-        .child(icon(Icon::X, 12.0).text_color(FG_MUTED))
+        .child(icon(Icon::X, 12.0).text_color(FG_MUTED()))
 }
 
 fn file_tab(path: String) -> impl IntoElement {
@@ -288,10 +288,10 @@ fn file_tab(path: String) -> impl IntoElement {
         let (open, close, label) = (path.clone(), path.clone(), label.clone());
         Some(untracked(move || {
             tab_shell(on, move || store::open_tab(Tab::File(open.clone())))
-                .child(icon(Icon::FileText, 14.0).text_color(FG_MUTED))
+                .child(icon(Icon::FileText, 14.0).text_color(FG_MUTED()))
                 // A long name ends in an ellipsis inside the tab.
-                .child(text(label).text_size(tx(TEXT_SM)).text_color(if on { FG } else { FG_MUTED }).number_of_lines(1).flex_shrink(1.0).min_w(px(0.0)))
-                .child(when(dirty, || view().w(px(6.0)).h(px(6.0)).rounded(px(R_FULL)).bg(FG_MUTED)))
+                .child(text(label).text_size(tx(TEXT_SM)).text_color(if on { FG() } else { FG_MUTED() }).number_of_lines(1).flex_shrink(1.0).min_w(px(0.0)))
+                .child(when(dirty, || view().w(px(6.0)).h(px(6.0)).rounded(px(R_FULL)).bg(FG_MUTED())))
                 .child(close_button(t("Close file"), move || store::close_file(&close)))
         }))
     }))
@@ -322,7 +322,7 @@ fn agent_tab(id: String) -> impl IntoElement {
                 .child(
                     text(move || agent.with(|a| a.as_ref().map(|a| a.title.clone()).unwrap_or_default()))
                         .text_size(tx(TEXT_SM))
-                        .text_color(if on { FG } else { FG_MUTED })
+                        .text_color(if on { FG() } else { FG_MUTED() })
                         .number_of_lines(1)
                         .flex_shrink(1.0)
                         .min_w(px(0.0)),
@@ -350,9 +350,9 @@ pub(crate) fn scripts_menu() -> impl IntoElement {
                     .px(sp(S3))
                     .rounded(px(R_FULL))
                     .border_1()
-                    .border_color(BORDER_STRONG)
+                    .border_color(BORDER_STRONG())
                     .hover(|s| s.bg(highlight()))
-                    .child(icon(Icon::Play, 13.0).text_color(if running > 0 { SUCCESS } else { FG_MUTED }))
+                    .child(icon(Icon::Play, 13.0).text_color(if running > 0 { SUCCESS } else { FG_MUTED() }))
                     .child(text(format!("{}{}", t("Scripts"), if running > 0 { format!(" · {running}") } else { String::new() })).text_size(tx(TEXT_SM)).font_weight(FontWeight(500))),
             )
             .align(nsh_core::overlay::Align::End)

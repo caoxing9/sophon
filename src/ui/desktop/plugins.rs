@@ -57,7 +57,7 @@ pub(crate) fn plugins(compact: bool, kind: PluginKind) -> impl IntoElement {
                             t("The accounts and services Sophon is connected to. Automations start on what they watch for, and answer through them")
                         })
                             .text_size(tx(TEXT_BASE))
-                            .text_color(FG_MUTED),
+                            .text_color(FG_MUTED()),
                     ),
             )
             .child(dynamic(move || {
@@ -70,8 +70,8 @@ pub(crate) fn plugins(compact: bool, kind: PluginKind) -> impl IntoElement {
                                 .items_center()
                                 .gap(sp(S2))
                                 .py(sp(S8))
-                                .child(icon(if of_plugins { Icon::Layers } else { Icon::Workflow }, 24.0).text_color(FG_FAINT))
-                                .child(text(if of_plugins { t("No plugins yet") } else { t("No integrations yet") }).text_size(tx(TEXT_BASE)).text_color(FG_MUTED)),
+                                .child(icon(if of_plugins { Icon::Layers } else { Icon::Workflow }, 24.0).text_color(FG_FAINT()))
+                                .child(text(if of_plugins { t("No plugins yet") } else { t("No integrations yet") }).text_size(tx(TEXT_BASE)).text_color(FG_MUTED())),
                         );
                     }
                     for plugin in installed {
@@ -107,7 +107,7 @@ pub(crate) fn plugins(compact: bool, kind: PluginKind) -> impl IntoElement {
                         t("One someone shared with you, its settings filled in. It runs its scripts on that computer: add only what you trust")
                     })
                     .text_size(tx(TEXT_SM))
-                    .text_color(FG_MUTED),
+                    .text_color(FG_MUTED()),
                 )
                 // Those that come with Sophon and were removed, to bring back.
                 .child(dynamic(move || {
@@ -116,7 +116,7 @@ pub(crate) fn plugins(compact: bool, kind: PluginKind) -> impl IntoElement {
                         return None;
                     }
                     Some(untracked(move || {
-                        let mut row = view().flex_row().flex_wrap().items_center().gap(sp(S2)).child(small(t("Comes with Sophon:"), FG_MUTED));
+                        let mut row = view().flex_row().flex_wrap().items_center().gap(sp(S2)).child(small(t("Comes with Sophon:"), FG_MUTED()));
                         for (id, name) in away {
                             row = row.child(btn(name, Variant::Outline, Sz::Sm, Some(Icon::Plus), move || store::restore_plugin(&id)));
                         }
@@ -131,7 +131,7 @@ pub(crate) fn plugins(compact: bool, kind: PluginKind) -> impl IntoElement {
 /// before anything else: the words, and their tone.
 fn standing(plugin: &Plugin) -> (&'static str, AdaptiveColor) {
     if !plugin.enabled {
-        (t("Turned off"), FG_MUTED)
+        (t("Turned off"), FG_MUTED())
     } else if plugin.error.is_some() {
         (t("Cannot be read"), DANGER)
     } else if !plugin.needs().is_empty() {
@@ -172,8 +172,8 @@ pub(crate) fn param_rows(plugin_id: &str, params: &[crate::daemon::connection::P
             .min_w(px(0.0))
             .gap(px(2.0))
             .child(text(param.label.clone()).text_size(tx(TEXT_BASE)))
-            .when(!param.hint.is_empty(), |v| v.child(small(param.hint.clone(), FG_MUTED)));
-        let line = view().px(sp(S4)).py(sp(S3)).border_t_1().border_color(BORDER);
+            .when(!param.hint.is_empty(), |v| v.child(small(param.hint.clone(), FG_MUTED())));
+        let line = view().px(sp(S4)).py(sp(S3)).border_t_1().border_color(BORDER());
         rows = rows.child(match param.kind.as_str() {
             "switch" => {
                 let now = read.clone();
@@ -203,7 +203,7 @@ pub(crate) fn param_rows(plugin_id: &str, params: &[crate::daemon::connection::P
                                     }
                                 })
                                 .text_size(tx(TEXT_SM))
-                                .text_color(FG_MUTED),
+                                .text_color(FG_MUTED()),
                             )
                             .child(btn(t("Choose…"), Variant::Outline, Sz::Sm, Some(Icon::ListFilter), move || {
                                 // The list opens on what is picked now.
@@ -233,10 +233,10 @@ pub(crate) fn param_rows(plugin_id: &str, params: &[crate::daemon::connection::P
                                         .h(sp(CONTROL_SM))
                                         .px(sp(S3))
                                         .rounded(px(R_FULL))
-                                        .bg(tint(FG, 0.06))
-                                        .hover(|style| style.bg(tint(FG, 0.1)))
+                                        .bg(tint(FG(), 0.06))
+                                        .hover(|style| style.bg(tint(FG(), 0.1)))
                                         .child(text(one.clone()).text_size(tx(TEXT_SM)).font_family(mono_font))
-                                        .child(icon(Icon::X, 12.0).text_color(FG_MUTED)),
+                                        .child(icon(Icon::X, 12.0).text_color(FG_MUTED())),
                                 );
                             }
                             chosen
@@ -273,7 +273,7 @@ pub(crate) fn param_fields(plugin_id: &str, params: &[crate::daemon::connection:
     let mut typed = Vec::new();
     for param in params {
         let (id, name) = (plugin_id.to_owned(), if draft { param.of.key(&param.name) } else { param.name.clone() });
-        let hint = (!param.hint.is_empty()).then(|| small(param.hint.clone(), FG_MUTED));
+        let hint = (!param.hint.is_empty()).then(|| small(param.hint.clone(), FG_MUTED()));
         // What it is now: the automation's own word when it has said, else the plugin's.
         let given = param.value.clone();
         let read = {
@@ -324,14 +324,14 @@ pub(crate) fn param_fields(plugin_id: &str, params: &[crate::daemon::connection:
                                     .h(sp(CONTROL_SM))
                                     .px(sp(S3))
                                     .rounded(px(R_FULL))
-                                    .bg(tint(FG, 0.06))
-                                    .hover(|style| style.bg(tint(FG, 0.1)))
+                                    .bg(tint(FG(), 0.06))
+                                    .hover(|style| style.bg(tint(FG(), 0.1)))
                                     .child(text(one.clone()).text_size(tx(TEXT_SM)).font_family(mono_font))
-                                    .child(icon(Icon::X, 12.0).text_color(FG_MUTED)),
+                                    .child(icon(Icon::X, 12.0).text_color(FG_MUTED())),
                             );
                         }
                         if picked.is_empty() {
-                            chosen = chosen.child(small(if optional { t("Any") } else { t("None picked yet") }, FG_MUTED));
+                            chosen = chosen.child(small(if optional { t("Any") } else { t("None picked yet") }, FG_MUTED()));
                         }
                         // The list opens on what is picked now.
                         let mut asked = asked.clone();
@@ -398,10 +398,10 @@ fn step(number: &'static str, done: bool, title: &'static str, status: impl Into
             .w(px(20.0))
             .h(px(20.0))
             .rounded(px(R_FULL))
-            .bg(tint(FG, 0.08))
+            .bg(tint(FG(), 0.08))
             .items_center()
             .justify_center()
-            .child(text(number).text_size(tx(TEXT_XS)).font_weight(FontWeight(500)).text_color(FG_MUTED))
+            .child(text(number).text_size(tx(TEXT_XS)).font_weight(FontWeight(500)).text_color(FG_MUTED()))
     };
     let mut row = view()
         .flex_row()
@@ -421,7 +421,7 @@ fn step(number: &'static str, done: bool, title: &'static str, status: impl Into
 /// first letter on the colour it goes by, else the sign of its kind.
 fn mark(plugin: &Plugin) -> View {
     // A hairline round it: a colour near the card's own still reads as a tile.
-    let tile = view().w(px(36.0)).h(px(36.0)).flex_shrink_0().rounded(px(R_LG)).border_1().border_color(tint(FG, 0.1)).items_center().justify_center();
+    let tile = view().w(px(36.0)).h(px(36.0)).flex_shrink_0().rounded(px(R_LG)).border_1().border_color(tint(FG(), 0.1)).items_center().justify_center();
     if !plugin.icon.is_empty() {
         return tile.overflow_hidden().child(image(plugin.icon.clone()).w(px(36.0)).h(px(36.0)).object_fit(nsh_core::ResizeMode::Cover));
     }
@@ -430,7 +430,7 @@ fn mark(plugin: &Plugin) -> View {
         (Some(colour), Some(first)) => tile
             .bg(AdaptiveColor::rgb(colour, colour))
             .child(text(first.to_uppercase().to_string()).text_size(tx(TEXT_LG)).font_weight(FontWeight(600)).text_color(AdaptiveColor::rgb(0xffffff, 0xffffff))),
-        _ => tile.bg(tint(ACCENT, 0.1)).child(icon(if plugin.kind == PluginKind::Plugin { Icon::Layers } else { Icon::Zap }, 18.0).text_color(ACCENT)),
+        _ => tile.bg(tint(ACCENT(), 0.1)).child(icon(if plugin.kind == PluginKind::Plugin { Icon::Layers } else { Icon::Zap }, 18.0).text_color(ACCENT())),
     }
 }
 
@@ -450,7 +450,7 @@ fn plugin_card(plugin: Plugin) -> View {
                         .items_center()
                         .gap(sp(S2))
                         .child(text(plugin.name.clone()).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)))
-                        .when(!plugin.version.is_empty(), |v| v.child(small(format!("v{}", plugin.version), FG_MUTED)))
+                        .when(!plugin.version.is_empty(), |v| v.child(small(format!("v{}", plugin.version), FG_MUTED())))
                         .child(badge(tone_words, tone)),
                 ),
             )
@@ -475,7 +475,7 @@ fn plugin_card(plugin: Plugin) -> View {
             }),
     );
     if !plugin.description.is_empty() {
-        head = head.child(small(plugin.description.clone(), FG_MUTED));
+        head = head.child(small(plugin.description.clone(), FG_MUTED()));
     }
     if let Some(error) = plugin.error.clone() {
         return card().child(head.child(small(error, DANGER)));
@@ -483,7 +483,7 @@ fn plugin_card(plugin: Plugin) -> View {
     // Whose it came with, for an integration a plugin brought.
     if !plugin.from.is_empty() {
         let bringer = store::plugins().into_iter().find(|other| other.id == plugin.from).map(|other| other.name).unwrap_or_else(|| plugin.from.clone());
-        head = head.child(small(tf("Came with the plugin “{}”: it stays while that does", &[&bringer]), FG_MUTED));
+        head = head.child(small(tf("Came with the plugin “{}”: it stays while that does", &[&bringer]), FG_MUTED()));
     }
     // Off: what it is, and no more until it is on again.
     if !plugin.enabled {
@@ -492,19 +492,19 @@ fn plugin_card(plugin: Plugin) -> View {
         } else {
             t("Its triggers start nothing and nothing can send through it, until it is turned on again")
         };
-        return card().child(head.child(small(resting, FG_MUTED)));
+        return card().child(head.child(small(resting, FG_MUTED())));
     }
     // Whose it works as, when it has no sign-in of its own to say so.
     if !plugin.setup
         && let Some(account) = plugin.account.clone()
     {
-        head = head.child(small(account, FG_MUTED));
+        head = head.child(small(account, FG_MUTED()));
     }
     // The integrations a plugin counts on, and how each stands: each a
     // way to where it is set up.
     for need in &plugin.requires {
         let (words, tone) = if need.ready {
-            (tf("Uses {}: ready", &[&need.name]), FG_MUTED)
+            (tf("Uses {}: ready", &[&need.name]), FG_MUTED())
         } else if need.installed {
             (tf("Uses {}: set that integration up first", &[&need.name]), WARNING)
         } else {
@@ -521,10 +521,10 @@ fn plugin_card(plugin: Plugin) -> View {
                 .rounded(px(R_LG))
                 .hover(|style| style.bg(highlight()))
                 .child(small(words, tone))
-                .child(icon(Icon::ChevronRight, 12.0).text_color(FG_FAINT)),
+                .child(icon(Icon::ChevronRight, 12.0).text_color(FG_FAINT())),
         );
     }
-    let mut steps = view().gap(sp(S3)).p(sp(S4)).border_t_1().border_color(BORDER);
+    let mut steps = view().gap(sp(S3)).p(sp(S4)).border_t_1().border_color(BORDER());
     let needs = plugin.needs();
     let configured = needs.is_empty();
 
@@ -534,7 +534,7 @@ fn plugin_card(plugin: Plugin) -> View {
     if !own.is_empty() {
         let pressed = plugin.id.clone();
         let open = !configured || store::plugin_open(&plugin.id);
-        let status = small(if configured { t("Filled in").to_owned() } else { format!("{}{}", t("To fill in: "), needs.join(", ")) }, if configured { FG_MUTED } else { WARNING });
+        let status = small(if configured { t("Filled in").to_owned() } else { format!("{}{}", t("To fill in: "), needs.join(", ")) }, if configured { FG_MUTED() } else { WARNING });
         steps = steps.child(step(
             "1",
             configured,
@@ -562,11 +562,11 @@ fn plugin_card(plugin: Plugin) -> View {
             let account = account.clone();
             Some(untracked(move || {
                 if busy {
-                    small(t("Finish it in the browser that opened on that computer…"), FG_MUTED)
+                    small(t("Finish it in the browser that opened on that computer…"), FG_MUTED())
                 } else if let Some(error) = failed {
                     small(error, DANGER)
                 } else if let Some(account) = account {
-                    small(account, FG_MUTED)
+                    small(account, FG_MUTED())
                 } else {
                     small(t("Not set up yet"), WARNING)
                 }
@@ -585,15 +585,15 @@ fn plugin_card(plugin: Plugin) -> View {
     // The skills a plugin brings: what the agents of its automations
     // know how to do, by name and what each is for.
     if !plugin.skills.is_empty() {
-        let mut list = view().gap(px(4.0)).child(small(t("Skills it brings: "), FG_MUTED));
+        let mut list = view().gap(px(4.0)).child(small(t("Skills it brings: "), FG_MUTED()));
         for (name, about) in &plugin.skills {
             list = list.child(
                 view()
                     .flex_row()
                     .items_start()
                     .gap(sp(S2))
-                    .child(icon(Icon::Sparkles, 13.0).text_color(FG_FAINT))
-                    .child(view().flex_1().min_w(px(0.0)).gap(px(2.0)).child(text(name.clone()).text_size(tx(TEXT_SM)).font_family(mono_font)).when(!about.is_empty(), |v| v.child(small(about.clone(), FG_MUTED).number_of_lines(2)))),
+                    .child(icon(Icon::Sparkles, 13.0).text_color(FG_FAINT()))
+                    .child(view().flex_1().min_w(px(0.0)).gap(px(2.0)).child(text(name.clone()).text_size(tx(TEXT_SM)).font_family(mono_font)).when(!about.is_empty(), |v| v.child(small(about.clone(), FG_MUTED()).number_of_lines(2)))),
             );
         }
         steps = steps.child(list);
@@ -605,8 +605,8 @@ fn plugin_card(plugin: Plugin) -> View {
                 .flex_row()
                 .items_start()
                 .gap(sp(S2))
-                .child(view().pt(px(2.0)).child(icon(Icon::Server, 13.0).text_color(FG_FAINT)))
-                .child(view().flex_1().min_w(px(0.0)).child(small(format!("{}{}", t("MCP servers it brings: "), plugin.mcp.join(", ")), FG_MUTED))),
+                .child(view().pt(px(2.0)).child(icon(Icon::Server, 13.0).text_color(FG_FAINT())))
+                .child(view().flex_1().min_w(px(0.0)).child(small(format!("{}{}", t("MCP servers it brings: "), plugin.mcp.join(", ")), FG_MUTED()))),
         );
     }
     // What it watches for is started on from the automations page; so are
@@ -619,7 +619,7 @@ fn plugin_card(plugin: Plugin) -> View {
                 .flex_row()
                 .items_center()
                 .gap(sp(S3))
-                .child(view().flex_1().child(small(format!("{lead}{}", offered.join(", ")), FG_MUTED)))
+                .child(view().flex_1().child(small(format!("{lead}{}", offered.join(", ")), FG_MUTED())))
                 .child(btn(t("New automation"), Variant::Outline, Sz::Sm, Some(Icon::Plus), store::open_schedules)),
         );
     }

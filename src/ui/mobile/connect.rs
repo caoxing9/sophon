@@ -51,7 +51,7 @@ fn welcome(open_scan: impl Fn() + Clone + 'static) -> impl IntoElement {
                             .mt(sp(S4))
                             .mb(px(48.0))
                             .child(text(t("Welcome to Sophon")).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)).text_center())
-                            .child(text(t("Connect your computer to get started")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED).text_center()),
+                            .child(text(t("Connect your computer to get started")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED()).text_center()),
                     )
                     .child(
                         view()
@@ -70,7 +70,7 @@ fn welcome(open_scan: impl Fn() + Clone + 'static) -> impl IntoElement {
                 text(format!("v{}", crate::update::current_version()))
                     .mt(sp(S6))
                     .text_size(tx(TEXT_SM))
-                    .text_color(FG_MUTED)
+                    .text_color(FG_MUTED())
                     .text_center(),
             ),
     )
@@ -78,7 +78,7 @@ fn welcome(open_scan: impl Fn() + Clone + 'static) -> impl IntoElement {
 
 /// One of the welcome screen's ways to connect: a full-width, 52 pt row.
 fn action(glyph: Icon, label: &'static str, primary: bool, on_press: impl Fn() + 'static) -> impl IntoElement {
-    let ink = if primary { ACCENT_FG } else { FG };
+    let ink = if primary { ACCENT_FG() } else { FG() };
     button()
         .on_press(on_press)
         .flex_row()
@@ -87,9 +87,9 @@ fn action(glyph: Icon, label: &'static str, primary: bool, on_press: impl Fn() +
         .gap(sp(S3))
         .py(sp(S4))
         .rounded(px(R_XL))
-        .bg(if primary { ACCENT } else { SURFACE2 })
+        .bg(if primary { ACCENT() } else { SURFACE2() })
         .border_1()
-        .border_color(if primary { ACCENT } else { BORDER })
+        .border_color(if primary { ACCENT() } else { BORDER() })
         .active(|s| s.opacity(0.75))
         .child(icon(glyph, 18.0).text_color(ink))
         .child(text(label).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)).text_color(ink))
@@ -114,11 +114,11 @@ fn saved_hosts() -> impl IntoElement {
                         .gap(sp(S3))
                         .h(px(52.0))
                         .px(sp(S4))
-                        .when(i > 0, |v| v.border_t_1().border_color(BORDER))
+                        .when(i > 0, |v| v.border_t_1().border_color(BORDER()))
                         .active(|s| s.bg(highlight()))
-                        .child(icon(Icon::Server, 18.0).text_color(FG_MUTED))
+                        .child(icon(Icon::Server, 18.0).text_color(FG_MUTED()))
                         .child(text(h.label()).text_size(tx(TEXT_BASE)).number_of_lines(1).flex_1())
-                        .child(icon(Icon::ChevronRight, 16.0).text_color(FG_FAINT)),
+                        .child(icon(Icon::ChevronRight, 16.0).text_color(FG_FAINT())),
                 );
             }
             view().mt(sp(S6)).gap(sp(S2)).child(section_label(t("Paired before"))).child(c).into_element()
@@ -185,7 +185,7 @@ fn scan(back: impl Fn() + Clone + 'static) -> impl IntoElement {
                         .flex_1()
                         .rounded(px(R_XL))
                         .overflow_hidden()
-                        .bg(SURFACE2)
+                        .bg(SURFACE2())
                         .child(native(crate::platform::QR_SCANNER).flex_1().on_native_event(on_event))
                         .child(
                             view()
@@ -220,7 +220,7 @@ fn scan(back: impl Fn() + Clone + 'static) -> impl IntoElement {
 /// The scan frame: four accent corners around a 260 pt square.
 fn frame() -> impl IntoElement {
     let corner = |top: bool, left: bool| {
-        let mut v = view().absolute().w(px(36.0)).h(px(36.0)).border_color(ACCENT);
+        let mut v = view().absolute().w(px(36.0)).h(px(36.0)).border_color(ACCENT());
         v = if top { v.top(px(0.0)).border_t(px(4.0)) } else { v.bottom(px(0.0)).border_b(px(4.0)) };
         v = if left { v.left(px(0.0)).border_l(px(4.0)) } else { v.right(px(0.0)).border_r(px(4.0)) };
         match (top, left) {
@@ -245,14 +245,14 @@ fn camera_app_card() -> impl IntoElement {
         .mt(sp(S6))
         .p(sp(S6))
         .rounded(px(R_XL))
-        .bg(SURFACE2)
+        .bg(SURFACE2())
         .gap(sp(S4))
         .child(text(t("Scan with your phone's camera")).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)))
         .child(
             text(t("Sophon can't open the camera on Android yet. Scan the QR code in Sophon on your computer with your phone's camera app and open the link it finds, or copy the pairing link there and paste it here."))
                 .text_size(tx(TEXT_BASE))
                 .line_height(px(20.0))
-                .text_color(FG_MUTED),
+                .text_color(FG_MUTED()),
         )
         .child(view().items_start().child(btn(t("Paste pairing link"), Variant::Primary, Sz::Md, Some(Icon::ClipboardPaste), || {
             store::open_modal(store::Modal::AddHost)
@@ -264,14 +264,14 @@ fn permission_card() -> impl IntoElement {
         .mt(sp(S6))
         .p(sp(S6))
         .rounded(px(R_XL))
-        .bg(SURFACE2)
+        .bg(SURFACE2())
         .gap(sp(S4))
         .child(text(t("Camera permission")).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)))
         .child(
             text(t("Allow camera access to scan the pairing QR code from your computer."))
                 .text_size(tx(TEXT_BASE))
                 .line_height(px(20.0))
-                .text_color(FG_MUTED),
+                .text_color(FG_MUTED()),
         )
         .child(view().items_start().child(btn(t("Open Settings"), Variant::Primary, Sz::Md, None, || {
             let _ = open_url("app-settings:");

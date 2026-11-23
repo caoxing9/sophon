@@ -85,7 +85,7 @@ fn agent_tools_of(agent: Memo<Option<crate::daemon::Agent>>) -> impl IntoElement
         .items_center()
         .gap(sp(S2))
         .min_w(px(0.0))
-        .child(text(move || label.get()).text_size(tx(TEXT_SM)).text_color(FG_FAINT).number_of_lines(1).flex_shrink(1.0))
+        .child(text(move || label.get()).text_size(tx(TEXT_SM)).text_color(FG_FAINT()).number_of_lines(1).flex_shrink(1.0))
         // The desktop's is beside the send button (`composer::meters`).
         // (The context is the composer's, beside Send.)
         .child(view().w(sp(S1)))
@@ -102,7 +102,7 @@ fn agent_tools_of(agent: Memo<Option<crate::daemon::Agent>>) -> impl IntoElement
                     .justify_center()
                     .rounded(px(R_FULL))
                     .hover(|s| s.bg(highlight()))
-                    .child(icon(Icon::Ellipsis, 16.0).text_color(FG_MUTED)),
+                    .child(icon(Icon::Ellipsis, 16.0).text_color(FG_MUTED())),
             )
             .align(nsh_core::overlay::Align::End)
             .child(agent_actions(agent)),
@@ -169,7 +169,7 @@ pub(crate) fn draft_pane() -> AnyElement {
                         text(line)
                             .px(sp(S8))
                             .text_size(tx(TEXT_SM))
-                            .text_color(move || if form.with(|f| f.error.is_some()) { DANGER } else { FG_MUTED })
+                            .text_color(move || if form.with(|f| f.error.is_some()) { DANGER } else { FG_MUTED() })
                             .text_center()
                             .number_of_lines(2),
                     ),
@@ -200,7 +200,7 @@ pub(crate) fn draft_pane() -> AnyElement {
                     } else if let Some((_, from)) = &f.context {
                         Some((tf("Continues from “{}” · runs in {}", &[&from, &f.path]), false))
                     } else {
-                        Some((tf("Runs in {}", &[&f.path]), false))
+                        None
                     }
                 })
             })
@@ -219,7 +219,7 @@ pub(crate) fn dropup_or_down_outline() -> impl IntoElement {
             .rounded(px(R_FULL))
             .hover(|s| s.bg(highlight()))
             .label(t("Outline"))
-            .child(icon(Icon::ListTodo, 15.0).text_color(FG_MUTED)),
+            .child(icon(Icon::ListTodo, 15.0).text_color(FG_MUTED())),
     )
     .align(nsh_core::overlay::Align::End)
     .child(dynamic(|| {
@@ -261,17 +261,17 @@ fn context_bar() -> impl IntoElement {
             .gap(px(6.0))
             .min_w(px(0.0))
             .flex_shrink(1.0)
-            .child(icon(glyph, 14.0).text_color(FG_MUTED))
+            .child(icon(glyph, 14.0).text_color(FG_MUTED()))
             .child(
                 text(move || label.get())
                     .text_size(tx(TEXT_SM))
-                    .text_color(FG_MUTED)
+                    .text_color(FG_MUTED())
                     .number_of_lines(1)
                     .flex_shrink(1.0)
                     .min_w(px(0.0)),
             )
     };
-    let divider = || view().w(px(1.0)).h(px(14.0)).bg(BORDER);
+    let divider = || view().w(px(1.0)).h(px(14.0)).bg(BORDER());
     view()
         .flex_row()
         .items_center()
@@ -285,9 +285,9 @@ fn context_bar() -> impl IntoElement {
         .pl(sp(S3))
         .pr(sp(S1))
         .rounded(px(R_LG))
-        .bg(tint(SURFACE1, 0.7))
+        .bg(tint(SURFACE1(), 0.7))
         .border_1()
-        .border_color(tint(BORDER, 0.7))
+        .border_color(tint(BORDER(), 0.7))
         // Nothing past its edge: a long name ends in an ellipsis.
         .overflow_hidden()
         .child(item(Icon::Monitor, host))

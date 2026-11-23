@@ -43,7 +43,7 @@ pub(crate) fn page() -> Screen {
                         .child(
                             text(move || ws.with(|w| w.as_ref().map(|w| w.name.clone()).unwrap_or_default()))
                                 .text_size(tx(TEXT_XS))
-                                .text_color(FG_MUTED)
+                                .text_color(FG_MUTED())
                                 .number_of_lines(1),
                         ),
                     glass_group()
@@ -118,7 +118,7 @@ fn header_button(glyph: Icon, label: &'static str, on_press: impl Fn() + 'static
         .items_center()
         .justify_center()
         .active(|s| s.opacity(0.6))
-        .child(icon(glyph, 20.0).text_color(FG))
+        .child(icon(glyph, 20.0).text_color(FG()))
 }
 
 /// The open agent's actions, as the system's sheet.
@@ -252,9 +252,9 @@ fn picker_row(glyph: Icon, value: impl Fn() -> String + 'static, on_press: impl 
         .h(px(52.0))
         .px(sp(S4))
         .rounded(px(16.0))
-        .bg(tint(FG, 0.06))
+        .bg(tint(FG(), 0.06))
         .active(|s| s.opacity(0.7))
-        .child(icon(glyph, 18.0).text_color(FG_MUTED))
+        .child(icon(glyph, 18.0).text_color(FG_MUTED()))
         .child(text(value).text_size(tx(TEXT_LG)).number_of_lines(1).flex_1())
-        .child(icon(Icon::ChevronsUpDown, 16.0).text_color(FG_FAINT))
+        .child(icon(Icon::ChevronsUpDown, 16.0).text_color(FG_FAINT()))
 }

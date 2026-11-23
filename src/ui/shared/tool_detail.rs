@@ -89,8 +89,8 @@ pub(crate) fn tool_body(kind: &str, detail: &Value, error: Option<&str>) -> View
                     list = list.child(
                         view()
                             .gap(px(1.0))
-                            .child(text(title).text_size(tx(TEXT_SM)).text_color(FG).number_of_lines(1))
-                            .child(text(url).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(FG_MUTED).number_of_lines(1)),
+                            .child(text(title).text_size(tx(TEXT_SM)).text_color(FG()).number_of_lines(1))
+                            .child(text(url).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(FG_MUTED()).number_of_lines(1)),
                     );
                 }
                 body = body.child(label(t("Results"))).child(list);
@@ -111,7 +111,7 @@ pub(crate) fn tool_body(kind: &str, detail: &Value, error: Option<&str>) -> View
         }
         "sub_agent" | "plain_text" => {
             if let Some(s) = field("description").or_else(|| field("text")).or_else(|| field("title")) {
-                body = body.child(text(s).text_size(tx(TEXT_BASE)).line_height(px(20.0)).text_color(FG).selectable(true));
+                body = body.child(text(s).text_size(tx(TEXT_BASE)).line_height(px(20.0)).text_color(FG()).selectable(true));
             }
         }
         _ => {
@@ -153,7 +153,7 @@ fn clip(s: String) -> String {
 }
 
 fn label(s: &'static str) -> impl IntoElement {
-    text(s).text_size(tx(TEXT_XS)).font_weight(FontWeight(600)).text_color(FG_MUTED).mt(px(2.0))
+    text(s).text_size(tx(TEXT_XS)).font_weight(FontWeight(600)).text_color(FG_MUTED()).mt(px(2.0))
 }
 
 fn badge(s: String, tone: AdaptiveColor) -> impl IntoElement {
@@ -173,20 +173,20 @@ fn path_row(glyph: Icon, path: String) -> impl IntoElement {
         .items_center()
         .gap(px(6.0))
         .min_w(px(0.0))
-        .child(icon(glyph, 14.0).text_color(FG_MUTED))
-        .child(text(path).text_size(tx(TEXT_CODE)).font_family(mono_font).text_color(FG).selectable(true).flex_1())
+        .child(icon(glyph, 14.0).text_color(FG_MUTED()))
+        .child(text(path).text_size(tx(TEXT_CODE)).font_family(mono_font).text_color(FG()).selectable(true).flex_1())
 }
 
 /// Monospaced text on a soft panel, scrolling past `max_h`.
 fn code(s: String, max_h: f32) -> impl IntoElement {
-    scroll().max_h(px(max_h)).rounded(px(R_LG)).bg(SURFACE2).child(
+    scroll().max_h(px(max_h)).rounded(px(R_LG)).bg(SURFACE2()).child(
         text(clip(s))
             .px(sp(S3))
             .py(sp(S2))
             .text_size(tx(TEXT_CODE))
             .line_height(px(18.0))
             .font_family(mono_font)
-            .text_color(FG)
+            .text_color(FG())
             .selectable(true),
     )
 }
@@ -198,7 +198,7 @@ fn diff_block(lines: Vec<String>) -> impl IntoElement {
     for line in lines {
         chars += line.len();
         if chars > MAX_CHARS {
-            col = col.child(text("…").px(sp(S3)).text_size(tx(TEXT_CODE)).text_color(FG_MUTED));
+            col = col.child(text("…").px(sp(S3)).text_size(tx(TEXT_CODE)).text_color(FG_MUTED()));
             break;
         }
         let (bg, fg) = if line.starts_with('+') && !line.starts_with("+++") {
@@ -206,9 +206,9 @@ fn diff_block(lines: Vec<String>) -> impl IntoElement {
         } else if line.starts_with('-') && !line.starts_with("---") {
             (tint(DANGER, 0.12), DANGER)
         } else if line.starts_with("@@") {
-            (tint(FG, 0.0), FG_MUTED)
+            (tint(FG(), 0.0), FG_MUTED())
         } else {
-            (tint(FG, 0.0), FG)
+            (tint(FG(), 0.0), FG())
         };
         col = col.child(
             text(if line.is_empty() { " ".to_owned() } else { line })
@@ -221,5 +221,5 @@ fn diff_block(lines: Vec<String>) -> impl IntoElement {
                 .selectable(true),
         );
     }
-    scroll().max_h(px(320.0)).rounded(px(R_LG)).bg(SURFACE2).overflow_hidden().child(col)
+    scroll().max_h(px(320.0)).rounded(px(R_LG)).bg(SURFACE2()).overflow_hidden().child(col)
 }

@@ -92,11 +92,11 @@ fn history_section(range: Signal<Range>) -> View {
                         .flex_row()
                         .items_center()
                         .gap(sp(S2))
-                        .child(icon(Icon::Info, 14.0).text_color(FG_MUTED))
+                        .child(icon(Icon::Info, 14.0).text_color(FG_MUTED()))
                         .child(
                             text(t("Connected to another computer: these numbers cover the sessions on this one only. The limits below come from the connected host"))
                                 .text_size(tx(TEXT_SM))
-                                .text_color(FG_MUTED)
+                                .text_color(FG_MUTED())
                                 .flex_1(),
                         )
                 })
@@ -120,7 +120,7 @@ fn history_section(range: Signal<Range>) -> View {
                         .child(
                             text(t("Cost is an estimate at API list prices, not your subscription bill. Models without a known price are left out of it"))
                                 .text_size(tx(TEXT_XS))
-                                .text_color(FG_FAINT),
+                                .text_color(FG_FAINT()),
                         )
                         .into_element()
                 }
@@ -129,7 +129,7 @@ fn history_section(range: Signal<Range>) -> View {
 }
 
 fn muted(s: &str) -> nsh_core::element::Text {
-    text(s.to_owned()).text_size(tx(TEXT_BASE)).text_color(FG_MUTED)
+    text(s.to_owned()).text_size(tx(TEXT_BASE)).text_color(FG_MUTED())
 }
 
 fn tile(label: &str, value: String, note: Option<String>) -> View {
@@ -140,11 +140,11 @@ fn tile(label: &str, value: String, note: Option<String>) -> View {
         .gap(px(2.0))
         .rounded(px(R_XL))
         .border_1()
-        .border_color(BORDER)
-        .bg(SURFACE0)
-        .child(text(label.to_owned()).text_size(tx(TEXT_XS)).text_color(FG_MUTED).number_of_lines(1))
+        .border_color(BORDER())
+        .bg(SURFACE0())
+        .child(text(label.to_owned()).text_size(tx(TEXT_XS)).text_color(FG_MUTED()).number_of_lines(1))
         .child(text(value).text_size(tx(TEXT_XL)).font_weight(FontWeight(500)).font_family(mono_font).number_of_lines(1))
-        .when_some(note, |v, n| v.child(text(n).text_size(tx(TEXT_XS)).text_color(FG_FAINT).number_of_lines(2)))
+        .when_some(note, |v, n| v.child(text(n).text_size(tx(TEXT_XS)).text_color(FG_FAINT()).number_of_lines(2)))
 }
 
 fn hit_rate(t: &usage::Tokens) -> String {
@@ -188,14 +188,14 @@ fn days_chart(stats: &Stats, last_day: i64) -> View {
                         .h(relative((v / max) as f32))
                         .min_h(px(if v > 0.0 { 2.0 } else { 0.0 }))
                         .rounded_t(px(R_SM))
-                        .bg(if i as i64 == n - 1 { ACCENT } else { tint(ACCENT, 0.55) }),
+                        .bg(if i as i64 == n - 1 { ACCENT() } else { tint(ACCENT(), 0.55) }),
                 ),
         );
     }
     let axis = view()
         .flex_row()
-        .child(text(usage::day_label(last_day - n + 1)).text_size(tx(TEXT_XS)).text_color(FG_FAINT).flex_1())
-        .child(text(t("Today")).text_size(tx(TEXT_XS)).text_color(FG_FAINT));
+        .child(text(usage::day_label(last_day - n + 1)).text_size(tx(TEXT_XS)).text_color(FG_FAINT()).flex_1())
+        .child(text(t("Today")).text_size(tx(TEXT_XS)).text_color(FG_FAINT()));
     card()
         .p(sp(S4))
         .gap(sp(S2))
@@ -212,12 +212,12 @@ fn num_cell(s: String, strong: bool) -> nsh_core::element::Text {
         .text_right()
         .text_size(tx(TEXT_SM))
         .font_family(mono_font)
-        .text_color(if strong { FG } else { FG_MUTED })
+        .text_color(if strong { FG() } else { FG_MUTED() })
         .number_of_lines(1)
 }
 
 fn head_cell(s: &str) -> nsh_core::element::Text {
-    text(s.to_owned()).w(px(NUM_W)).text_right().text_size(tx(TEXT_XS)).text_color(FG_FAINT).number_of_lines(1)
+    text(s.to_owned()).w(px(NUM_W)).text_right().text_size(tx(TEXT_XS)).text_color(FG_FAINT()).number_of_lines(1)
 }
 
 fn models_table(stats: &Stats) -> View {
@@ -238,8 +238,8 @@ fn models_table(stats: &Stats) -> View {
                     .gap(sp(S3))
                     .px(sp(S4))
                     .py(sp(S3))
-                    .when(i > 0, |v| v.border_t_1().border_color(BORDER))
-                    .child(icon(if m.source == usage::Source::Claude { Icon::Claude } else { Icon::Codex }, 16.0).text_color(FG_MUTED))
+                    .when(i > 0, |v| v.border_t_1().border_color(BORDER()))
+                    .child(icon(if m.source == usage::Source::Claude { Icon::Claude } else { Icon::Codex }, 16.0).text_color(FG_MUTED()))
                     .child(
                         view()
                             .flex_1()
@@ -249,11 +249,11 @@ fn models_table(stats: &Stats) -> View {
                             .child(
                                 text(tf("{} in · {} out · {} cached", &[&usage::compact(k.input), &usage::compact(k.output), &hit_rate(&k)]))
                                     .text_size(tx(TEXT_XS))
-                                    .text_color(FG_FAINT)
+                                    .text_color(FG_FAINT())
                                     .number_of_lines(1),
                             ),
                     )
-                    .child(text(cost).text_size(tx(TEXT_SM)).font_family(mono_font).text_color(if m.priced { FG } else { FG_MUTED })),
+                    .child(text(cost).text_size(tx(TEXT_SM)).font_family(mono_font).text_color(if m.priced { FG() } else { FG_MUTED() })),
             );
         }
         return c;
@@ -266,8 +266,8 @@ fn models_table(stats: &Stats) -> View {
             .px(sp(S4))
             .py(sp(S2))
             .border_b_1()
-            .border_color(BORDER)
-            .child(text(t("Model")).text_size(tx(TEXT_XS)).text_color(FG_FAINT).flex_1())
+            .border_color(BORDER())
+            .child(text(t("Model")).text_size(tx(TEXT_XS)).text_color(FG_FAINT()).flex_1())
             .child(head_cell(t("Input")))
             .child(head_cell(t("Output")))
             .child(head_cell(t("Cache read")))
@@ -286,7 +286,7 @@ fn models_table(stats: &Stats) -> View {
                 .px(sp(S4))
                 .py(sp(S2))
                 .border_t_1()
-                .border_color(BORDER)
+                .border_color(BORDER())
                 .child(
                     view()
                         .flex_1()
@@ -294,7 +294,7 @@ fn models_table(stats: &Stats) -> View {
                         .flex_row()
                         .items_center()
                         .gap(sp(S2))
-                        .child(icon(if m.source == usage::Source::Claude { Icon::Claude } else { Icon::Codex }, 14.0).text_color(FG_MUTED))
+                        .child(icon(if m.source == usage::Source::Claude { Icon::Claude } else { Icon::Codex }, 14.0).text_color(FG_MUTED()))
                         .child(text(m.model.clone()).text_size(tx(TEXT_SM)).font_family(mono_font).number_of_lines(1).flex_shrink(1.0)),
                 )
                 .child(num_cell(usage::compact(k.input), false))
@@ -348,7 +348,7 @@ fn provider_card(p: &ProviderUsage, history: &limits::History) -> View {
             .items_center()
             .gap(sp(S2))
             .child(text(p.name.clone()).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)))
-            .child(text(p.plan.clone().unwrap_or_default()).text_size(tx(TEXT_SM)).text_color(FG_MUTED)),
+            .child(text(p.plan.clone().unwrap_or_default()).text_size(tx(TEXT_SM)).text_color(FG_MUTED())),
     );
     if let Some(e) = p.error.clone() {
         c = c.child(text(e).text_size(tx(TEXT_SM)).text_color(DANGER));
@@ -374,8 +374,8 @@ fn claude_resets_row() -> View {
         .gap(sp(S2))
         .pt(sp(S2))
         .border_t_1()
-        .border_color(tint(BORDER, 0.6))
-        .child(icon(Icon::Ticket, 14.0).text_color(FG_MUTED))
+        .border_color(tint(BORDER(), 0.6))
+        .child(icon(Icon::Ticket, 14.0).text_color(FG_MUTED()))
         .child(
             view()
                 .flex_1()
@@ -384,7 +384,7 @@ fn claude_resets_row() -> View {
                 .child(
                     text(t("Claude Code shows how many are left and asks before using one"))
                         .text_size(tx(TEXT_XS))
-                        .text_color(FG_FAINT),
+                        .text_color(FG_FAINT()),
                 ),
         )
         .child(btn(t("Open"), Variant::Outline, Sz::Sm, None, open_limit_reset))
@@ -424,9 +424,9 @@ fn resets_row(provider: String) -> View {
         }
         let provider = provider.clone();
         Some(untracked(move || {
-            let mut col = view().gap(sp(S2)).pt(sp(S2)).border_t_1().border_color(tint(BORDER, 0.6));
+            let mut col = view().gap(sp(S2)).pt(sp(S2)).border_t_1().border_color(tint(BORDER(), 0.6));
             if let Some(e) = c.error.clone() {
-                col = col.child(text(tf("Resets: {}", &[&e])).text_size(tx(TEXT_XS)).text_color(FG_FAINT));
+                col = col.child(text(tf("Resets: {}", &[&e])).text_size(tx(TEXT_XS)).text_color(FG_FAINT()));
             }
             for o in c.options.iter().filter(|o| o.count > 0).cloned() {
                 let expires = o
@@ -440,13 +440,13 @@ fn resets_row(provider: String) -> View {
                         .flex_row()
                         .items_center()
                         .gap(sp(S2))
-                        .child(icon(Icon::Ticket, 14.0).text_color(FG_MUTED))
+                        .child(icon(Icon::Ticket, 14.0).text_color(FG_MUTED()))
                         .child(
                             view()
                                 .flex_1()
                                 .min_w(px(0.0))
                                 .child(text(format!("{} × {}", o.label, o.count)).text_size(tx(TEXT_SM)).number_of_lines(1))
-                                .when_some(expires, |v, e| v.child(text(e).text_size(tx(TEXT_XS)).text_color(FG_FAINT))),
+                                .when_some(expires, |v, e| v.child(text(e).text_size(tx(TEXT_XS)).text_color(FG_FAINT()))),
                         )
                         .child(dynamic(move || {
                             let busy = busy.get();
@@ -468,7 +468,7 @@ fn resets_row(provider: String) -> View {
 fn window_row(w: &UsageWindow, points: &[limits::Point]) -> View {
     let now = usage::now();
     let used = w.used.unwrap_or(0.0).clamp(0.0, 100.0);
-    let tone = if used >= 90.0 { DANGER } else if used >= 70.0 { WARNING } else { ACCENT };
+    let tone = if used >= 90.0 { DANGER } else if used >= 70.0 { WARNING } else { ACCENT() };
     let resets = w.resets_at.as_deref().and_then(usage::parse::rfc3339);
     let length = limits::window_length(&w.id, &w.label);
     let current = limits::current_window(points, resets);
@@ -479,13 +479,13 @@ fn window_row(w: &UsageWindow, points: &[limits::Point]) -> View {
             view()
                 .flex_row()
                 .child(text(w.label.clone()).text_size(tx(TEXT_SM)).flex_1())
-                .child(text(format!("{used:.0}%")).text_size(tx(TEXT_SM)).font_family(mono_font).text_color(FG_MUTED)),
+                .child(text(format!("{used:.0}%")).text_size(tx(TEXT_SM)).font_family(mono_font).text_color(FG_MUTED())),
         )
         .child(
             view()
                 .h(px(6.0))
                 .rounded(px(R_FULL))
-                .bg(SURFACE3)
+                .bg(SURFACE3())
                 .child(view().h_full().w(relative(used as f32 / 100.0)).rounded(px(R_FULL)).bg(tone)),
         );
     if current.len() >= 2 {
@@ -493,7 +493,7 @@ fn window_row(w: &UsageWindow, points: &[limits::Point]) -> View {
     }
     let mut foot = view().flex_row().gap(sp(S2));
     if let Some(r) = resets {
-        foot = foot.child(text(tf("Resets {}", &[&usage::time_label(r, &local_offset)])).text_size(tx(TEXT_XS)).text_color(FG_FAINT).flex_1());
+        foot = foot.child(text(tf("Resets {}", &[&usage::time_label(r, &local_offset)])).text_size(tx(TEXT_XS)).text_color(FG_FAINT()).flex_1());
     }
     if let Some(out) = runs_out {
         foot = foot.child(
@@ -523,7 +523,7 @@ fn trend(points: &[limits::Point], resets: Option<i64>, length: Option<i64>, ton
             ("pct".into(), points.iter().map(|p| p.pct).collect()),
         ],
     );
-    view().h(px(44.0)).border_b_1().border_color(BORDER).child(
+    view().h(px(44.0)).border_b_1().border_color(BORDER()).child(
         plot()
             .data(rows)
             .x(nsh_core::element::RowAccessor::from("t"))

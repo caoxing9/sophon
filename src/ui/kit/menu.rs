@@ -18,7 +18,7 @@ use super::{
 
 fn popup(s: StyleRefinement) -> StyleRefinement {
     // Near opaque: what is under a menu must not read through its rows.
-    s.bg(AdaptiveColor::new(Hsla::from(rgb(0xfdfcf9)).opacity(0.985), Hsla::from(rgb(0x2b2b28)).opacity(0.985)))
+    s.bg({ let p = POPOVER(); AdaptiveColor::new(p.light.opacity(0.985), p.dark.opacity(0.985)) })
         .backdrop_blur(px(GLASS_BLUR))
         .backdrop_saturate(1.7)
         .rounded(px(14.0))
@@ -70,10 +70,10 @@ pub(crate) fn menu_row(
 ) -> MenuItemElement {
     let label: SharedString = label.into();
     let mut body = view().flex_1().gap(px(1.0)).child(
-        text(label).text_size(tx(TEXT_BASE)).text_color(FG).number_of_lines(1),
+        text(label).text_size(tx(TEXT_BASE)).text_color(FG()).number_of_lines(1),
     );
     if let Some(detail) = detail.filter(|d| !d.is_empty()) {
-        body = body.child(text(detail).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1));
+        body = body.child(text(detail).text_size(tx(TEXT_SM)).text_color(FG_MUTED()).number_of_lines(1));
     }
     let mut row = menu_item()
         .on_select(on_select)
@@ -90,12 +90,12 @@ pub(crate) fn menu_row(
         .active(|s| s.bg(highlight()))
         .disabled_style(|s| s.opacity(0.4));
     if let Some(lead) = lead {
-        row = row.child(icon(lead, 16.0).text_color(FG_MUTED));
+        row = row.child(icon(lead, 16.0).text_color(FG_MUTED()));
     }
     row = row.child(body);
     row.child(
         view().w(px(16.0)).child(if checked {
-            icon(Icon::Check, 16.0).text_color(ACCENT).into_element()
+            icon(Icon::Check, 16.0).text_color(ACCENT()).into_element()
         } else {
             view().into_element()
         }),
@@ -123,12 +123,12 @@ pub(crate) fn menu_row_danger(label: &'static str, lead: Icon, on_select: impl F
 pub(crate) fn menu_heading(label: impl Into<SharedString>) -> View {
     let label: SharedString = label.into();
     view().px(sp(S2)).pt(sp(S2)).pb(sp(S1)).child(
-        text(label).text_size(tx(TEXT_XS)).font_weight(FontWeight(500)).text_color(FG_FAINT),
+        text(label).text_size(tx(TEXT_XS)).font_weight(FontWeight(500)).text_color(FG_FAINT()),
     )
 }
 
 pub(crate) fn menu_divider() -> impl IntoElement {
-    menu_separator().h(px(1.0)).my(sp(S1)).mx(sp(S1)).bg(BORDER)
+    menu_separator().h(px(1.0)).my(sp(S1)).mx(sp(S1)).bg(BORDER())
 }
 
 /// A pill trigger for a picker in a toolbar: icon, label, chevron.
@@ -144,16 +144,16 @@ pub(crate) fn picker_trigger(lead: Option<Icon>, label: impl IntoReactive<Shared
         .rounded(px(R_FULL))
         .hover(|s| s.bg(highlight()));
     if let Some(lead) = lead {
-        v = v.child(icon(lead, 15.0).text_color(FG_MUTED));
+        v = v.child(icon(lead, 15.0).text_color(FG_MUTED()));
     }
     v.child(
         text(label)
             .text_size(tx(TEXT_SM))
             .font_weight(FontWeight(500))
-            .text_color(FG_MUTED)
+            .text_color(FG_MUTED())
             .number_of_lines(1)
             .max_w(px(180.0))
             .flex_shrink(1.0),
     )
-    .child(icon(Icon::ChevronDown, 13.0).text_color(FG_FAINT))
+    .child(icon(Icon::ChevronDown, 13.0).text_color(FG_FAINT()))
 }

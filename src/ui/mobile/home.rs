@@ -134,13 +134,13 @@ fn search_field(query: Signal<String>, placeholder: &'static str) -> View {
             .h(px(36.0))
             .px(px(10.0))
             .rounded(px(10.0))
-            .bg(tint(FG, 0.07))
-            .child(icon(Icon::Search, 16.0).text_color(FG_MUTED))
+            .bg(tint(FG(), 0.07))
+            .child(icon(Icon::Search, 16.0).text_color(FG_MUTED()))
             .child(
                 input()
                     .flex_1()
                     .text_size(tx(TEXT_LG))
-                    .text_color(FG)
+                    .text_color(FG())
                     .value(move || query.get())
                     .on_change(move |v: &str| query.set(v.to_owned()))
                     .placeholder(placeholder),
@@ -159,7 +159,7 @@ fn round_button(glyph: Icon, label: &'static str, on_press: impl Fn() + 'static)
             .items_center()
             .justify_center()
             .active(|s| s.opacity(0.6))
-            .child(icon(glyph, 18.0).text_color(FG)),
+            .child(icon(glyph, 18.0).text_color(FG())),
     )
 }
 
@@ -215,7 +215,7 @@ fn host_chip() -> impl IntoElement {
         .pl(px(10.0))
         .pr(sp(S2))
         .rounded(px(R_FULL))
-        .bg(tint(FG, 0.07))
+        .bg(tint(FG(), 0.07))
         .active(|s| s.opacity(0.7))
         .child(crate::ui::shared::conn_mark())
         .child(text(move || name.get()).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).number_of_lines(1).flex_shrink(1.0))
@@ -227,9 +227,9 @@ fn host_chip() -> impl IntoElement {
                 (Conn::Connected { .. }, Some(Via::Relay)) => Icon::Cloud,
                 _ => return None,
             };
-            Some(untracked(move || icon(glyph, 12.0).text_color(FG_MUTED).into_element()))
+            Some(untracked(move || icon(glyph, 12.0).text_color(FG_MUTED()).into_element()))
         }))
-        .child(icon(Icon::ChevronDown, 12.0).text_color(FG_MUTED))
+        .child(icon(Icon::ChevronDown, 12.0).text_color(FG_MUTED()))
 }
 
 /// The foot: the system tab bar, icons only, with the four tabs, and
@@ -259,7 +259,7 @@ fn foot(tab: Signal<HomeTab>) -> impl IntoElement {
                             // keep the navigation surface visible behind it.
                             // Not on iOS: its bar is a floating glass pill,
                             // and a fill behind it shows as a box.
-                            .bg(if cfg!(target_os = "android") { SURFACE2 } else { tint(SURFACE2, 0.0) })
+                            .bg(if cfg!(target_os = "android") { SURFACE2() } else { tint(SURFACE2(), 0.0) })
                             .child(
                                 tab_bar()
                                     .items(vec![
@@ -294,7 +294,7 @@ fn foot(tab: Signal<HomeTab>) -> impl IntoElement {
                                     .items_center()
                                     .justify_center()
                                     .active(|s| s.opacity(0.6))
-                                    .child(icon(Icon::SquarePen, 22.0).text_color(FG)),
+                                    .child(icon(Icon::SquarePen, 22.0).text_color(FG())),
                             )
                         }),
                     ),
@@ -314,10 +314,10 @@ fn matches(query: &str, fields: &[&str]) -> bool {
 /// A round glyph tinted by a status: the leading mark of a row.
 fn glyph(icon_of: Icon, status: Status) -> View {
     let color = match status {
-        Status::Running => ACCENT,
+        Status::Running => ACCENT(),
         Status::NeedsYou => WARNING,
         Status::Failed => DANGER,
-        _ => FG_MUTED,
+        _ => FG_MUTED(),
     };
     view()
         .w(px(36.0))
@@ -344,12 +344,12 @@ fn group_header(project_id: String, name: String, count: usize) -> impl IntoElem
         .active(|s| s.opacity(0.6))
         .child(
             icon(Icon::ChevronDown, 13.0)
-                .text_color(FG_FAINT)
+                .text_color(FG_FAINT())
                 .rotate(move || Radians(if folded.get() { -std::f32::consts::FRAC_PI_2 } else { 0.0 }))
                 .transition_transform(),
         )
-        .child(text(name).text_size(tx(TEXT_SM)).font_weight(FontWeight(600)).text_color(FG_MUTED).number_of_lines(1).flex_1())
-        .child(text(count.to_string()).text_size(tx(TEXT_SM)).text_color(FG_FAINT))
+        .child(text(name).text_size(tx(TEXT_SM)).font_weight(FontWeight(600)).text_color(FG_MUTED()).number_of_lines(1).flex_1())
+        .child(text(count.to_string()).text_size(tx(TEXT_SM)).text_color(FG_FAINT()))
 }
 
 /// A folding group: its header always, its card revealed (a clipped
@@ -369,7 +369,7 @@ fn group(project_id: String, name: String, rows: Vec<AnyElement>) -> impl IntoEl
 /// Grouped rows, iOS's inset style: a rounded card whose dividers start at
 /// the rows' text.
 fn group_card(rows: Vec<AnyElement>) -> View {
-    let mut c = view().rounded(px(14.0)).bg(SURFACE0).border_1().border_color(tint(BORDER, 0.7)).overflow_hidden();
+    let mut c = view().rounded(px(14.0)).bg(SURFACE0()).border_1().border_color(tint(BORDER(), 0.7)).overflow_hidden();
     for r in rows {
         c = c.child(r);
     }
@@ -397,14 +397,14 @@ fn row_shell(lead: View, title: String, line: String, trailing: View, divider: b
                 .min_h(px(60.0))
                 .py(px(10.0))
                 .pr(sp(S4))
-                .when(divider, |v| v.border_t_1().border_color(tint(BORDER, 0.8)))
+                .when(divider, |v| v.border_t_1().border_color(tint(BORDER(), 0.8)))
                 .child(
                     view()
                         .flex_1()
                         .min_w(px(0.0))
                         .gap(px(2.0))
                         .child(text(title).text_size(px(16.0)).font_weight(FontWeight(600)).number_of_lines(1))
-                        .child(text(line).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1)),
+                        .child(text(line).text_size(tx(TEXT_SM)).text_color(FG_MUTED()).number_of_lines(1)),
                 )
                 .child(trailing),
         )
@@ -458,7 +458,7 @@ fn chat_row(a: Agent, w: Option<Workspace>, divider: bool) -> AnyElement {
         .items_end()
         .gap(px(4.0))
         // At work now: "now", not when its turn began.
-        .child(text(if a.is_running() { crate::i18n::t("now").to_owned() } else { time::ago(&a.updated_at) }).text_size(tx(TEXT_XS)).text_color(FG_FAINT));
+        .child(text(if a.is_running() { crate::i18n::t("now").to_owned() } else { time::ago(&a.updated_at) }).text_size(tx(TEXT_XS)).text_color(FG_FAINT()));
     let (id, ws) = (a.id.clone(), w.as_ref().map(|w| w.id.clone()));
     row_shell(glyph(Icon::Bot, status), store::conversation_title(&a), line, trailing, divider, move || {
         match &ws {
@@ -516,8 +516,8 @@ fn workspace_row(w: Workspace, new_agent: bool, divider: bool) -> AnyElement {
         .flex_row()
         .items_center()
         .gap(sp(S2))
-        .child(text(time::ago(&w.activity_at)).text_size(tx(TEXT_XS)).text_color(FG_FAINT))
-        .child(icon(Icon::ChevronRight, 14.0).text_color(FG_FAINT));
+        .child(text(time::ago(&w.activity_at)).text_size(tx(TEXT_XS)).text_color(FG_FAINT()))
+        .child(icon(Icon::ChevronRight, 14.0).text_color(FG_FAINT()));
     let kind = if w.branch.is_some() { Icon::GitBranch } else { Icon::Folder };
     row_shell(glyph(kind, Status::of_workspace(&w.status)), w.name.clone(), line, trailing, divider, move || {
         super::open_chat(&id, new_agent.then_some(Tab::Draft))
@@ -534,7 +534,7 @@ fn connecting() -> impl IntoElement {
         })
         .mt(sp(S3))
         .text_size(tx(TEXT_SM))
-        .text_color(FG_MUTED),
+        .text_color(FG_MUTED()),
     )
 }
 
@@ -543,7 +543,7 @@ fn empty(message: &'static str) -> impl IntoElement {
         .items_center()
         .px(sp(S8))
         .pt(px(S8 * 2.0))
-        .child(text(message).text_size(tx(TEXT_BASE)).line_height(px(20.0)).text_color(FG_MUTED).text_center())
+        .child(text(message).text_size(tx(TEXT_BASE)).line_height(px(20.0)).text_color(FG_MUTED()).text_center())
 }
 
 /// A new conversation: the workspaces to start it in, searchable, under
@@ -566,13 +566,13 @@ pub(crate) fn new_chat_page() -> nsh_core::element::Screen {
                         .h(px(44.0))
                         .px(sp(S4))
                         .rounded(px(R_FULL))
-                        .bg(SURFACE2)
-                        .child(icon(Icon::Search, 18.0).text_color(FG_MUTED))
+                        .bg(SURFACE2())
+                        .child(icon(Icon::Search, 18.0).text_color(FG_MUTED()))
                         .child(
                             input()
                                 .flex_1()
                                 .text_size(tx(TEXT_LG))
-                                .text_color(FG)
+                                .text_color(FG())
                                 .value(move || query.get())
                                 .on_change(move |v: &str| query.set(v.to_owned()))
                                 .placeholder(t("Search workspaces")),

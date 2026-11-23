@@ -75,6 +75,58 @@ pub(crate) fn project_list(actions: bool, empty: impl Fn() -> AnyElement + 'stat
     }))
 }
 
+/// What a row of the sidebar opens.
+pub(crate) enum Entry {
+    Conversation(crate::daemon::Agent),
+    Workspace(String),
+}
+
+/// The sidebar's rows that open a conversation, top to bottom, as the
+/// list shows them (folded projects and sections left out): what ⌘1–⌘9
+/// open.
+pub(crate) fn sidebar_entries() -> Vec<Entry> {
+    let mut out = Vec::new();
+    for g in store::groups() {
+        match &g.project {
+            None => {
+                if store::is_collapsed(&g.key()) {
+                    continue;
+                }
+                out.extend(g.conversations.iter().cloned().map(Entry::Conversation));
+            }
+            Some(p) if store::is_collapsed(&p.id) => continue,
+            Some(_) => {}
+        }
+        for w in &g.workspaces {
+            workspace_entries(w, &mut out);
+        }
+    }
+    out
+}
+
+/// A workspace's rows, as `workspace_entry` draws them.
+fn workspace_entries(w: &crate::daemon::Workspace, out: &mut Vec<Entry>) {
+    let mut conversations: Vec<crate::daemon::Agent> =
+        store::workspace_agents(&w.id).into_iter().filter(|a| !a.archived && a.parent_id.is_none() && !store::is_hidden_run(a)).collect();
+    conversations.reverse();
+    if !conversations.is_empty() && conversations.iter().all(|a| a.pinned) {
+        return;
+    }
+    let unpinned: Vec<_> = conversations.into_iter().filter(|a| !a.pinned).collect();
+    let bare = !w.pinned
+        && w.directory.trim_end_matches('/') == w.project_root.trim_end_matches('/')
+        && unpinned.is_empty()
+        && store::screen() != Screen::Workspace(w.id.clone());
+    if bare {
+        return;
+    }
+    if unpinned.len() > 1 {
+        out.extend(unpinned.into_iter().take(CONVERSATIONS_SHOWN).map(Entry::Conversation));
+    } else {
+        out.push(Entry::Workspace(w.id.clone()));
+    }
+}
+
 /// The projects' heading: their name, and "Add project" (the desktop's)
 /// at its right, where the rows' actions are.
 pub(crate) fn projects_heading(actions: bool) -> View {
@@ -115,7 +167,7 @@ fn group(g: ReadSignal<store::Group>, actions: bool) -> AnyElement {
             .hover(|s| s.bg(sidebar_hover()))
             .child(
                 icon(Icon::ChevronDown, 13.0)
-                    .text_color(FG_FAINT)
+                    .text_color(FG_FAINT())
                     .rotate(move || Radians(if folded.get() { -std::f32::consts::FRAC_PI_2 } else { 0.0 }))
                     .transition_transform(),
             )
@@ -159,7 +211,7 @@ fn guided(rows: View) -> View {
     view().child(
         rows.ml(px(if MOBILE { S2 } else { PROJECT_GUIDE }))
             .border_l(px(1.0))
-            .border_color(tint(FG, 0.09)),
+            .border_color(tint(FG(), 0.09)),
     )
 }
 
@@ -218,7 +270,7 @@ fn workspace_entry(w: ReadSignal<crate::daemon::Workspace>, actions: bool) -> im
                             .justify_center()
                             .rounded(px(R_LG))
                             .hover(|s| s.bg(sidebar_hover()))
-                            .child(text(move || crate::i18n::tf("Show {} more", &[&more.get().to_string()])).text_size(tx(TEXT_SM)).text_color(FG_MUTED))
+                            .child(text(move || crate::i18n::tf("Show {} more", &[&more.get().to_string()])).text_size(tx(TEXT_SM)).text_color(FG_MUTED()))
                     }))
                     .into_element()
             } else {
@@ -241,14 +293,14 @@ fn draft_row(root: String) -> impl IntoElement {
             .mx(sp(S2))
             .mb(px(2.0))
             .rounded(px(R_LG))
-            .bg(SIDEBAR_SELECTED)
+            .bg(SIDEBAR_SELECTED())
             .flex_row()
             .items_center()
             .gap(sp(S2))
             .h(sp(ROW_HEIGHT))
             .pl(sp(S2))
-            .child(view().w(px(15.0)).items_center().child(icon(Icon::SquarePen, 13.0).text_color(FG_MUTED)))
-            .child(text(t("New conversation")).text_size(tx(TEXT_BASE)).text_color(FG).number_of_lines(1).flex_1())
+            .child(view().w(px(15.0)).items_center().child(icon(Icon::SquarePen, 13.0).text_color(FG_MUTED())))
+            .child(text(t("New conversation")).text_size(tx(TEXT_BASE)).text_color(FG()).number_of_lines(1).flex_1())
     })
 }
 
@@ -270,7 +322,7 @@ fn conversation_row(agent: ReadSignal<crate::daemon::Agent>, actions: bool) -> i
         .child(row_status(move || {
             agent.with(|agent| Status::of_agent(&agent.status, agent.requires_attention || !agent.pending.is_empty()))
         }))
-        .child(text(move || agent.with(store::conversation_title)).text_size(tx(TEXT_BASE)).text_color(FG).number_of_lines(1).flex_1());
+        .child(text(move || agent.with(store::conversation_title)).text_size(tx(TEXT_BASE)).text_color(FG()).number_of_lines(1).flex_1());
     let more = dropdown(
         view()
             .w(px(24.0))
@@ -279,7 +331,7 @@ fn conversation_row(agent: ReadSignal<crate::daemon::Agent>, actions: bool) -> i
             .justify_center()
             .rounded(px(R_FULL))
             .hover(|s| s.bg(highlight()))
-            .child(icon(Icon::Ellipsis, 15.0).text_color(FG_FAINT)),
+            .child(icon(Icon::Ellipsis, 15.0).text_color(FG_FAINT())),
     )
     .align(nsh_core::overlay::Align::End)
     .child(
@@ -324,7 +376,7 @@ fn conversation_row(agent: ReadSignal<crate::daemon::Agent>, actions: bool) -> i
         .mx(sp(S2))
         .mb(px(2.0))
         .rounded(px(R_LG))
-        .bg(move || if selected.get() { SIDEBAR_SELECTED } else { tint(SIDEBAR, 0.0) })
+        .bg(move || if selected.get() { SIDEBAR_SELECTED() } else { tint(SIDEBAR(), 0.0) })
         .transition_colors()
         .child(
             view()
@@ -388,7 +440,7 @@ fn project_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
         .h(sp(ROW_HEIGHT))
         .rounded(px(R_LG))
         .translate_y(move || DefiniteLength::from(px(drag.get())))
-        .bg(move || if dragging.get() { sidebar_hover() } else { tint(SIDEBAR, 0.0) })
+        .bg(move || if dragging.get() { sidebar_hover() } else { tint(SIDEBAR(), 0.0) })
         // Under the pointer: the row fills, its name darkens and its
         // actions appear (out of the way otherwise, as T3's and Lody's).
         .group()
@@ -410,17 +462,17 @@ fn project_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
                 .h(sp(ROW_HEIGHT))
                 .child(
                     icon(Icon::ChevronDown, 13.0)
-                        .text_color(FG_FAINT)
+                        .text_color(FG_FAINT())
                         .rotate(move || Radians(if folded.get() { -std::f32::consts::FRAC_PI_2 } else { 0.0 }))
                         .transition_transform(),
                 )
-                .child(icon(Icon::Folder, 15.0).text_color(FG_FAINT))
+                .child(icon(Icon::Folder, 15.0).text_color(FG_FAINT()))
                 .child(
                     text(move || project.with(|p| p.as_ref().map(|p| p.name.clone()).unwrap_or_default()))
                         .text_size(tx(TEXT_SM))
                         .font_weight(FontWeight(500))
-                        .text_color(FG_MUTED)
-                        .group_hover(|s| s.text_color(FG))
+                        .text_color(FG_MUTED())
+                        .group_hover(|s| s.text_color(FG()))
                         .number_of_lines(1)
                         .flex_1(),
                 ),
@@ -468,7 +520,7 @@ fn project_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
                         .rounded(px(R_FULL))
                         .hover(|s| s.bg(highlight()))
                         .label(t("Project actions"))
-                        .child(icon(Icon::Ellipsis, 15.0).text_color(FG_FAINT)),
+                        .child(icon(Icon::Ellipsis, 15.0).text_color(FG_FAINT())),
                 )
                 .align(nsh_core::overlay::Align::End)
                 .child(dynamic(move || {
@@ -530,7 +582,7 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
         .child(
             text(move || display_name.get())
                 .text_size(tx(TEXT_BASE))
-                .text_color(move || if selected.get() { FG } else { FG })
+                .text_color(move || if selected.get() { FG() } else { FG() })
                 .number_of_lines(1)
                 .flex_1(),
         )
@@ -557,7 +609,7 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
             .justify_center()
             .rounded(px(R_FULL))
             .hover(|s| s.bg(highlight()))
-            .child(icon(Icon::Ellipsis, 15.0).text_color(FG_FAINT)),
+            .child(icon(Icon::Ellipsis, 15.0).text_color(FG_FAINT())),
     )
     .align(nsh_core::overlay::Align::End)
     .child(dynamic(move || {
@@ -618,7 +670,7 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
         // A hairline between rows that fill under the pointer.
         .mb(px(2.0))
         .rounded(px(R_LG))
-        .bg(move || if selected.get() { SIDEBAR_SELECTED } else { tint(SIDEBAR, 0.0) })
+        .bg(move || if selected.get() { SIDEBAR_SELECTED() } else { tint(SIDEBAR(), 0.0) })
         .transition_colors()
         .child(
             view()

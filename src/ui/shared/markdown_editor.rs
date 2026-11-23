@@ -73,21 +73,21 @@ fn styles() -> RichEditorStyles {
         StyleRefinement::default()
             .text_size(tx(TEXT_BASE))
             .line_height(px(24.0))
-            .text_color(FG)
+            .text_color(FG())
             .into(),
     ));
-    styles.caret = Some(PartStyle(StyleRefinement::default().bg(ACCENT).into()));
+    styles.caret = Some(PartStyle(StyleRefinement::default().bg(ACCENT()).into()));
     styles.selection = Some(PartStyle(
-        StyleRefinement::default().bg(tint(ACCENT, 0.3)).into(),
+        StyleRefinement::default().bg(tint(ACCENT(), 0.3)).into(),
     ));
     styles.placeholder = Some(PartStyle(
-        StyleRefinement::default().text_color(FG_FAINT).into(),
+        StyleRefinement::default().text_color(FG_FAINT()).into(),
     ));
     // What an input method is composing: a light wash, as the composer's.
     styles.composition = Some(PartStyle(
         StyleRefinement::default()
             .no_underline()
-            .bg(tint(ACCENT, 0.14))
+            .bg(tint(ACCENT(), 0.14))
             .into(),
     ));
     styles
