@@ -268,6 +268,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Logs", "日志"),
     ("sophon.log and connection.log, in Sophon's folder", "Sophon 文件夹中的 sophon.log 和 connection.log"),
     ("Show in Finder", "在访达中显示"),
+    ("⌘-click to show in Finder", "⌘ 点按在访达中显示"),
     ("Diagnostics copied: paste them where you report the problem", "诊断信息已复制，可粘贴到问题反馈中"),
     ("Unpin", "取消置顶"),
     ("Pinned", "已置顶"),

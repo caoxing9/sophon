@@ -557,7 +557,7 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
             return None;
         };
         // (icon, label, detail, what goes in, a folder, the label in code type)
-        let rows: Vec<(Icon, String, String, String, bool, bool)> = match &trigger {
+        let rows: Vec<(Option<Icon>, String, String, String, bool, bool)> = match &trigger {
             Trigger::Slash(prefix) => {
                 let agent = store::selected_id()?;
                 store::commands(&agent)
@@ -572,7 +572,8 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
                             Some(h) => format!("{} · {h}", c.description),
                             None => c.description,
                         };
-                        (if c.skill { Icon::Sparkles } else { Icon::Slash }, format!("/{}", c.name), detail, insert, false, true)
+                        // No icon: the name's own `/` says what it is.
+                        (None, format!("/{}", c.name), detail, insert, false, true)
                     })
                     .collect()
             }
@@ -596,19 +597,19 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
                     .filter(|(a, name)| q.is_empty() || name.to_lowercase().contains(&q) || a.title.to_lowercase().contains(&q))
                     .collect();
                 found.sort_by(|x, y| y.0.updated_at.cmp(&x.0.updated_at));
-                let mut rows: Vec<(Icon, String, String, String, bool, bool)> = found
+                let mut rows: Vec<(Option<Icon>, String, String, String, bool, bool)> = found
                     .into_iter()
                     .take(if q.is_empty() { 4 } else { 5 })
                     .map(|(a, name)| {
                         let place = store::project_name_of(&a).unwrap_or_else(|| crate::daemon::model::folder_name(&a.cwd));
                         let when = crate::ui::mobile::time::ago(&a.updated_at);
                         let detail = if when.is_empty() { place } else { format!("{place} · {when}") };
-                        (Icon::Bot, name, detail, format!("{}{}", composer_doc::CONVERSATION, a.id), false, false)
+                        (Some(Icon::Bot), name, detail, format!("{}{}", composer_doc::CONVERSATION, a.id), false, false)
                     })
                     .collect();
                 rows.extend(store::suggestions(&cwd, query).into_iter().take(9usize.saturating_sub(rows.len())).map(|(path, dir)| {
                     let rel = path.strip_prefix(&cwd).map(|p| p.trim_start_matches('/').to_owned()).unwrap_or(path);
-                    (if dir { Icon::Folder } else { Icon::FileText }, rel.clone(), String::new(), rel, dir, true)
+                    (Some(if dir { Icon::Folder } else { Icon::FileText }), rel.clone(), String::new(), rel, dir, true)
                 }));
                 rows
             }
@@ -655,7 +656,7 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
                         .px(sp(S2))
                         .rounded(px(R_LG))
                         .hover(|s| s.bg(highlight()))
-                        .child(icon(glyph, 15.0).text_color(FG_MUTED()))
+                        .when_some(glyph, |v, glyph| v.child(icon(glyph, 15.0).text_color(FG_MUTED())))
                         .child(if code {
                             text(label).text_size(tx(TEXT_BASE)).font_family(mono_font).text_color(FG()).flex_shrink_0()
                         } else {

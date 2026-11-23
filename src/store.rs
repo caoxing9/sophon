@@ -3706,7 +3706,7 @@ fn apply_color_theme(theme: &ColorTheme) {
         }
         None => {
             set_color_scheme(global::<Theme>().with_untracked(|t| t.0));
-            preset.unwrap_or(Palette::IVORY).with_accent(theme.accent)
+            preset.unwrap_or(Palette::IVORY).with_accent(theme.accent, &theme.preset)
         }
     };
     set_palette(palette);

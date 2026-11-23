@@ -7,7 +7,7 @@
 
 use nsh_core::{Hsla, color::rgb, element::AdaptiveColor};
 
-const fn pair(light: u32, dark: u32) -> AdaptiveColor {
+pub(crate) const fn pair(light: u32, dark: u32) -> AdaptiveColor {
     AdaptiveColor::rgb(light, dark)
 }
 
@@ -115,12 +115,15 @@ impl Palette {
         }
     }
 
-    /// This palette with another accent (`None`: its own).
-    pub(crate) fn with_accent(mut self, accent: Option<u32>) -> Palette {
+    /// This palette (preset `key`'s) with another accent (`None`: its
+    /// own). In an appearance it would not show in (black on a dark page),
+    /// the text colour stands in for it, as Mono's accent does.
+    pub(crate) fn with_accent(mut self, accent: Option<u32>, key: &str) -> Palette {
         if let Some(a) = accent {
-            self.accent = pair(a, a);
-            let on = on_color(a);
-            self.accent_fg = pair(on, on);
+            let p = THEME_PRESETS.iter().find(|p| p.0 == key).unwrap_or(&THEME_PRESETS[0]);
+            let (light, dark) = (readable_accent(a, p.3.bg, p.3.fg), readable_accent(a, p.4.bg, p.4.fg));
+            self.accent = pair(light, dark);
+            self.accent_fg = pair(on_color(light), on_color(dark));
         }
         self
     }
@@ -173,8 +176,8 @@ impl Derived {
             fg_faint: mix(t.fg, t.bg, 0.62),
             border: toward_fg(0.09),
             border_strong: toward_fg(0.15),
-            accent: t.accent,
-            accent_fg: on_color(t.accent),
+            accent: readable_accent(t.accent, t.bg, t.fg),
+            accent_fg: on_color(readable_accent(t.accent, t.bg, t.fg)),
         }
     }
 }
@@ -196,6 +199,14 @@ pub(crate) fn luminance(c: u32) -> f32 {
         if s <= 0.03928 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
     };
     0.2126 * lin((c >> 16) & 0xff) + 0.7152 * lin((c >> 8) & 0xff) + 0.0722 * lin(c & 0xff)
+}
+
+/// `accent`, or `fg` when `accent` would barely show on `bg` (its
+/// contrast under 1.8:1: black on a dark page, white on a light one).
+pub(crate) fn readable_accent(accent: u32, bg: u32, fg: u32) -> u32 {
+    let (a, b) = (luminance(accent), luminance(bg));
+    let contrast = (a.max(b) + 0.05) / (a.min(b) + 0.05);
+    if contrast < 1.8 { fg } else { accent }
 }
 
 /// Text that reads on `c`: near black on a light colour, white on a dark one.
