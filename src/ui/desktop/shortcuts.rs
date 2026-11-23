@@ -136,7 +136,16 @@ fn keys(with_menu: bool) -> Vec<(String, std::rc::Rc<dyn Fn()>)> {
             if crate::ui::shared::model_picker::take_digit(n) {
                 return;
             }
-            if let Some(tab) = store::tab_list().get(n - 1).cloned() {
+            // The sidebar's conversations, first to ninth (Settings ›
+            // Keyboard); off, the workspace's tabs.
+            if store::number_shortcuts_untracked() {
+                use crate::ui::shared::projects::{Entry, sidebar_entries};
+                match untracked(sidebar_entries).into_iter().nth(n - 1) {
+                    Some(Entry::Conversation(a)) => store::open_session(&a),
+                    Some(Entry::Workspace(id)) => store::open_workspace(&id),
+                    None => {}
+                }
+            } else if let Some(tab) = store::tab_list().get(n - 1).cloned() {
                 store::open_tab(tab);
             }
         }));
@@ -157,7 +166,7 @@ fn new_chat() {
     store::new_chat_here();
 }
 
-/// The menu bar, as a Mac app's: ⌘W closes the open tab (not the window),
+/// The menu bar, as a Mac app's: ⌘W closes the open tab, else the window,
 /// and ⌘Q asks twice before quitting, as Chrome does; the Edit menu keeps
 /// the text fields' own commands.
 fn menu() {
@@ -184,7 +193,7 @@ fn menu() {
                 M::new(t("New workspace")).shortcut("mod+n").on_select(|| store::open_new_workspace(None)),
                 M::new(t("New chat")).shortcut("mod+t").on_select(new_chat),
                 M::separator(),
-                M::new(t("Close tab")).shortcut("mod+w").on_select(store::close_current),
+                M::new(t("Close")).shortcut("mod+w").on_select(store::close_current),
             ],
         ),
         M::submenu(
@@ -320,9 +329,9 @@ pub(crate) fn palette() -> impl IntoElement {
                 .accessibility_label(t("Command palette"))
                 .auto_focus(true)
                 .on_select(|id: &SharedString| run(id))
-                .empty(view().p(sp(S4)).child(text(t("No results")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED)))
+                .empty(view().p(sp(S4)).child(text(t("No results")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED())))
                 .h(px(420.0))
-                .search_prefix(icon(Icon::Search, 17.0).text_color(FG_MUTED))
+                .search_prefix(icon(Icon::Search, 17.0).text_color(FG_MUTED()))
                 .search_bar_class("flex-row items-center gap-3 px-4 h-14 border-b border-border")
                 .search_class("flex-1 text-base text-foreground")
                 .group_class("px-4 pt-3 pb-1 text-xs font-medium text-muted-foreground")
@@ -337,11 +346,11 @@ pub(crate) fn palette() -> impl IntoElement {
                         .gap(sp(S2))
                         .h(sp(CONTROL_MD + 4.0))
                         .px(sp(S3))
-                        .child(text(entry.label.clone()).text_size(tx(TEXT_BASE)).text_color(FG).number_of_lines(1).flex_1())
+                        .child(text(entry.label.clone()).text_size(tx(TEXT_BASE)).text_color(FG()).number_of_lines(1).flex_1())
                         .child(
                             text(entry.shortcut_label.clone().unwrap_or_default())
                                 .text_size(tx(TEXT_SM))
-                                .text_color(FG_FAINT),
+                                .text_color(FG_FAINT()),
                         )
                 }),
         )
@@ -381,9 +390,9 @@ pub(crate) fn changed_files() -> impl IntoElement {
                     store::close_modal();
                     store::open_tab(Tab::Diff(Some(id.to_string())));
                 })
-                .empty(view().p(sp(S4)).child(text(t("No changed files")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED)))
+                .empty(view().p(sp(S4)).child(text(t("No changed files")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED())))
                 .h(px(420.0))
-                .search_prefix(icon(Icon::FileDiff, 17.0).text_color(FG_MUTED))
+                .search_prefix(icon(Icon::FileDiff, 17.0).text_color(FG_MUTED()))
                 .search_bar_class("flex-row items-center gap-3 px-4 h-14 border-b border-border")
                 .search_class("flex-1 text-base text-foreground")
                 .item_class("mx-2 rounded-lg focus:bg-accent hover:bg-accent")
@@ -398,8 +407,8 @@ pub(crate) fn changed_files() -> impl IntoElement {
                         .gap(sp(S2))
                         .h(sp(CONTROL_MD + 4.0))
                         .px(sp(S3))
-                        .child(text(entry.label.clone()).text_size(tx(TEXT_BASE)).text_color(FG).number_of_lines(1).flex_shrink_0())
-                        .child(text(folder).text_size(tx(TEXT_SM)).text_color(FG_FAINT).number_of_lines(1).flex_1())
+                        .child(text(entry.label.clone()).text_size(tx(TEXT_BASE)).text_color(FG()).number_of_lines(1).flex_shrink_0())
+                        .child(text(folder).text_size(tx(TEXT_SM)).text_color(FG_FAINT()).number_of_lines(1).flex_1())
                         .child(text(format!("+{add}")).text_size(tx(TEXT_SM)).font_family(mono_font).text_color(SUCCESS))
                         .child(text(format!("−{del}")).text_size(tx(TEXT_SM)).font_family(mono_font).text_color(DANGER))
                 }),

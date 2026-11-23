@@ -195,11 +195,11 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                                     .w(px(36.0))
                                     .h(px(36.0))
                                     .rounded(px(10.0))
-                                    .bg(tint(FG, 0.07))
+                                    .bg(tint(FG(), 0.07))
                                     .items_center()
                                     .justify_center()
                                     .active(|s| s.opacity(0.6))
-                                    .child(icon(Icon::Plus, 18.0).text_color(FG)),
+                                    .child(icon(Icon::Plus, 18.0).text_color(FG())),
                             )
                             .child(
                                 nsh_base::button()
@@ -217,11 +217,11 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                                     .gap(px(6.0))
                                     .px(sp(S1))
                                     .active(|s| s.opacity(0.6))
-                                    .child(icon(Icon::Sparkles, 15.0).text_color(FG_MUTED))
+                                    .child(icon(Icon::Sparkles, 15.0).text_color(FG_MUTED()))
                                     .child(
                                         text(move || settings.get())
                                             .text_size(tx(TEXT_BASE))
-                                            .text_color(FG_MUTED)
+                                            .text_color(FG_MUTED())
                                             .number_of_lines(1)
                                             .flex_shrink(1.0),
                                     ),
@@ -248,6 +248,12 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
     // go (`dropped`, on the window's root): the card says so while they
     // are over the window.
     let over = computed(|| global::<Dropping>().with(|d| d.0));
+    // No send button: Return sends. Stop shows while the agent runs and
+    // nothing is typed (typed, Return steers, interrupts or queues).
+    let stoppable = computed(move || running.get() && empty.get());
+    let _ = (busy, submit);
+    // One line, as Codex's: attach, the text, dictation (and stop). The
+    // agent's settings and its context under the card, at the right.
     view()
         .w_full()
         .max_w(px(CONTENT_MAX_WIDTH))
@@ -258,80 +264,64 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         .child(chips::preview_layer(key))
         .child(glass_strong(view())
         .w_full()
-        // A press anywhere on the card that nothing else takes (its edges
-        // around the text, the bar between the controls and Send) is a
-        // press on the input: the text was a strip in the middle of what
-        // looks like one field.
+        // A press anywhere on the card that nothing else takes is a press
+        // on the input: the text was a strip in the middle of what looks
+        // like one field.
         .test_id("composer-card")
         .on_press(move || {
             if let Some(session) = doc.session() {
                 session.focus();
             }
         })
-        // Close to the bar above it (where it runs, the branch): the two
-        // read as one piece, not a pill under a card.
-        .rounded(px(16.0))
-        .border_color(move || if over.get() { ACCENT.into() } else { glass_edge() })
-        .child(editor(doc, text_value, placeholder, TEXT_CONTENT, 220.0, changed).mx(sp(S4)).mt(px(14.0)).mb(sp(S1)))
+        .rounded(px(22.0))
+        .border_color(move || if over.get() { ACCENT().into() } else { glass_edge() })
+        .flex_row()
+        .items_end()
+        .gap(sp(S1))
+        .px(sp(S2))
+        .py(sp(S2))
+        .child(
+            nsh_base::button()
+                .on_press(with_key(pick_any_into))
+                .accessibility_label(t("Attach"))
+                .w(sp(CONTROL_SM))
+                .h(sp(CONTROL_SM))
+                .flex_shrink_0()
+                .items_center()
+                .justify_center()
+                .rounded(px(R_FULL))
+                .hover(|s| s.bg(highlight()))
+                .child(icon(Icon::Plus, 18.0).text_color(FG_MUTED())),
+        )
+        .child(view().flex_1().min_w(px(0.0)).min_h(sp(CONTROL_SM)).justify_center().child(editor(doc, text_value, placeholder, TEXT_CONTENT, 220.0, changed).mx(sp(S1))))
+        .child(view().flex_shrink_0().child(mic_button(doc)))
+        .child(when(stoppable, || {
+            button()
+                .on_press(store::stop_selected)
+                .accessibility_label(t("Stop"))
+                .w(sp(CONTROL_SM))
+                .h(sp(CONTROL_SM))
+                .flex_shrink_0()
+                .rounded(px(R_FULL))
+                .bg(FG())
+                .items_center()
+                .justify_center()
+                .hover(|s| s.opacity(0.85))
+                .child(view().w(px(9.0)).h(px(9.0)).rounded(px(2.0)).bg(SURFACE0()))
+        })))
         .child(
             view()
                 .flex_row()
                 .items_center()
-                .gap(sp(S2))
+                .justify_end()
+                .gap(px(2.0))
+                .pt(sp(S1))
                 .px(sp(S2))
-                .pb(sp(S2))
-                .child(
-                    // The controls give up width first (their labels shorten);
-                    // the send / stop disc keeps its place in the corner.
-                    view()
-                        .flex_row()
-                        .flex_wrap()
-                        .items_center()
-                        .gap(px(2.0))
-                        .flex_1()
-                        .min_w(px(0.0))
-                // The desktop opens the file dialog at once (a picture
-                // chosen there goes as a picture, as one dropped does); the
-                // phone asks first, its photos being apart from its files.
-                .child(if MOBILE {
-                    dropup(
-                        view()
-                            .w(sp(CONTROL_SM))
-                            .h(sp(CONTROL_SM))
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(R_FULL))
-                            .hover(|s| s.bg(highlight()))
-                            .label(t("Attach"))
-                            .child(icon(Icon::Paperclip, 16.0).text_color(FG_MUTED)),
-                    )
-                    .child(menu_row(t("Choose images…"), Some(Icon::Image), None, false, with_key(pick_images_into)))
-                    .child(menu_row(t("Choose files…"), Some(Icon::File), None, false, with_key(pick_files_into)))
-                    .into_element()
-                } else {
-                    nsh_base::button()
-                        .on_press(with_key(pick_any_into))
-                        .accessibility_label(t("Attach"))
-                        .w(sp(CONTROL_SM))
-                        .h(sp(CONTROL_SM))
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(R_FULL))
-                        .hover(|s| s.bg(highlight()))
-                        .child(icon(Icon::Paperclip, 16.0).text_color(FG_MUTED))
-                        .into_element()
-                })
-                .child(mic_button(doc))
                 .child(model_picker(live))
-                // What the agent may do without asking, beside its model:
-                // out of the picker's footer, where it took two presses to
-                // see and three to change.
-                .child(super::model_picker::access_mode(live)),
-                )
-                // How full the agent's context is, beside Send; the plan's
-                // limits are the status bar's.
-                .child(view().flex_shrink_0().flex_row().items_center().gap(sp(S2)).child(when(move || live, context_meter_ring)).child(disc(running, busy, empty, submit))),
-        ))
+                // What the agent may do without asking, beside its model.
+                .child(super::model_picker::access_mode(live))
+                .child(when(move || live, context_meter_ring)),
+        )
         .into_element()
 }
 
@@ -348,15 +338,15 @@ fn editor(
 ) -> View {
     let key = doc.key;
     let mut styles = RichEditorStyles::default();
-    let typography = |s: StyleRefinement| s.text_size(px(size)).line_height(px(22.0)).text_color(FG);
+    let typography = |s: StyleRefinement| s.text_size(px(size)).line_height(px(22.0)).text_color(FG());
     styles.root = Some(PartStyle(typography(StyleRefinement::default()).into()));
-    styles.caret = Some(PartStyle(StyleRefinement::default().bg(ACCENT).into()));
-    styles.selection = Some(PartStyle(StyleRefinement::default().bg(tint(ACCENT, 0.3)).into()));
-    styles.placeholder = Some(PartStyle(StyleRefinement::default().text_color(FG_FAINT).into()));
+    styles.caret = Some(PartStyle(StyleRefinement::default().bg(ACCENT()).into()));
+    styles.selection = Some(PartStyle(StyleRefinement::default().bg(tint(ACCENT(), 0.3)).into()));
+    styles.placeholder = Some(PartStyle(StyleRefinement::default().text_color(FG_FAINT()).into()));
     // What an input method is composing (pinyin before it becomes
     // characters): a light accent wash behind it, as the system's own
     // fields mark it, not the editor's underline under each piece.
-    styles.composition = Some(PartStyle(StyleRefinement::default().no_underline().bg(tint(ACCENT, 0.14)).into()));
+    styles.composition = Some(PartStyle(StyleRefinement::default().no_underline().bg(tint(ACCENT(), 0.14)).into()));
     let mut nodes = PartStyles::default();
     nodes.0.insert("paragraph".into(), typography(StyleRefinement::default()).into());
     // The editor wraps each chip in a box of its node's part: that box is
@@ -649,13 +639,13 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
         composer_doc::set_menu(Some(composer_doc::Menu { count: rows.len(), pick: choose.clone() }));
         Some(untracked(move || {
             let selected = computed(|| global::<composer_doc::MenuSelected>().with(|s| s.0));
-            let mut list = card().mb(sp(S2)).p(sp(S1)).bg(POPOVER).shadow_md();
+            let mut list = card().mb(sp(S2)).p(sp(S1)).bg(POPOVER()).shadow_md();
             for (i, (glyph, label, detail, _, _, code)) in rows.clone().into_iter().enumerate() {
                 let choose = choose.clone();
                 list = list.child(
                     button()
                         .on_press(move || choose(i))
-                        .bg(move || if selected.get() == i { highlight() } else { tint(FG, 0.0) })
+                        .bg(move || if selected.get() == i { highlight() } else { tint(FG(), 0.0) })
                         .flex_row()
                         .items_center()
                         .gap(sp(S2))
@@ -663,15 +653,15 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
                         .px(sp(S2))
                         .rounded(px(R_LG))
                         .hover(|s| s.bg(highlight()))
-                        .child(icon(glyph, 15.0).text_color(FG_MUTED))
+                        .child(icon(glyph, 15.0).text_color(FG_MUTED()))
                         .child(if code {
-                            text(label).text_size(tx(TEXT_BASE)).font_family(mono_font).text_color(FG).flex_shrink_0()
+                            text(label).text_size(tx(TEXT_BASE)).font_family(mono_font).text_color(FG()).flex_shrink_0()
                         } else {
                             // A conversation's name in the text's own type, as
                             // the sidebar shows it, cut to leave its detail.
-                            text(label).text_size(tx(TEXT_BASE)).text_color(FG).number_of_lines(1).flex_shrink(1.0)
+                            text(label).text_size(tx(TEXT_BASE)).text_color(FG()).number_of_lines(1).flex_shrink(1.0)
                         })
-                        .child(text(detail).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1).flex_shrink_0().when(!code, |t| t.ml(sp(S2))).when(code, |t| t.flex_1())),
+                        .child(text(detail).text_size(tx(TEXT_SM)).text_color(FG_MUTED()).number_of_lines(1).flex_shrink_0().when(!code, |t| t.ml(sp(S2))).when(code, |t| t.flex_1())),
                 );
             }
             list
@@ -699,11 +689,11 @@ fn elsewhere_bar(live: bool) -> impl IntoElement {
                 .flex_row()
                 .items_center()
                 .gap(sp(S3))
-                .child(icon(Icon::Terminal, 15.0).text_color(FG_MUTED))
+                .child(icon(Icon::Terminal, 15.0).text_color(FG_MUTED()))
                 .child(
                     text(tf("Open in a Claude Code background session ({}): messages sent here fail until it is closed there", &[&short]))
                         .text_size(tx(TEXT_SM))
-                        .text_color(FG_MUTED)
+                        .text_color(FG_MUTED())
                         .flex_1(),
                 )
                 .child(btn(t("Close it there"), Variant::Outline, Sz::Sm, None, move || {
@@ -736,7 +726,7 @@ fn queue_track(live: bool) -> impl IntoElement {
                         .flex_row()
                         .items_center()
                         .gap(sp(S2))
-                        .child(icon(Icon::Inbox, 14.0).text_color(FG_FAINT))
+                        .child(icon(Icon::Inbox, 14.0).text_color(FG_FAINT()))
                         .child(text({
                             let mut body = msg.text.clone();
                             for image in &msg.images {
@@ -802,11 +792,11 @@ fn disc(running: Memo<bool>, busy: Memo<bool>, empty: Memo<bool>, submit: impl F
                     .w(px(32.0))
                     .h(px(32.0))
                     .rounded(px(R_FULL))
-                    .bg(FG)
+                    .bg(FG())
                     .items_center()
                     .justify_center()
                     .hover(|s| s.opacity(0.85))
-                    .child(view().w(px(10.0)).h(px(10.0)).rounded(px(2.0)).bg(SURFACE0))
+                    .child(view().w(px(10.0)).h(px(10.0)).rounded(px(2.0)).bg(SURFACE0()))
                     .into_element()
             } else {
                 button()
@@ -815,11 +805,11 @@ fn disc(running: Memo<bool>, busy: Memo<bool>, empty: Memo<bool>, submit: impl F
                     .w(px(32.0))
                     .h(px(32.0))
                     .rounded(px(R_FULL))
-                    .bg(move || if empty.get() { SURFACE3 } else { ACCENT })
+                    .bg(move || if empty.get() { SURFACE3() } else { ACCENT() })
                     .items_center()
                     .justify_center()
                     .hover(|s| s.opacity(0.88))
-                    .child(icon(Icon::ArrowUp, 17.0).text_color(move || if empty.get() { FG_FAINT } else { ACCENT_FG }))
+                    .child(icon(Icon::ArrowUp, 17.0).text_color(move || if empty.get() { FG_FAINT() } else { ACCENT_FG() }))
                     .into_element()
             }
         }))
@@ -879,16 +869,16 @@ pub(crate) fn usage_bar(live: bool) -> impl IntoElement {
         }
         (provider, out)
     });
-    view().flex_row().items_center().h(px(30.0)).px(sp(S3)).gap(sp(S2)).border_t(px(1.0)).border_color(BORDER).child(dynamic(move || {
+    view().flex_row().items_center().h(px(30.0)).px(sp(S3)).gap(sp(S2)).border_t(px(1.0)).border_color(BORDER()).child(dynamic(move || {
         let (provider, list) = readings.get();
         Some(untracked(move || {
             let glyph = match provider.as_str() {
                 "codex" => Icon::Codex,
                 _ => Icon::Claude,
             };
-            let mut row = view().flex_row().items_center().gap(sp(S4)).child(icon(glyph, 13.0).text_color(FG_MUTED));
+            let mut row = view().flex_row().items_center().gap(sp(S4)).child(icon(glyph, 13.0).text_color(FG_MUTED()));
             if list.is_empty() {
-                row = row.child(text(t("No usage reported yet")).text_size(tx(TEXT_XS)).text_color(FG_FAINT));
+                row = row.child(text(t("No usage reported yet")).text_size(tx(TEXT_XS)).text_color(FG_FAINT()));
             }
             for (word, pct, left) in list {
                 let tone = meter_tone(pct);
@@ -903,10 +893,10 @@ pub(crate) fn usage_bar(live: bool) -> impl IntoElement {
                     .rounded(px(R_MD))
                     .hover(|s| s.bg(highlight()))
                     .child(ring(pct).text_color(tone))
-                    .child(text(word).text_size(tx(TEXT_XS)).text_color(FG_MUTED))
+                    .child(text(word).text_size(tx(TEXT_XS)).text_color(FG_MUTED()))
                     .child(text(format!("{:.0}%", pct.clamp(0.0, 100.0))).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(tone));
                 if let Some(secs) = left.filter(|s| *s > 0) {
-                    meter = meter.child(text(time_left(secs)).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(FG_FAINT));
+                    meter = meter.child(text(time_left(secs)).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(FG_FAINT()));
                 }
                 row = row.child(meter);
             }
@@ -961,7 +951,7 @@ pub(crate) fn usage_summary() -> impl IntoElement {
                 .h(px(28.0))
                 .pl(sp(S3))
                 .pr(sp(S1))
-                .child(text(t("This week left")).text_size(tx(TEXT_XS)).text_color(FG_FAINT));
+                .child(text(t("This week left")).text_size(tx(TEXT_XS)).text_color(FG_FAINT()));
             for (_, name, left, _) in &list {
                 shown = shown.child(
                     view()
@@ -969,7 +959,7 @@ pub(crate) fn usage_summary() -> impl IntoElement {
                         .items_center()
                         .gap(px(5.0))
                         .child(ring(*left).text_color(left_tone(*left)))
-                        .child(text(name.clone()).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG))
+                        .child(text(name.clone()).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG()))
                         .child(text(format!("{left:.0}%")).text_size(tx(TEXT_SM)).font_family(mono_font).text_color(left_tone(*left))),
                 );
             }
@@ -991,17 +981,17 @@ pub(crate) fn usage_summary() -> impl IntoElement {
                             .flex_row()
                             .items_center()
                             .gap(sp(S2))
-                            .child(text(word).text_size(tx(TEXT_XS)).text_color(FG_MUTED).w(px(42.0)))
+                            .child(text(word).text_size(tx(TEXT_XS)).text_color(FG_MUTED()).w(px(42.0)))
                             .child(
                                 view()
                                     .flex_1()
                                     .h(px(5.0))
                                     .rounded(px(R_FULL))
-                                    .bg(SURFACE3)
+                                    .bg(SURFACE3())
                                     .child(view().h_full().w(relative((rest / 100.0) as f32)).rounded(px(R_FULL)).bg(left_tone(rest))),
                             )
                             .child(text(format!("{rest:.0}%")).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(left_tone(rest)).w(px(36.0)).text_right())
-                            .child(text(left.filter(|s| *s > 0).map(time_left).unwrap_or_default()).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(FG_FAINT).w(px(54.0)).text_right()),
+                            .child(text(left.filter(|s| *s > 0).map(time_left).unwrap_or_default()).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(FG_FAINT()).w(px(54.0)).text_right()),
                     );
                 }
                 card = card.child(block);
@@ -1018,12 +1008,12 @@ pub(crate) fn usage_summary() -> impl IntoElement {
                 .items_center()
                 .rounded(px(R_FULL))
                 .border_1()
-                .border_color(BORDER)
-                .bg(SURFACE0)
+                .border_color(BORDER())
+                .bg(SURFACE0())
                 .hover(|s| s.bg(highlight()))
                 .child(shown)
                 .child(
-                    dropdown(view().w(px(24.0)).h(px(24.0)).mr(px(2.0)).items_center().justify_center().rounded(px(R_FULL)).hover(|s| s.bg(highlight())).child(icon(Icon::ChevronDown, 13.0).text_color(FG_MUTED)))
+                    dropdown(view().w(px(24.0)).h(px(24.0)).mr(px(2.0)).items_center().justify_center().rounded(px(R_FULL)).hover(|s| s.bg(highlight())).child(icon(Icon::ChevronDown, 13.0).text_color(FG_MUTED())))
                         .align(nsh_core::overlay::Align::End)
                         .child(card),
                 )
@@ -1049,24 +1039,24 @@ fn context_meter_ring() -> impl IntoElement {
                 .px(sp(S4))
                 .py(sp(S3))
                 .rounded(px(R_LG))
-                .bg(SURFACE0)
+                .bg(SURFACE0())
                 .border_1()
-                .border_color(BORDER)
+                .border_color(BORDER())
                 .child(
                     view()
                         .flex_row()
                         .items_center()
                         .child(text(t("Context")).text_size(tx(TEXT_SM)).font_weight(FontWeight(600)).flex_1())
-                        .child(text(tf("{}% used", &[&format!("{pct:.0}")])).text_size(tx(TEXT_XS)).text_color(FG_MUTED)),
+                        .child(text(tf("{}% used", &[&format!("{pct:.0}")])).text_size(tx(TEXT_XS)).text_color(FG_MUTED())),
                 )
                 .child(
                     view()
                         .h(px(5.0))
                         .rounded(px(R_FULL))
-                        .bg(SURFACE3)
-                        .child(view().h_full().w(relative((pct / 100.0) as f32)).rounded(px(R_FULL)).bg(if pct >= 80.0 { tone } else { FG_MUTED })),
+                        .bg(SURFACE3())
+                        .child(view().h_full().w(relative((pct / 100.0) as f32)).rounded(px(R_FULL)).bg(if pct >= 80.0 { tone } else { FG_MUTED() })),
                 )
-                .child(text(format!("{} / {}", tokens(used), tokens(max))).text_size(tx(TEXT_XS)).text_color(FG_MUTED));
+                .child(text(format!("{} / {}", tokens(used), tokens(max))).text_size(tx(TEXT_XS)).text_color(FG_MUTED()));
             view().tooltip(tip.into_element()).child(
                 button()
                     .on_press(store::open_usage)
@@ -1134,7 +1124,7 @@ fn meter_tone(pct: f64) -> AdaptiveColor {
     } else if pct >= 80.0 {
         WARNING
     } else {
-        FG_MUTED
+        FG_MUTED()
     }
 }
 
@@ -1184,13 +1174,13 @@ pub(crate) fn hint(message: impl Fn() -> Option<(String, bool)> + 'static) -> im
                 .child(icon(if error { Icon::CircleAlert } else { Icon::Info }, 14.0).text_color(if error {
                     DANGER
                 } else {
-                    FG_FAINT
+                    FG_FAINT()
                 }))
                 .child(
                     text(m.clone())
                         .text_size(tx(TEXT_SM))
                         .font_weight(FontWeight(400))
-                        .text_color(if error { DANGER } else { FG_MUTED })
+                        .text_color(if error { DANGER } else { FG_MUTED() })
                         .selectable(true)
                         .flex_shrink(1.0),
                 )
@@ -1430,7 +1420,7 @@ fn listening_card(doc: Doc) -> impl IntoElement {
                 .looped(None)
                 .start();
             wave = wave.child(
-                view().w(px(4.0)).h(px(26.0)).rounded(px(R_FULL)).bg(ACCENT).bind_transform(nsh_core::TransformKind::ScaleY, &level),
+                view().w(px(4.0)).h(px(26.0)).rounded(px(R_FULL)).bg(ACCENT()).bind_transform(nsh_core::TransformKind::ScaleY, &level),
             );
         }
         view()
@@ -1440,7 +1430,7 @@ fn listening_card(doc: Doc) -> impl IntoElement {
             .left(px(0.0))
             .right(px(0.0))
             .rounded(px(24.0))
-            .bg(SURFACE0)
+            .bg(SURFACE0())
             .pointer_events(PointerEvents::None)
             .px(sp(S4))
             .py(sp(S3))
@@ -1452,12 +1442,12 @@ fn listening_card(doc: Doc) -> impl IntoElement {
                     .items_center()
                     .gap(sp(S3))
                     .child(wave)
-                    .child(text(t("Listening…")).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).text_color(FG))
+                    .child(text(t("Listening…")).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).text_color(FG()))
                     .child(view().flex_1())
-                    .child(text(t("Let go to stop")).text_size(tx(TEXT_SM)).text_color(FG_FAINT)),
+                    .child(text(t("Let go to stop")).text_size(tx(TEXT_SM)).text_color(FG_FAINT())),
             )
             .child(when(move || heard.with(|h| !h.is_empty()), move || {
-                text(move || heard.get()).text_size(tx(TEXT_BASE)).text_color(FG_MUTED).number_of_lines(2)
+                text(move || heard.get()).text_size(tx(TEXT_BASE)).text_color(FG_MUTED()).number_of_lines(2)
             }))
     })
 }
@@ -1548,7 +1538,7 @@ fn mic_button(doc: Doc) -> impl IntoElement {
         .hover(|s| s.bg(highlight()))
         .child(dynamic(move || {
             let active = on.with(|d| d.0);
-            Some(untracked(move || icon(if active { Icon::MicOff } else { Icon::Mic }, 16.0).text_color(if active { DANGER } else { FG_MUTED })))
+            Some(untracked(move || icon(if active { Icon::MicOff } else { Icon::Mic }, 16.0).text_color(if active { DANGER } else { FG_MUTED() })))
         }))
 }
 

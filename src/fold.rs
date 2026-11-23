@@ -17,7 +17,11 @@ use crate::{
 pub(crate) enum Row {
     /// The item at this index. `grouped`: it shows under an open group's
     /// summary, so it is drawn indented.
-    Item { index: usize, grouped: bool },
+    /// `turn_end`: nothing of the agent's follows it in the turn (no
+    /// call, thought or more words): a reply's actions show under it.
+    /// Worked out here, with the rows, so a row reads a flag rather than
+    /// looking at its neighbour as each word streams in.
+    Item { index: usize, grouped: bool, turn_end: bool },
     /// The summary of a run of tool calls.
     Group(Group),
 }
@@ -52,10 +56,49 @@ impl Row {
 /// The display rows for `items`. `running`: the agent's turn is going on.
 /// `choice`: groups the user opened (true) or closed (false), by id; the
 /// rest are open while live and folded otherwise.
+/// How the conversation shows the agent's tool calls (`toolCalls` in the
+/// settings): runs open while the agent works in them (`Auto`), always
+/// folded to their summary (`Folded`), or not at all (`Hidden`: what it
+/// says alone, its thinking and calls left out).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ToolDisplay {
+    #[default]
+    Auto,
+    Folded,
+    Hidden,
+}
+
+impl ToolDisplay {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            ToolDisplay::Auto => "auto",
+            ToolDisplay::Folded => "folded",
+            ToolDisplay::Hidden => "hidden",
+        }
+    }
+
+    pub(crate) fn parse(s: &str) -> Self {
+        match s {
+            "folded" => ToolDisplay::Folded,
+            "hidden" => ToolDisplay::Hidden,
+            _ => ToolDisplay::Auto,
+        }
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn fold(items: &[Item], running: bool, choice: &HashMap<String, bool>) -> Vec<Row> {
+    fold_as(items, running, choice, ToolDisplay::Auto)
+}
+
+pub(crate) fn fold_as(items: &[Item], running: bool, choice: &HashMap<String, bool>, display: ToolDisplay) -> Vec<Row> {
     let mut rows = Vec::with_capacity(items.len());
     let mut i = 0;
     while i < items.len() {
+        if display == ToolDisplay::Hidden && matches!(items[i], Item::Tool { .. } | Item::Reasoning { .. }) {
+            i += 1;
+            continue;
+        }
         // A run is the agent at work between what it says: its calls, and
         // its thinking between them (as Claude Code's app shows a turn's
         // steps under one summary), two calls at least.
@@ -65,7 +108,7 @@ pub(crate) fn fold(items: &[Item], running: bool, choice: &HashMap<String, bool>
         }
         let calls = items[i..end].iter().filter(|t| matches!(t, Item::Tool { .. })).count();
         if calls < 2 {
-            rows.push(Row::Item { index: i, grouped: false });
+            rows.push(Row::Item { index: i, grouped: false, turn_end: turn_end(items, i) });
             i += 1;
             continue;
         }
@@ -81,14 +124,19 @@ pub(crate) fn fold(items: &[Item], running: bool, choice: &HashMap<String, bool>
         // The run the agent is in (the last one), or one with a call still
         // going, stays open so its progress shows.
         let live = running && (end == items.len() || run.iter().any(|t| status_of(t) == "running"));
-        let open = choice.get(&id).copied().unwrap_or(live);
+        let open = choice.get(&id).copied().unwrap_or(live && display == ToolDisplay::Auto);
         rows.push(Row::Group(Group { start: i, end, id, live, open }));
         if open {
-            rows.extend((i..end).map(|index| Row::Item { index, grouped: true }));
+            rows.extend((i..end).map(|index| Row::Item { index, grouped: true, turn_end: false }));
         }
         i = end;
     }
     rows
+}
+
+/// Whether item `i` ends what the agent did in its turn.
+fn turn_end(items: &[Item], i: usize) -> bool {
+    !matches!(items.get(i + 1), Some(Item::Tool { .. } | Item::Reasoning { .. } | Item::Assistant { .. }))
 }
 
 /// The row that shows item `index`: its own, or its folded group's.
@@ -293,6 +341,22 @@ mod tests {
         assert_eq!(keys(&fold(&items, true, &closed)), ["g:a"]);
         let opened = HashMap::from([("a".to_owned(), true)]);
         assert_eq!(keys(&fold(&items, false, &opened)), ["g:a", "0", "1"]);
+        assert_eq!(keys(&fold_as(&items, true, &none(), ToolDisplay::Folded)), ["g:a"]);
+        assert!(fold_as(&items, true, &none(), ToolDisplay::Hidden).is_empty());
+    }
+
+    #[test]
+    fn a_reply_ends_its_turn_unless_the_agent_goes_on() {
+        let user = |text: &str| Item::User { text: text.into(), message_id: None, images: vec![], at: None };
+        let items = vec![user("go"), said("looking"), tool("a", "shell", "completed", ""), said("done"), user("next")];
+        let ends: Vec<bool> = fold(&items, false, &none())
+            .iter()
+            .filter_map(|r| match r {
+                Row::Item { turn_end, .. } => Some(*turn_end),
+                Row::Group(_) => None,
+            })
+            .collect();
+        assert_eq!(ends, [false, false, false, true, true]);
     }
 
     #[test]

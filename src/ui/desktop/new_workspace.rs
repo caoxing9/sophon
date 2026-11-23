@@ -124,7 +124,7 @@ fn new_workspace_form(compact: bool, form: Memo<store::Form>, project_label: Mem
                                         } else if f.worktree {
                                             Some((tf("A new worktree branched from {}", &[&f.path]), false))
                                         } else {
-                                            Some((tf("Runs in {}", &[&f.path]), false))
+                                            None
                                         }
                                     })
                                 })
@@ -149,13 +149,13 @@ fn project_chat(form: Memo<store::Form>, project_label: Memo<String>) -> View {
                 .h(px(44.0))
                 .px(sp(S4))
                 .window_drag(true)
-                .child(icon(Icon::Folder, 14.0).text_color(FG_MUTED))
+                .child(icon(Icon::Folder, 14.0).text_color(FG_MUTED()))
                 .child(text(move || project_label.get()).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)))
-                .child(text(t("New conversation")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED)),
+                .child(text(t("New conversation")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED())),
         )
         .child(
-            view().flex_1().items_center().justify_center().gap(sp(S2)).child(icon(Icon::SquarePen, 22.0).text_color(FG_FAINT)).child(
-                text(move || tf("A new conversation in {}", &[&project_label.get()])).text_size(tx(TEXT_SM)).text_color(FG_MUTED),
+            view().flex_1().items_center().justify_center().gap(sp(S2)).child(icon(Icon::SquarePen, 22.0).text_color(FG_FAINT())).child(
+                text(move || tf("A new conversation in {}", &[&project_label.get()])).text_size(tx(TEXT_SM)).text_color(FG_MUTED()),
             ),
         )
         .child(
@@ -167,7 +167,7 @@ fn project_chat(form: Memo<store::Form>, project_label: Memo<String>) -> View {
                 .child(composer::hint(move || {
                     form.with(|f| {
                         f.error.clone().map(|e| (e, true)).or_else(|| {
-                            if f.busy { Some((t("Creating workspace…").into(), false)) } else { Some((tf("Runs in {}", &[&f.path]), false)) }
+                            if f.busy { Some((t("Creating workspace…").into(), false)) } else { None }
                         })
                     })
                 })),
@@ -184,9 +184,9 @@ fn project_picker(label: Memo<String>) -> impl IntoElement {
             .px(sp(S2))
             .rounded(px(R_FULL))
             .hover(|s| s.bg(highlight()))
-            .child(icon(Icon::Folder, 15.0).text_color(FG_MUTED))
+            .child(icon(Icon::Folder, 15.0).text_color(FG_MUTED()))
             .child(text(move || label.get()).text_size(tx(TEXT_BASE)).number_of_lines(1))
-            .child(icon(Icon::ChevronDown, 14.0).text_color(FG_FAINT)),
+            .child(icon(Icon::ChevronDown, 14.0).text_color(FG_FAINT())),
     )
     .child(dynamic(move || {
         let projects = store::projects();

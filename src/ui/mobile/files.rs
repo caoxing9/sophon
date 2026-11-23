@@ -79,7 +79,7 @@ fn entry_row(entry: Memo<Option<DirEntry>>) -> impl IntoElement {
         .active(|s| s.bg(highlight()))
         .child(dynamic(move || {
             let glyph = if is_dir() { Icon::Folder } else { Icon::File };
-            Some(untracked(move || icon(glyph, 18.0).text_color(FG_MUTED).into_element()))
+            Some(untracked(move || icon(glyph, 18.0).text_color(FG_MUTED()).into_element()))
         }))
         .child(
             text(move || entry.with(|e| e.as_ref().map(|e| e.name.clone()).unwrap_or_default()))
@@ -90,9 +90,9 @@ fn entry_row(entry: Memo<Option<DirEntry>>) -> impl IntoElement {
         .child(
             text(move || entry.with(|e| e.as_ref().filter(|e| !e.is_dir).map(|e| format_size(e.size as usize)).unwrap_or_default()))
                 .text_size(tx(TEXT_SM))
-                .text_color(FG_FAINT),
+                .text_color(FG_FAINT()),
         )
-        .child(icon(Icon::ChevronRight, 16.0).text_color(FG_FAINT))
+        .child(icon(Icon::ChevronRight, 16.0).text_color(FG_FAINT()))
 }
 
 pub(crate) fn file_page(path: String) -> Screen {
@@ -114,7 +114,7 @@ pub(crate) fn file_page(path: String) -> Screen {
                 view()
                     .items_center()
                     .child(text(name).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).number_of_lines(1))
-                    .child(text(dir).text_size(tx(TEXT_XS)).text_color(FG_MUTED).number_of_lines(1)),
+                    .child(text(dir).text_size(tx(TEXT_XS)).text_color(FG_MUTED()).number_of_lines(1)),
                 view()
                     .opacity(move || if busy.get() { 0.4_f32 } else { 1.0 })
                     .child(glass_button(Icon::Download, t("Download"), move || store::download_file(&down))),
@@ -167,7 +167,7 @@ fn content(path: String) -> AnyElement {
                                 .gap_3()
                                 .text_size(tx(TEXT_CONTENT))
                                 .line_height(px(24.0))
-                                .text_color(FG),
+                                .text_color(FG()),
                         ),
                     )
                     .into_element();
@@ -183,11 +183,11 @@ fn content(path: String) -> AnyElement {
                                 .text_size(tx(TEXT_SM))
                                 .line_height(px(19.0))
                                 .font_family(mono_font)
-                                .text_color(FG)
+                                .text_color(FG())
                                 .selectable(true),
                         )
                         .when(cut, |v| {
-                            v.child(text(t("The rest of the file is in its download")).text_size(tx(TEXT_SM)).text_color(FG_MUTED))
+                            v.child(text(t("The rest of the file is in its download")).text_size(tx(TEXT_SM)).text_color(FG_MUTED()))
                         }),
                 )
                 .into_element()
@@ -205,8 +205,8 @@ fn download_note(path: String, why: String) -> AnyElement {
         .gap(sp(S3))
         .p(sp(S6))
         .pb(px(96.0))
-        .child(icon(Icon::File, 40.0).text_color(FG_FAINT))
-        .child(text(why).text_size(tx(TEXT_BASE)).text_color(FG_MUTED).text_center())
+        .child(icon(Icon::File, 40.0).text_color(FG_FAINT()))
+        .child(text(why).text_size(tx(TEXT_BASE)).text_color(FG_MUTED()).text_center())
         .child(btn(t("Download"), Variant::Primary, Sz::Md, Some(Icon::Download), move || store::download_file(&path)))
         .into_element()
 }
@@ -216,7 +216,7 @@ fn note(glyph: Icon, message: String) -> AnyElement {
         .flex_row()
         .gap(sp(S2))
         .p(sp(S4))
-        .child(icon(glyph, 16.0).text_color(FG_FAINT))
-        .child(text(message).text_size(tx(TEXT_BASE)).text_color(FG_MUTED).flex_1())
+        .child(icon(glyph, 16.0).text_color(FG_FAINT()))
+        .child(text(message).text_size(tx(TEXT_BASE)).text_color(FG_MUTED()).flex_1())
         .into_element()
 }

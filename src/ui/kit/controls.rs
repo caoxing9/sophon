@@ -22,7 +22,7 @@ use super::{
 /// otherwise and do not inherit a view's color, which hides them in dark
 /// mode. A `.text_color(..)` after it still wins.
 pub(crate) fn text(content: impl IntoReactive<SharedString>) -> nsh_core::element::Text {
-    nsh_core::element::text(content).text_color(FG)
+    nsh_core::element::text(content).text_color(FG())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -91,7 +91,7 @@ pub(crate) fn icon_btn(glyph: Icon, size: Sz, label: &'static str, on_press: imp
     nsh_ui::button::Button::new()
         .ghost()
         .size(sz)
-        .icon(icon(glyph, sz.icon()).text_color(FG_MUTED))
+        .icon(icon(glyph, sz.icon()).text_color(FG_MUTED()))
         .accessibility_label(label)
         .on_press(on_press)
         .build()
@@ -103,13 +103,13 @@ pub(crate) fn field() -> InputElement {
         .h(sp(CONTROL_MD + 4.0))
         .px(sp(S3))
         .rounded(px(R_LG))
-        .bg(SURFACE2)
+        .bg(SURFACE2())
         .border_1()
-        .border_color(BORDER)
+        .border_color(BORDER())
         .text_size(tx(TEXT_BASE))
-        .text_color(FG)
-        .caret_color(|| color(ACCENT))
-        .selection_color(|| color(tint(ACCENT, 0.3)))
+        .text_color(FG())
+        .caret_color(|| color(ACCENT()))
+        .selection_color(|| color(tint(ACCENT(), 0.3)))
 }
 
 /// A segmented control: the selected segment is a raised surface, not an
@@ -138,10 +138,10 @@ pub(crate) fn segmented<T: Clone + PartialEq + 'static>(
         .w(move || Length::from(px(at.get().1)))
         .opacity(move || if at.get().1 > 0.0 { 1.0_f32 } else { 0.0 })
         .rounded(px(R_FULL))
-        .bg(SURFACE0)
+        .bg(SURFACE0())
         .border_1()
-        .border_color(BORDER);
-    let mut row = view().flex_row().p(px(3.0)).gap(px(2.0)).rounded(px(R_FULL)).bg(SURFACE2).self_start().child(thumb);
+        .border_color(BORDER());
+    let mut row = view().flex_row().p(px(3.0)).gap(px(2.0)).rounded(px(R_FULL)).bg(SURFACE2()).self_start().child(thumb);
     for (i, (value, label)) in options.into_iter().enumerate() {
         let is_on = {
             let value = value.clone();
@@ -173,7 +173,7 @@ pub(crate) fn segmented<T: Clone + PartialEq + 'static>(
                     text(label)
                         .text_size(tx(TEXT_SM))
                         .font_weight(FontWeight(500))
-                        .text_color(move || if is_on.get() { FG } else { FG_MUTED })
+                        .text_color(move || if is_on.get() { FG() } else { FG_MUTED() })
                         .transition_colors(),
                 ),
         ));
@@ -187,7 +187,7 @@ trait ShadowIf {
 
 impl ShadowIf for ButtonElement {
     fn shadow_sm_if(self, on: Memo<bool>) -> Self {
-        self.border_1().border_color(move || if on.get() { BORDER } else { AdaptiveColor::rgb(0, 0).opacity(0.0) })
+        self.border_1().border_color(move || if on.get() { BORDER() } else { AdaptiveColor::rgb(0, 0).opacity(0.0) })
     }
 }
 
@@ -208,15 +208,15 @@ pub(crate) fn chip(
         .px(sp(S3))
         .rounded(px(R_FULL))
         .border_1()
-        .border_color(move || if selected.get() { ACCENT } else { BORDER })
-        .bg(move || if selected.get() { tint(ACCENT, 0.08) } else { SURFACE0 })
+        .border_color(move || if selected.get() { ACCENT() } else { BORDER() })
+        .bg(move || if selected.get() { tint(ACCENT(), 0.08) } else { SURFACE0() })
         .hover(|s| s.bg(highlight()))
         .active(|s| s.opacity(0.7))
         .disabled_style(|s| s.opacity(0.4));
     if let Some(lead) = lead {
-        b = b.child(icon(lead, 15.0).text_color(move || if selected.get() { ACCENT } else { FG_MUTED }));
+        b = b.child(icon(lead, 15.0).text_color(move || if selected.get() { ACCENT() } else { FG_MUTED() }));
     }
-    b.child(text(label).text_size(tx(TEXT_BASE)).text_color(FG).number_of_lines(1))
+    b.child(text(label).text_size(tx(TEXT_BASE)).text_color(FG()).number_of_lines(1))
 }
 
 /// The status of an agent or workspace, as one color family.
@@ -291,17 +291,17 @@ pub(crate) fn badge(label: impl IntoReactive<SharedString>, color: AdaptiveColor
 
 /// A bordered card grouping related rows.
 pub(crate) fn card() -> View {
-    view().rounded(px(R_XL)).border_1().border_color(BORDER).bg(SURFACE0).overflow_hidden()
+    view().rounded(px(R_XL)).border_1().border_color(BORDER()).bg(SURFACE0()).overflow_hidden()
 }
 
 /// The label above a stack of rows or a form field.
 pub(crate) fn section_label(label: impl IntoReactive<SharedString>) -> nsh_core::element::Text {
-    text(label).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG_MUTED)
+    text(label).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG_MUTED())
 }
 
 /// A one-point hairline.
 pub(crate) fn hairline() -> View {
-    view().h(px(1.0)).bg(BORDER).flex_shrink_0()
+    view().h(px(1.0)).bg(BORDER()).flex_shrink_0()
 }
 
 /// The keyboard key hint shown in menus and tooltips.
@@ -313,8 +313,8 @@ pub(crate) fn kbd(label: &'static str) -> View {
         .justify_center()
         .rounded(px(R_SM))
         .border_1()
-        .border_color(BORDER)
-        .child(text(label).text_size(tx(TEXT_XS)).text_color(FG_MUTED))
+        .border_color(BORDER())
+        .child(text(label).text_size(tx(TEXT_XS)).text_color(FG_MUTED()))
 }
 
 /// An on / off switch: 34 × 20, the accent when on.
@@ -326,7 +326,7 @@ pub(crate) fn switch(on: impl Fn() -> bool + 'static, on_change: impl Fn(bool) +
         .h(px(20.0))
         .p(px(2.0))
         .rounded(px(R_FULL))
-        .bg(move || if on.get() { ACCENT } else { SURFACE4 })
+        .bg(move || if on.get() { ACCENT() } else { SURFACE4() })
         .flex_row()
         .justify_start()
         .child(
@@ -334,7 +334,7 @@ pub(crate) fn switch(on: impl Fn() -> bool + 'static, on_change: impl Fn(bool) +
                 .w(px(16.0))
                 .h(px(16.0))
                 .rounded(px(R_FULL))
-                .bg(ACCENT_FG)
+                .bg(ACCENT_FG())
                 .shadow_sm()
                 .ml(move || px(if on.get() { 14.0 } else { 0.0 })),
         )
@@ -356,7 +356,7 @@ pub(crate) fn glass(v: View) -> View {
 /// screens, the composer and its buttons.
 pub(crate) fn liquid_glass(v: View) -> View {
     v.glass_effect(nsh_core::GlassEffect::Regular)
-        .bg(tint(SURFACE0, 0.35))
+        .bg(tint(SURFACE0(), 0.35))
         .backdrop_blur(px(GLASS_BLUR))
         .backdrop_saturate(1.7)
         .border_1()
@@ -407,10 +407,10 @@ pub(crate) fn ambient() -> View {
         .right(px(0.0))
         .bottom(px(0.0))
         .overflow_hidden()
-        .bg(SURFACE0)
-        .child(glow(tint(ACCENT, 0.16), Some(-220.0), None, 760.0))
+        .bg(SURFACE0())
+        .child(glow(tint(ACCENT(), 0.16), Some(-220.0), None, 760.0))
         .child(glow(tint(DOT_WARNING, 0.12), None, Some(-200.0), 700.0))
-        .child(glow(tint(ACCENT, 0.07), Some(260.0), Some(420.0), 520.0))
+        .child(glow(tint(ACCENT(), 0.07), Some(260.0), Some(420.0), 520.0))
 }
 
 /// Loading: an eclipse passing, drawn rather than the icon's layers (no
@@ -465,15 +465,15 @@ pub(crate) fn eclipse(size: f32) -> View {
             centered(size * 0.86)
                 .when(size >= 32.0, |v| v.border_2())
                 .when(size < 32.0, |v| v.border_1())
-                .border_color(tint(ACCENT, 0.55))
+                .border_color(tint(ACCENT(), 0.55))
                 .bind_opacity(&corona)
                 .bind_scale(&flare),
         )
         .child(
             centered(disc)
-                .bg(ACCENT)
+                .bg(ACCENT())
                 .overflow_hidden()
-                .child(view().w(px(disc)).h(px(disc)).rounded(px(R_FULL)).bg(SURFACE0).bind_translate_x(&moon_x)),
+                .child(view().w(px(disc)).h(px(disc)).rounded(px(R_FULL)).bg(SURFACE0()).bind_translate_x(&moon_x)),
         )
 }
 
@@ -544,7 +544,7 @@ pub(crate) fn spark(size: f32) -> View {
                 // One font for all six, so none sits higher or wider than
                 // the last: Menlo has them all, where a font someone picked
                 // for code has some and borrows the rest.
-                .child(text(glyph).text_size(px(size)).line_height(px(size)).font_family(MONO).text_color(ACCENT)),
+                .child(text(glyph).text_size(px(size)).line_height(px(size)).font_family(MONO).text_color(ACCENT())),
         );
     }
     mark
@@ -556,7 +556,7 @@ pub(crate) fn loader(label: Option<&'static str>) -> View {
         .items_center()
         .gap(sp(S3))
         .child(eclipse(44.0))
-        .when_some(label, |v, l| v.child(text(crate::i18n::t(l)).text_size(tx(TEXT_SM)).text_color(FG_MUTED)))
+        .when_some(label, |v, l| v.child(text(crate::i18n::t(l)).text_size(tx(TEXT_SM)).text_color(FG_MUTED())))
 }
 
 /// [`loader`] in the middle of the room a list will take once it is here:
@@ -579,5 +579,5 @@ pub(crate) fn working(label: impl IntoReactive<SharedString>) -> View {
         .items_center()
         .gap(px(6.0))
         .child(eclipse(24.0))
-        .child(text(label).text_size(tx(TEXT_SM)).text_color(FG_MUTED))
+        .child(text(label).text_size(tx(TEXT_SM)).text_color(FG_MUTED()))
 }

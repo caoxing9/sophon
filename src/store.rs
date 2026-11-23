@@ -2177,7 +2177,7 @@ pub(crate) fn display_rows() -> Vec<crate::fold::Row> {
         let running = t.agent_id.as_deref().is_some_and(|id| {
             global::<Agents>().with(|a| a.0.iter().any(|x| x.id == id && x.is_running()))
         });
-        crate::fold::fold(&t.items, running, &t.folds)
+        crate::fold::fold_as(&t.items, running, &t.folds, tool_display())
     })
 }
 
@@ -3310,6 +3310,11 @@ fn save_prefs() {
         "monoFontFamily": global::<Fonts>().with_untracked(|f| f.mono.clone()),
         "fontSize": global::<Look>().with_untracked(|l| l.font_size),
         "compact": global::<Look>().with_untracked(|l| l.compact),
+        "colorTheme": global::<ColorTheme>().with_untracked(|t| t.preset.clone()),
+        "customBackground": global::<ColorTheme>().with_untracked(|t| t.background.map(hex_of)),
+        "customAccent": global::<ColorTheme>().with_untracked(|t| t.accent.map(hex_of)),
+        "numberShortcuts": global::<NumberShortcuts>().with_untracked(|n| n.0),
+        "toolCalls": global::<ToolCalls>().with_untracked(|d| d.0.as_str()),
         "appearance": match global::<Theme>().with_untracked(|t| t.0) {
             nsh_core::platform::Appearance::Light => "light",
             nsh_core::platform::Appearance::Dark => "dark",
@@ -3519,6 +3524,20 @@ pub(crate) fn load_prefs() {
     if appearance != nsh_core::platform::Appearance::System {
         set_color_scheme(appearance);
     }
+    if let Some(d) = v.get("toolCalls").and_then(serde_json::Value::as_str) {
+        global::<ToolCalls>().set(ToolCalls(crate::fold::ToolDisplay::parse(d)));
+    }
+    if let Some(on) = v.get("numberShortcuts").and_then(serde_json::Value::as_bool) {
+        global::<NumberShortcuts>().set(NumberShortcuts(on));
+    }
+    let color = |k: &str| v.get(k).and_then(serde_json::Value::as_str).and_then(parse_hex);
+    let theme = ColorTheme {
+        preset: v.get("colorTheme").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned(),
+        background: color("customBackground"),
+        accent: color("customAccent"),
+    };
+    apply_color_theme(&theme);
+    global::<ColorTheme>().set(theme);
 }
 
 #[derive(Clone, Default, PartialEq)]
@@ -3631,10 +3650,117 @@ pub(crate) fn open_settings_file() {
     }
 }
 
-/// Shows the app in `appearance` and remembers it.
+/// Shows the app in `appearance` and remembers it. (A background of the
+/// user's own decides it while there is one: `apply_color_theme`.)
 pub(crate) fn set_appearance(appearance: nsh_core::platform::Appearance) {
     global::<Theme>().set(Theme(appearance));
-    set_color_scheme(appearance);
+    if global::<ColorTheme>().with_untracked(|t| t.background.is_none()) {
+        set_color_scheme(appearance);
+    }
+    save_prefs();
+}
+
+/// The colour theme: a preset (`""`: Ivory & Clay, the default), or a
+/// solid background and an accent of the user's own over it. In
+/// `settings.json` as `colorTheme`, `customBackground` and `customAccent`
+/// (`"#rrggbb"`).
+#[derive(Clone, Default, PartialEq, Debug)]
+pub(crate) struct ColorTheme {
+    pub(crate) preset: String,
+    pub(crate) background: Option<u32>,
+    pub(crate) accent: Option<u32>,
+}
+
+/// The colour theme, tracked: a change mounts the UI again.
+pub(crate) fn color_theme() -> ColorTheme {
+    global::<ColorTheme>().with(Clone::clone)
+}
+
+/// Draws the app in `theme` from now on and remembers it.
+pub(crate) fn set_color_theme(theme: ColorTheme) {
+    apply_color_theme(&theme);
+    global::<ColorTheme>().set(theme);
+    save_prefs();
+}
+
+pub(crate) fn edit_color_theme(f: impl FnOnce(&mut ColorTheme)) {
+    let mut theme = global::<ColorTheme>().with_untracked(Clone::clone);
+    f(&mut theme);
+    set_color_theme(theme);
+}
+
+/// Sets the palette views are made with; a background of the user's own
+/// also sets the appearance its lightness asks for (dark text on a light
+/// one), the system's controls and the status colours with it.
+fn apply_color_theme(theme: &ColorTheme) {
+    use crate::ui::kit::{Palette, luminance, palette_preset, set_palette};
+    let preset = palette_preset(&theme.preset);
+    let palette = match theme.background {
+        Some(bg) => {
+            let light = luminance(bg) > 0.4;
+            let accent = theme.accent.unwrap_or_else(|| crate::ui::kit::preset_accent(&theme.preset, !light));
+            let fg = if light { 0x1f1e1d } else { 0xf2f1ec };
+            let tone = crate::ui::kit::Tone { bg, fg, accent };
+            set_color_scheme(if light { nsh_core::platform::Appearance::Light } else { nsh_core::platform::Appearance::Dark });
+            Palette::derived(tone, tone)
+        }
+        None => {
+            set_color_scheme(global::<Theme>().with_untracked(|t| t.0));
+            preset.unwrap_or(Palette::IVORY).with_accent(theme.accent)
+        }
+    };
+    set_palette(palette);
+}
+
+/// `#rrggbb` (or `rrggbb`, `#rgb`) as `0xRRGGBB`.
+pub(crate) fn parse_hex(text: &str) -> Option<u32> {
+    let h = text.trim().trim_start_matches('#');
+    let h = match h.len() {
+        3 => h.chars().flat_map(|c| [c, c]).collect::<String>(),
+        6 => h.to_owned(),
+        _ => return None,
+    };
+    u32::from_str_radix(&h, 16).ok()
+}
+
+pub(crate) fn hex_of(c: u32) -> String {
+    format!("#{c:06x}")
+}
+
+/// How the conversation shows tool calls (`fold::ToolDisplay`).
+#[derive(Clone, Default, PartialEq)]
+struct ToolCalls(crate::fold::ToolDisplay);
+
+pub(crate) fn tool_display() -> crate::fold::ToolDisplay {
+    global::<ToolCalls>().with(|d| d.0)
+}
+
+pub(crate) fn set_tool_display(display: crate::fold::ToolDisplay) {
+    global::<ToolCalls>().set(ToolCalls(display));
+    save_prefs();
+}
+
+/// Whether ⌘1–⌘9 open the sidebar's conversations, first to ninth (on by
+/// default); off, they open the workspace's tabs. `numberShortcuts`.
+#[derive(Clone, PartialEq)]
+struct NumberShortcuts(bool);
+
+impl Default for NumberShortcuts {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
+pub(crate) fn number_shortcuts() -> bool {
+    global::<NumberShortcuts>().with(|n| n.0)
+}
+
+pub(crate) fn number_shortcuts_untracked() -> bool {
+    global::<NumberShortcuts>().with_untracked(|n| n.0)
+}
+
+pub(crate) fn set_number_shortcuts(on: bool) {
+    global::<NumberShortcuts>().set(NumberShortcuts(on));
     save_prefs();
 }
 
@@ -7253,17 +7379,28 @@ pub(crate) fn set_terminal_focused(on: bool) {
 /// terminal shown in the panel when it has the focus; else a file, diff,
 /// sub-agent or new-chat tab (back to the conversation). A conversation
 /// itself, or a screen with no tabs, stays: quitting is ⌘Q's.
+/// ⌘W: what is in front closes (a dialog, the focused terminal, a file,
+/// diff or sub-agent tab); with none, the window does, as a Mac app's
+/// (Sophon keeps running: the Dock icon opens it again).
 pub(crate) fn close_current() {
+    if !close_in_window() {
+        #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+        nsh_core::element::desktop::close_window();
+    }
+}
+
+/// Closes what is in front inside the window; `false` when nothing was.
+fn close_in_window() -> bool {
     if modal().is_some() {
         close_modal();
-        return;
+        return true;
     }
-    let Screen::Workspace(_) = screen() else { return };
+    let Screen::Workspace(_) = screen() else { return false };
     if terminal_panel_open() && global::<TerminalFocus>().with_untracked(|f| f.0) {
         if let Some(id) = active_terminal() {
             kill_terminal(&id);
         }
-        return;
+        return true;
     }
     match tab() {
         Tab::File(path) => close_file(&path),
@@ -7273,8 +7410,9 @@ pub(crate) fn close_current() {
                 open_workspace(&w.id);
             }
         }
-        Tab::Agent(_) => {}
+        Tab::Agent(_) => return false,
     }
+    true
 }
 
 #[cfg(test)]

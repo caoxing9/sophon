@@ -95,8 +95,8 @@ pub(crate) fn fallback(path: String, glyph: Icon, why: String) -> AnyElement {
         .justify_center()
         .gap(sp(S3))
         .p(sp(S6))
-        .child(icon(glyph, 40.0).text_color(FG_FAINT))
-        .child(text(why).text_size(tx(TEXT_BASE)).text_color(FG_MUTED).text_center())
+        .child(icon(glyph, 40.0).text_color(FG_FAINT()))
+        .child(text(why).text_size(tx(TEXT_BASE)).text_color(FG_MUTED()).text_center())
         .child(actions)
         .into_element()
 }

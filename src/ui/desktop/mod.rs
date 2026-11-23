@@ -58,7 +58,7 @@ pub(crate) fn shell() -> impl IntoElement {
     view()
         .flex_1()
         .p_safe_area()
-        .text_color(FG)
+        .text_color(FG())
         // Files dragged from Finder: the whole window takes them, for the
         // composer on screen.
         .on_file_drag_enter(|| crate::ui::shared::composer::dragging_over(true))
@@ -97,7 +97,7 @@ pub(crate) fn shell() -> impl IntoElement {
                                     .backdrop_blur(px(GLASS_BLUR))
                                     .backdrop_saturate(1.7)
                                     .border_r_1()
-                                    .border_color(tint(BORDER, 0.7)),
+                                    .border_color(tint(BORDER(), 0.7)),
                             ),
                     )
                     .child(dynamic(move || (!hidden.get()).then(|| untracked(|| resize_handle().into_element()))))
@@ -112,7 +112,7 @@ pub(crate) fn shell() -> impl IntoElement {
             }
             Layout::Sidebar => view()
                 .flex_1()
-                .child(sidebar::sidebar().bg(SIDEBAR).flex_1())
+                .child(sidebar::sidebar().bg(SIDEBAR()).flex_1())
                 .child(notice::notice_bar(computed(|| Length::from(px(title_bar().top.0 + S2)))))
                 .into_element(),
             Layout::Main => main(true).into_element(),
@@ -172,7 +172,7 @@ fn quit_hint() -> impl IntoElement {
                     crate::ui::kit::text(move || hint.get().map(t).unwrap_or_default())
                         .text_size(tx(TEXT_LG))
                         .font_weight(nsh_core::element::FontWeight(600))
-                        .text_color(FG),
+                        .text_color(FG()),
                 ),
         )
 }
@@ -252,7 +252,7 @@ fn resize_handle() -> impl IntoElement {
                 .w(px(2.0))
                 .h(px(36.0))
                 .rounded(px(1.0))
-                .bg(move || tint(ACCENT, if dragging.get() { 0.9 } else if hover.get() { 0.5 } else { 0.0 })),
+                .bg(move || tint(ACCENT(), if dragging.get() { 0.9 } else if hover.get() { 0.5 } else { 0.0 })),
         )
 }
 

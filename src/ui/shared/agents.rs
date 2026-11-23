@@ -46,7 +46,7 @@ pub(crate) fn agents_card(editable: bool) -> impl IntoElement {
                         .px(sp(S4))
                         .py(sp(S3))
                         .border_t_1()
-                        .border_color(BORDER)
+                        .border_color(BORDER())
                         .child(btn(t("Add account…"), Variant::Outline, Sz::Sm, Some(Icon::Plus), || {
                             store::open_modal(Modal::AddAgentAccount)
                         }))
@@ -71,9 +71,9 @@ fn agent_row(p: Provider, d: Option<Diagnostic>, u: Option<store::AgentUpdate>, 
     let d = d.unwrap_or_default();
 
     let (status, tone) = if !on {
-        (t("Disabled"), FG_MUTED)
+        (t("Disabled"), FG_MUTED())
     } else if p.status == "loading" {
-        (t("Checking…"), FG_MUTED)
+        (t("Checking…"), FG_MUTED())
     } else if p.available() {
         (t("Ready"), SUCCESS)
     } else {
@@ -87,7 +87,7 @@ fn agent_row(p: Provider, d: Option<Diagnostic>, u: Option<store::AgentUpdate>, 
         .child(text(p.label.clone()).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)))
         .child(badge(status, tone));
     if gateway {
-        title = title.child(badge(t("Through a gateway"), if native_claude { WARNING } else { FG_MUTED }));
+        title = title.child(badge(t("Through a gateway"), if native_claude { WARNING } else { FG_MUTED() }));
     }
 
     // Version · models: what is known, nothing in place of the rest.
@@ -207,7 +207,7 @@ fn agent_row(p: Provider, d: Option<Diagnostic>, u: Option<store::AgentUpdate>, 
         .gap(sp(S3))
         .px(sp(S4))
         .py(sp(S4))
-        .when(!first, |v| v.border_t_1().border_color(BORDER))
+        .when(!first, |v| v.border_t_1().border_color(BORDER()))
         .child(
             view()
                 .w(px(28.0))
@@ -216,7 +216,7 @@ fn agent_row(p: Provider, d: Option<Diagnostic>, u: Option<store::AgentUpdate>, 
                 .items_center()
                 .justify_center()
                 .rounded(px(R_LG))
-                .bg(SURFACE2)
+                .bg(SURFACE2())
                 .child(mark(&family, 16.0)),
         )
         .child(body)
@@ -238,11 +238,11 @@ fn update_line(u: &store::AgentUpdate, newer: Option<&str>) -> Option<View> {
         });
     }
     let latest = newer?;
-    Some(row.child(text(tf("Version {} is out", &[latest])).text_size(tx(TEXT_SM)).text_color(ACCENT)))
+    Some(row.child(text(tf("Version {} is out", &[latest])).text_size(tx(TEXT_SM)).text_color(ACCENT())))
 }
 
 fn muted(s: String) -> nsh_core::element::Text {
-    text(s).text_size(tx(TEXT_SM)).text_color(FG_MUTED)
+    text(s).text_size(tx(TEXT_SM)).text_color(FG_MUTED())
 }
 
 /// `Claude account · me@x.com · Max 20x · until 2026-11-29`, or that it is
@@ -297,9 +297,9 @@ fn command_box(cmd: String) -> View {
         .pr(sp(S1))
         .py(sp(S1))
         .rounded(px(R_LG))
-        .bg(SURFACE2)
+        .bg(SURFACE2())
         .border_1()
-        .border_color(BORDER)
+        .border_color(BORDER())
         .child(text(cmd).flex_1().min_w(px(0.0)).font_family(mono_font).text_size(tx(TEXT_SM)))
         .child(icon_btn(Icon::Copy, Sz::Sm, t("Copy"), move || {
             set_clipboard(copy.clone());
@@ -325,7 +325,7 @@ fn base_choice(base: Signal<Base>) -> View {
 }
 
 fn hint(s: impl IntoReactive<SharedString>) -> nsh_core::element::Text {
-    text(s).text_size(tx(TEXT_SM)).line_height(px(18.0)).text_color(FG_MUTED)
+    text(s).text_size(tx(TEXT_SM)).line_height(px(18.0)).text_color(FG_MUTED())
 }
 
 /// Another account of Claude Code or Codex: a separate instance whose

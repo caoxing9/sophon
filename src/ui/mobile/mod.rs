@@ -141,7 +141,7 @@ pub(crate) fn glass_button(glyph: Icon, label: &'static str, on_press: impl Fn()
             .items_center()
             .justify_center()
             .active(|s| s.opacity(0.6))
-            .child(icon(glyph, 20.0).text_color(FG)),
+            .child(icon(glyph, 20.0).text_color(FG())),
     )
 }
 
@@ -154,7 +154,7 @@ pub(crate) fn shell() -> impl IntoElement {
     let paired = computed(|| store::current_host().is_some());
     view()
         .flex_1()
-        .text_color(FG)
+        .text_color(FG())
         .child(ambient())
         .child(modals::modal_layer())
         .child(dynamic(move || {

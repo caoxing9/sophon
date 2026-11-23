@@ -57,7 +57,7 @@ pub(crate) fn artifacts_view(shown: Memo<bool>) -> View {
                     text(move || all.with(|a| a.as_ref().filter(|l| !l.is_empty()).map(|l| l.len().to_string()).unwrap_or_default()))
                         .text_size(tx(TEXT_SM))
                         .font_family(mono_font)
-                        .text_color(FG_FAINT),
+                        .text_color(FG_FAINT()),
                 )
                 .child(icon_btn(Icon::RotateCw, Sz::Sm, t("Refresh"), store::load_artifacts)),
         )
@@ -90,7 +90,7 @@ pub(crate) fn artifacts_view(shown: Memo<bool>) -> View {
                 for artifact in list {
                     let this = day_of(artifact.modified);
                     if this != day {
-                        page = page.child(text(this.clone()).text_size(tx(TEXT_XS)).text_color(FG_FAINT).px(sp(S1)).pt(sp(S3)).pb(sp(S1)));
+                        page = page.child(text(this.clone()).text_size(tx(TEXT_XS)).text_color(FG_FAINT()).px(sp(S1)).pt(sp(S3)).pb(sp(S1)));
                         day = this;
                     }
                     page = page.child(artifact_row(artifact));
@@ -112,7 +112,7 @@ fn scope_word(project: bool, label: &'static str) -> impl IntoElement {
             text(label)
                 .text_size(tx(TEXT_SM))
                 .font_weight(FontWeight(500))
-                .text_color(move || if on.get() { FG } else { FG_FAINT }),
+                .text_color(move || if on.get() { FG() } else { FG_FAINT() }),
         )
 }
 
@@ -127,9 +127,9 @@ fn kind_chips(list: &[Artifact], now: Option<String>) -> View {
             .rounded(px(R_MD))
             .items_center()
             .justify_center()
-            .bg(if on { tint(FG, 0.08) } else { tint(FG, 0.0) })
-            .hover(|s| s.bg(tint(FG, 0.05)))
-            .child(text(label).text_size(tx(TEXT_XS)).font_weight(FontWeight(500)).text_color(if on { FG } else { FG_MUTED }))
+            .bg(if on { tint(FG(), 0.08) } else { tint(FG(), 0.0) })
+            .hover(|s| s.bg(tint(FG(), 0.05)))
+            .child(text(label).text_size(tx(TEXT_XS)).font_weight(FontWeight(500)).text_color(if on { FG() } else { FG_MUTED() }))
     };
     row = row.child(chip(tf("All {}", &[&list.len().to_string()]), now.is_none(), None));
     for (kind, word) in KINDS {
@@ -148,16 +148,16 @@ fn preview_card(artifact: Artifact) -> impl IntoElement {
     let media = if artifact.kind == "image" && here {
         view()
             .h(px(170.0))
-            .bg(tint(FG, 0.04))
+            .bg(tint(FG(), 0.04))
             .overflow_hidden()
             .child(image(SharedString::from(format!("file://{}", artifact.path))).w_full().h_full().object_fit(nsh_core::ResizeMode::Cover))
     } else {
         view()
             .h(px(96.0))
-            .bg(tint(FG, 0.04))
+            .bg(tint(FG(), 0.04))
             .items_center()
             .justify_center()
-            .child(text(badge(&artifact)).text_size(tx(TEXT_LG)).font_weight(FontWeight(600)).text_color(FG_MUTED).font_family(mono_font))
+            .child(text(badge(&artifact)).text_size(tx(TEXT_LG)).font_weight(FontWeight(600)).text_color(FG_MUTED()).font_family(mono_font))
     };
     let meta = match (artifact.width, artifact.height) {
         (Some(w), Some(h)) => format!("{w} × {h} · {}", stamp(artifact.modified)),
@@ -175,10 +175,10 @@ fn preview_card(artifact: Artifact) -> impl IntoElement {
             .items_center()
             .justify_center()
             .gap(px(6.0))
-            .bg(if filled { ACCENT.into() } else { tint(FG, 0.06) })
+            .bg(if filled { ACCENT().into() } else { tint(FG(), 0.06) })
             .hover(|s| s.opacity(0.85))
-            .child(icon(glyph, 14.0).text_color(if filled { ACCENT_FG } else { FG }))
-            .child(text(label).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(if filled { ACCENT_FG } else { FG }))
+            .child(icon(glyph, 14.0).text_color(if filled { ACCENT_FG() } else { FG() }))
+            .child(text(label).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(if filled { ACCENT_FG() } else { FG() }))
     };
     let mut actions = view().flex_row().gap(sp(S2));
     if here {
@@ -202,15 +202,15 @@ fn preview_card(artifact: Artifact) -> impl IntoElement {
                         .child(text(artifact.name.clone()).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).number_of_lines(1).flex_1())
                         .when(page, |v| v.child(icon_btn(Icon::ExternalLink, Sz::Sm, t("Open"), move || store::open_artifact(&opened)))),
                 )
-                .child(text(meta).text_size(tx(TEXT_XS)).text_color(FG_MUTED))
+                .child(text(meta).text_size(tx(TEXT_XS)).text_color(FG_MUTED()))
                 .child(actions)
                 .child(
                     view()
                         .flex_row()
                         .items_center()
                         .gap(px(5.0))
-                        .child(icon(Icon::Info, 12.0).text_color(FG_FAINT))
-                        .child(text(t("A file being there does not mean it was checked")).text_size(tx(TEXT_XS)).text_color(FG_FAINT)),
+                        .child(icon(Icon::Info, 12.0).text_color(FG_FAINT()))
+                        .child(text(t("A file being there does not mean it was checked")).text_size(tx(TEXT_XS)).text_color(FG_FAINT())),
                 ),
         )
 }
@@ -229,17 +229,17 @@ fn artifact_row(artifact: Artifact) -> impl IntoElement {
             .h(px(28.0))
             .rounded(px(R_SM))
             .overflow_hidden()
-            .bg(tint(FG, 0.05))
+            .bg(tint(FG(), 0.05))
             .child(image(SharedString::from(format!("file://{}", artifact.path))).w_full().h_full().object_fit(nsh_core::ResizeMode::Cover))
     } else {
         view()
             .w(px(40.0))
             .h(px(28.0))
             .rounded(px(R_SM))
-            .bg(tint(ACCENT, 0.10))
+            .bg(tint(ACCENT(), 0.10))
             .items_center()
             .justify_center()
-            .child(text(badge(&artifact)).text_size(px(9.0)).font_weight(FontWeight(700)).text_color(ACCENT))
+            .child(text(badge(&artifact)).text_size(px(9.0)).font_weight(FontWeight(700)).text_color(ACCENT()))
     };
     nsh_base::button()
         .on_press(move || store::pick_artifact(Some(path.clone())))
@@ -250,7 +250,7 @@ fn artifact_row(artifact: Artifact) -> impl IntoElement {
         .px(sp(S1))
         .py(px(5.0))
         .rounded(px(R_LG))
-        .bg(move || if on.get() { highlight() } else { tint(FG, 0.0) })
+        .bg(move || if on.get() { highlight() } else { tint(FG(), 0.0) })
         .hover(|s| s.bg(highlight()))
         .child(lead)
         .child(
@@ -258,10 +258,10 @@ fn artifact_row(artifact: Artifact) -> impl IntoElement {
                 .flex_1()
                 .min_w(px(0.0))
                 .gap(px(1.0))
-                .child(text(artifact.name.clone()).text_size(tx(TEXT_SM)).text_color(FG).number_of_lines(1))
-                .when(!artifact.folder.is_empty(), |v| v.child(text(artifact.folder.clone()).text_size(tx(TEXT_XS)).text_color(FG_FAINT).number_of_lines(1))),
+                .child(text(artifact.name.clone()).text_size(tx(TEXT_SM)).text_color(FG()).number_of_lines(1))
+                .when(!artifact.folder.is_empty(), |v| v.child(text(artifact.folder.clone()).text_size(tx(TEXT_XS)).text_color(FG_FAINT()).number_of_lines(1))),
         )
-        .child(text(clock(artifact.modified)).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(FG_FAINT))
+        .child(text(clock(artifact.modified)).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(FG_FAINT()))
 }
 
 /// A file's kind in a few letters: its extension, as T3 Code's badge.

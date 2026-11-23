@@ -40,7 +40,7 @@ pub(crate) fn diff_page(path: String) -> Screen {
                 view()
                     .items_center()
                     .child(text(name).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).number_of_lines(1))
-                    .child(text(dir).text_size(tx(TEXT_XS)).text_color(FG_MUTED).number_of_lines(1)),
+                    .child(text(dir).text_size(tx(TEXT_XS)).text_color(FG_MUTED()).number_of_lines(1)),
                 view().w(px(44.0)),
             ))
             .child(view().flex_1().px_safe_area().pb_safe_area().child(diff(path))),
@@ -65,7 +65,7 @@ fn files() -> impl IntoElement {
             .px(sp(S4))
             .py(sp(S2))
             .text_size(tx(TEXT_SM))
-            .text_color(FG_MUTED),
+            .text_color(FG_MUTED()),
         )
         .child(dynamic(move || {
             let (loaded, empty, error) = changes.with(|c| (c.loaded, c.files.is_empty(), c.error.clone()));
@@ -75,8 +75,8 @@ fn files() -> impl IntoElement {
                         .flex_row()
                         .gap(sp(S2))
                         .p(sp(S4))
-                        .child(icon(glyph, 16.0).text_color(FG_FAINT))
-                        .child(text(message).text_size(tx(TEXT_BASE)).text_color(FG_MUTED).flex_1())
+                        .child(icon(glyph, 16.0).text_color(FG_FAINT()))
+                        .child(text(message).text_size(tx(TEXT_BASE)).text_color(FG_MUTED()).flex_1())
                         .into_element()
                 };
                 if let Some(e) = error.clone() {
@@ -151,7 +151,7 @@ fn file_row(file: Memo<Option<DiffFile>>) -> impl IntoElement {
                 .child(
                     text(move || file.with(|f| f.as_ref().map(|f| split(f).1).unwrap_or_default()))
                         .text_size(tx(TEXT_SM))
-                        .text_color(FG_FAINT)
+                        .text_color(FG_FAINT())
                         .number_of_lines(1),
                 ),
         )
@@ -159,9 +159,9 @@ fn file_row(file: Memo<Option<DiffFile>>) -> impl IntoElement {
             text(move || file.with(|f| f.as_ref().map(|f| format!("+{} −{}", f.additions, f.deletions)).unwrap_or_default()))
                 .text_size(tx(TEXT_SM))
                 .font_family(mono_font)
-                .text_color(FG_MUTED),
+                .text_color(FG_MUTED()),
         )
-        .child(icon(Icon::ChevronRight, 16.0).text_color(FG_FAINT))
+        .child(icon(Icon::ChevronRight, 16.0).text_color(FG_FAINT()))
 }
 
 fn diff(path: String) -> impl IntoElement {
@@ -179,7 +179,7 @@ fn diff(path: String) -> impl IntoElement {
                         .flex_1()
                         .items_center()
                         .justify_center()
-                        .child(text(t("No changes")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED))
+                        .child(text(t("No changes")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED()))
                         .into_element();
                 }
                 let mut d = diff_view()

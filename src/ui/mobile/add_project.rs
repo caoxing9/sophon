@@ -34,13 +34,13 @@ pub(crate) fn page() -> Screen {
                         .h(px(44.0))
                         .px(sp(S4))
                         .rounded(px(R_FULL))
-                        .bg(SURFACE2)
-                        .child(icon(Icon::Search, 18.0).text_color(FG_MUTED))
+                        .bg(SURFACE2())
+                        .child(icon(Icon::Search, 18.0).text_color(FG_MUTED()))
                         .child(
                             input()
                                 .flex_1()
                                 .text_size(tx(TEXT_LG))
-                                .text_color(FG)
+                                .text_color(FG())
                                 .value(move || query.get())
                                 .on_change(move |v: &str| query.set(v.to_owned()))
                                 .placeholder(t("Find a folder on the computer")),
@@ -69,14 +69,14 @@ pub(crate) fn page() -> Screen {
                             .justify_center()
                             .gap(sp(S2))
                             .rounded(px(R_FULL))
-                            .bg(ACCENT)
+                            .bg(ACCENT())
                             .active(|s| s.opacity(0.8))
-                            .child(icon(Icon::FolderPlus, 18.0).text_color(ACCENT_FG))
+                            .child(icon(Icon::FolderPlus, 18.0).text_color(ACCENT_FG()))
                             .child(
                                 text(move || tf("Add “{}”", &[&folder_name.get()]))
                                     .text_size(tx(TEXT_LG))
                                     .font_weight(FontWeight(600))
-                                    .text_color(ACCENT_FG)
+                                    .text_color(ACCENT_FG())
                                     .number_of_lines(1),
                             ),
                     ),
@@ -111,15 +111,15 @@ fn folders(browse: Memo<store::Browse>) -> impl IntoElement {
                             .rounded(px(R_FULL))
                             .items_center()
                             .justify_center()
-                            .bg(SURFACE2)
-                            .child(icon(Icon::ArrowUp, 16.0).text_color(FG)),
+                            .bg(SURFACE2())
+                            .child(icon(Icon::ArrowUp, 16.0).text_color(FG())),
                     )
                     .child(
                         text(move || browse.with(|b| b.cwd.clone()))
                             .flex_1()
                             .text_size(tx(TEXT_SM))
                             .font_family(mono_font)
-                            .text_color(FG_MUTED)
+                            .text_color(FG_MUTED())
                             .number_of_lines(1),
                     ),
             )
@@ -133,7 +133,7 @@ fn folders(browse: Memo<store::Browse>) -> impl IntoElement {
                         return view().pt(sp(S8)).items_center().child(loader(None)).into_element();
                     }
                     if b.folders.is_empty() {
-                        return text(t("No folders here")).p(sp(S4)).text_size(tx(TEXT_BASE)).text_color(FG_MUTED).into_element();
+                        return text(t("No folders here")).p(sp(S4)).text_size(tx(TEXT_BASE)).text_color(FG_MUTED()).into_element();
                     }
                     list(b.folders.clone()).into_element()
                 }))
@@ -149,7 +149,7 @@ fn found(query: Signal<String>) -> impl IntoElement {
         let list_of = results.get();
         Some(untracked(move || {
             if list_of.is_empty() {
-                return text(t("No matching folders")).p(sp(S4)).text_size(tx(TEXT_BASE)).text_color(FG_MUTED).into_element();
+                return text(t("No matching folders")).p(sp(S4)).text_size(tx(TEXT_BASE)).text_color(FG_MUTED()).into_element();
             }
             list(list_of.clone()).into_element()
         }))
@@ -170,17 +170,17 @@ fn list(folders: Vec<String>) -> View {
                 .gap(sp(S3))
                 .min_h(px(52.0))
                 .px(sp(S4))
-                .when(i > 0, |v| v.border_t_1().border_color(BORDER))
+                .when(i > 0, |v| v.border_t_1().border_color(BORDER()))
                 .active(|s| s.bg(highlight()))
-                .child(icon(Icon::Folder, 20.0).text_color(ACCENT))
+                .child(icon(Icon::Folder, 20.0).text_color(ACCENT()))
                 .child(
                     view()
                         .flex_1()
                         .min_w(px(0.0))
                         .child(text(name).text_size(tx(TEXT_LG)).number_of_lines(1))
-                        .child(text(path).text_size(tx(TEXT_XS)).text_color(FG_FAINT).number_of_lines(1)),
+                        .child(text(path).text_size(tx(TEXT_XS)).text_color(FG_FAINT()).number_of_lines(1)),
                 )
-                .child(icon(Icon::ChevronRight, 16.0).text_color(FG_FAINT)),
+                .child(icon(Icon::ChevronRight, 16.0).text_color(FG_FAINT())),
         );
     }
     c

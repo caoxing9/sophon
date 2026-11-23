@@ -40,13 +40,13 @@ pub(crate) fn notice_bar(top: Memo<Length>) -> impl IntoElement {
                         .pr(sp(S1))
                         .py(sp(S1))
                         .rounded(px(R_FULL))
-                        .bg(FG)
+                        .bg(FG())
                         .shadow_lg()
-                        .child(icon(Icon::Info, 15.0).text_color(SURFACE0))
+                        .child(icon(Icon::Info, 15.0).text_color(SURFACE0()))
                         .child(
                             text(m.clone())
                                 .text_size(tx(TEXT_SM))
-                                .text_color(SURFACE0)
+                                .text_color(SURFACE0())
                                 .number_of_lines(2)
                                 .flex_shrink(1.0),
                         )
@@ -59,8 +59,8 @@ pub(crate) fn notice_bar(top: Memo<Length>) -> impl IntoElement {
                                     .rounded(px(R_FULL))
                                     .items_center()
                                     .justify_center()
-                                    .bg(tint(SURFACE0, 0.18))
-                                    .child(text(t("Undo")).text_size(tx(TEXT_SM)).font_weight(nsh_core::element::FontWeight(600)).text_color(SURFACE0)),
+                                    .bg(tint(SURFACE0(), 0.18))
+                                    .child(text(t("Undo")).text_size(tx(TEXT_SM)).font_weight(nsh_core::element::FontWeight(600)).text_color(SURFACE0())),
                             )
                         })
                         .child(
@@ -71,7 +71,7 @@ pub(crate) fn notice_bar(top: Memo<Length>) -> impl IntoElement {
                                 .rounded(px(R_FULL))
                                 .items_center()
                                 .justify_center()
-                                .child(icon(Icon::X, 14.0).text_color(SURFACE0)),
+                                .child(icon(Icon::X, 14.0).text_color(SURFACE0())),
                         ),
                 )
                 .into_element()

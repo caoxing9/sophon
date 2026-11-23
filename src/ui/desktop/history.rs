@@ -54,7 +54,7 @@ pub(crate) fn history(compact: bool) -> impl IntoElement {
                     return view()
                         .p(sp(S8))
                         .items_center()
-                        .child(text(t("No sessions yet")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED))
+                        .child(text(t("No sessions yet")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED()))
                         .into_element();
                 }
                 let count = agents.len();
@@ -101,12 +101,12 @@ fn session_row(agent: Memo<Option<Agent>>) -> impl IntoElement {
                             format!("{} · {} · {date}", a.provider, crate::daemon::model::folder_name(&a.cwd))
                         }))
                         .text_size(tx(TEXT_SM))
-                        .text_color(FG_MUTED)
+                        .text_color(FG_MUTED())
                         .number_of_lines(1),
                     ),
             )
             .child(when(move || agent.with(|a| a.as_ref().is_some_and(|a| a.archived)), || {
-                badge(t("Archived"), FG_MUTED)
+                badge(t("Archived"), FG_MUTED())
             })),
     )
 }

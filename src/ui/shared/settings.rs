@@ -4,7 +4,7 @@
 
 use crate::i18n::{Lang, t, tf};
 use nsh_core::{
-    element::{FontWeight, View},
+    element::{AdaptiveColor, FontWeight, View},
     prelude::*,
 };
 use crate::ui::kit::text;
@@ -28,6 +28,23 @@ pub(crate) fn appearance_card() -> View {
                 store::set_appearance,
             ),
             true,
+        ))
+        .child(row(t("Color theme"), t("The interface's colors"), theme_swatches(), false))
+        .child(row(
+            t("Background"),
+            t("A solid color of your own; light or dark follows it"),
+            hex_control(
+                BACKGROUNDS,
+                || store::color_theme().background,
+                |c| store::edit_color_theme(|t| t.background = c),
+            ),
+            false,
+        ))
+        .child(row(
+            t("Accent color"),
+            t("Buttons, links and the caret"),
+            hex_control(ACCENTS, || store::color_theme().accent, |c| store::edit_color_theme(|t| t.accent = c)),
+            false,
         ))
         .child(row(
             t("Language"),
@@ -88,6 +105,77 @@ pub(crate) fn appearance_card() -> View {
         })
 }
 
+/// Solid backgrounds to pick from at a press: light, warm, greys, dark.
+const BACKGROUNDS: &[u32] = &[0xffffff, 0xf7f5ef, 0xeef1f5, 0xe9efe6, 0x2b2b2b, 0x1e1e1e, 0x101418, 0x000000];
+const ACCENTS: &[u32] = &[0xc96442, 0x339cff, 0x7c5cff, 0x10a37f, 0xe5484d, 0xf59e0b, 0x000000];
+
+/// A round colour well; ringed when it is the one in use.
+fn swatch(color: u32, selected: bool, label: SharedString, on_press: impl Fn() + 'static) -> impl IntoElement {
+    nsh_base::button()
+        .on_press(on_press)
+        .accessibility_label(label)
+        .w(px(26.0))
+        .h(px(26.0))
+        .p(px(2.0))
+        .rounded(px(R_FULL))
+        .border_1()
+        .border_color(if selected { ACCENT() } else { tint(BORDER(), 0.0) })
+        .child(view().flex_1().rounded(px(R_FULL)).bg(AdaptiveColor::rgb(color, color)).border_1().border_color(BORDER_STRONG()))
+}
+
+/// The theme presets, each a swatch of its accent.
+fn theme_swatches() -> impl IntoElement {
+    let current = store::color_theme().preset;
+    let mut row = view().flex_row().items_center().gap(px(4.0));
+    for &(key, name, color, _, _) in THEME_PRESETS {
+        row = row.child(swatch(color, current == key, name.into(), move || store::edit_color_theme(|t| t.preset = key.to_owned())));
+    }
+    row
+}
+
+/// A colour of the user's own: swatches to press, a hex field (applied on
+/// Return: each change mounts the UI again) and a reset.
+fn hex_control(choices: &'static [u32], current: fn() -> Option<u32>, set: fn(Option<u32>)) -> impl IntoElement {
+    let now = current();
+    let typed = signal(now.map(store::hex_of).unwrap_or_default());
+    let mut wells = view().flex_row().items_center().gap(px(2.0));
+    for &c in choices {
+        wells = wells.child(swatch(c, now == Some(c), store::hex_of(c).into(), move || set(Some(c))));
+    }
+    view()
+        .flex_row()
+        .items_center()
+        .gap(sp(S2))
+        .child(wells)
+        .child(
+            field()
+                .w(px(92.0))
+                .h(sp(CONTROL_SM))
+                .placeholder("#rrggbb")
+                .value(move || typed.get())
+                .on_change(move |v: &str| typed.set(v.to_owned()))
+                .on_submit(move |v: &str| {
+                    let v = v.trim();
+                    if v.is_empty() {
+                        set(None);
+                    } else if let Some(c) = store::parse_hex(v) {
+                        set(Some(c));
+                    }
+                }),
+        )
+        .child(when(move || now.is_some(), move || icon_btn(Icon::Undo2, Sz::Sm, t("Reset"), move || set(None))))
+}
+
+/// ⌘1–⌘9 (the desktop's).
+pub(crate) fn shortcuts_card() -> View {
+    card().child(row(
+        t("Number shortcuts"),
+        t("Use ⌘1–9 to switch conversations"),
+        switch(store::number_shortcuts, store::set_number_shortcuts),
+        true,
+    ))
+}
+
 /// The font in use, or the default's name: pressed, the installed fonts
 /// to pick from.
 fn font_field(mono: bool, _example: &'static str) -> impl IntoElement {
@@ -107,9 +195,25 @@ fn font_field(mono: bool, _example: &'static str) -> impl IntoElement {
     )
 }
 
-/// What Return does while an agent runs.
+/// What Return does while an agent runs, and how the agent's tool calls show.
 pub(crate) fn sending_card() -> View {
-    card().child(row(
+    use crate::fold::ToolDisplay;
+    card()
+    .child(row(
+        t("Tool calls"),
+        t("The commands and reads between the agent's replies"),
+        segmented(
+            vec![
+                (ToolDisplay::Auto, t("Expanded").into()),
+                (ToolDisplay::Folded, t("Folded").into()),
+                (ToolDisplay::Hidden, t("Hidden").into()),
+            ],
+            store::tool_display,
+            store::set_tool_display,
+        ),
+        true,
+    ))
+    .child(row(
         t("While an agent is running"),
         t("What Return does with your message"),
         segmented(
@@ -121,7 +225,7 @@ pub(crate) fn sending_card() -> View {
             || store::settings().send_behavior,
             store::set_send_behavior,
         ),
-        true,
+        false,
     ))
 }
 
@@ -140,9 +244,9 @@ pub(crate) fn dictation_card() -> View {
         .rounded(px(R_LG))
         .items_center()
         .justify_center()
-        .bg(SURFACE2)
+        .bg(SURFACE2())
         .border_1()
-        .border_color(move || if recording.get() { ACCENT.into() } else { tint(BORDER, 1.0) })
+        .border_color(move || if recording.get() { ACCENT().into() } else { tint(BORDER(), 1.0) })
         .child(text(move || {
             if recording.get() {
                 t("Press keys…").to_owned()
@@ -152,7 +256,7 @@ pub(crate) fn dictation_card() -> View {
         })
         .text_size(tx(TEXT_BASE))
         .font_weight(FontWeight(500))
-        .text_color(move || if recording.get() { FG_MUTED } else { FG }));
+        .text_color(move || if recording.get() { FG_MUTED() } else { FG() }));
     let reset = when(move || !recording.get() && !key.get().is_some_and(|k| k.is_fn()), || {
         icon_btn(Icon::RotateCw, Sz::Sm, t("Back to Fn"), || store::set_dictation_key(Some(store::Hotkey::fn_key())))
     });
@@ -254,13 +358,13 @@ pub(crate) fn row(title: impl IntoReactive<SharedString>, hint: impl IntoReactiv
         .gap(sp(S4))
         .px(sp(S4))
         .py(sp(S4))
-        .when(!first, |v| v.border_t_1().border_color(BORDER))
+        .when(!first, |v| v.border_t_1().border_color(BORDER()))
         .child(
             view()
                 .flex_1()
                 .gap(px(2.0))
-                .child(text(title).text_size(tx(TEXT_BASE)).text_color(FG))
-                .child(text(hint).text_size(tx(TEXT_SM)).text_color(FG_MUTED)),
+                .child(text(title).text_size(tx(TEXT_BASE)).text_color(FG()))
+                .child(text(hint).text_size(tx(TEXT_SM)).text_color(FG_MUTED())),
         )
         .child(control)
 }
@@ -297,7 +401,7 @@ pub(crate) fn host_card() -> View {
             }))
             .text_size(tx(TEXT_BASE))
             .font_family(mono_font)
-            .text_color(FG_MUTED),
+            .text_color(FG_MUTED()),
             false,
         ))
 }
@@ -486,9 +590,9 @@ pub(crate) fn behavior_card() -> impl IntoElement {
                         .py(sp(S4))
                         .gap(sp(S2))
                         .border_t_1()
-                        .border_color(BORDER)
+                        .border_color(BORDER())
                         .child(text(t("Extra system prompt")).text_size(tx(TEXT_BASE)))
-                        .child(text(t("Appended to every agent's instructions")).text_size(tx(TEXT_SM)).text_color(FG_MUTED))
+                        .child(text(t("Appended to every agent's instructions")).text_size(tx(TEXT_SM)).text_color(FG_MUTED()))
                         .child(
                             field()
                                 .multiline(true)

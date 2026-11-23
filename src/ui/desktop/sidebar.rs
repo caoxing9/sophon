@@ -164,7 +164,7 @@ fn host_body() -> View {
         )
         // That it opens a list to switch from: a row is otherwise a place
         // to go, and this one is not.
-        .child(icon(Icon::ChevronsUpDown, 14.0).text_color(FG_FAINT))
+        .child(icon(Icon::ChevronsUpDown, 14.0).text_color(FG_FAINT()))
 }
 
 fn nav_item(
@@ -185,16 +185,16 @@ fn nav_item(
         .my(px(1.0))
         .px(sp(S2))
         .rounded(px(R_LG))
-        .bg(move || if active.get() { SIDEBAR_SELECTED } else { tint(SIDEBAR, 0.0) })
+        .bg(move || if active.get() { SIDEBAR_SELECTED() } else { tint(SIDEBAR(), 0.0) })
         .hover(|s| s.bg(sidebar_hover()))
         .active(|s| s.opacity(0.7))
-        .child(icon(glyph, 16.0).text_color(FG_MUTED))
-        .child(text(label).text_size(tx(TEXT_BASE)).text_color(FG).flex_1())
+        .child(icon(glyph, 16.0).text_color(FG_MUTED()))
+        .child(text(label).text_size(tx(TEXT_BASE)).text_color(FG()).flex_1())
 }
 
 /// A row's shortcut, faint at its end.
 fn hint(keys: &'static str) -> impl IntoElement {
-    text(keys).text_size(tx(TEXT_XS)).text_color(FG_FAINT).mr(px(2.0))
+    text(keys).text_size(tx(TEXT_XS)).text_color(FG_FAINT()).mr(px(2.0))
 }
 
 fn empty_list() -> impl IntoElement {
@@ -209,7 +209,7 @@ fn connect_elsewhere() -> impl IntoElement {
         .px(sp(S3))
         .pt(sp(S3))
         .gap(sp(S3))
-        .child(text(t("Connect to the computer your agents run on")).text_size(tx(TEXT_SM)).line_height(px(18.0)).text_color(FG_MUTED))
+        .child(text(t("Connect to the computer your agents run on")).text_size(tx(TEXT_SM)).line_height(px(18.0)).text_color(FG_MUTED()))
         .child(crate::ui::shared::modals::nearby_list())
         .child(btn(t("Add host…"), Variant::Secondary, Sz::Sm, Some(Icon::Plus), || store::open_modal(store::Modal::AddHost)))
 }
@@ -231,7 +231,7 @@ fn service_status() -> impl IntoElement {
         })
         .text_size(tx(TEXT_SM))
         .line_height(px(18.0))
-        .text_color(FG_MUTED),
+        .text_color(FG_MUTED()),
     )
     .child(when(retry, || {
         btn(
@@ -250,7 +250,7 @@ fn service_status() -> impl IntoElement {
 /// shows which page is open, and pull requests a dot while one is unseen.
 fn footer() -> impl IntoElement {
     let tool = |glyph: Icon, label: &'static str, tip: &'static str, on: fn() -> bool, open: fn()| {
-        view().tooltip(text(tip).text_size(tx(TEXT_XS)).px(sp(S2)).py(px(3.0)).rounded(px(R_MD)).bg(SURFACE0).border_1().border_color(BORDER).into_element()).child(
+        view().tooltip(text(tip).text_size(tx(TEXT_XS)).px(sp(S2)).py(px(3.0)).rounded(px(R_MD)).bg(SURFACE0()).border_1().border_color(BORDER()).into_element()).child(
             button()
                 .on_press(open)
                 .accessibility_label(label)
@@ -259,10 +259,10 @@ fn footer() -> impl IntoElement {
                 .rounded(px(R_LG))
                 .items_center()
                 .justify_center()
-                .bg(move || if on() { SIDEBAR_SELECTED } else { tint(SIDEBAR, 0.0) })
+                .bg(move || if on() { SIDEBAR_SELECTED() } else { tint(SIDEBAR(), 0.0) })
                 .hover(|s| s.bg(sidebar_hover()))
                 .active(|s| s.opacity(0.7))
-                .child(icon(glyph, 16.0).text_color(move || if on() { FG } else { FG_MUTED })),
+                .child(icon(glyph, 16.0).text_color(move || if on() { FG() } else { FG_MUTED() })),
         )
     };
     let elsewhere = computed(|| matches!(store::screen(), Screen::Inbox | Screen::PullRequest { .. } | Screen::Plugins | Screen::Extensions));
@@ -273,10 +273,10 @@ fn footer() -> impl IntoElement {
             .rounded(px(R_LG))
             .items_center()
             .justify_center()
-            .bg(move || if elsewhere.get() { SIDEBAR_SELECTED } else { tint(SIDEBAR, 0.0) })
+            .bg(move || if elsewhere.get() { SIDEBAR_SELECTED() } else { tint(SIDEBAR(), 0.0) })
             .hover(|s| s.bg(sidebar_hover()))
             .label(t("More"))
-            .child(icon(Icon::Ellipsis, 16.0).text_color(FG_MUTED))
+            .child(icon(Icon::Ellipsis, 16.0).text_color(FG_MUTED()))
             .child(when(
                 || store::desk_inbox_items().iter().any(store::inbox_unseen),
                 || view().absolute().top(px(5.0)).right(px(5.0)).w(px(6.0)).h(px(6.0)).rounded(px(R_FULL)).bg(DOT_RUNNING),
@@ -298,7 +298,7 @@ fn footer() -> impl IntoElement {
         .px(sp(S1))
         .py(sp(S2))
         .border_t_1()
-        .border_color(tint(BORDER, 0.6))
+        .border_color(tint(BORDER(), 0.6))
         .child(tool(Icon::Settings, t("Settings"), t("Settings  ⌘,"), || store::screen() == Screen::Settings, store::open_settings))
         .child(tool(Icon::Activity, t("Usage"), t("Usage"), || store::screen() == Screen::Usage, store::open_usage))
         .child(tool(Icon::History, t("History"), t("History"), || store::screen() == Screen::History, store::open_history))
@@ -340,7 +340,7 @@ fn update_button() -> impl IntoElement {
     let busy = computed(move || st.with(|s| matches!(s.phase, Phase::Downloading(_) | Phase::Installing)));
     view().tooltip(dynamic(move || {
         let words = label();
-        Some(untracked(move || text(words).text_size(tx(TEXT_XS)).px(sp(S2)).py(px(3.0)).rounded(px(R_MD)).bg(SURFACE0).border_1().border_color(BORDER)))
+        Some(untracked(move || text(words).text_size(tx(TEXT_XS)).px(sp(S2)).py(px(3.0)).rounded(px(R_MD)).bg(SURFACE0()).border_1().border_color(BORDER())))
     }).into_element()).child(
         button()
             .on_press(move || {
@@ -354,10 +354,10 @@ fn update_button() -> impl IntoElement {
             .rounded(px(R_LG))
             .items_center()
             .justify_center()
-            .bg(tint(SIDEBAR, 0.0))
+            .bg(tint(SIDEBAR(), 0.0))
             .hover(|s| s.bg(sidebar_hover()))
             .active(|s| s.opacity(0.7))
-            .child(icon(Icon::CircleArrowUp, 16.0).text_color(move || if offered.get() { ACCENT } else { FG_MUTED }))
+            .child(icon(Icon::CircleArrowUp, 16.0).text_color(move || if offered.get() { ACCENT() } else { FG_MUTED() }))
             .child(when(move || offered.get() && !busy.get(), || view().absolute().top(px(5.0)).right(px(5.0)).w(px(6.0)).h(px(6.0)).rounded(px(R_FULL)).bg(DANGER))),
     )
 }

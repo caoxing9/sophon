@@ -28,11 +28,11 @@ pub(crate) fn file_pane(path: String) -> impl IntoElement {
                 .h(px(40.0))
                 .px(sp(S4))
                 .border_b_1()
-                .border_color(BORDER)
-                .child(icon(Icon::FileText, 15.0).text_color(FG_MUTED))
+                .border_color(BORDER())
+                .child(icon(Icon::FileText, 15.0).text_color(FG_MUTED()))
                 .child(text(path.clone()).text_size(tx(TEXT_BASE)).font_family(mono_font).number_of_lines(1).flex_1())
                 .child(when(move || file.with(|f| f.as_ref().is_some_and(|f| f.dirty())), || {
-                    text(t("Unsaved")).text_size(tx(TEXT_SM)).text_color(FG_MUTED)
+                    text(t("Unsaved")).text_size(tx(TEXT_SM)).text_color(FG_MUTED())
                 }))
                 // A copy on this device (the host may be another computer):
                 // a file that can't be shown as text too.

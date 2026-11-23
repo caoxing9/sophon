@@ -147,8 +147,10 @@ pub fn App() -> impl IntoElement {
             let (font, _) = store::fonts();
             // The text size and compact mode too: sizes are read as views are made.
             let _ = store::look();
+            // The colour theme too: colours are read as views are made.
+            let _ = store::color_theme();
             Some(untracked(move || {
-                let shell = view().flex_1().child(ui::shell());
+                let shell = view().flex_1().bg(ui::kit::SURFACE0()).text_color(ui::kit::FG()).child(ui::shell());
                 match font.clone() {
                     Some(family) => shell.font_family(SharedString::from(family)).into_element(),
                     None => shell.into_element(),

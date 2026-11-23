@@ -58,7 +58,7 @@ pub(crate) fn resize_handle() -> impl IntoElement {
                 .w(px(3.0))
                 .h(px(48.0))
                 .rounded(px(1.0))
-                .bg(move || tint(ACCENT, if dragging.get() { 0.9 } else if hover.get() { 0.5 } else { 0.0 })),
+                .bg(move || tint(ACCENT(), if dragging.get() { 0.9 } else if hover.get() { 0.5 } else { 0.0 })),
         )
 }
 
@@ -142,7 +142,7 @@ fn files_view() -> View {
 fn tree_row(row: Memo<Option<store::TreeRow>>) -> impl IntoElement {
     nsh_base::context_menu()
         .popup_style(|s| {
-            s.bg(POPOVER).rounded(px(R_XL)).border_1().border_color(BORDER).p(sp(S1)).min_w(px(200.0)).shadow_lg()
+            s.bg(POPOVER()).rounded(px(R_XL)).border_1().border_color(BORDER()).p(sp(S1)).min_w(px(200.0)).shadow_lg()
         })
         .trigger(tree_row_body(row))
         .child(dynamic(move || {
@@ -199,7 +199,7 @@ fn tree_row_body(row: Memo<Option<store::TreeRow>>) -> impl IntoElement {
         .pl(move || px(S2 + row.with(|r| r.as_ref().map_or(0, |r| r.depth)) as f32 * 14.0))
         .pr(sp(S2))
         .rounded(px(R_LG))
-        .bg(move || if selected.get() { highlight() } else { tint(SURFACE1, 0.0) })
+        .bg(move || if selected.get() { highlight() } else { tint(SURFACE1(), 0.0) })
         .hover(|s| s.bg(highlight()))
         .child(dynamic(move || {
             let (dir, open) = row.with(|r| r.as_ref().map_or((false, false), |r| (r.entry.is_dir, r.expanded)));
@@ -209,7 +209,7 @@ fn tree_row_body(row: Memo<Option<store::TreeRow>>) -> impl IntoElement {
                     (true, false) => Icon::ChevronRight,
                     _ => Icon::File,
                 };
-                icon(glyph, 14.0).text_color(FG_FAINT)
+                icon(glyph, 14.0).text_color(FG_FAINT())
             }))
         }))
         .child(
@@ -238,11 +238,11 @@ pub(super) fn empty_state(glyph: Icon, title: &'static str, detail: &'static str
                 .rounded(px(R_FULL))
                 .items_center()
                 .justify_center()
-                .bg(SURFACE2)
-                .child(icon(glyph, 20.0).text_color(FG_MUTED)),
+                .bg(SURFACE2())
+                .child(icon(glyph, 20.0).text_color(FG_MUTED())),
         )
-        .child(text(title).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).text_color(FG).text_center())
-        .child(text(detail).text_size(tx(TEXT_SM)).line_height(px(19.0)).text_color(FG_MUTED).text_center())
+        .child(text(title).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).text_color(FG()).text_center())
+        .child(text(detail).text_size(tx(TEXT_SM)).line_height(px(19.0)).text_color(FG_MUTED()).text_center())
 }
 
 fn loading_state() -> View {
@@ -324,10 +324,10 @@ pub(crate) fn diff_pane(path: Option<String>) -> impl IntoElement {
         .pl(sp(S4))
         .pr(sp(S2))
         .border_b_1()
-        .border_color(tint(BORDER, 0.7))
-        .child(icon(Icon::FileDiff, 15.0).text_color(FG_MUTED))
+        .border_color(tint(BORDER(), 0.7))
+        .child(icon(Icon::FileDiff, 15.0).text_color(FG_MUTED()))
         .child(text(name).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).number_of_lines(1).flex_shrink(1.0))
-        .child(dir.map(|d| text(d).text_size(tx(TEXT_SM)).text_color(FG_FAINT).number_of_lines(1).flex_shrink(1.0)))
+        .child(dir.map(|d| text(d).text_size(tx(TEXT_SM)).text_color(FG_FAINT()).number_of_lines(1).flex_shrink(1.0)))
         .child(view().flex_1())
         .child(
             view()
@@ -357,7 +357,7 @@ pub(crate) fn diff_pane(path: Option<String>) -> impl IntoElement {
                     .flex_1()
                     .items_center()
                     .justify_center()
-                    .child(text(t("No changes")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED))
+                    .child(text(t("No changes")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED()))
                     .into_element();
             }
             let mut d = diff_view()
@@ -378,9 +378,9 @@ pub(crate) fn diff_pane(path: Option<String>) -> impl IntoElement {
                         .rounded(px(5.0))
                         .items_center()
                         .justify_center()
-                        .bg(ACCENT)
+                        .bg(ACCENT())
                         .shadow_sm()
-                        .child(icon(Icon::Plus, 12.0).text_color(ACCENT_FG))
+                        .child(icon(Icon::Plus, 12.0).text_color(ACCENT_FG()))
                 })
                 .render_annotation(move |a: &DiffAnnotation| {
                     if a.id.as_ref() == "draft" {
@@ -421,14 +421,14 @@ pub(crate) fn diff_pane(path: Option<String>) -> impl IntoElement {
         .pl(sp(S4))
         .pr(px(6.0))
         .rounded(px(R_FULL))
-        .child(icon(Icon::Pencil, 16.0).text_color(FG_MUTED))
+        .child(icon(Icon::Pencil, 16.0).text_color(FG_MUTED()))
         .child(
             input()
                 .flex_1()
                 .text_size(tx(TEXT_BASE))
-                .text_color(FG)
-                .caret_color(|| color(ACCENT))
-                .selection_color(|| color(tint(ACCENT, 0.3)))
+                .text_color(FG())
+                .caret_color(|| color(ACCENT()))
+                .selection_color(|| color(tint(ACCENT(), 0.3)))
                 .value(move || note.get())
                 .on_change(move |v: &str| note.set(v.to_owned()))
                 .on_submit(move |_: &str| send())
@@ -449,9 +449,9 @@ pub(crate) fn diff_pane(path: Option<String>) -> impl IntoElement {
                 .rounded(px(R_FULL))
                 .items_center()
                 .justify_center()
-                .bg(move || if empty_note.get() { highlight() } else { ACCENT })
+                .bg(move || if empty_note.get() { highlight() } else { ACCENT() })
                 .transition_colors()
-                .child(icon(Icon::ArrowUp, 17.0).text_color(move || if empty_note.get() { FG_FAINT } else { ACCENT_FG })),
+                .child(icon(Icon::ArrowUp, 17.0).text_color(move || if empty_note.get() { FG_FAINT() } else { ACCENT_FG() })),
         );
     view()
         .flex_1()
@@ -489,7 +489,7 @@ fn comment_draft(draft: Signal<Option<DiffLineRange>>, text_sig: Signal<String>,
     let empty = computed(move || text_sig.with(|t| t.trim().is_empty()));
     comment_shell()
         .gap(sp(S2))
-        .child(text(label).text_size(tx(TEXT_XS)).text_color(FG_MUTED).font_weight(FontWeight(600)))
+        .child(text(label).text_size(tx(TEXT_XS)).text_color(FG_MUTED()).font_weight(FontWeight(600)))
         .child(
             field()
                 .auto_focus(true)
@@ -530,17 +530,17 @@ fn comment_card(c: LineComment, remove: impl Fn() + 'static) -> View {
                 .w(px(22.0))
                 .h(px(22.0))
                 .rounded(px(R_FULL))
-                .bg(tint(ACCENT, 0.15))
+                .bg(tint(ACCENT(), 0.15))
                 .items_center()
                 .justify_center()
-                .child(icon(Icon::Pencil, 11.0).text_color(ACCENT)),
+                .child(icon(Icon::Pencil, 11.0).text_color(ACCENT())),
         )
         .child(
             view()
                 .flex_1()
                 .gap(px(2.0))
-                .child(text(lines_label(c.range)).text_size(tx(TEXT_XS)).text_color(FG_MUTED).font_weight(FontWeight(600)))
-                .child(text(c.text).text_size(tx(TEXT_SM)).text_color(FG)),
+                .child(text(lines_label(c.range)).text_size(tx(TEXT_XS)).text_color(FG_MUTED()).font_weight(FontWeight(600)))
+                .child(text(c.text).text_size(tx(TEXT_SM)).text_color(FG())),
         )
         .child(icon_btn(Icon::Trash2, Sz::Sm, t("Delete comment"), remove))
 }

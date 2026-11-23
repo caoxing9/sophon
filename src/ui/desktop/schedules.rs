@@ -253,7 +253,7 @@ pub(crate) fn schedules(compact: bool) -> impl IntoElement {
 fn list_column(pane: Signal<Pane>, filter: Signal<String>, opened: Signal<bool>, compact: bool) -> View {
     view()
         .when(compact, |v| v.flex_1())
-        .when(!compact, |v| v.w(px(300.0)).flex_shrink_0().border_r_1().border_color(BORDER))
+        .when(!compact, |v| v.w(px(300.0)).flex_shrink_0().border_r_1().border_color(BORDER()))
         .child(
             view()
                 .flex_row()
@@ -292,7 +292,7 @@ fn list_column(pane: Signal<Pane>, filter: Signal<String>, opened: Signal<bool>,
                 };
                 let shown: Vec<_> = items.into_iter().filter(|s| needle.is_empty() || s.name.to_lowercase().contains(&needle) || s.prompt.to_lowercase().contains(&needle)).collect();
                 if shown.is_empty() {
-                    return list.child(text(t("No automations yet")).text_size(tx(TEXT_SM)).text_color(FG_MUTED).px(sp(S2)).py(sp(S4)));
+                    return list.child(text(t("No automations yet")).text_size(tx(TEXT_SM)).text_color(FG_MUTED()).px(sp(S2)).py(sp(S4)));
                 }
                 for s in shown {
                     list = list.child(list_row(s, &plugins, pane, opened));
@@ -347,10 +347,10 @@ fn list_row(s: Schedule, plugins: &[Plugin], pane: Signal<Pane>, opened: Signal<
     let active = s.status == "active";
     let place = if s.cwd.is_empty() { String::new() } else { project_name(&s.cwd) };
     let with = if !s.command.is_empty() { t("Command").to_owned() } else { runs_on_words(&s, false) };
-    let muted = |words: String| text(words).text_size(tx(TEXT_XS)).text_color(FG_MUTED).number_of_lines(1);
+    let muted = |words: String| text(words).text_size(tx(TEXT_XS)).text_color(FG_MUTED()).number_of_lines(1);
     view()
         .rounded(px(R_LG))
-        .bg(move || if pane.with(|now| *now == Pane::Edit(shown.clone())) { highlight() } else { tint(FG, 0.0) })
+        .bg(move || if pane.with(|now| *now == Pane::Edit(shown.clone())) { highlight() } else { tint(FG(), 0.0) })
         .hover(|style| style.bg(highlight()))
         .child(
             nsh_base::button()
@@ -369,7 +369,7 @@ fn list_row(s: Schedule, plugins: &[Plugin], pane: Signal<Pane>, opened: Signal<
                         .items_center()
                         .gap(px(6.0))
                         .pr(px(44.0))
-                        .child(icon(if s.probe_error.is_some() { Icon::TriangleAlert } else if event { Icon::Zap } else { Icon::CalendarClock }, 13.0).text_color(if s.probe_error.is_some() { DANGER } else { FG_MUTED }))
+                        .child(icon(if s.probe_error.is_some() { Icon::TriangleAlert } else if event { Icon::Zap } else { Icon::CalendarClock }, 13.0).text_color(if s.probe_error.is_some() { DANGER } else { FG_MUTED() }))
                         .child(muted(starts_words(&s, plugins)).flex_1().min_w(px(0.0))),
                 )
                 .child(text(s.name.clone()).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).number_of_lines(1))
@@ -378,7 +378,7 @@ fn list_row(s: Schedule, plugins: &[Plugin], pane: Signal<Pane>, opened: Signal<
                         .flex_row()
                         .items_center()
                         .gap(px(6.0))
-                        .when(!place.is_empty(), |v| v.child(icon(Icon::Folder, 12.0).text_color(FG_FAINT)))
+                        .when(!place.is_empty(), |v| v.child(icon(Icon::Folder, 12.0).text_color(FG_FAINT())))
                         .child(muted(place).flex_1().min_w(px(0.0)))
                         .child(muted(with).flex_shrink_0()),
                 ),
@@ -409,7 +409,7 @@ fn gallery(pane: Signal<Pane>, opened: Signal<bool>, compact: bool) -> impl Into
                     .when(compact, |v| v.child(icon_btn(Icon::ArrowLeft, Sz::Sm, t("Back"), move || opened.set(false))))
                     .child(text(t("New automation")).text_size(tx(TEXT_2XL)).font_weight(FontWeight(500))),
             )
-            .child(text(t("Begin from one of these, or from nothing. All of it can be changed")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED))
+            .child(text(t("Begin from one of these, or from nothing. All of it can be changed")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED()))
             .child(view().flex_row().child(segmented(
                 vec![(Kind::All, t("All").into()), (Kind::Review, t("Code review").into()), (Kind::Upkeep, t("Upkeep").into()), (Kind::Plugins, t("From plugins").into())],
                 move || kind.get(),
@@ -454,7 +454,7 @@ fn gallery(pane: Signal<Pane>, opened: Signal<bool>, compact: bool) -> impl Into
                     }
                     if !any {
                         // Only the plugins' can be none: there are none installed.
-                        return view().py(sp(S6)).gap(sp(S3)).items_start().child(text(t("No plugin brings one yet")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED)).child(btn(
+                        return view().py(sp(S6)).gap(sp(S3)).items_start().child(text(t("No plugin brings one yet")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED())).child(btn(
                             t("Open Plugins"),
                             Variant::Outline,
                             Sz::Sm,
@@ -488,8 +488,8 @@ fn template_card(glyph: Icon, title: String, about: String, when: String, on_pre
         .gap(sp(S3))
         .rounded(px(R_XL))
         .border_1()
-        .border_color(BORDER)
-        .bg(SURFACE0)
+        .border_color(BORDER())
+        .bg(SURFACE0())
         .hover(|style| style.bg(highlight()))
         .child(
             view()
@@ -502,11 +502,11 @@ fn template_card(glyph: Icon, title: String, about: String, when: String, on_pre
                         .min_w(px(0.0))
                         .gap(px(4.0))
                         .child(text(title).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)))
-                        .child(text(about).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(3)),
+                        .child(text(about).text_size(tx(TEXT_SM)).text_color(FG_MUTED()).number_of_lines(3)),
                 ),
         )
         .child(view().flex_1())
-        .when(timed, |card| card.child(view().flex_row().items_center().gap(px(6.0)).child(icon(mark, 12.0).text_color(FG_FAINT)).child(text(when).text_size(tx(TEXT_XS)).text_color(FG_MUTED).number_of_lines(1))))
+        .when(timed, |card| card.child(view().flex_row().items_center().gap(px(6.0)).child(icon(mark, 12.0).text_color(FG_FAINT())).child(text(when).text_size(tx(TEXT_XS)).text_color(FG_MUTED()).number_of_lines(1))))
 }
 
 /// An automation to read and change, or a new one to fill in: what
@@ -669,8 +669,8 @@ fn editor(existing: Option<Schedule>, template: Template, pane: Signal<Pane>, op
             .flex_1()
             .h(px(44.0))
             .px(px(0.0))
-            .bg(tint(FG, 0.0))
-            .border_color(tint(FG, 0.0))
+            .bg(tint(FG(), 0.0))
+            .border_color(tint(FG(), 0.0))
             .text_size(tx(TEXT_2XL))
             .font_weight(FontWeight(600))
             .value(move || name.get())
@@ -690,7 +690,7 @@ fn editor(existing: Option<Schedule>, template: Template, pane: Signal<Pane>, op
     }
     // Under the name, on one line: whether it is on, where it works, and
     // the rest of what is done with it.
-    let bar_rule = || view().w(px(1.0)).h(px(16.0)).bg(BORDER);
+    let bar_rule = || view().w(px(1.0)).h(px(16.0)).bg(BORDER());
     let now = |id: &str| store::schedules().and_then(|list| list.into_iter().find(|s| s.id == id));
     let mut bar = view().flex_row().items_center().gap(sp(S3)).min_h(sp(CONTROL_SM));
     if let Some(id) = editing.clone() {
@@ -702,7 +702,7 @@ fn editor(existing: Option<Schedule>, template: Template, pane: Signal<Pane>, op
                     .items_center()
                     .gap(sp(S2))
                     .child(switch(move || now(&switched).is_some_and(|s| s.status == "active"), move |on| store::schedule_op(&flipped, if on { "resume" } else { "pause" })).accessibility_label(t("Active")))
-                    .child(text(move || -> SharedString { if now(&said).is_some_and(|s| s.status == "active") { t("Active").into() } else { t("Paused").into() } }).text_size(tx(TEXT_SM)).text_color(FG_MUTED)),
+                    .child(text(move || -> SharedString { if now(&said).is_some_and(|s| s.status == "active") { t("Active").into() } else { t("Paused").into() } }).text_size(tx(TEXT_SM)).text_color(FG_MUTED())),
             )
             .child(bar_rule());
     }
@@ -729,7 +729,7 @@ fn editor(existing: Option<Schedule>, template: Template, pane: Signal<Pane>, op
         bar = bar
             .child(bar_rule())
             .child(
-                dropdown(view().w(sp(CONTROL_SM)).h(sp(CONTROL_SM)).items_center().justify_center().rounded(px(R_FULL)).hover(|s| s.bg(highlight())).child(icon(Icon::Ellipsis, 16.0).text_color(FG_MUTED)))
+                dropdown(view().w(sp(CONTROL_SM)).h(sp(CONTROL_SM)).items_center().justify_center().rounded(px(R_FULL)).hover(|s| s.bg(highlight())).child(icon(Icon::Ellipsis, 16.0).text_color(FG_MUTED())))
                     .align(nsh_core::overlay::Align::Start)
                     .child(menu_row_danger(t("Delete automation"), Icon::Trash2, move || {
                         store::schedule_op(&removed, "delete");
@@ -748,7 +748,7 @@ fn editor(existing: Option<Schedule>, template: Template, pane: Signal<Pane>, op
                 }
             })
             .text_size(tx(TEXT_SM))
-            .text_color(FG_FAINT)
+            .text_color(FG_FAINT())
             .number_of_lines(1));
     }
     let failing = editing.clone().map(|id| {
@@ -766,7 +766,7 @@ fn editor(existing: Option<Schedule>, template: Template, pane: Signal<Pane>, op
     let choosing = signal(!is_edit && template.title.is_empty());
     // Made from a plugin, what starts it is the plugin's to say.
     let fixed = made_of.is_some();
-    let line = || view().px(sp(S4)).py(sp(S3)).border_t_1().border_color(BORDER);
+    let line = || view().px(sp(S4)).py(sp(S3)).border_t_1().border_color(BORDER());
     let triggers = dynamic(move || {
         let (installed, open) = (store::plugins(), choosing.get());
         // Read here when closed: the line shown is the one picked.
@@ -804,7 +804,7 @@ fn editor(existing: Option<Schedule>, template: Template, pane: Signal<Pane>, op
                     .min_w(px(0.0))
                     .gap(px(2.0))
                     .child(text(title).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)))
-                    .when(!about.is_empty(), |v| v.child(text(about).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(2)))
+                    .when(!about.is_empty(), |v| v.child(text(about).text_size(tx(TEXT_SM)).text_color(FG_MUTED()).number_of_lines(2)))
             };
             if let Some(current) = current {
                 // One on an integration no longer installed still says so.
@@ -846,7 +846,7 @@ fn editor(existing: Option<Schedule>, template: Template, pane: Signal<Pane>, op
                         .hover(|style| style.bg(highlight()))
                         .child(glyph_tile(glyph))
                         .child(words(title, about))
-                        .child(view().w(px(20.0)).child(dynamic(move || starts.with(|by| *by == marked).then(|| untracked(|| icon(Icon::Check, 16.0).text_color(ACCENT)))))),
+                        .child(view().w(px(20.0)).child(dynamic(move || starts.with(|by| *by == marked).then(|| untracked(|| icon(Icon::Check, 16.0).text_color(ACCENT())))))),
                 );
             }
             list
@@ -922,7 +922,7 @@ fn editor(existing: Option<Schedule>, template: Template, pane: Signal<Pane>, op
     // A few characters beside a segmented control: as tall and as round as
     // it, so the row reads as one line of controls.
     let short = |width: f32| field().w(px(width)).h(sp(CONTROL_SM + 4.0)).rounded(px(R_FULL)).text_size(tx(TEXT_SM)).text_center();
-    let lead = |label: &'static str| text(label).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG_MUTED);
+    let lead = |label: &'static str| text(label).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG_MUTED());
     // What was picked, said back: the check that it was understood.
     let summary = move || -> SharedString {
         match expression.get() {
@@ -995,7 +995,7 @@ fn editor(existing: Option<Schedule>, template: Template, pane: Signal<Pane>, op
                 .gap(sp(S3))
                 .min_h(sp(CONTROL_SM))
                 .child(text(move || if probing.get() { t("Looks") } else { t("Repeats") }).text_size(tx(TEXT_BASE)).flex_1())
-                .child(text(summary).text_size(tx(TEXT_SM)).text_color(FG_MUTED).number_of_lines(1))
+                .child(text(summary).text_size(tx(TEXT_SM)).text_color(FG_MUTED()).number_of_lines(1))
                 .child(when(move || probing.get() && !pacing.get(), move || btn(t("Change"), Variant::Outline, Sz::Sm, None, move || pacing.set(true))))
                 .child(when(move || probing.get() && pacing.get(), move || btn(t("Done"), Variant::Outline, Sz::Sm, None, move || pacing.set(false)))),
         )
@@ -1010,16 +1010,16 @@ fn editor(existing: Option<Schedule>, template: Template, pane: Signal<Pane>, op
     // A field with no frame of its own: the card around it is its frame.
     // Nothing here is checked for spelling: commands and instructions
     // are full of names no dictionary has.
-    let bare = || field().multiline(true).auto_correct(false).bg(tint(FG, 0.0)).border_color(tint(FG, 0.0)).rounded(px(0.0)).px(sp(S4)).py(sp(S3));
+    let bare = || field().multiline(true).auto_correct(false).bg(tint(FG(), 0.0)).border_color(tint(FG(), 0.0)).rounded(px(0.0)).px(sp(S4)).py(sp(S3));
     let does = card()
         .child(view().flex_row().px(sp(S4)).py(sp(S3)).child(segmented(vec![(false, t("Start a conversation").into()), (true, t("Run a command").into())], move || commanding.get(), move |on| commanding.set(on))))
         .child(dynamic(move || {
             let on = commanding.get();
             let (runs_on, made_with) = (runs_on.clone(), made_with.clone());
             Some(untracked(move || {
-                let body = view().border_t_1().border_color(BORDER);
-                let foot = || view().flex_row().items_center().gap(sp(S2)).min_h(sp(CONTROL_MD)).px(sp(S4)).py(sp(S2)).border_t_1().border_color(BORDER);
-                let said = |words: String| text(words).text_size(tx(TEXT_SM)).text_color(FG_MUTED);
+                let body = view().border_t_1().border_color(BORDER());
+                let foot = || view().flex_row().items_center().gap(sp(S2)).min_h(sp(CONTROL_MD)).px(sp(S4)).py(sp(S2)).border_t_1().border_color(BORDER());
+                let said = |words: String| text(words).text_size(tx(TEXT_SM)).text_color(FG_MUTED());
                 if on {
                     // How the last try of it went, under the command: on its
                     // way, or whether it ended well and the end of what it wrote.
@@ -1027,7 +1027,7 @@ fn editor(existing: Option<Schedule>, template: Template, pane: Signal<Pane>, op
                         let trial = store::trial();
                         match trial {
                             store::Trial::None => None,
-                            store::Trial::Running => Some(untracked(move || foot().child(icon(Icon::LoaderCircle, 14.0).text_color(FG_FAINT)).child(said(t("Trying it on that computer…").to_owned())))),
+                            store::Trial::Running => Some(untracked(move || foot().child(icon(Icon::LoaderCircle, 14.0).text_color(FG_FAINT())).child(said(t("Trying it on that computer…").to_owned())))),
                             store::Trial::Done { ok, output, took_ms } => Some(untracked(move || {
                                 let (tone, label) = if ok { (SUCCESS, t("Succeeded")) } else { (DANGER, t("Failed")) };
                                 let wrote = if output.trim().is_empty() { t("It printed nothing").to_owned() } else { output };
@@ -1036,9 +1036,9 @@ fn editor(existing: Option<Schedule>, template: Template, pane: Signal<Pane>, op
                                     .px(sp(S4))
                                     .py(sp(S3))
                                     .border_t_1()
-                                    .border_color(BORDER)
+                                    .border_color(BORDER())
                                     .child(view().flex_row().items_center().gap(sp(S2)).child(badge(label, tone)).child(said(format!("{:.1}s", took_ms as f64 / 1000.0))).child(said(t("A try: nothing of it is kept").to_owned())))
-                                    .child(text(wrote).text_size(tx(TEXT_SM)).line_height(px(18.0)).font_family(mono_font).text_color(if ok { FG } else { DANGER }).number_of_lines(14))
+                                    .child(text(wrote).text_size(tx(TEXT_SM)).line_height(px(18.0)).font_family(mono_font).text_color(if ok { FG() } else { DANGER }).number_of_lines(14))
                             })),
                         }
                     });
@@ -1065,7 +1065,7 @@ fn editor(existing: Option<Schedule>, template: Template, pane: Signal<Pane>, op
                         )
                         .child(
                             foot()
-                                .child(icon(Icon::SquareTerminal, 14.0).text_color(FG_FAINT))
+                                .child(icon(Icon::SquareTerminal, 14.0).text_color(FG_FAINT()))
                                 .child(said(t("No conversation and no model: it does the same each time, and what it prints is kept with the run").to_owned()).flex_1())
                                 .child(
                                     btn(t("Try it"), Variant::Outline, Sz::Sm, Some(Icon::Play), move || store::try_command(&command.get_untracked(), &path.get_untracked()))
@@ -1080,7 +1080,7 @@ fn editor(existing: Option<Schedule>, template: Template, pane: Signal<Pane>, op
                         // Made already: what it runs on stays as it was made,
                         // until it is asked to be picked again.
                         Some(target) => foot()
-                            .child(icon(Icon::Cpu, 14.0).text_color(FG_FAINT))
+                            .child(icon(Icon::Cpu, 14.0).text_color(FG_FAINT()))
                             .child(said(target))
                             .when_some(made_with, |v, (provider, model, mode)| {
                                 v.child(btn(t("Change"), Variant::Ghost, Sz::Sm, None, move || {
@@ -1167,7 +1167,7 @@ fn editor(existing: Option<Schedule>, template: Template, pane: Signal<Pane>, op
     // is still there on coming back from the runs.
     view()
         .flex_1()
-        .child(view().when(is_edit, |v| v.border_b_1().border_color(BORDER)).child(top))
+        .child(view().when(is_edit, |v| v.border_b_1().border_color(BORDER())).child(top))
         .child(
             view()
                 .flex_1()
@@ -1178,7 +1178,7 @@ fn editor(existing: Option<Schedule>, template: Template, pane: Signal<Pane>, op
 
 /// The mark of a trigger or a template: its glyph on a soft square.
 fn glyph_tile(glyph: Icon) -> View {
-    view().w(px(34.0)).h(px(34.0)).rounded(px(R_LG)).bg(tint(FG, 0.06)).items_center().justify_center().flex_shrink_0().child(icon(glyph, 16.0).text_color(FG_MUTED))
+    view().w(px(34.0)).h(px(34.0)).rounded(px(R_LG)).bg(tint(FG(), 0.06)).items_center().justify_center().flex_shrink_0().child(icon(glyph, 16.0).text_color(FG_MUTED()))
 }
 
 /// One of an automation's two pages, underlined while it is the one shown.
@@ -1189,8 +1189,8 @@ fn tab_button(label: &'static str, on: impl Fn() -> bool + Copy + 'static, on_pr
         .h(px(36.0))
         .justify_end()
         .gap(px(8.0))
-        .child(text(label).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)).text_color(move || if on() { FG } else { FG_MUTED }))
-        .child(view().h(px(2.0)).rounded(px(1.0)).bg(move || if on() { FG } else { tint(FG, 0.0) }))
+        .child(text(label).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)).text_color(move || if on() { FG() } else { FG_MUTED() }))
+        .child(view().h(px(2.0)).rounded(px(1.0)).bg(move || if on() { FG() } else { tint(FG(), 0.0) }))
 }
 
 /// Whether the one there is runs at times of its own (its cadence is
@@ -1225,7 +1225,7 @@ fn took(run: &ScheduleRun) -> Option<String> {
 /// is all of it to press: the conversation opens.
 fn runs_list(runs: Vec<ScheduleRun>) -> View {
     if runs.is_empty() {
-        return view().h(px(180.0)).items_center().justify_center().rounded(px(R_LG)).border_1().border_color(BORDER).child(text(t("This automation has not run yet")).text_size(tx(TEXT_SM)).text_color(FG_MUTED));
+        return view().h(px(180.0)).items_center().justify_center().rounded(px(R_LG)).border_1().border_color(BORDER()).child(text(t("This automation has not run yet")).text_size(tx(TEXT_SM)).text_color(FG_MUTED()));
     }
     let mut list = view().gap(sp(S3));
     // The last fifty: more is the conversations' own history.
@@ -1235,7 +1235,7 @@ fn runs_list(runs: Vec<ScheduleRun>) -> View {
         let (tone, label) = match run.status.as_str() {
             "succeeded" | "completed" => (SUCCESS, t("Succeeded")),
             "failed" => (DANGER, t("Failed")),
-            "canceled" => (FG_MUTED, t("Canceled")),
+            "canceled" => (FG_MUTED(), t("Canceled")),
             _ => (WARNING, t("Running")),
         };
         let mut line = view()
@@ -1243,16 +1243,16 @@ fn runs_list(runs: Vec<ScheduleRun>) -> View {
             .items_center()
             .gap(sp(S2))
             .min_h(sp(CONTROL_SM))
-            .child(text(local_time(&run.started, true)).text_size(tx(TEXT_SM)).text_color(FG).font_family(mono_font))
+            .child(text(local_time(&run.started, true)).text_size(tx(TEXT_SM)).text_color(FG()).font_family(mono_font))
             .child(badge(label, tone));
         if let Some(took) = took(&run) {
-            line = line.child(text(took).text_size(tx(TEXT_SM)).text_color(FG_MUTED));
+            line = line.child(text(took).text_size(tx(TEXT_SM)).text_color(FG_MUTED()));
         }
         // What caused it, in the room that is left: a long one is cut short.
         line = line.child(
             text(run.event.clone().unwrap_or_default())
                 .text_size(tx(TEXT_SM))
-                .text_color(FG_MUTED)
+                .text_color(FG_MUTED())
                 .font_family(mono_font)
                 .number_of_lines(1)
                 .flex_1()
@@ -1260,7 +1260,7 @@ fn runs_list(runs: Vec<ScheduleRun>) -> View {
         );
         // That there is a conversation behind it to open.
         if run.agent_id.is_some() {
-            line = line.child(icon(Icon::ChevronRight, 14.0).text_color(FG_FAINT));
+            line = line.child(icon(Icon::ChevronRight, 14.0).text_color(FG_FAINT()));
         }
         entry = entry.child(line);
         // Why it failed, on a line of its own.
@@ -1273,14 +1273,14 @@ fn runs_list(runs: Vec<ScheduleRun>) -> View {
                 text(format!("{} {said}", if action == "react" { "☺" } else { "↩" }))
                     .text_size(tx(TEXT_SM))
                     .line_height(px(18.0))
-                    .text_color(FG)
+                    .text_color(FG())
                     .number_of_lines(2),
             );
         }
         // What the agent answered: usually all there is to read of a run.
         if let Some(output) = run.output.clone() {
             entry = entry.child(
-                text(output).text_size(tx(TEXT_SM)).line_height(px(18.0)).text_color(FG_MUTED).number_of_lines(4),
+                text(output).text_size(tx(TEXT_SM)).line_height(px(18.0)).text_color(FG_MUTED()).number_of_lines(4),
             );
         }
         list = list.child(match run.agent_id.clone() {
@@ -1293,8 +1293,8 @@ fn runs_list(runs: Vec<ScheduleRun>) -> View {
                     .py(sp(S3))
                     .rounded(px(R_XL))
                     .border_1()
-                    .border_color(BORDER)
-                    .bg(SURFACE0)
+                    .border_color(BORDER())
+                    .bg(SURFACE0())
                     .hover(|style| style.bg(highlight()))
                     .child(entry)
                     .into_element()
