@@ -421,16 +421,20 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                 RowKind::Tool => view().pl(move || px(if grouped.get() { S4 } else { 0.0 })).child(tool_row(item)).into_element(),
                 RowKind::Group => group_row(group).into_element(),
                 RowKind::Todo => todo_card(item).into_element(),
+                // A line where the reply would be, not a red block: the mark
+                // says it failed, the words say why, quietly.
                 RowKind::Error => view()
                     .flex_row()
+                    .items_center()
                     .gap(sp(S2))
-                    .px(sp(S3))
-                    .py(sp(S2))
-                    .rounded(px(R_LG))
-                    .bg(tint(DANGER, 0.08))
-                    .child(icon(Icon::CircleAlert, 16.0).text_color(DANGER))
+                    .min_h(px(26.0))
+                    .child(icon(Icon::CircleAlert, 14.0).text_color(DANGER))
                     .child(
-                        view().selectable(true).on_text_selection_change(take_copy).flex_1().child(text(text_of).text_size(tx(TEXT_BASE)).text_color(DANGER)),
+                        view()
+                            .selectable(true)
+                            .on_text_selection_change(take_copy)
+                            .flex_1()
+                            .child(text(text_of).text_size(tx(TEXT_SM)).line_height(px(19.0)).text_color(FG_MUTED)),
                     )
                     // The turn ended on it: its message sent again.
                     .child(when(computed(move || last.get() && !running.get()), move || retry_button(DANGER)))
@@ -1793,9 +1797,9 @@ fn retry_button(tone: AdaptiveColor) -> impl IntoElement {
         .items_center()
         .gap(sp(S1))
         .px(sp(S2))
-        .h(px(26.0))
+        .h(px(24.0))
         .rounded(px(R_FULL))
-        .bg(tint(tone, 0.16))
+        .bg(tint(tone, 0.12))
         .active(|s| s.opacity(0.6))
         .child(icon(Icon::RotateCw, 12.0).text_color(tone))
         .child(text(t("Retry")).text_size(tx(TEXT_SM)).font_weight(FontWeight(600)).text_color(tone))
