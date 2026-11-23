@@ -57,13 +57,14 @@ impl Row {
 /// `choice`: groups the user opened (true) or closed (false), by id; the
 /// rest are open while live and folded otherwise.
 /// How the conversation shows the agent's tool calls (`toolCalls` in the
-/// settings): runs open while the agent works in them (`Auto`), always
-/// folded to their summary (`Folded`), or not at all (`Hidden`: what it
-/// says alone, its thinking and calls left out).
+/// settings): runs open while the agent works in them (`Auto`), folded to
+/// their count, a single call too, until pressed open (`Folded`, the
+/// default), or not at all (`Hidden`: what it says alone, its thinking and
+/// calls left out).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum ToolDisplay {
-    #[default]
     Auto,
+    #[default]
     Folded,
     Hidden,
 }
@@ -107,7 +108,9 @@ pub(crate) fn fold_as(items: &[Item], running: bool, choice: &HashMap<String, bo
             end += 1;
         }
         let calls = items[i..end].iter().filter(|t| matches!(t, Item::Tool { .. })).count();
-        if calls < 2 {
+        // Folded, one call is a count too ("Ran 1 command"): no command
+        // shows until it is asked for.
+        if calls < if display == ToolDisplay::Folded { 1 } else { 2 } {
             rows.push(Row::Item { index: i, grouped: false, turn_end: turn_end(items, i) });
             i += 1;
             continue;
@@ -343,6 +346,11 @@ mod tests {
         assert_eq!(keys(&fold(&items, false, &opened)), ["g:a", "0", "1"]);
         assert_eq!(keys(&fold_as(&items, true, &none(), ToolDisplay::Folded)), ["g:a"]);
         assert!(fold_as(&items, true, &none(), ToolDisplay::Hidden).is_empty());
+        // Folded, a single call is a count as well, and opens when pressed.
+        let one = vec![said("go"), tool("x", "shell", "running", "")];
+        assert_eq!(keys(&fold_as(&one, true, &none(), ToolDisplay::Folded)), ["0", "g:x"]);
+        let opened = HashMap::from([("x".to_owned(), true)]);
+        assert_eq!(keys(&fold_as(&one, true, &opened, ToolDisplay::Folded)), ["0", "g:x", "1"]);
     }
 
     #[test]
