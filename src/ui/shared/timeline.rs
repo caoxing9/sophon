@@ -1689,6 +1689,9 @@ pub(crate) fn tracks() -> View {
     // The sub-agents' list as the user left it (open or folded), if they did.
     let subs_open = signal(None::<bool>);
     let work = computed(|| store::selected_id().map(|id| store::background(&id)).unwrap_or_default());
+    // The background list stays one line until opened: it runs on its own
+    // and should not take the view from the conversation.
+    let work_open = signal(false);
     view()
         .w_full()
         .max_w(px(CONTENT_MAX_WIDTH()))
@@ -1782,19 +1785,39 @@ pub(crate) fn tracks() -> View {
             if list.is_empty() {
                 return None;
             }
+            let open = work_open.get();
             Some(untracked(move || {
-                let mut c = card().mb(sp(S2)).px(sp(S3)).py(sp(S2)).gap(px(2.0)).child(section_label(t("Background")));
+                // Folded: a terminal and how many run, as a folded run of
+                // tool calls reads; what each is for shows when opened.
+                let head = nsh_base::button()
+                    .on_press(move || work_open.set(!open))
+                    .flex_row()
+                    .items_center()
+                    .gap(sp(S2))
+                    .h(px(26.0))
+                    .px(sp(S2))
+                    .rounded(px(R_LG))
+                    .hover(|st| st.bg(highlight()))
+                    .child(status_dot(|| Status::Running))
+                    .child(count_chip(Icon::Terminal, list.len(), FG_MUTED()))
+                    .child(view().flex_1())
+                    .child(icon(if open { Icon::ChevronDown } else { Icon::ChevronUp }, 13.0).text_color(FG_FAINT()));
+                let mut c = view().mb(sp(S1)).child(head);
+                if !open {
+                    return c;
+                }
                 for w in list.clone() {
                     let mut row = view()
                         .flex_row()
                         .items_center()
                         .gap(sp(S2))
-                        .h(px(30.0))
-                        .child(status_dot(|| Status::Running))
-                        .child(text(w.label.clone()).text_size(tx(TEXT_CODE)).font_family(mono_font).number_of_lines(1).flex_1());
+                        .h(px(26.0))
+                        .pl(sp(S6))
+                        .pr(sp(S1))
+                        .child(text(if w.label.is_empty() { t("Background task").to_owned() } else { w.label.clone() }).text_size(tx(TEXT_SM)).text_color(FG_MUTED()).number_of_lines(1).flex_1());
                     if let Some(token) = w.stop_token.clone() {
                         let item = w.id.clone();
-                        row = row.child(btn(t("Stop"), Variant::Outline, Sz::Sm, None, move || {
+                        row = row.child(icon_btn(Icon::X, Sz::Sm, "Stop", move || {
                             if let Some(agent) = store::selected_id() {
                                 store::stop_background(&agent, &item, &token);
                             }
