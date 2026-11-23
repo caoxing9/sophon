@@ -83,6 +83,9 @@ pub enum Event {
     Background(Value),
     /// A rewind is done, or why it could not be.
     Rewound(Result<(), String>),
+    /// What the user will likely say next, as the CLI guesses it once a
+    /// turn is over (Claude Code's prompt suggestions).
+    Suggestion(String),
     /// A turn is underway.
     Busy,
     /// Nothing is; how what was underway ended.

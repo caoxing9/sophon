@@ -3201,3 +3201,52 @@ done
     );
     assert!(!told.contains("second"), "{last}");
 }
+
+#[tokio::test]
+async fn claude_code_s_guess_at_the_next_message_is_offered_until_one_is_sent() {
+    let service = Service(tempfile::tempdir().unwrap());
+    // A `claude` that, once a turn is over, guesses the next message as
+    // Claude Code's prompt suggestions do (when asked to at initialize).
+    install(
+        service.0.path(),
+        "claude",
+        r#"#!/bin/sh
+say() { printf '%s\n' "$1"; }
+n=0
+while IFS= read -r line; do
+    case "$line" in
+        *'"subtype":"initialize"'*) printf '%s\n' "$line" >> initialized ;;
+        *'"type":"user"'*)
+            n=$((n + 1))
+            say '{"type":"system","subtype":"init","session_id":"s-1"}'
+            say '{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m","content":[{"type":"text","text":"ok"}]}}'
+            say '{"type":"result","is_error":false}'
+            say "{\"type\":\"prompt_suggestion\",\"suggestion\":\"go on with step $n\",\"session_id\":\"s-1\"}" ;;
+    esac
+done
+"#,
+    );
+    service.cli("start");
+    let mut socket = service.connect(true).await;
+    let created = ask(&mut socket, json!({"type":"workspace.create.request","source":{"kind":"directory","path":service.0.path()},
+        "agent":{"config":{"provider":"claude"},"initialPrompt":"first"}})).await;
+    let agent = created["payload"]["agent"]["id"].clone();
+    finished(&mut socket).await;
+    let suggested = async |socket: &mut Socket| {
+        for _ in 0..50 {
+            let timeline = ask(socket, json!({"type":"fetch_agent_timeline_request","agentId":agent})).await;
+            if let Some(text) = timeline["payload"]["agent"]["promptSuggestion"].as_str() {
+                return text.to_owned();
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        panic!("no suggestion came");
+    };
+    assert_eq!(suggested(&mut socket).await, "go on with step 1");
+    let asked = fs::read_to_string(service.0.path().join("initialized")).unwrap();
+    assert!(asked.contains(r#""promptSuggestions":true"#), "{asked}");
+    // A message sent: the guess is gone, and the next turn's comes.
+    ask(&mut socket, json!({"type":"send_agent_message_request","agentId":agent,"text":"go on with step 1"})).await;
+    finished(&mut socket).await;
+    assert_eq!(suggested(&mut socket).await, "go on with step 2");
+}
