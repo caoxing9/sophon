@@ -24,7 +24,7 @@ pub(crate) fn usage_page(compact: bool) -> impl IntoElement {
     scroll().flex_1().child(
         view()
             .w_full()
-            .max_w(px(CONTENT_MAX_WIDTH + 80.0))
+            .max_w(px(CONTENT_MAX_WIDTH() + 80.0))
             .self_center()
             .px(sp(S6))
             .py(sp(S8))

@@ -3310,6 +3310,7 @@ fn save_prefs() {
         "monoFontFamily": global::<Fonts>().with_untracked(|f| f.mono.clone()),
         "fontSize": global::<Look>().with_untracked(|l| l.font_size),
         "compact": global::<Look>().with_untracked(|l| l.compact),
+        "contentWidth": global::<Look>().with_untracked(|l| l.width.as_str()),
         "colorTheme": global::<ColorTheme>().with_untracked(|t| t.preset.clone()),
         "customBackground": global::<ColorTheme>().with_untracked(|t| t.background.map(hex_of)),
         "customAccent": global::<ColorTheme>().with_untracked(|t| t.accent.map(hex_of)),
@@ -3474,6 +3475,7 @@ pub(crate) fn load_prefs() {
     apply_look(Look {
         font_size: v.get("fontSize").and_then(serde_json::Value::as_f64).map_or(DEFAULT_FONT_SIZE, font_size_of),
         compact: v.get("compact").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        width: ContentWidth::of(v.get("contentWidth").and_then(serde_json::Value::as_str).unwrap_or_default()),
     });
     global::<Settings>().update(|s| {
         s.send_behavior = behavior;
@@ -3565,11 +3567,49 @@ struct Fonts {
 struct Look {
     font_size: f32,
     compact: bool,
+    width: ContentWidth,
 }
 
 impl Default for Look {
     fn default() -> Self {
-        Look { font_size: DEFAULT_FONT_SIZE, compact: false }
+        Look { font_size: DEFAULT_FONT_SIZE, compact: false, width: ContentWidth::Standard }
+    }
+}
+
+/// How wide the conversation and the composer go (`contentWidth`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(crate) enum ContentWidth {
+    #[default]
+    Standard,
+    Wide,
+    /// The window's width, less its margins.
+    Full,
+}
+
+impl ContentWidth {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            ContentWidth::Standard => "standard",
+            ContentWidth::Wide => "wide",
+            ContentWidth::Full => "full",
+        }
+    }
+
+    fn of(s: &str) -> Self {
+        match s {
+            "wide" => ContentWidth::Wide,
+            "full" => ContentWidth::Full,
+            _ => ContentWidth::Standard,
+        }
+    }
+
+    /// The most the conversation's column takes, in points.
+    pub(crate) fn points(self) -> f32 {
+        match self {
+            ContentWidth::Standard => 820.0,
+            ContentWidth::Wide => 1080.0,
+            ContentWidth::Full => 100_000.0,
+        }
     }
 }
 
@@ -3581,6 +3621,24 @@ thread_local! {
     /// (text, spacing) factors for `kit::tx` and `kit::sp`, which run for
     /// every view made: kept beside the global, not read through it.
     static SCALE: std::cell::Cell<(f32, f32)> = const { std::cell::Cell::new((1.0, 1.0)) };
+    /// The column's width, for `kit::CONTENT_MAX_WIDTH`, as `SCALE` is kept.
+    static WIDTH: std::cell::Cell<ContentWidth> = const { std::cell::Cell::new(ContentWidth::Standard) };
+}
+
+/// The conversation column's width as set (read as views are made).
+pub(crate) fn content_width() -> ContentWidth {
+    WIDTH.get()
+}
+
+/// The column's width setting, tracked.
+pub(crate) fn content_width_tracked() -> ContentWidth {
+    global::<Look>().with(|l| l.width)
+}
+
+pub(crate) fn set_content_width(width: ContentWidth) {
+    let look = global::<Look>().with_untracked(|l| *l);
+    apply_look(Look { width, ..look });
+    save_prefs();
 }
 
 /// The factors text sizes and spacing are multiplied by.
@@ -3590,6 +3648,7 @@ pub(crate) fn ui_scale() -> (f32, f32) {
 
 fn apply_look(look: Look) {
     SCALE.set((look.font_size / DEFAULT_FONT_SIZE, if look.compact { COMPACT } else { 1.0 }));
+    WIDTH.set(look.width);
     global::<Look>().set(look);
 }
 
@@ -3706,7 +3765,7 @@ fn apply_color_theme(theme: &ColorTheme) {
         }
         None => {
             set_color_scheme(global::<Theme>().with_untracked(|t| t.0));
-            preset.unwrap_or(Palette::IVORY).with_accent(theme.accent)
+            preset.unwrap_or(Palette::IVORY).with_accent(theme.accent, &theme.preset)
         }
     };
     set_palette(palette);
@@ -5734,7 +5793,7 @@ struct LastSaidRev(u64);
 /// attachments alone.
 fn as_name(text: &str) -> Option<String> {
     use crate::ui::shared::composer_doc::{Segment, segments};
-    let text = text.split(crate::ui::shared::timeline::CONTEXT_MARK).next().unwrap_or("");
+    let text = crate::notes::body(text).split(crate::ui::shared::timeline::CONTEXT_MARK).next().unwrap_or("");
     let words: String = segments(text)
         .into_iter()
         .map(|s| match s {
@@ -5928,6 +5987,39 @@ pub(crate) fn submit_form() {
             })
             .collect(),
     }));
+}
+
+// ---------------------------------------------------------- notes
+
+/// Each conversation's notes on its replies, waiting for the next message.
+#[derive(Clone, Default, PartialEq)]
+struct Notes(HashMap<String, Vec<crate::notes::Note>>);
+
+/// Conversation `agent`'s notes waiting (tracked).
+pub(crate) fn notes(agent: &str) -> Vec<crate::notes::Note> {
+    global::<Notes>().with(|n| n.0.get(agent).cloned().unwrap_or_default())
+}
+
+/// Adds a note to the open conversation's next message.
+pub(crate) fn add_note(note: crate::notes::Note) {
+    let Some(agent) = selected_id() else { return };
+    global::<Notes>().update(|n| n.0.entry(agent).or_default().push(note));
+}
+
+pub(crate) fn remove_note(agent: &str, index: usize) {
+    global::<Notes>().update(|n| {
+        if let Some(list) = n.0.get_mut(agent)
+            && index < list.len()
+        {
+            list.remove(index);
+        }
+    });
+}
+
+pub(crate) fn clear_notes(agent: &str) {
+    global::<Notes>().update(|n| {
+        n.0.remove(agent);
+    });
 }
 
 // ---------------------------------------------------------- agent actions
@@ -6617,7 +6709,13 @@ pub(crate) fn turns() -> Vec<(usize, String, String)> {
         let mut out: Vec<(usize, String, String)> = Vec::new();
         for (n, item) in t.items.iter().enumerate() {
             match item {
-                Item::User { text, .. } => out.push((n, text.lines().next().unwrap_or_default().to_owned(), String::new())),
+                Item::User { text, .. } => {
+                    // Its words; a message of notes alone, its first comment.
+                    let (notes, body) = crate::notes::split(text);
+                    let first = body.lines().next().filter(|l| !l.trim().is_empty()).map(str::to_owned);
+                    let first = first.or_else(|| notes.first().map(|n| if n.comment.is_empty() { n.quote.clone() } else { n.comment.clone() }));
+                    out.push((n, first.unwrap_or_default().lines().next().unwrap_or_default().to_owned(), String::new()));
+                }
                 Item::Assistant { text, .. } => {
                     if let Some(last) = out.last_mut().filter(|l| l.2.is_empty()) {
                         // Its start, as plain words: no Markdown marks.

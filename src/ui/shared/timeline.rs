@@ -233,7 +233,7 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
         // Close together: a turn's steps and words read as one piece.
         .py(px(if MOBILE { 6.0 } else { 2.0 }))
         .w_full()
-        .max_w(px(CONTENT_MAX_WIDTH + 2.0 * S6))
+        .max_w(px(CONTENT_MAX_WIDTH() + 2.0 * S6))
         .self_center()
         .rounded(px(R_LG))
         .bg(move || match hit.get() {
@@ -250,7 +250,7 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                 RowKind::User if MOBILE => user_row(item, view().child(dynamic(move || {
                     let selecting = index.get().is_some() && selecting_text() == index.get();
                     Some(untracked(move || {
-                        let bubble = view().px(px(14.0)).py(px(9.0)).rounded(px(18.0)).bg(tint(ACCENT(), 0.10));
+                        let bubble = view().px(px(14.0)).py(px(9.0)).rounded(px(18.0)).bg(user_bubble());
                         if selecting {
                             select_in_place(bubble.child(user_text(item, true))).items_end().into_element()
                         } else {
@@ -280,7 +280,7 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                             .gap(px(4.0))
                             .on_mouse_enter(move |_: &MouseEvent| hover.set(true))
                             .on_mouse_leave(move |_: &MouseEvent| hover.set(false))
-                            .child(view().px(px(14.0)).py(px(9.0)).rounded(px(18.0)).bg(tint(ACCENT(), 0.10)).selectable(true).on_text_selection_change(take_copy).child(user_text(item, true)))
+                            .child(view().px(px(14.0)).py(px(9.0)).rounded(px(18.0)).bg(user_bubble()).selectable(true).on_text_selection_change(take_copy).child(user_text(item, true)))
                             .child(user_actions(item).opacity(move || if hover.get() { 1.0_f32 } else { 0.0 }).transition_opacity()),
                     )
                     .into_element()
@@ -316,6 +316,27 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                     .into_element(),
                 RowKind::Assistant => {
                     let hover = signal(false);
+                    let chosen = signal(Chosen::default());
+                    // Words chosen in it offer a note where the pointer let
+                    // them go; a press on that opens the note's card there.
+                    let pointer = signal((0.0_f32, 0.0_f32));
+                    let offer = signal(None::<(f32, f32, String)>);
+                    let noting = signal(None::<(f32, f32, String)>);
+                    effect(move || {
+                        let c = chosen.get();
+                        if c.cleared.is_none() && !c.words.trim().is_empty() {
+                            let (x, y) = pointer.get_untracked();
+                            offer.set(Some((x, y, c.words.trim().to_owned())));
+                        } else {
+                            // A moment later: the press on "Note" itself
+                            // lets the words go first.
+                            set_timeout(std::time::Duration::from_millis(400), move || {
+                                if chosen.with_untracked(|c| c.cleared.is_some() || c.words.trim().is_empty()) {
+                                    offer.set(None);
+                                }
+                            });
+                        }
+                    });
                     // One piece of the reply as Markdown, as the whole is shown.
                     let piece = move |markdown: Box<dyn Fn() -> String>| {
                         text_view()
@@ -327,11 +348,16 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                             // While searching, the words found are marked in the
                             // text itself, not only the message they are in.
                             .markdown(move || {
-                                let body = markdown();
+                                // A file's path written as code, a chip of the file.
+                                let here = store::on_this_mac();
+                                let body = super::file_links::link_paths(&markdown(), |p| !here || super::file_links::exists_here(p));
                                 let f = store::find();
                                 Some(SharedString::from(if f.open && hit.get() > 0 { mark_matches(&body, &f.query) } else { body }))
                             })
                             .options(move || MarkdownOptions { streaming: streaming.get(), ..MarkdownOptions::default() })
+                            // A file's path, a chip that opens it.
+                            .extensions(vec![super::file_links::extension()])
+                            .render_custom(super::file_links::chip)
                             .selectable(true)
                             .gap_3()
                             .text_size(tx(TEXT_CONTENT))
@@ -345,7 +371,8 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                     view()
                         .on_mouse_enter(move |_: &MouseEvent| hover.set(true))
                         .on_mouse_leave(move |_: &MouseEvent| hover.set(false))
-                        .child(copy_area(dynamic(move || {
+                        .on_mouse_move(move |e: &MouseEvent| pointer.set((e.position.x.0, e.position.y.0)))
+                        .child(copy_area_choosing(chosen, dynamic(move || {
                             let list = pieces.get();
                             Some(untracked(move || {
                                 if !list.iter().any(|p| p.quoted.is_some()) {
@@ -366,7 +393,9 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                         // Under the reply (as T3 Code's): copy it, fork the
                         // conversation, quote it in the next message, and when
                         // it was written; there under the pointer once written.
-                        .child(when(turn_end, move || reply_actions(item, text_of, computed(move || !streaming.get() && hover.get()))))
+                        .child(when(turn_end, move || reply_actions(item, text_of, chosen, computed(move || !streaming.get() && hover.get()))))
+                        // Over the reply, so last.
+                        .child(super::notes::selection_layer(offer, noting))
                         .into_element()
                 }
                 // The agent's thinking, folded to one line ("Thinking"):
@@ -538,6 +567,7 @@ pub(crate) fn mark_matches(markdown: &str, query: &str) -> String {
 /// A user message as copied: what was written, without another
 /// conversation's words sent along with it (`store::conversation_context`).
 fn message_words(text: &str) -> String {
+    let text = crate::notes::body(text);
     match text.find(CONTEXT_MARK) {
         Some(at) => text[..at].trim_end().to_owned(),
         None => text.to_owned(),
@@ -677,7 +707,48 @@ fn copy_area(content: impl IntoElement) -> View {
     view().selectable(true).on_text_selection_change(take_copy).child(content)
 }
 
+/// The words last chosen in a reply, and when the choice was let go (a
+/// press on the reply's Quote button may clear it just before it lands).
+#[derive(Clone, Default, PartialEq)]
+struct Chosen {
+    words: String,
+    cleared: Option<std::time::Instant>,
+}
+
+impl Chosen {
+    /// What a quote takes now: the words chosen, if still chosen or let go
+    /// a moment ago.
+    fn words(&self) -> Option<&str> {
+        let recent = self.cleared.is_none_or(|at| at.elapsed() < std::time::Duration::from_millis(600));
+        (recent && !self.words.trim().is_empty()).then_some(self.words.as_str())
+    }
+}
+
+/// [`copy_area`] that also keeps what is chosen in it, for Quote.
+fn copy_area_choosing(chosen: Signal<Chosen>, content: impl IntoElement) -> View {
+    view()
+        .selectable(true)
+        .on_text_selection_change(move |e: &nsh_core::element::TextSelectionEvent| {
+            take_copy(e);
+            chosen.update(|c| {
+                if !e.text.trim().is_empty() {
+                    *c = Chosen { words: e.text.clone(), cleared: None };
+                } else if c.cleared.is_none() && !c.words.is_empty() {
+                    c.cleared = Some(std::time::Instant::now());
+                }
+            });
+        })
+        .child(content)
+}
+
 pub(crate) const CONTEXT_MARK: &str = "\n\n--- The conversation \"";
+
+/// A sent message's bubble: the surface a step above the page, opaque
+/// and without the accent's hue (a black or pale accent would vanish in
+/// it, a loud one shout).
+fn user_bubble() -> AdaptiveColor {
+    SURFACE2()
+}
 
 fn user_text(item: Memo<Option<Item>>, selectable: bool) -> impl IntoElement {
     use crate::ui::shared::composer_doc::{Segment, is_image_name, segments};
@@ -688,6 +759,8 @@ fn user_text(item: Memo<Option<Item>>, selectable: bool) -> impl IntoElement {
         });
         // Another conversation's words sent with it (`store::conversation_
         // context`) are the agent's to read, not the bubble's to show.
+        // Its notes show as a chip above it (`user_row`).
+        let body = crate::notes::body(&body).to_owned();
         let body = match body.find(CONTEXT_MARK) {
             Some(at) => body[..at].trim_end().to_owned(),
             None => body,
@@ -776,9 +849,13 @@ fn user_row(item: Memo<Option<Item>>, bubble: impl IntoElement + 'static) -> imp
                 .iter()
                 .filter(|s| matches!(s, crate::ui::shared::composer_doc::Segment::Chip(n) if crate::ui::shared::composer_doc::is_image_name(n)))
                 .count();
-            (images.iter().skip(named).cloned().collect::<Vec<_>>(), !text.trim().is_empty())
+            (images.iter().skip(named).cloned().collect::<Vec<_>>(), !crate::notes::body(text).trim().is_empty())
         }
         _ => (vec![], true),
+    });
+    let notes = item.with_untracked(|i| match i {
+        Some(Item::User { text, .. }) => crate::notes::split(text).0,
+        _ => Vec::new(),
     });
     let mut thumbs = view().flex_row().flex_wrap().justify_end().gap(px(6.0));
     for uri in &images {
@@ -797,6 +874,7 @@ fn user_row(item: Memo<Option<Item>>, bubble: impl IntoElement + 'static) -> imp
         .items_end()
         .gap(px(6.0))
         .max_w(relative(0.82))
+        .when(!notes.is_empty(), |v| v.child(super::notes::sent_notes(notes)))
         .when(!images.is_empty(), |v| v.child(thumbs))
         .when(has_text, |v| v.child(bubble))
 }
@@ -901,13 +979,14 @@ fn reply_sheet(body: String, index: Option<usize>) {
 /// Rewind from a user message (the message menu).
 /// The row under a written reply: copy, fork, quote, and its time, each
 /// named under the pointer.
-fn reply_actions(item: Memo<Option<Item>>, text_of: impl Fn() -> String + Copy + 'static, shown: Memo<bool>) -> impl IntoElement {
+fn reply_actions(item: Memo<Option<Item>>, text_of: impl Fn() -> String + Copy + 'static, chosen: Signal<Chosen>, shown: Memo<bool>) -> impl IntoElement {
     let at = computed(move || match item.get() {
         Some(Item::Assistant { at, .. }) => at.as_deref().and_then(sent_at),
         _ => None,
     });
     let tip = |label: &'static str| text(label).text_size(tx(TEXT_XS)).px(sp(S2)).py(px(3.0)).rounded(px(R_MD)).bg(SURFACE0()).border_1().border_color(BORDER()).into_element();
-    let action = move |glyph: Icon, label: &'static str, press: Box<dyn Fn()>| {
+    // Lit (the accent) while words in the reply are chosen: it quotes those.
+    let lit_action = move |glyph: Icon, label: &'static str, lit: Memo<bool>, press: Box<dyn Fn()>| {
         view().tooltip(tip(label)).child(
             nsh_base::button()
                 .on_press(move || press())
@@ -918,9 +997,10 @@ fn reply_actions(item: Memo<Option<Item>>, text_of: impl Fn() -> String + Copy +
                 .items_center()
                 .justify_center()
                 .hover(|s| s.bg(highlight()))
-                .child(icon(glyph, 14.0).text_color(FG_MUTED())),
+                .child(icon(glyph, 14.0).text_color(move || if lit.get() { ACCENT() } else { FG_MUTED() })),
         )
     };
+    let action = move |glyph: Icon, label: &'static str, press: Box<dyn Fn()>| lit_action(glyph, label, computed(|| false), press);
     view()
         .flex_row()
         .items_center()
@@ -940,7 +1020,15 @@ fn reply_actions(item: Memo<Option<Item>>, text_of: impl Fn() -> String + Copy +
             }),
         ))
         .child(action(Icon::GitBranch, t("Fork conversation"), Box::new(store::fork_selected)))
-        .child(action(Icon::TextQuote, t("Quote in a message"), Box::new(move || crate::ui::shared::composer::attach_as_context(&text_of()))))
+        .child(lit_action(
+            Icon::TextQuote,
+            t("Quote in a message"),
+            computed(move || chosen.with(|c| c.cleared.is_none() && !c.words.trim().is_empty())),
+            Box::new(move || {
+                let quoted = chosen.with_untracked(|c| c.words().map(str::to_owned)).unwrap_or_else(text_of);
+                crate::ui::shared::composer::attach_as_context(&quoted);
+            }),
+        ))
         .child(text(move || at.get().unwrap_or_default()).text_size(tx(TEXT_XS)).text_color(FG_FAINT()).ml(sp(S1)))
 }
 
@@ -1361,7 +1449,7 @@ fn todo_card(item: Memo<Option<Item>>) -> impl IntoElement {
 /// form, a plan to approve, or a tool to allow.
 pub(crate) fn permissions() -> View {
     let pending = computed(|| store::selected_agent().map(|a| a.pending).unwrap_or_default());
-    view().w_full().max_w(px(CONTENT_MAX_WIDTH)).self_center().child(dynamic(move || {
+    view().w_full().max_w(px(CONTENT_MAX_WIDTH())).self_center().child(dynamic(move || {
         let first = pending.get().into_iter().next()?;
         Some(untracked(move || {
             let questions = first.input.as_ref().and_then(questions_of).filter(|q| !q.is_empty());
@@ -1575,7 +1663,7 @@ pub(crate) fn tracks() -> View {
     let work = computed(|| store::selected_id().map(|id| store::background(&id)).unwrap_or_default());
     view()
         .w_full()
-        .max_w(px(CONTENT_MAX_WIDTH))
+        .max_w(px(CONTENT_MAX_WIDTH()))
         .self_center()
         .child(dynamic(move || {
             let lines = todos.get()?;
@@ -1718,7 +1806,7 @@ pub(crate) fn subagent_pane(parent: String, id: String) -> impl IntoElement {
             Some(untracked(move || match list.clone() {
                 None => view().flex_1().items_center().justify_center().child(loader(None)).into_element(),
                 Some(list) => {
-                    let mut col = view().gap(sp(S2)).px(sp(S6)).py(sp(S4)).w_full().max_w(px(CONTENT_MAX_WIDTH + 2.0 * S6)).self_center();
+                    let mut col = view().gap(sp(S2)).px(sp(S6)).py(sp(S4)).w_full().max_w(px(CONTENT_MAX_WIDTH() + 2.0 * S6)).self_center();
                     for item in list {
                         col = col.child(static_row(item));
                     }
@@ -1981,7 +2069,7 @@ fn thinking(running: Memo<bool>) -> impl IntoElement {
             };
             view()
                 .w_full()
-                .max_w(px(CONTENT_MAX_WIDTH + 2.0 * S6))
+                .max_w(px(CONTENT_MAX_WIDTH() + 2.0 * S6))
                 .self_center()
                 // The rows' own inset, so the words line up with the text.
                 .px(sp(S6))

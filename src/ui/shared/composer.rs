@@ -121,9 +121,13 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         }
         match target {
             Target::Agent => {
+                // The notes on replies go ahead of the words.
+                let notes = store::selected_id().map(|id| untracked(|| store::notes(&id))).unwrap_or_default();
+                let message = crate::notes::with_notes(&notes, &out.message);
                 if let Some(id) = store::selected_id()
-                    && store::send_message(&out.message)
+                    && store::send_message(&message)
                 {
+                    store::clear_notes(&id);
                     store::set_draft(&id, "");
                     // Its attachments went with it (sent, or queued with
                     // it): their chips go from the composer.
@@ -256,7 +260,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
     // agent's settings and its context under the card, at the right.
     view()
         .w_full()
-        .max_w(px(CONTENT_MAX_WIDTH))
+        .max_w(px(CONTENT_MAX_WIDTH()))
         .self_center()
         .child(elsewhere_bar(live))
         .child(queue_track(live))
@@ -275,11 +279,11 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         })
         .rounded(px(22.0))
         .border_color(move || if over.get() { ACCENT().into() } else { glass_edge() })
-        .flex_row()
-        .items_end()
-        .gap(sp(S1))
         .px(sp(S2))
         .py(sp(S2))
+        // The notes on replies waiting for this message, over its text.
+        .child(super::notes::composer_notes(live))
+        .child(view().w_full().flex_row().items_end().gap(sp(S1))
         .child(
             nsh_base::button()
                 .on_press(with_key(pick_any_into))
@@ -308,7 +312,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                 .justify_center()
                 .hover(|s| s.opacity(0.85))
                 .child(view().w(px(9.0)).h(px(9.0)).rounded(px(2.0)).bg(SURFACE0()))
-        })))
+        }))))
         .child(
             view()
                 .flex_row()
@@ -557,7 +561,7 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
             return None;
         };
         // (icon, label, detail, what goes in, a folder, the label in code type)
-        let rows: Vec<(Icon, String, String, String, bool, bool)> = match &trigger {
+        let rows: Vec<(Option<Icon>, String, String, String, bool, bool)> = match &trigger {
             Trigger::Slash(prefix) => {
                 let agent = store::selected_id()?;
                 store::commands(&agent)
@@ -572,7 +576,8 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
                             Some(h) => format!("{} · {h}", c.description),
                             None => c.description,
                         };
-                        (if c.skill { Icon::Sparkles } else { Icon::Slash }, format!("/{}", c.name), detail, insert, false, true)
+                        // No icon: the name's own `/` says what it is.
+                        (None, format!("/{}", c.name), detail, insert, false, true)
                     })
                     .collect()
             }
@@ -596,19 +601,19 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
                     .filter(|(a, name)| q.is_empty() || name.to_lowercase().contains(&q) || a.title.to_lowercase().contains(&q))
                     .collect();
                 found.sort_by(|x, y| y.0.updated_at.cmp(&x.0.updated_at));
-                let mut rows: Vec<(Icon, String, String, String, bool, bool)> = found
+                let mut rows: Vec<(Option<Icon>, String, String, String, bool, bool)> = found
                     .into_iter()
                     .take(if q.is_empty() { 4 } else { 5 })
                     .map(|(a, name)| {
                         let place = store::project_name_of(&a).unwrap_or_else(|| crate::daemon::model::folder_name(&a.cwd));
                         let when = crate::ui::mobile::time::ago(&a.updated_at);
                         let detail = if when.is_empty() { place } else { format!("{place} · {when}") };
-                        (Icon::Bot, name, detail, format!("{}{}", composer_doc::CONVERSATION, a.id), false, false)
+                        (Some(Icon::Bot), name, detail, format!("{}{}", composer_doc::CONVERSATION, a.id), false, false)
                     })
                     .collect();
                 rows.extend(store::suggestions(&cwd, query).into_iter().take(9usize.saturating_sub(rows.len())).map(|(path, dir)| {
                     let rel = path.strip_prefix(&cwd).map(|p| p.trim_start_matches('/').to_owned()).unwrap_or(path);
-                    (if dir { Icon::Folder } else { Icon::FileText }, rel.clone(), String::new(), rel, dir, true)
+                    (Some(if dir { Icon::Folder } else { Icon::FileText }), rel.clone(), String::new(), rel, dir, true)
                 }));
                 rows
             }
@@ -655,7 +660,7 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
                         .px(sp(S2))
                         .rounded(px(R_LG))
                         .hover(|s| s.bg(highlight()))
-                        .child(icon(glyph, 15.0).text_color(FG_MUTED()))
+                        .when_some(glyph, |v, glyph| v.child(icon(glyph, 15.0).text_color(FG_MUTED())))
                         .child(if code {
                             text(label).text_size(tx(TEXT_BASE)).font_family(mono_font).text_color(FG()).flex_shrink_0()
                         } else {
@@ -1166,7 +1171,7 @@ pub(crate) fn thinking_options(live: bool) -> Vec<crate::daemon::model::Opt> {
 /// A hint line under a composer (errors, where it starts).
 pub(crate) fn hint(message: impl Fn() -> Option<(String, bool)> + 'static) -> impl IntoElement {
     let message = computed(message);
-    view().w_full().max_w(px(CONTENT_MAX_WIDTH)).self_center().px(sp(S2)).child(dynamic(move || {
+    view().w_full().max_w(px(CONTENT_MAX_WIDTH())).self_center().px(sp(S2)).child(dynamic(move || {
         let (m, error) = message.get()?;
         Some(untracked(move || {
             view()
