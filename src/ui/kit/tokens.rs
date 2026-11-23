@@ -258,6 +258,8 @@ pub(crate) const DESTRUCTIVE: AdaptiveColor = pair(0xb53333, 0xe5675a);
 // Status: the text/icon band and the louder dot band.
 pub(crate) const SUCCESS: AdaptiveColor = pair(0x3f7a4a, 0x7cbf8a);
 pub(crate) const DANGER: AdaptiveColor = pair(0xa8402f, 0xe9907f);
+/// A failure count beside muted text: red, but no louder than the text.
+pub(crate) const DANGER_MUTED: AdaptiveColor = pair(0xa0584a, 0xb4746a);
 pub(crate) const WARNING: AdaptiveColor = pair(0x8a5e14, 0xd9a85c);
 pub(crate) const DOT_SUCCESS: AdaptiveColor = pair(0x23a55a, 0x3ccf74);
 pub(crate) const DOT_RUNNING: AdaptiveColor = pair(0x3b82f6, 0x60a5fa);

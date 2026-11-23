@@ -1271,33 +1271,61 @@ fn group_row(group: Memo<Option<Group>>) -> impl IntoElement {
                 .rotate(move || Radians(if open.get() { std::f32::consts::FRAC_PI_2 } else { 0.0 }))
                 .transition_transform(),
         )
-        .child(
-            text(move || summary.with(|s| s.describe()))
-                .text_size(tx(TEXT_BASE))
-                .text_color(FG_MUTED())
-                .number_of_lines(1)
-                .flex_shrink(1.0),
-        )
-        // Failures show on the summary, so a folded group hides no error.
+        // What the run did, as an icon and a count per kind; the words
+        // are in the tooltip.
         .child(dynamic(move || {
-            let failed = summary.with(|s| s.failures())?;
+            let counts = summary.with(|s| s.counts());
+            let tip = summary.with(|s| match s.failures() {
+                Some(f) => format!("{} · {f}", s.describe()),
+                None => s.describe(),
+            });
             Some(untracked(move || {
-                text(format!("· {failed}")).text_size(tx(TEXT_BASE)).text_color(DANGER).flex_shrink_0().into_element()
+                let mut row = view().flex_row().items_center().gap(sp(S3)).flex_shrink(1.0);
+                for (kind, n) in counts {
+                    row = row.child(count_chip(tool_icon(kind, ""), n, FG_MUTED()));
+                }
+                view()
+                    .tooltip(
+                        glass_strong(view())
+                            .px(sp(S2))
+                            .py(sp(S1))
+                            .rounded(px(R_LG))
+                            .child(text(tip).text_size(tx(TEXT_XS)))
+                            .into_element(),
+                    )
+                    .child(row)
+                    .into_element()
             }))
         }))
         .child(view().flex_1())
         .child(dynamic(move || {
-            let (running, failed) = summary.with(|s| (s.running > 0, s.failed > 0));
+            let (running, failed) = summary.with(|s| (s.running > 0, s.failed));
+            // Failures are counted here, beside the row's status, so a
+            // folded group hides no error and the red shows once.
             Some(untracked(move || {
-                if running {
-                    status_dot(|| Status::Running).into_element()
-                } else if failed {
-                    icon(Icon::X, 14.0).text_color(DANGER).into_element()
-                } else {
-                    icon(Icon::Check, 14.0).text_color(SUCCESS).into_element()
+                let mut end = view().flex_row().items_center().gap(sp(S2)).flex_shrink_0();
+                if failed > 0 {
+                    end = end.child(count_chip(Icon::X, failed, DANGER_MUTED));
                 }
+                if running {
+                    end = end.child(status_dot(|| Status::Running));
+                } else if failed == 0 {
+                    end = end.child(icon(Icon::Check, 14.0).text_color(SUCCESS));
+                }
+                end.into_element()
             }))
         }))
+}
+
+/// A kind of call on a folded row: its icon and how many there were.
+fn count_chip(glyph: Icon, n: usize, color: AdaptiveColor) -> impl IntoElement {
+    view()
+        .flex_row()
+        .items_center()
+        .gap(px(4.0))
+        .flex_shrink_0()
+        .child(icon(glyph, 13.0).text_color(color))
+        .child(text(n.to_string()).text_size(tx(TEXT_SM)).text_color(color))
 }
 
 /// Thoughts shown whole, by how they begin: the list recycles its rows,
