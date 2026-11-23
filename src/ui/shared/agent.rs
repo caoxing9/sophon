@@ -52,7 +52,6 @@ pub(crate) fn agent_pane(bar: bool) -> impl IntoElement {
                 .pb(px(if MOBILE { S2 } else { S4 }))
                 .child(timeline::tracks())
                 .child(timeline::permissions())
-                .when(!MOBILE, |v| v.child(context_bar()))
                 .child(composer::composer(Target::Agent, t("Message the agent…"))),
         )
 }
@@ -238,9 +237,10 @@ pub(crate) fn dropup_or_down_outline() -> impl IntoElement {
 }
 
 
-/// Where the agent works, over the composer: the computer, the folder and
-/// branch, and the uncommitted changes (a press shows them).
-fn context_bar() -> impl IntoElement {
+/// Where the agent works, under the composer at its left (the desktop's):
+/// the computer, the folder and branch, and the uncommitted changes (a
+/// press shows them). Plain, no frame.
+pub(crate) fn context_bar() -> impl IntoElement {
     let ws = computed(store::current_workspace);
     let host = computed(|| {
         let named = store::current_host().map(|h| h.label());
@@ -276,18 +276,10 @@ fn context_bar() -> impl IntoElement {
         .flex_row()
         .items_center()
         .gap(sp(S3))
-        .h(px(34.0))
-        // As wide as the composer under it.
-        .w_full()
-        .max_w(px(CONTENT_MAX_WIDTH))
-        .self_center()
-        .mb(sp(S2))
-        .pl(sp(S3))
-        .pr(sp(S1))
-        .rounded(px(R_LG))
-        .bg(tint(SURFACE1(), 0.7))
-        .border_1()
-        .border_color(tint(BORDER(), 0.7))
+        .flex_1()
+        .min_w(px(0.0))
+        .pl(sp(S2))
+        .pr(sp(S2))
         // Nothing past its edge: a long name ends in an ellipsis.
         .overflow_hidden()
         .child(item(Icon::Monitor, host))
@@ -307,7 +299,6 @@ fn context_bar() -> impl IntoElement {
                     .into_element()
             }))
         }))
-        .child(view().flex_1())
         .child(dynamic(move || {
             let (add, del) = diff.get();
             (add + del > 0).then(|| {

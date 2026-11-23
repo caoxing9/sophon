@@ -58,6 +58,7 @@ pub(crate) fn bind() {
             // Each Fn press, numbered: a hold's timer starts only its own.
             let press = std::rc::Rc::new(std::cell::Cell::new(0u64));
             let started = std::rc::Rc::new(std::cell::Cell::new(false));
+            let command_press = std::rc::Rc::new(std::cell::Cell::new(0u64));
             while let Some(heard) = rx.recv().await {
                 let fn_chosen = store::dictation_key().is_some_and(|k| k.is_fn());
                 match heard {
@@ -82,6 +83,26 @@ pub(crate) fn bind() {
                             }
                         });
                     }
+                    // ⌘ held alone a moment shows the sidebar's numbers
+                    // (not for ⌘C and the like, a key pressed meanwhile);
+                    // they go when it is let go, or when the keyboard
+                    // says it is not held (the app left with ⌘⇥).
+                    Heard::Command(true) => {
+                        let n = command_press.get() + 1;
+                        command_press.set(n);
+                        let command_press = command_press.clone();
+                        set_timeout(std::time::Duration::from_millis(350), move || {
+                            if command_press.get() == n && crate::platform::fn_key::command_down() {
+                                store::set_command_held(true);
+                                watch_command_release();
+                            }
+                        });
+                    }
+                    Heard::Command(false) => {
+                        command_press.set(command_press.get() + 1);
+                        store::set_command_held(false);
+                    }
+                    Heard::CommandKey if !untracked(store::command_held) => command_press.set(command_press.get() + 1),
                     Heard::FnUp | Heard::FnCombined if fn_chosen => {
                         press.set(press.get() + 1);
                         if started.replace(false) && crate::ui::shared::composer::dictating() {
@@ -100,6 +121,22 @@ pub(crate) fn bind() {
     // Command and Control key for its own keymap and drops those it has no
     // command for, the menu's too: it runs these itself.
     crate::ui::shared::composer_doc::set_app_keys(keys(true));
+}
+
+/// While the sidebar's numbers show: hides them once ⌘ is no longer held,
+/// even if its release went unheard (another app had the keyboard).
+#[cfg(target_os = "macos")]
+fn watch_command_release() {
+    set_timeout(std::time::Duration::from_millis(200), || {
+        if !store::command_held() {
+            return;
+        }
+        if crate::platform::fn_key::command_down() {
+            watch_command_release();
+        } else {
+            store::set_command_held(false);
+        }
+    });
 }
 
 /// The app's shortcuts and what they do; `with_menu` adds the menu items'

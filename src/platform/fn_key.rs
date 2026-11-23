@@ -41,6 +41,17 @@ pub(crate) enum Heard {
     Cancelled,
     /// Recording: Delete, no shortcut.
     Cleared,
+    /// ⌘ went down on its own (`true`) or stopped being alone: let go,
+    /// another modifier added.
+    Command(bool),
+    /// A key pressed while ⌘ is held.
+    CommandKey,
+}
+
+/// Whether ⌘ is down right now (and no other modifier): what the
+/// keyboard holds, heard or not (the app may have lost focus meanwhile).
+pub(crate) fn command_down() -> bool {
+    mods_of(NSEvent::modifierFlags_class()) == MOD_CMD
 }
 
 /// What the monitor matches and whether it records, set from the engine's
@@ -70,6 +81,8 @@ pub(crate) fn record(on: bool) {
 thread_local! {
     /// Fn is down, and nothing else happened since.
     static CLEAN: Cell<bool> = const { Cell::new(false) };
+    /// ⌘ alone is down, as last reported.
+    static COMMAND: Cell<bool> = const { Cell::new(false) };
 }
 
 unsafe extern "C" {
@@ -152,6 +165,9 @@ pub(crate) fn watch(heard: impl Fn(Heard) + Send + 'static) {
                 if fn_was_alone {
                     heard(Heard::FnCombined);
                 }
+                if mods & MOD_CMD != 0 {
+                    heard(Heard::CommandKey);
+                }
                 if shortcut == Some((code, mods)) {
                     if !e.isARepeat() {
                         heard(Heard::Shortcut);
@@ -161,6 +177,10 @@ pub(crate) fn watch(heard: impl Fn(Heard) + Send + 'static) {
             } else if kind == NSEventType::FlagsChanged {
                 let flags = e.modifierFlags();
                 let others = mods_of(flags) != 0;
+                let command = mods_of(flags) == MOD_CMD && !flags.contains(NSEventModifierFlags::Function);
+                if COMMAND.with(|c| c.replace(command)) != command && !recording {
+                    heard(Heard::Command(command));
+                }
                 if e.keyCode() == FN_KEY {
                     if flags.contains(NSEventModifierFlags::Function) {
                         if !others {
