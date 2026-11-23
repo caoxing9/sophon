@@ -75,6 +75,33 @@ pub(crate) fn project_list(actions: bool, empty: impl Fn() -> AnyElement + 'stat
     }))
 }
 
+/// While ⌘ is held (macOS): the key, ⌘1–⌘9, that opens this row, if it
+/// is among the first nine. `is` tells the row's entry.
+fn number_badge(is: impl Fn(&Entry) -> bool + 'static) -> impl IntoElement {
+    let number = computed(move || {
+        if MOBILE || !store::command_held() || !store::number_shortcuts() {
+            return None;
+        }
+        sidebar_entries().iter().take(9).position(&is).map(|i| i + 1)
+    });
+    dynamic(move || {
+        let n = number.get()?;
+        Some(untracked(move || {
+            view()
+                .h(px(18.0))
+                .min_w(px(18.0))
+                .px(px(5.0))
+                .mr(sp(S1))
+                .flex_shrink_0()
+                .items_center()
+                .justify_center()
+                .rounded(px(R_SM))
+                .bg(tint(FG(), 0.08))
+                .child(text(format!("⌘{n}")).text_size(tx(TEXT_XS)).font_weight(FontWeight(500)).text_color(FG_MUTED()))
+        }))
+    })
+}
+
 /// What a row of the sidebar opens.
 pub(crate) enum Entry {
     Conversation(crate::daemon::Agent),
@@ -322,7 +349,11 @@ fn conversation_row(agent: ReadSignal<crate::daemon::Agent>, actions: bool) -> i
         .child(row_status(move || {
             agent.with(|agent| Status::of_agent(&agent.status, agent.requires_attention || !agent.pending.is_empty()))
         }))
-        .child(text(move || agent.with(store::conversation_title)).text_size(tx(TEXT_BASE)).text_color(FG()).number_of_lines(1).flex_1());
+        .child(text(move || agent.with(store::conversation_title)).text_size(tx(TEXT_BASE)).text_color(FG()).number_of_lines(1).flex_1())
+        .child({
+            let id = id.clone();
+            number_badge(move |e| matches!(e, Entry::Conversation(a) if a.id == id))
+        });
     let more = dropdown(
         view()
             .w(px(24.0))
@@ -599,6 +630,7 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
                 row
             }))
         }))
+        .child(number_badge(move |e| matches!(e, Entry::Workspace(id) if ws.with_untracked(|w| w.as_ref().is_some_and(|w| &w.id == id)))))
 ;
 
     let more = dropdown(

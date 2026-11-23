@@ -3764,6 +3764,21 @@ pub(crate) fn set_number_shortcuts(on: bool) {
     save_prefs();
 }
 
+/// ⌘ held on its own for a moment (macOS): the sidebar shows each
+/// conversation's number, the one ⌘1–⌘9 opens.
+#[derive(Clone, Default, PartialEq)]
+struct CommandHeld(bool);
+
+pub(crate) fn command_held() -> bool {
+    global::<CommandHeld>().with(|c| c.0)
+}
+
+pub(crate) fn set_command_held(on: bool) {
+    if global::<CommandHeld>().with_untracked(|c| c.0) != on {
+        global::<CommandHeld>().set(CommandHeld(on));
+    }
+}
+
 /// The service Sophon carries inside its own app bundle
 /// (`Sophon.app/Contents/Resources/service`, put there when the app is
 /// packaged: `scripts/bundle-service.sh`). `SOPHON_SERVICE_DIR`

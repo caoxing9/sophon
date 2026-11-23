@@ -317,6 +317,8 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                 .gap(px(2.0))
                 .pt(sp(S1))
                 .px(sp(S2))
+                // Where the agent works, at the left.
+                .when(live, |v| v.child(super::agent::context_bar()))
                 .child(model_picker(live))
                 // What the agent may do without asking, beside its model.
                 .child(super::model_picker::access_mode(live))
