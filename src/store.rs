@@ -3316,6 +3316,7 @@ fn save_prefs() {
         "customAccent": global::<ColorTheme>().with_untracked(|t| t.accent.map(hex_of)),
         "numberShortcuts": global::<NumberShortcuts>().with_untracked(|n| n.0),
         "toolCalls": global::<ToolCalls>().with_untracked(|d| d.0.as_str()),
+        "toolCallsChosen": global::<ToolCallsChosen>().with_untracked(|c| c.0),
         "appearance": match global::<Theme>().with_untracked(|t| t.0) {
             nsh_core::platform::Appearance::Light => "light",
             nsh_core::platform::Appearance::Dark => "dark",
@@ -3526,7 +3527,11 @@ pub(crate) fn load_prefs() {
     if appearance != nsh_core::platform::Appearance::System {
         set_color_scheme(appearance);
     }
-    if let Some(d) = v.get("toolCalls").and_then(serde_json::Value::as_str) {
+    // Every save wrote the default it was ("folded") as if chosen: only a
+    // choice made since `toolCallsChosen` holds, the rest are quiet.
+    let chosen = v.get("toolCallsChosen").and_then(serde_json::Value::as_bool).unwrap_or(false);
+    global::<ToolCallsChosen>().set(ToolCallsChosen(chosen));
+    if let Some(d) = v.get("toolCalls").and_then(serde_json::Value::as_str).filter(|_| chosen) {
         global::<ToolCalls>().set(ToolCalls(crate::fold::ToolDisplay::parse(d)));
     }
     if let Some(on) = v.get("numberShortcuts").and_then(serde_json::Value::as_bool) {
@@ -3796,8 +3801,13 @@ pub(crate) fn tool_display() -> crate::fold::ToolDisplay {
 
 pub(crate) fn set_tool_display(display: crate::fold::ToolDisplay) {
     global::<ToolCalls>().set(ToolCalls(display));
+    global::<ToolCallsChosen>().set(ToolCallsChosen(true));
     save_prefs();
 }
+
+/// The tool calls' display was picked in the settings, not left as it was.
+#[derive(Clone, Default, PartialEq)]
+struct ToolCallsChosen(bool);
 
 /// Whether ⌘1–⌘9 open the sidebar's conversations, first to ninth (on by
 /// default); off, they open the workspace's tabs. `numberShortcuts`.
