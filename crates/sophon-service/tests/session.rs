@@ -451,6 +451,14 @@ async fn an_agent_s_own_agents_commands_and_kept_rules() {
         json!([{"name":"review","description":"Review a change","argumentHint":"<pr>"}]),
         "{commands}"
     );
+    // A new conversation's, by its provider and folder, answered as its key's.
+    let draft = ask(
+        &mut socket,
+        json!({"type":"list_commands_request","agentId":"draft:claude","provider":"claude","cwd":service.0.path()}),
+    )
+    .await;
+    assert_eq!(draft["payload"]["agentId"], "draft:claude", "{draft}");
+    assert_eq!(draft["payload"]["commands"], commands["payload"]["commands"], "{draft}");
 
     ask(
         &mut socket,

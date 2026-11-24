@@ -836,11 +836,14 @@ pub async fn commands(shared: &Shared, request: &Value) -> Result<Value, String>
     };
     let (family, settings, place) = {
         let host = shared.borrow();
-        let agent = host.state.agents.get(agent_id).ok_or("Unknown agent")?;
-        let place = (
-            text(agent, "provider")?.to_owned(),
-            text(agent, "cwd")?.to_owned(),
-        );
+        // A conversation's own, or a new one's: its provider and folder.
+        let place = match host.state.agents.get(agent_id) {
+            Some(agent) => (text(agent, "provider")?.to_owned(), text(agent, "cwd")?.to_owned()),
+            None if request["provider"].is_string() && request["cwd"].is_string() => {
+                (text(request, "provider")?.to_owned(), text(request, "cwd")?.to_owned())
+            }
+            None => return Err("Unknown agent".into()),
+        };
         if let Some(known) = host.commands.get(&place) {
             return Ok(reply(known));
         }

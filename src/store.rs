@@ -4360,6 +4360,23 @@ pub(crate) fn commands(agent_id: &str) -> Vec<SlashCommand> {
     }
 }
 
+/// A new conversation's commands: its provider's in its folder, asked of
+/// the host once and kept as a conversation's are.
+pub(crate) fn draft_commands(provider: &str, cwd: &str) -> Vec<SlashCommand> {
+    let key = format!("draft:{provider}:{cwd}");
+    let known = global::<Commands>().with(|c| c.0.get(&key).cloned());
+    match known {
+        Some(list) => list,
+        None => {
+            global::<Commands>().update(|c| {
+                c.0.insert(key.clone(), vec![]);
+            });
+            send(Command::ListDraftCommands { key, provider: provider.to_owned(), cwd: cwd.to_owned() });
+            vec![]
+        }
+    }
+}
+
 /// Files and folders for an @ mention: asks the daemon when the query
 /// changes and gives the last answer meanwhile.
 pub(crate) fn suggestions(cwd: &str, query: &str) -> Vec<(String, bool)> {
