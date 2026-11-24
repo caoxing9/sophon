@@ -247,19 +247,14 @@ fn group(g: ReadSignal<store::Group>, actions: bool) -> AnyElement {
         .into_element()
 }
 
-/// Where a level's guide runs: under its project's chevron, in points
-/// from the row's left edge.
-const PROJECT_GUIDE: f32 = S2 + S1 + 6.0;
+/// How far a project's rows sit in: under its chevron, in points from the
+/// row's left edge.
+const PROJECT_INDENT: f32 = S2 + S1 + 6.0;
 
-/// The rows one level down, with a hairline down their left (as T3 Code's
-/// tree): what is under what reads at a glance, however deep. On the
-/// phone the rows keep their width: the line alone marks the level.
+/// The rows one level down, set in under their project: the indent alone
+/// says what is under what (the hairline down their left is gone).
 fn guided(rows: View) -> View {
-    view().child(
-        rows.ml(px(if MOBILE { S2 } else { PROJECT_GUIDE }))
-            .border_l(px(1.0))
-            .border_color(tint(FG(), 0.09)),
-    )
+    view().child(rows.ml(px(if MOBILE { S2 } else { PROJECT_INDENT })))
 }
 
 /// A workspace in the list: its conversations each a row of their own,
