@@ -181,6 +181,26 @@ fn diff(path: &str, patch: &str) -> Value {
     json!({"path":path,"hunks":hunks,"isNew":new,"isDeleted":deleted,"additions":additions,"deletions":deletions})
 }
 
+/// A checkout's branch (empty when detached) and its uncommitted lines,
+/// added and removed, as the changes panel counts them (against HEAD);
+/// `None` for a folder that is not one.
+pub async fn summary(cwd: &str) -> Option<(String, u64, u64)> {
+    if command(cwd, "git", &["rev-parse", "--is-inside-work-tree"]).await.ok()? != "true" {
+        return None;
+    }
+    let branch = command(cwd, "git", &["branch", "--show-current"]).await.unwrap_or_default();
+    let (mut added, mut removed) = (0, 0);
+    if let Ok(stats) = command(cwd, "git", &["diff", "--no-renames", "--numstat", "HEAD", "--"]).await {
+        for row in stats.lines() {
+            let mut fields = row.split('\t');
+            // A binary file says "-": no lines.
+            added += fields.next().and_then(|n| n.parse::<u64>().ok()).unwrap_or(0);
+            removed += fields.next().and_then(|n| n.parse::<u64>().ok()).unwrap_or(0);
+        }
+    }
+    Some((branch, added, removed))
+}
+
 pub fn handles(kind: &str) -> bool {
     kind.starts_with("checkout_")
         || kind.starts_with("checkout.commits.")

@@ -41,6 +41,51 @@ pub struct Host {
     pub terminals: crate::terminal::Terminals,
     /// The automations whose probe is running now: one look at a time.
     pub probing: HashSet<String>,
+    /// The workspaces' checkouts are being looked at: one look at a time.
+    pub summarizing: bool,
+}
+
+/// Looks at each open workspace's checkout and tells the clients of a
+/// branch or uncommitted lines that changed (`gitRuntime.currentBranch`,
+/// `diffStat`), as the line under the composer shows them.
+pub fn summarize_checkouts(shared: &Shared) {
+    let folders: Vec<(String, String)> = {
+        let mut host = shared.borrow_mut();
+        if host.summarizing {
+            return;
+        }
+        host.summarizing = true;
+        host.state
+            .workspaces
+            .iter()
+            .filter(|(_, w)| w["archivedAt"].is_null())
+            .filter_map(|(id, w)| {
+                let dir = w["workspaceDirectory"].as_str().or(w["projectRootPath"].as_str())?;
+                Some((id.clone(), dir.to_owned()))
+            })
+            .collect()
+    };
+    let shared = shared.clone();
+    tokio::task::spawn_local(async move {
+        for (id, dir) in folders {
+            let Some((branch, added, removed)) = crate::git::summary(&dir).await else { continue };
+            let mut host = shared.borrow_mut();
+            let Some(record) = host.state.workspaces.get_mut(&id) else { continue };
+            let stat = json!({"additions":added,"deletions":removed});
+            let branch = (!branch.is_empty()).then_some(branch);
+            if record["diffStat"] == stat && record["gitRuntime"]["currentBranch"].as_str() == branch.as_deref() {
+                continue;
+            }
+            record["diffStat"] = stat;
+            if !record["gitRuntime"].is_object() {
+                record["gitRuntime"] = json!({});
+            }
+            record["gitRuntime"]["currentBranch"] = json!(branch);
+            let record = record.clone();
+            host.publish("workspace_update", json!({"kind":"upsert","workspace":record}));
+        }
+        shared.borrow_mut().summarizing = false;
+    });
 }
 
 pub fn envelope(kind: &str, payload: Value) -> Value {
@@ -112,6 +157,7 @@ impl Host {
             timelines: HashMap::new(),
             terminals: Default::default(),
             probing: HashSet::new(),
+            summarizing: false,
         };
         // A run the last service left underway ended with it: it would
         // count as at work for good, and its automation start nothing.

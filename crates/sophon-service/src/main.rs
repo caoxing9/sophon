@@ -428,9 +428,14 @@ async fn serve(home: PathBuf) -> Result<(), Error> {
     let mut again = false;
     let mut poll = interval(Duration::from_millis(200));
     let mut schedules = interval(Duration::from_secs(1));
+    // The workspaces' branches and uncommitted lines, looked at again
+    // every few seconds.
+    let mut checkouts = interval(Duration::from_secs(5));
+    checkouts.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             _ = schedules.tick() => schedule::due(&host),
+            _ = checkouts.tick() => host::summarize_checkouts(&host),
             // A connection that could not be taken (too many files
             // open, one gone before it was taken) is that connection's
             // loss, not the service's.
