@@ -3134,7 +3134,7 @@ dependencies = [
 
 [[package]]
 name = "sophon"
-version = "0.2.60"
+version = "0.2.61"
 dependencies = [
  "base64 0.22.1",
  "block2",
@@ -3172,7 +3172,7 @@ dependencies = [
 
 [[package]]
 name = "sophon-service"
-version = "0.2.60"
+version = "0.2.61"
 dependencies = [
  "base64 0.22.1",
  "cap-std",
