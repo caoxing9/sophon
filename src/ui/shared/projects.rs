@@ -420,9 +420,24 @@ fn conversation_row(agent: ReadSignal<crate::daemon::Agent>, actions: bool) -> i
                 .transition_colors()
                 .child(main)
                 .when(actions, |v| {
-                    v.child(view().flex_row().items_center().opacity(if MOBILE { 1.0_f32 } else { 0.0 }).group_hover(|s| s.opacity(1.0)).transition_opacity().when(!MOBILE, |v| v.child(quick)).child(more))
+                    v.child(row_actions().when(!MOBILE, |v| v.child(quick)).child(more))
                 }),
         )
+}
+
+/// Where a row's actions go: shown under the pointer (always on a phone),
+/// and out of the way while ⌘ is held, so the row's ⌘1–9 sits at its end
+/// as on the rows without them.
+fn row_actions() -> View {
+    let badges = || !MOBILE && store::command_held() && store::number_shortcuts();
+    view()
+        .flex_row()
+        .items_center()
+        .max_w(move || px(if badges() { 0.0 } else { 200.0 }))
+        .overflow_hidden()
+        .opacity(if MOBILE { 1.0_f32 } else { 0.0 })
+        .group_hover(|s| s.opacity(1.0))
+        .transition_opacity()
 }
 
 /// A row's pin and archive at hand, under the pointer before its "…"
@@ -716,16 +731,7 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
                 .child(main)
                 // The actions only under the pointer (always on a phone).
                 .when(actions, |v| {
-                    v.child(
-                        view()
-                            .flex_row()
-                            .items_center()
-                            .opacity(if MOBILE { 1.0_f32 } else { 0.0 })
-                            .group_hover(|s| s.opacity(1.0))
-                            .transition_opacity()
-                            .when(!MOBILE, |v| v.child(quick))
-                            .child(more),
-                    )
+                    v.child(row_actions().when(!MOBILE, |v| v.child(quick)).child(more))
                 }),
         )
 }

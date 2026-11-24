@@ -246,6 +246,97 @@ pub(crate) fn sending_card() -> View {
     ))
 }
 
+/// When Sophon tells you of its agents with the system's notifications
+/// (the desktop's): a finished turn, an approval, a question; their sound;
+/// and whether the system lets it show them at all.
+pub(crate) fn notifications_card() -> View {
+    use nsh_core::notifications::NotificationPermission as P;
+    use store::{NotifyWhen, On};
+    let permission = signal(P::Default);
+    let refresh = move || {
+        spawn(async move {
+            permission.set(notification_permission().await);
+        })
+    };
+    refresh();
+    let allowed = dynamic(move || {
+        let p = permission.get();
+        Some(untracked(move || match p {
+            P::Granted | P::Unavailable => view().into_element(),
+            P::Denied => btn(t("Open System Settings"), Variant::Outline, Sz::Sm, None, || {
+                let _ = open_url("x-apple.systempreferences:com.apple.Notifications-Settings.extension".to_owned());
+            })
+            .into_element(),
+            P::Default => btn(t("Allow"), Variant::Outline, Sz::Sm, None, move || {
+                spawn(async move {
+                    permission.set(request_notification_permission().await);
+                });
+            })
+            .into_element(),
+        }))
+    });
+    card()
+        .child(row(
+            t("Allowed by the system"),
+            move || match permission.get() {
+                P::Granted => t("Notifications show"),
+                P::Denied => t("Turned off for Sophon in System Settings: nothing shows"),
+                P::Default => t("Not asked yet"),
+                P::Unavailable => t("This build cannot show notifications"),
+            }
+            .to_string(),
+            allowed,
+            true,
+        ))
+        .child(row(
+            t("Turn finished"),
+            t("When an agent finishing its turn is told"),
+            {
+                let name = |w: NotifyWhen| match w {
+                    NotifyWhen::Never => t("Never"),
+                    NotifyWhen::Away => t("Only when unfocused"),
+                    NotifyWhen::Always => t("Always"),
+                };
+                dropdown(picker_trigger(None, move || SharedString::from(name(store::settings().notify_finished))))
+                    .align(nsh_core::overlay::Align::End)
+                    .child(dynamic(move || {
+                        let current = store::settings().notify_finished;
+                        Some(untracked(move || {
+                            let mut list = view();
+                            for w in [NotifyWhen::Never, NotifyWhen::Away, NotifyWhen::Always] {
+                                list = list.child(menu_row(name(w), None, None, current == w, move || {
+                                    store::edit_settings(|s| s.notify_finished = w)
+                                }));
+                            }
+                            list
+                        }))
+                    }))
+            },
+            false,
+        ))
+        .child(row(
+            t("Approvals"),
+            t("When an agent waits for your approval"),
+            switch(|| store::settings().notify_approval.0, |on| store::edit_settings(|s| s.notify_approval = On(on)))
+                .accessibility_label(t("Approvals")),
+            false,
+        ))
+        .child(row(
+            t("Questions and errors"),
+            t("When an agent asks you something or stops on an error"),
+            switch(|| store::settings().notify_attention.0, |on| store::edit_settings(|s| s.notify_attention = On(on)))
+                .accessibility_label(t("Questions and errors")),
+            false,
+        ))
+        .child(row(
+            t("Sound"),
+            t("The system's notification sound"),
+            switch(|| store::settings().notify_sound.0, |on| store::edit_settings(|s| s.notify_sound = On(on)))
+                .accessibility_label(t("Sound")),
+            false,
+        ))
+}
+
 /// Whether this Mac stays awake while its agents run (the desktop's).
 /// Dictation's shortcut (the desktop's), recorded as Raycast's are: a
 /// press on the field, then the combination; Fn on its own by default.

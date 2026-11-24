@@ -608,9 +608,19 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
         // (icon, label, detail, what goes in, a folder, the label in code type)
         let rows: Vec<(Option<Icon>, String, String, String, bool, bool)> = match &trigger {
             Trigger::Slash(prefix) => {
-                let agent = store::selected_id()?;
-                store::commands(&agent)
-                    .into_iter()
+                // A conversation's, or a new one's by its provider and folder.
+                let list = match (target, store::selected_id()) {
+                    (_, Some(agent)) => store::commands(&agent),
+                    (Target::Form, None) => {
+                        let f = store::form();
+                        if f.provider.is_empty() || f.path.is_empty() {
+                            return None;
+                        }
+                        store::draft_commands(&f.provider, &f.path)
+                    }
+                    (Target::Agent, None) => return None,
+                };
+                list.into_iter()
                     .filter(|c| c.name.to_lowercase().starts_with(&prefix.to_lowercase()) && !crate::slash::hidden(&c.name))
                     .map(|c| {
                         let insert = format!("/{} ", c.name);

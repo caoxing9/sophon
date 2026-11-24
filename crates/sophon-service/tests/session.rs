@@ -451,6 +451,14 @@ async fn an_agent_s_own_agents_commands_and_kept_rules() {
         json!([{"name":"review","description":"Review a change","argumentHint":"<pr>"}]),
         "{commands}"
     );
+    // A new conversation's, by its provider and folder, answered as its key's.
+    let draft = ask(
+        &mut socket,
+        json!({"type":"list_commands_request","agentId":"draft:claude","provider":"claude","cwd":service.0.path()}),
+    )
+    .await;
+    assert_eq!(draft["payload"]["agentId"], "draft:claude", "{draft}");
+    assert_eq!(draft["payload"]["commands"], commands["payload"]["commands"], "{draft}");
 
     ask(
         &mut socket,
@@ -3252,4 +3260,39 @@ done
     ask(&mut socket, json!({"type":"send_agent_message_request","agentId":agent,"text":"go on with step 1"})).await;
     finished(&mut socket).await;
     assert_eq!(suggested(&mut socket).await, "go on with step 2");
+}
+
+#[tokio::test]
+async fn a_workspace_tells_its_branch_and_uncommitted_lines() {
+    let service = Service(tempfile::tempdir().unwrap());
+    install_provider(service.0.path());
+    let repo = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let done = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"])
+            .args(args)
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+    };
+    git(&["init"]);
+    fs::write(repo.path().join("a.txt"), "one\ntwo\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-m", "first"]);
+    // One line changed, one added.
+    fs::write(repo.path().join("a.txt"), "one\n2\nthree\n").unwrap();
+    service.cli("start");
+    let mut socket = service.connect(true).await;
+    ask(&mut socket, json!({"type":"workspace.create.request",
+        "source":{"kind":"directory","path":repo.path()},"agent":{"config":{"provider":"codex"}}})).await;
+    loop {
+        let frame = read(&mut socket).await;
+        let workspace = &frame["message"]["payload"]["workspace"];
+        if frame["message"]["type"] == "workspace_update" && !workspace["diffStat"].is_null() {
+            assert_eq!(workspace["gitRuntime"]["currentBranch"], "main", "{workspace}");
+            assert_eq!(workspace["diffStat"], json!({"additions":2,"deletions":1}), "{workspace}");
+            break;
+        }
+    }
 }

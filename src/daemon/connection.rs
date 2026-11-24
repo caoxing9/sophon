@@ -92,6 +92,9 @@ pub enum Command {
     /// as its conversation is looked at.
     ClearAgentAttention(String),
     ListCommands(String),
+    /// A new conversation's commands, by its provider and folder, answered
+    /// as `key`'s.
+    ListDraftCommands { key: String, provider: String, cwd: String },
     /// Files and folders matching `query` under `cwd` (@ mentions).
     Suggest { cwd: String, query: String },
     /// Folders on the host matching `query` (a path, from the home folder).
@@ -2490,6 +2493,11 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
             pending,
             Pending::Commands,
             json!({ "type": "list_commands_request", "agentId": agent_id }),
+        )],
+        Command::ListDraftCommands { key, provider, cwd } => vec![request(
+            pending,
+            Pending::Commands,
+            json!({ "type": "list_commands_request", "agentId": key, "provider": provider, "cwd": cwd }),
         )],
         Command::FindDirs { query } => vec![request(
             pending,

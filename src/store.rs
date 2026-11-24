@@ -1527,6 +1527,34 @@ pub(crate) struct Settings {
     pub(crate) push_hide: bool,
     /// The phone's id at the computers it registers with, made once.
     pub(crate) push_device: String,
+    /// When a finished turn is told with a notification here.
+    pub(crate) notify_finished: NotifyWhen,
+    /// An agent waiting for an approval is told.
+    pub(crate) notify_approval: On,
+    /// An agent that asks something or stops on an error is told.
+    pub(crate) notify_attention: On,
+    /// The notifications play the system's sound.
+    pub(crate) notify_sound: On,
+}
+
+/// When a finished turn is told here: always, only while Sophon is not
+/// the app in front (the default), or never.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(crate) enum NotifyWhen {
+    Always,
+    #[default]
+    Away,
+    Never,
+}
+
+/// A setting on unless set off.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct On(pub(crate) bool);
+
+impl Default for On {
+    fn default() -> Self {
+        On(true)
+    }
 }
 
 /// Whether the phone wants push notifications (on unless set off).
@@ -3286,6 +3314,14 @@ fn save_prefs() {
         "pushHide": s.push_hide,
         "pushDevice": s.push_device,
         "dictationKey": global::<DictationKeyPref>().with_untracked(|k| k.0.as_ref().map(Hotkey::to_json)),
+        "notifyFinished": match s.notify_finished {
+            NotifyWhen::Always => "always",
+            NotifyWhen::Away => "away",
+            NotifyWhen::Never => "never",
+        },
+        "notifyApproval": s.notify_approval.0,
+        "notifyAttention": s.notify_attention.0,
+        "notifySound": s.notify_sound.0,
         "keepAwake": match s.keep_awake {
             KeepAwake::Off => "off",
             KeepAwake::On => "on",
@@ -3486,6 +3522,15 @@ pub(crate) fn load_prefs() {
         s.push = PushWanted(v.get("push").and_then(serde_json::Value::as_bool).unwrap_or(true));
         s.push_hide = v.get("pushHide").and_then(serde_json::Value::as_bool).unwrap_or(false);
         s.push_device = v.get("pushDevice").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned();
+        s.notify_finished = match v.get("notifyFinished").and_then(serde_json::Value::as_str) {
+            Some("always") => NotifyWhen::Always,
+            Some("never") => NotifyWhen::Never,
+            _ => NotifyWhen::Away,
+        };
+        let on = |k: &str| On(v.get(k).and_then(serde_json::Value::as_bool).unwrap_or(true));
+        s.notify_approval = on("notifyApproval");
+        s.notify_attention = on("notifyAttention");
+        s.notify_sound = on("notifySound");
     });
     if let Some(h) = v.get("sidebarHidden").and_then(serde_json::Value::as_bool) {
         global::<SidebarHidden>().update(|s| s.0 = h);
@@ -4355,6 +4400,23 @@ pub(crate) fn commands(agent_id: &str) -> Vec<SlashCommand> {
                 c.0.insert(agent_id.to_owned(), vec![]);
             });
             send(Command::ListCommands(agent_id.to_owned()));
+            vec![]
+        }
+    }
+}
+
+/// A new conversation's commands: its provider's in its folder, asked of
+/// the host once and kept as a conversation's are.
+pub(crate) fn draft_commands(provider: &str, cwd: &str) -> Vec<SlashCommand> {
+    let key = format!("draft:{provider}:{cwd}");
+    let known = global::<Commands>().with(|c| c.0.get(&key).cloned());
+    match known {
+        Some(list) => list,
+        None => {
+            global::<Commands>().update(|c| {
+                c.0.insert(key.clone(), vec![]);
+            });
+            send(Command::ListDraftCommands { key, provider: provider.to_owned(), cwd: cwd.to_owned() });
             vec![]
         }
     }
@@ -6117,20 +6179,38 @@ fn notify_attention(next: &Agent) {
     // Only what is new and unseen: an approval, or a result the service
     // marks unread (`push::reason`); and not the agent on screen.
     let Some(why) = push::reason(before.as_ref(), next) else { return };
-    if selected_id().as_deref() == Some(next.id.as_str()) && lifecycle_active() {
-        return;
+    let on_screen = selected_id().as_deref() == Some(next.id.as_str()) && lifecycle_active();
+    // The phones hear of what is not on screen here, as before.
+    if !on_screen {
+        push_attention(next, why);
     }
-    push_attention(next, why);
     // The computer's push says it to this phone already.
     if cfg!(target_os = "ios") && push_served() {
         return;
     }
-    let body = match why {
-        Reason::Permission => format!("Waiting for your approval: {}", next.pending.first().map(|p| p.title.as_str()).unwrap_or_default()),
-        Reason::Finished => "Finished its turn".to_owned(),
-        Reason::Attention => "Needs your attention".to_owned(),
+    // Here, as the settings say (`Notifications`): a finished turn always,
+    // never, or only while Sophon is not the app in front (the default);
+    // the rest when asked for and not on screen.
+    let s = settings();
+    let show = match why {
+        Reason::Finished => match s.notify_finished {
+            NotifyWhen::Always => true,
+            NotifyWhen::Away => !lifecycle_active(),
+            NotifyWhen::Never => false,
+        },
+        Reason::Permission => s.notify_approval.0 && !on_screen,
+        Reason::Attention => s.notify_attention.0 && !on_screen,
     };
-    let n = nsh_core::notifications::Notification::new(format!("agent:{}", next.id), next.title.clone(), body);
+    if !show {
+        return;
+    }
+    let body = match why {
+        Reason::Permission => tf("Waiting for your approval: {}", &[next.pending.first().map(|p| p.title.as_str()).unwrap_or_default()]),
+        Reason::Finished => t("Finished its turn").to_owned(),
+        Reason::Attention => t("Needs your attention").to_owned(),
+    };
+    let n = nsh_core::notifications::Notification::new(format!("agent:{}", next.id), next.title.clone(), body)
+        .silent(!s.notify_sound.0);
     let _ = show_notification(n);
 }
 
