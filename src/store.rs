@@ -5517,9 +5517,6 @@ pub(crate) fn open_tab(tab: Tab) {
             reset_form(current_workspace().map(|w| w.directory));
         }
     });
-    if global::<Timeline>().with_untracked(|t| t.syncing) {
-        scroll_timeline_end_after(&[30, 120, 250], false);
-    }
     if let Some(id) = agent_id {
         send(Command::Open(id.clone()));
         send(Command::Subagents(id.clone()));
@@ -6714,9 +6711,9 @@ pub(crate) fn scroll_timeline_to_end() {
     scroll_timeline_end_after(&[60], true);
 }
 
-/// Jumps to the end at each delay (milliseconds): the rows' first layout
-/// uses estimated heights, so a conversation just opened is brought to its
-/// end again once its messages have measured themselves.
+/// Goes to the end at each delay (milliseconds), once the rows there are
+/// laid out. A conversation opening needs none: its list opens at its end
+/// (`initial_scroll_to_end`).
 fn scroll_timeline_end_after(delays: &'static [u64], animated: bool) {
     spawn(async move {
         for d in delays {
@@ -7119,10 +7116,8 @@ pub(crate) fn apply(event: Event) {
             }
         }
         Event::TimelineReset { agent_id, mut items, older, cursor } => {
-            let mut opened = false;
             global::<Timeline>().update(|t| {
                 if t.agent_id.as_deref() == Some(agent_id.as_str()) {
-                    opened = !t.loaded;
                     crate::daemon::model::collapse_retries(&mut items);
                     carry_images(&t.items, &mut items);
                     crate::sent_pictures::restore(&mut items);
@@ -7134,9 +7129,6 @@ pub(crate) fn apply(event: Event) {
                     t.older = older;
                 }
             });
-            if opened {
-                scroll_timeline_end_after(&[30, 120, 250], false);
-            }
         }
         Event::TimelineFailed { agent_id, message } => {
             // In the history's place when nothing of it shows; beside this
