@@ -1123,6 +1123,8 @@ pub(crate) enum ExplorerTab {
     /// What the conversation made.
     #[default]
     Artifacts,
+    /// The workspace's uncommitted changes, every file's diff in one scroll.
+    Changes,
     Files,
 }
 
@@ -1246,6 +1248,14 @@ pub(crate) fn toggle_explorer() {
     animate_panels();
     global::<Explorer>().update(|e| e.open = !e.open);
     save_prefs();
+}
+
+/// The changes, all of them, in the explorer: opened if it was put away.
+pub(crate) fn show_changes() {
+    if !explorer_open() {
+        toggle_explorer();
+    }
+    set_explorer_tab(ExplorerTab::Changes);
 }
 
 pub(crate) fn explorer_tab() -> ExplorerTab {
