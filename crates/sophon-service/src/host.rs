@@ -41,6 +41,67 @@ pub struct Host {
     pub terminals: crate::terminal::Terminals,
     /// The automations whose probe is running now: one look at a time.
     pub probing: HashSet<String>,
+    /// Workspaces whose branch and lines were counted since the service
+    /// started.
+    counted: HashSet<String>,
+    /// Workspaces whose branch and lines are to be counted again (a turn
+    /// ended in them), and those being counted now.
+    stale: HashSet<String>,
+    counting: HashSet<String>,
+}
+
+/// Keeps the workspaces' branch and uncommitted lines (`gitRuntime.
+/// currentBranch`, `diffStat`) as the line under the composer shows them,
+/// at Lody's pace: counted once a workspace is known (the service started,
+/// or it is new) and when a turn in it begins or ends; nothing is polled.
+/// An edit or a checkout made outside an agent shows at its next turn.
+pub fn watch_checkouts(shared: &Shared) {
+    let due: Vec<(String, String)> = {
+        let mut host = shared.borrow_mut();
+        let open: Vec<(String, String)> = host
+            .state
+            .workspaces
+            .iter()
+            .filter(|(_, w)| w["archivedAt"].is_null())
+            .filter_map(|(id, w)| {
+                let dir = w["workspaceDirectory"].as_str().or(w["projectRootPath"].as_str())?;
+                Some((id.clone(), dir.to_owned()))
+            })
+            .collect();
+        let mut due = Vec::new();
+        for (id, dir) in open {
+            let new = !host.counted.contains(&id);
+            if (new || host.stale.contains(&id)) && !host.counting.contains(&id) {
+                host.stale.remove(&id);
+                host.counted.insert(id.clone());
+                host.counting.insert(id.clone());
+                due.push((id, dir));
+            }
+        }
+        due
+    };
+    for (id, dir) in due {
+        let shared = shared.clone();
+        tokio::task::spawn_local(async move {
+            let summary = crate::git::summary(&dir).await;
+            let mut host = shared.borrow_mut();
+            host.counting.remove(&id);
+            let Some((branch, added, removed)) = summary else { return };
+            let Some(record) = host.state.workspaces.get_mut(&id) else { return };
+            let stat = json!({"additions":added,"deletions":removed});
+            let branch = (!branch.is_empty()).then_some(branch);
+            if record["diffStat"] == stat && record["gitRuntime"]["currentBranch"].as_str() == branch.as_deref() {
+                return;
+            }
+            record["diffStat"] = stat;
+            if !record["gitRuntime"].is_object() {
+                record["gitRuntime"] = json!({});
+            }
+            record["gitRuntime"]["currentBranch"] = json!(branch);
+            let record = record.clone();
+            host.publish("workspace_update", json!({"kind":"upsert","workspace":record}));
+        });
+    }
 }
 
 pub fn envelope(kind: &str, payload: Value) -> Value {
@@ -112,6 +173,9 @@ impl Host {
             timelines: HashMap::new(),
             terminals: Default::default(),
             probing: HashSet::new(),
+            counted: HashSet::new(),
+            stale: HashSet::new(),
+            counting: HashSet::new(),
         };
         // A run the last service left underway ended with it: it would
         // count as at work for good, and its automation start nothing.
@@ -303,6 +367,8 @@ impl Host {
         if let Some(record) = self.state.workspaces.get_mut(&workspace)
             && record["status"] != status
         {
+            // A turn began or ended: its lines are counted again.
+            self.stale.insert(workspace.clone());
             record["status"] = json!(status);
             record["activityAt"] = now();
             let record = record.clone();
