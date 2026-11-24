@@ -1,5 +1,6 @@
 //! The Explorer beside a workspace (the right sidebar): its changed
-//! files, live; a file opens its diff as a tab.
+//! files, live, every one's diff in one scroll; a file opens its diff as a
+//! tab.
 
 use crate::i18n::{t, tf};
 use nsh_base::{DiffAnnotation, DiffLayout, DiffLineRange, DiffSide, button, diff_view, input};
@@ -86,7 +87,11 @@ pub(crate) fn explorer() -> View {
                 .pb(sp(S1))
                 .window_drag(true)
                 .child(segmented(
-                    vec![(ExplorerTab::Artifacts, t("Artifacts").into()), (ExplorerTab::Files, t("Files").into())],
+                    vec![
+                        (ExplorerTab::Artifacts, t("Artifacts").into()),
+                        (ExplorerTab::Changes, t("Changes").into()),
+                        (ExplorerTab::Files, t("Files").into()),
+                    ],
                     store::explorer_tab,
                     store::set_explorer_tab,
                 ))
@@ -100,21 +105,81 @@ pub(crate) fn explorer() -> View {
                 view()
                     .flex_1()
                     .flex_row()
-                    .w(move || Length::from(px(width.get() * 2.0)))
+                    .w(move || Length::from(px(width.get() * 3.0)))
                     // Moved by its frame, not a transform, so the pages
                     // coming in are laid out where they show; the switch's
                     // layout spring (the thumb's) carries it.
                     .ml(move || {
                         let i = match tab.get() {
                             ExplorerTab::Artifacts => 0.0,
-                            ExplorerTab::Files => 1.0,
+                            ExplorerTab::Changes => 1.0,
+                            ExplorerTab::Files => 2.0,
                         };
                         Length::from(px(-i * width.get()))
                     })
                     .child(view().w(page).child(super::artifacts::artifacts_view(computed(move || tab.get() == ExplorerTab::Artifacts)).flex_1()))
+                    .child(view().w(page).child(changes_view().flex_1()))
                     .child(view().w(page).child(files_view().flex_1())),
             ),
         )
+}
+
+/// Every changed file's diff, one under the other, each under its header
+/// (pressed, it folds); read in one scroll rather than a file at a time.
+/// The whole view, split or with line comments, is a tab away.
+fn changes_view() -> View {
+    let changes = computed(store::changes);
+    let patch = computed(move || changes.with(|c| c.files.iter().map(|f| f.patch.clone()).collect::<String>()));
+    let stats = computed(move || changes.with(|c| (c.files.len(), c.files.iter().fold((0, 0), |(a, d), f| (a + f.additions, d + f.deletions)))));
+    // Rebuilt only as it changes state, not on each update of the patch.
+    let state = computed(move || {
+        changes.with(|c| match () {
+            _ if !c.loaded => 0,
+            _ if c.too_large => 1,
+            _ if c.files.is_empty() => 2,
+            _ => 3,
+        })
+    });
+    view().flex_1().child(dynamic(move || {
+        let state = state.get();
+        Some(untracked(move || match state {
+            0 => loading_state().into_element(),
+            1 => empty_state(Icon::FileDiff, t("Too many changes to show"), t("Commit some of them, or look in a terminal.")).into_element(),
+            2 => empty_state(Icon::FileDiff, t("No changes"), t("What the agents change shows here.")).into_element(),
+            _ => view()
+                .flex_1()
+                .child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(6.0))
+                        .h(px(30.0))
+                        .pl(sp(S3))
+                        .pr(sp(S2))
+                        .child(
+                            text(move || {
+                                let n = stats.get().0;
+                                if n == 1 { t("1 file").to_owned() } else { tf("{} files", &[&n.to_string()]) }
+                            })
+                            .text_size(tx(TEXT_SM))
+                            .text_color(FG_MUTED()),
+                        )
+                        .child(text(move || format!("+{}", stats.get().1.0)).text_size(tx(TEXT_SM)).font_family(mono_font).text_color(SUCCESS))
+                        .child(text(move || format!("\u{2212}{}", stats.get().1.1)).text_size(tx(TEXT_SM)).font_family(mono_font).text_color(DANGER))
+                        .child(view().flex_1())
+                        .child(icon_btn(Icon::Maximize2, Sz::Sm, t("Open in a tab"), || store::open_tab(Tab::Diff(None)))),
+                )
+                .child(
+                    diff_view()
+                        .patch(move || Some(SharedString::from(patch.get())))
+                        .layout(DiffLayout::Unified)
+                        .soft_wrap(true)
+                        .text_size(tx(TEXT_SM))
+                        .flex_1(),
+                )
+                .into_element(),
+        }))
+    }))
 }
 
 fn files_view() -> View {

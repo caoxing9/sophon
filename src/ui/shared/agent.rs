@@ -304,7 +304,7 @@ pub(crate) fn context_bar() -> impl IntoElement {
             (add + del > 0).then(|| {
                 untracked(move || {
                     nsh_base::button()
-                        .on_press(|| store::open_modal(store::Modal::ChangedFiles))
+                        .on_press(|| if MOBILE { store::open_modal(store::Modal::ChangedFiles) } else { store::show_changes() })
                         .accessibility_label(t("Show changes"))
                         .flex_row()
                         .items_center()
