@@ -131,6 +131,12 @@ fn quiet_turn(items: &[Item], start: usize, end: usize, running: bool, choice: &
     let open = choice.get(&id).copied().unwrap_or(false);
     // Its first call's place: what was said before it comes first.
     let lead = (start..first).rev().find(|&i| !work(&items[i])).map_or(start, |i| i + 1);
+    // One run of calls in the turn: its own line says it all, and a line
+    // over the turn would say it again (opened, or while the agent is in it).
+    let runs = (lead..end).filter(|&i| work(&items[i]) && (i == lead || !work(&items[i - 1]))).count();
+    if runs <= 1 {
+        return fold_range(items, start, end, running, choice, ToolDisplay::Folded, rows);
+    }
     fold_range(items, start, lead, running, choice, ToolDisplay::Folded, rows);
     rows.push(Row::Group(Group { start: lead, end, id, live: false, open }));
     if open {
@@ -596,5 +602,20 @@ mod tests {
         // The turn's line, its words, and the run it is in now.
         assert_eq!(keys(&rows), ["0", "g:t:a", "2", "g:b"]);
         assert!(matches!(&rows[3], Row::Group(g) if g.live && g.start == 3 && g.end == 5));
+    }
+
+    #[test]
+    fn quietly_a_turn_of_one_run_is_that_run_s_line_alone() {
+        // asked, two calls, asked again: one line, not the turn's over the run's.
+        let items = vec![asked("go"), tool("a", "shell", "failed", ""), tool("b", "shell", "completed", ""), asked("next")];
+        assert_eq!(keys(&fold_as(&items, false, &none(), ToolDisplay::Quiet)), ["0", "g:a", "3"]);
+        // Opened, its calls show under it, once.
+        let opened = HashMap::from([("a".to_owned(), true)]);
+        assert_eq!(keys(&fold_as(&items, false, &opened, ToolDisplay::Quiet)), ["0", "g:a", "1", "2", "3"]);
+        // While the agent is in it, and with words after it.
+        let live = vec![asked("go"), tool("a", "shell", "completed", ""), tool("b", "shell", "running", "")];
+        assert_eq!(keys(&fold_as(&live, true, &none(), ToolDisplay::Quiet)), ["0", "g:a"]);
+        let said_after = vec![asked("go"), tool("a", "shell", "completed", ""), tool("b", "read", "completed", "x"), said("done")];
+        assert_eq!(keys(&fold_as(&said_after, false, &none(), ToolDisplay::Quiet)), ["0", "g:a", "3"]);
     }
 }
