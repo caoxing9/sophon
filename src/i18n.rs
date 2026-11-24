@@ -972,6 +972,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("The commands and reads between the agent's replies", "回复之间执行的命令和读取的文件"),
     ("Expanded", "展开"),
     ("Folded", "折叠"),
+    ("Quiet", "精简"),
     ("Hidden", "隐藏"),
     ("Scripts", "脚本"),
     ("click to stop", "点击停止"),

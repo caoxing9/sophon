@@ -222,6 +222,7 @@ pub(crate) fn sending_card() -> View {
             vec![
                 (ToolDisplay::Auto, t("Expanded").into()),
                 (ToolDisplay::Folded, t("Folded").into()),
+                (ToolDisplay::Quiet, t("Quiet").into()),
                 (ToolDisplay::Hidden, t("Hidden").into()),
             ],
             store::tool_display,
