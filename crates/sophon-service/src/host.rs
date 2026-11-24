@@ -8,7 +8,7 @@ use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
     io,
-    path::PathBuf,
+    path::{Path, PathBuf},
     rc::Rc,
 };
 use tokio::sync::{broadcast, mpsc::UnboundedSender};
@@ -41,21 +41,48 @@ pub struct Host {
     pub terminals: crate::terminal::Terminals,
     /// The automations whose probe is running now: one look at a time.
     pub probing: HashSet<String>,
-    /// The workspaces' checkouts are being looked at: one look at a time.
-    pub summarizing: bool,
+    /// Each workspace's checkout as last looked at: what its `.git/HEAD`
+    /// says and when its index last changed.
+    checkouts: HashMap<String, String>,
+    /// Workspaces whose branch and lines are to be counted again (a turn
+    /// ended in them), and those being counted now.
+    stale: HashSet<String>,
+    counting: HashSet<String>,
 }
 
-/// Looks at each open workspace's checkout and tells the clients of a
-/// branch or uncommitted lines that changed (`gitRuntime.currentBranch`,
-/// `diffStat`), as the line under the composer shows them.
-pub fn summarize_checkouts(shared: &Shared) {
-    let folders: Vec<(String, String)> = {
+/// What a checkout's git metadata says now, cheaply (files read, no
+/// `git` run): its HEAD and when its index changed. A switch, a commit or
+/// an add changes it; an edit to a file alone does not.
+fn checkout_mark(dir: &str) -> Option<String> {
+    let dot = Path::new(dir).join(".git");
+    // A worktree's `.git` is a file naming its own git folder.
+    let git = if dot.is_file() {
+        let pointer = std::fs::read_to_string(&dot).ok()?;
+        let target = PathBuf::from(pointer.strip_prefix("gitdir:")?.trim());
+        if target.is_absolute() { target } else { Path::new(dir).join(target) }
+    } else {
+        dot
+    };
+    let head = std::fs::read_to_string(git.join("HEAD")).ok()?;
+    let index = std::fs::metadata(git.join("index"))
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos());
+    Some(format!("{}@{index}", head.trim()))
+}
+
+/// Keeps the workspaces' branch and uncommitted lines (`gitRuntime.
+/// currentBranch`, `diffStat`) as the line under the composer shows them,
+/// as Lody does without polling the files: counted when the service
+/// starts or a workspace is new, when a turn in it ends, and when its git
+/// metadata moves (a switch, a commit, an add in a terminal). Run every
+/// few seconds; reading those two files is all it does unless one moved.
+pub fn watch_checkouts(shared: &Shared) {
+    let due: Vec<(String, String)> = {
         let mut host = shared.borrow_mut();
-        if host.summarizing {
-            return;
-        }
-        host.summarizing = true;
-        host.state
+        let open: Vec<(String, String)> = host
+            .state
             .workspaces
             .iter()
             .filter(|(_, w)| w["archivedAt"].is_null())
@@ -63,18 +90,32 @@ pub fn summarize_checkouts(shared: &Shared) {
                 let dir = w["workspaceDirectory"].as_str().or(w["projectRootPath"].as_str())?;
                 Some((id.clone(), dir.to_owned()))
             })
-            .collect()
+            .collect();
+        let mut due = Vec::new();
+        for (id, dir) in open {
+            let Some(mark) = checkout_mark(&dir) else { continue };
+            let moved = host.checkouts.get(&id) != Some(&mark);
+            let stale = host.stale.remove(&id);
+            if (moved || stale) && !host.counting.contains(&id) {
+                host.checkouts.insert(id.clone(), mark);
+                host.counting.insert(id.clone());
+                due.push((id, dir));
+            }
+        }
+        due
     };
-    let shared = shared.clone();
-    tokio::task::spawn_local(async move {
-        for (id, dir) in folders {
-            let Some((branch, added, removed)) = crate::git::summary(&dir).await else { continue };
+    for (id, dir) in due {
+        let shared = shared.clone();
+        tokio::task::spawn_local(async move {
+            let summary = crate::git::summary(&dir).await;
             let mut host = shared.borrow_mut();
-            let Some(record) = host.state.workspaces.get_mut(&id) else { continue };
+            host.counting.remove(&id);
+            let Some((branch, added, removed)) = summary else { return };
+            let Some(record) = host.state.workspaces.get_mut(&id) else { return };
             let stat = json!({"additions":added,"deletions":removed});
             let branch = (!branch.is_empty()).then_some(branch);
             if record["diffStat"] == stat && record["gitRuntime"]["currentBranch"].as_str() == branch.as_deref() {
-                continue;
+                return;
             }
             record["diffStat"] = stat;
             if !record["gitRuntime"].is_object() {
@@ -83,9 +124,8 @@ pub fn summarize_checkouts(shared: &Shared) {
             record["gitRuntime"]["currentBranch"] = json!(branch);
             let record = record.clone();
             host.publish("workspace_update", json!({"kind":"upsert","workspace":record}));
-        }
-        shared.borrow_mut().summarizing = false;
-    });
+        });
+    }
 }
 
 pub fn envelope(kind: &str, payload: Value) -> Value {
@@ -157,7 +197,9 @@ impl Host {
             timelines: HashMap::new(),
             terminals: Default::default(),
             probing: HashSet::new(),
-            summarizing: false,
+            checkouts: HashMap::new(),
+            stale: HashSet::new(),
+            counting: HashSet::new(),
         };
         // A run the last service left underway ended with it: it would
         // count as at work for good, and its automation start nothing.
@@ -349,6 +391,8 @@ impl Host {
         if let Some(record) = self.state.workspaces.get_mut(&workspace)
             && record["status"] != status
         {
+            // A turn began or ended: its lines are counted again.
+            self.stale.insert(workspace.clone());
             record["status"] = json!(status);
             record["activityAt"] = now();
             let record = record.clone();
