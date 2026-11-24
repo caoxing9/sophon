@@ -173,7 +173,7 @@ pub(crate) fn model_picker(live: bool, current_name: Memo<String>) -> impl IntoE
         .align(nsh_core::overlay::Align::Start)
         .offset(px(4.0))
         .popup_style(|s: nsh_core::element::StyleRefinement| {
-            s.bg(POPOVER()).rounded(px(R_LG)).border_1().border_color(tint(FG(), 0.10)).shadow_lg().overflow_hidden()
+            s.bg(POPOVER()).rounded(px(R_LG)).border_1().border_color(tint(FG(), 0.10)).overflow_hidden()
         })
         .trigger(
             view()

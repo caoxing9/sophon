@@ -157,7 +157,6 @@ pub(crate) fn selection_layer(chosen: Signal<Chosen>, open: Signal<Chosen>) -> i
                     .bg(POPOVER())
                     .border_1()
                     .border_color(BORDER())
-                    .shadow_md()
                     // Solid, so the chosen words under it don't show through.
                     .hover(|s| s.bg(SURFACE3()).border_color(BORDER_STRONG()))
                     .child(icon(Icon::MessageSquare, 13.0).text_color(FG()))
@@ -185,7 +184,6 @@ pub(crate) fn selection_layer(chosen: Signal<Chosen>, open: Signal<Chosen>) -> i
                     .bg(POPOVER())
                     .border_1()
                     .border_color(BORDER())
-                    .shadow_lg()
                     .child(
                         view()
                             .border_l(px(2.0))

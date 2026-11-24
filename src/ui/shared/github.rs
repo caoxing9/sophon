@@ -400,7 +400,7 @@ fn filters_menu(filters: Memo<store::DeskInbox>, all: Memo<Vec<InboxItem>>) -> i
         .align(nsh_core::overlay::Align::Start)
         .offset(px(4.0))
         .popup_style(|s: nsh_core::element::StyleRefinement| {
-            s.bg(POPOVER()).rounded(px(R_LG)).border_1().border_color(tint(FG(), 0.10)).shadow_lg().overflow_hidden().w(px(240.0))
+            s.bg(POPOVER()).rounded(px(R_LG)).border_1().border_color(tint(FG(), 0.10)).overflow_hidden().w(px(240.0))
         })
         .trigger(
             view()
@@ -889,7 +889,6 @@ fn actions(repo: &str, d: &Detail, busy: Memo<bool>) -> View {
                     .border_1()
                     .border_color(BORDER_STRONG())
                     .bg(POPOVER())
-                    .shadow_lg()
                     .child(text(title).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)))
                     .child(text(detail).text_size(tx(TEXT_SM)).text_color(FG_MUTED()))
                     .child(

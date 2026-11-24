@@ -734,7 +734,6 @@ fn suggest_panel(target: Target, doc: Doc) -> impl IntoElement {
                 .mb(sp(S2))
                 .p(sp(S1))
                 .bg(POPOVER())
-                .shadow_md()
                 .child(scroll().max_h(px(row_h * MENU_ROWS as f32)).element_ref(&scroller).child(list))
         }))
     }))

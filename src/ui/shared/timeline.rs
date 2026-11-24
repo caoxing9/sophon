@@ -143,7 +143,6 @@ fn turn_rail() -> impl IntoElement {
                         .p(sp(S3))
                         .gap(sp(S1))
                         .rounded(px(R_XL))
-                        .shadow_lg()
                         .pointer_events(PointerEvents::None)
                         .child(text(message).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).text_color(FG()).number_of_lines(1))
                         .when(!reply.is_empty(), |v| {
@@ -1209,7 +1208,6 @@ fn jump_buttons() -> impl IntoElement {
             .backdrop_saturate(1.7)
             .border_1()
             .border_color(glass_edge())
-            .shadow_md()
             .group()
             .active(|s| s.opacity(0.75))
             .opacity(move || if shown.get() { 1.0_f32 } else { 0.0 })
@@ -1978,8 +1976,7 @@ pub(crate) fn find_bar() -> impl IntoElement {
             .h(px(40.0))
             .pl(sp(S3))
             .pr(sp(S1))
-            .rounded(px(R_XL))
-            .shadow_lg();
+            .rounded(px(R_XL));
         let panel = if MOBILE { panel.mx(sp(S2)).mb(sp(S2)) } else { panel.absolute().top(sp(S2)).right(sp(S6)).w(px(360.0)) };
         panel
             .child(icon(Icon::Search, 15.0).text_color(FG_MUTED()))

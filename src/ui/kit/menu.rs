@@ -1,5 +1,5 @@
 //! Dropdown menus on `nsh/base`'s `Menu`: a popover surface with a hairline
-//! border and a soft shadow, rows with an optional icon, a description and
+//! border and no shadow, rows with an optional icon, a description and
 //! a check for the current choice.
 
 #![allow(dead_code)]
@@ -27,7 +27,6 @@ fn popup(s: StyleRefinement) -> StyleRefinement {
         .p(sp(S1))
         .min_w(px(220.0))
         .max_w(px(360.0))
-        .shadow_lg()
 }
 
 /// A menu that opens under `trigger`.
