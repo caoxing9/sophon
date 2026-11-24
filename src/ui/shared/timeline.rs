@@ -1324,8 +1324,10 @@ fn count_chip(glyph: Icon, n: usize, color: AdaptiveColor) -> impl IntoElement {
         .items_center()
         .gap(px(4.0))
         .flex_shrink_0()
-        .child(icon(glyph, 13.0).text_color(color))
-        .child(text(n.to_string()).text_size(tx(TEXT_SM)).text_color(color))
+        .child(icon(glyph, 14.0).text_color(color))
+        // A digit stands above its line's middle and outgrows a 13 pt
+        // glyph: one size down and nudged, it sits level with the icon.
+        .child(text(n.to_string()).text_size(tx(TEXT_XS)).text_color(color).mt(px(1.0)))
 }
 
 /// Thoughts shown whole, by how they begin: the list recycles its rows,
@@ -1787,8 +1789,8 @@ pub(crate) fn tracks() -> View {
             }
             let open = work_open.get();
             Some(untracked(move || {
-                // Folded: a terminal and how many run, as a folded run of
-                // tool calls reads; what each is for shows when opened.
+                // Folded: one line saying how many run; what each is for
+                // shows when opened.
                 let head = nsh_base::button()
                     .on_press(move || work_open.set(!open))
                     .flex_row()
@@ -1799,7 +1801,7 @@ pub(crate) fn tracks() -> View {
                     .rounded(px(R_LG))
                     .hover(|st| st.bg(highlight()))
                     .child(status_dot(|| Status::Running))
-                    .child(count_chip(Icon::Terminal, list.len(), FG_MUTED()))
+                    .child(text(format!("{} {}", t("Background task"), list.len())).text_size(tx(TEXT_SM)).text_color(FG_MUTED()))
                     .child(view().flex_1())
                     .child(icon(if open { Icon::ChevronDown } else { Icon::ChevronUp }, 13.0).text_color(FG_FAINT()));
                 let mut c = view().mb(sp(S1)).child(head);
