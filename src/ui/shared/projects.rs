@@ -42,6 +42,24 @@ fn row_status(status: impl Fn() -> Status + 'static) -> impl IntoElement {
         }))
 }
 
+/// A row's mark at its end, where its "…" is: the titles start flush,
+/// a row at rest leaving no gap before its own. Under the pointer the
+/// actions take its place; with ⌘ held, the row's ⌘1–9.
+fn trailing_status(status: impl Fn() -> Status + 'static) -> impl IntoElement {
+    let badges = || !MOBILE && store::command_held() && store::number_shortcuts();
+    view()
+        .absolute()
+        .top(px(0.0))
+        .bottom(px(0.0))
+        .right(px(S1 + 4.5))
+        .justify_center()
+        .pointer_events(nsh_core::PointerEvents::None)
+        .opacity(move || if badges() { 0.0_f32 } else { 1.0 })
+        .group_hover(|s| s.opacity(0.0))
+        .transition_opacity()
+        .child(row_status(status))
+}
+
 /// The list; `actions` adds the desktop's (new workspace, pin, rename,
 /// archive), `empty` is what shows with no projects. Each project is a
 /// group whose workspaces fold away: a clipped height on a native spring
@@ -328,8 +346,9 @@ fn draft_row(root: String) -> impl IntoElement {
             .gap(sp(S2))
             .h(sp(ROW_HEIGHT))
             .pl(sp(S2))
-            .child(view().w(px(15.0)).items_center().child(icon(Icon::SquarePen, 13.0).text_color(FG_MUTED())))
+            .pr(px(S1 + 4.5 + 4.0))
             .child(text(t("New conversation")).text_size(tx(TEXT_BASE)).text_color(FG()).number_of_lines(1).flex_1())
+            .child(view().w(px(15.0)).items_center().child(icon(Icon::SquarePen, 13.0).text_color(FG_MUTED())))
     })
 }
 
@@ -348,7 +367,7 @@ fn conversation_row(agent: ReadSignal<crate::daemon::Agent>, actions: bool) -> i
         .gap(sp(S2))
         .h(sp(ROW_HEIGHT))
         .pl(sp(S2))
-        .child(row_status(move || agent.with(Status::of_agent_row)))
+        .when(MOBILE || !actions, |v| v.child(row_status(move || agent.with(Status::of_agent_row))))
         .child(text(move || agent.with(store::conversation_title)).text_size(tx(TEXT_BASE)).text_color(FG()).number_of_lines(1).flex_1())
         .child({
             let id = id.clone();
@@ -421,7 +440,8 @@ fn conversation_row(agent: ReadSignal<crate::daemon::Agent>, actions: bool) -> i
                 .child(main)
                 .when(actions, |v| {
                     v.child(row_actions().when(!MOBILE, |v| v.child(quick)).child(more))
-                }),
+                })
+                .when(actions && !MOBILE, |v| v.child(trailing_status(move || agent.with(Status::of_agent_row)))),
         )
 }
 
@@ -635,7 +655,7 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
         .gap(sp(S2))
         .h(sp(ROW_HEIGHT))
         .pl(sp(S2))
-        .child(row_status(status))
+        .when(MOBILE || !actions, |v| v.child(row_status(status)))
         .child(
             text(move || display_name.get())
                 .text_size(tx(TEXT_BASE))
@@ -743,7 +763,8 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
                 // The actions only under the pointer (always on a phone).
                 .when(actions, |v| {
                     v.child(row_actions().when(!MOBILE, |v| v.child(quick)).child(more))
-                }),
+                })
+                .when(actions && !MOBILE, |v| v.child(trailing_status(status))),
         )
 }
 
