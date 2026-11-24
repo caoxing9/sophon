@@ -90,7 +90,6 @@ pub(crate) fn conn_banner(top: f32) -> impl IntoElement {
                 .px(sp(S3))
                 .rounded(px(R_FULL))
                 .bg(FG())
-                .shadow_md()
                 .child(text(said).text_size(tx(TEXT_SM)).text_color(SURFACE0()).number_of_lines(1));
             // After a failure the next attempt comes by itself; the press
             // makes it now.

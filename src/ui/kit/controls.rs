@@ -341,14 +341,13 @@ pub(crate) fn switch(on: impl Fn() -> bool + 'static, on_change: impl Fn(bool) +
 }
 
 /// A liquid-glass panel: translucent, blurring what is behind it, with a
-/// bright rim and a soft drop shadow.
+/// bright rim; flat, no drop shadow.
 pub(crate) fn glass(v: View) -> View {
     v.bg(glass_fill())
         .backdrop_blur(px(GLASS_BLUR))
         .backdrop_saturate(1.7)
         .border_1()
         .border_color(glass_edge())
-        .shadow_lg()
 }
 
 /// Apple's Liquid Glass (iOS 26 and later; earlier systems keep the
@@ -361,7 +360,6 @@ pub(crate) fn liquid_glass(v: View) -> View {
         .backdrop_saturate(1.7)
         .border_1()
         .border_color(glass_edge())
-        .shadow_lg()
 }
 
 /// The denser glass of menus, dialogs and the composer (Liquid Glass on
@@ -375,7 +373,6 @@ pub(crate) fn glass_strong(v: View) -> View {
         .backdrop_saturate(1.7)
         .border_1()
         .border_color(glass_edge())
-        .shadow_xl()
 }
 
 /// The base behind the glass: the plain page surface, a solid color with

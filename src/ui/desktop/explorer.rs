@@ -142,7 +142,7 @@ fn files_view() -> View {
 fn tree_row(row: Memo<Option<store::TreeRow>>) -> impl IntoElement {
     nsh_base::context_menu()
         .popup_style(|s| {
-            s.bg(POPOVER()).rounded(px(R_XL)).border_1().border_color(BORDER()).p(sp(S1)).min_w(px(200.0)).shadow_lg()
+            s.bg(POPOVER()).rounded(px(R_XL)).border_1().border_color(BORDER()).p(sp(S1)).min_w(px(200.0))
         })
         .trigger(tree_row_body(row))
         .child(dynamic(move || {
@@ -379,7 +379,6 @@ pub(crate) fn diff_pane(path: Option<String>) -> impl IntoElement {
                         .items_center()
                         .justify_center()
                         .bg(ACCENT())
-                        .shadow_sm()
                         .child(icon(Icon::Plus, 12.0).text_color(ACCENT_FG()))
                 })
                 .render_annotation(move |a: &DiffAnnotation| {
@@ -555,6 +554,5 @@ fn comment_shell() -> View {
         .bg(glass_fill_strong())
         .border_1()
         .border_color(glass_edge())
-        .shadow_sm()
 }
 

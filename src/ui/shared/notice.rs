@@ -41,7 +41,6 @@ pub(crate) fn notice_bar(top: Memo<Length>) -> impl IntoElement {
                         .py(sp(S1))
                         .rounded(px(R_FULL))
                         .bg(FG())
-                        .shadow_lg()
                         .child(icon(Icon::Info, 15.0).text_color(SURFACE0()))
                         .child(
                             text(m.clone())

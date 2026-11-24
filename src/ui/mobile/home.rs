@@ -282,7 +282,7 @@ fn foot(tab: Signal<HomeTab>) -> impl IntoElement {
                     view().w(px(NEW)).h(px(NEW)).translate_y(DefiniteLength::from(px(-11.0))).pointer_events(nsh_core::PointerEvents::BoxNone).child(
                         // Only the conversations offer a new one.
                         when(move || tab.get() == HomeTab::Chats, move || {
-                            liquid_glass(view()).w(px(NEW)).h(px(NEW)).rounded(px(R_FULL)).shadow_lg().child(
+                            liquid_glass(view()).w(px(NEW)).h(px(NEW)).rounded(px(R_FULL)).child(
                                 button()
                                     .on_press(|| {
                                         dismiss_keyboard();
