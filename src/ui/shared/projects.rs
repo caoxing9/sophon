@@ -29,13 +29,15 @@ fn row_status(status: impl Fn() -> Status + 'static) -> impl IntoElement {
         .justify_center()
         .child(dynamic(move || {
             let current = status.get();
-            Some(untracked(move || {
-                if MOBILE || current != Status::Running {
-                    return status_dot(move || current).into_element();
-                }
+            Some(untracked(move || match current {
+                // Seen and at rest: no mark, its place kept.
+                Status::Idle => view().into_element(),
+                // Waiting for the user: a hand raised.
+                Status::NeedsYou => raised_hand(13.0).label(current.label()).into_element(),
                 // Running: the mark an agent at work has in its own
                 // conversation, the same here.
-                spark(13.0).label(current.label()).into_element()
+                Status::Running if !MOBILE => spark(13.0).label(current.label()).into_element(),
+                _ => status_dot(move || current).into_element(),
             }))
         }))
 }
@@ -346,9 +348,7 @@ fn conversation_row(agent: ReadSignal<crate::daemon::Agent>, actions: bool) -> i
         .gap(sp(S2))
         .h(sp(ROW_HEIGHT))
         .pl(sp(S2))
-        .child(row_status(move || {
-            agent.with(|agent| Status::of_agent(&agent.status, agent.requires_attention || !agent.pending.is_empty()))
-        }))
+        .child(row_status(move || agent.with(Status::of_agent_row)))
         .child(text(move || agent.with(store::conversation_title)).text_size(tx(TEXT_BASE)).text_color(FG()).number_of_lines(1).flex_1())
         .child({
             let id = id.clone();
@@ -609,7 +609,18 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
             .map(|a| store::conversation_title(&a))
             .unwrap_or(workspace.name)
     });
-    let status = move || ws.with(|w| w.as_ref().map(|w| Status::of_workspace(&w.status)).unwrap_or(Status::Idle));
+    // Its conversations' marks, the most urgent: as each conversation's
+    // row says it, not the service's summary (which marks a seen, idle
+    // workspace done).
+    let status = move || {
+        let Some(id) = ws.with(|w| w.as_ref().map(|w| w.id.clone())) else { return Status::Idle };
+        Status::most_urgent(
+            store::workspace_agents(&id)
+                .iter()
+                .filter(|a| !a.archived && a.parent_id.is_none() && !store::is_hidden_run(a))
+                .map(Status::of_agent_row),
+        )
+    };
 
     let main = button()
         .on_press(move || {
