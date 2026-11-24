@@ -241,6 +241,38 @@ impl Status {
         }
     }
 
+    /// What a conversation asks of the user, as the sidebar marks it: an
+    /// approval or a question (needs you), a failure not yet seen, its
+    /// work, a finished turn not yet seen (done); nothing once seen.
+    pub(crate) fn of_agent_row(agent: &crate::daemon::Agent) -> Self {
+        let unseen = agent.requires_attention;
+        if !agent.pending.is_empty() || (unseen && agent.attention_reason.as_deref() == Some("needs_input")) {
+            Status::NeedsYou
+        } else if unseen && (agent.status == "error" || agent.attention_reason.as_deref() == Some("error")) {
+            Status::Failed
+        } else if matches!(agent.status.as_str(), "running" | "initializing") {
+            Status::Running
+        } else if unseen {
+            Status::Done
+        } else {
+            Status::Idle
+        }
+    }
+
+    /// The one of several conversations' marks a workspace shows: what
+    /// most wants the user (needs you, then a failure, work, a finished
+    /// turn).
+    pub(crate) fn most_urgent(marks: impl IntoIterator<Item = Self>) -> Self {
+        let rank = |s: &Status| match s {
+            Status::NeedsYou => 4,
+            Status::Failed => 3,
+            Status::Running => 2,
+            Status::Done => 1,
+            Status::Idle => 0,
+        };
+        marks.into_iter().max_by_key(rank).unwrap_or(Status::Idle)
+    }
+
     pub(crate) fn of_workspace(status: &str) -> Self {
         match status {
             "running" => Status::Running,
@@ -486,6 +518,32 @@ pub(crate) fn mark(size: f32, lift: Lift) -> View {
 /// dot opening into a flower and closing again), set one on another and
 /// each shown in its turn. Natively, as [`eclipse`]: an animated opacity
 /// for each, no layout or engine work per frame.
+/// A hand raised and waving now and then: a conversation waits for the
+/// user (an approval, a question).
+pub(crate) fn raised_hand(size: f32) -> View {
+    let turn = animated_value(0.0);
+    let step = |to: f32, ms: f32| Animation::timing(&turn, to, nsh_core::element::Timing::new(ms, Easing::EaseInOut));
+    Animation::sequence([
+        step(-14.0, 120.0),
+        step(12.0, 160.0),
+        step(-10.0, 140.0),
+        step(0.0, 120.0),
+        Animation::delay(1600.0),
+    ])
+    .looped(None)
+    .start();
+    view()
+        .w(px(size))
+        .h(px(size))
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        // It turns at the wrist.
+        .transform_origin(nsh_core::TransformOrigin { x: relative(0.5).into(), y: relative(1.0).into(), z: px(0.0) })
+        .bind_rotate(&turn)
+        .child(icon(Icon::Hand, size).text_color(DOT_WARNING))
+}
+
 pub(crate) fn spark(size: f32) -> View {
     // The third has a sign after it that keeps it a drawn mark where a
     // system would make an emoji of it.
