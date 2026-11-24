@@ -428,7 +428,9 @@ async fn serve(home: PathBuf) -> Result<(), Error> {
     let mut again = false;
     let mut poll = interval(Duration::from_millis(200));
     let mut schedules = interval(Duration::from_secs(1));
-    // The workspaces' branches and uncommitted lines (`watch_checkouts`).
+    // The workspaces' branches and uncommitted lines, counted when one is
+    // new or a turn in it began or ended (`watch_checkouts`): this only
+    // looks at what is marked.
     let mut checkouts = interval(Duration::from_secs(2));
     checkouts.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {

@@ -8,7 +8,7 @@ use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
     io,
-    path::{Path, PathBuf},
+    path::PathBuf,
     rc::Rc,
 };
 use tokio::sync::{broadcast, mpsc::UnboundedSender};
@@ -41,43 +41,20 @@ pub struct Host {
     pub terminals: crate::terminal::Terminals,
     /// The automations whose probe is running now: one look at a time.
     pub probing: HashSet<String>,
-    /// Each workspace's checkout as last looked at: what its `.git/HEAD`
-    /// says and when its index last changed.
-    checkouts: HashMap<String, String>,
+    /// Workspaces whose branch and lines were counted since the service
+    /// started.
+    counted: HashSet<String>,
     /// Workspaces whose branch and lines are to be counted again (a turn
     /// ended in them), and those being counted now.
     stale: HashSet<String>,
     counting: HashSet<String>,
 }
 
-/// What a checkout's git metadata says now, cheaply (files read, no
-/// `git` run): its HEAD and when its index changed. A switch, a commit or
-/// an add changes it; an edit to a file alone does not.
-fn checkout_mark(dir: &str) -> Option<String> {
-    let dot = Path::new(dir).join(".git");
-    // A worktree's `.git` is a file naming its own git folder.
-    let git = if dot.is_file() {
-        let pointer = std::fs::read_to_string(&dot).ok()?;
-        let target = PathBuf::from(pointer.strip_prefix("gitdir:")?.trim());
-        if target.is_absolute() { target } else { Path::new(dir).join(target) }
-    } else {
-        dot
-    };
-    let head = std::fs::read_to_string(git.join("HEAD")).ok()?;
-    let index = std::fs::metadata(git.join("index"))
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or(0, |d| d.as_nanos());
-    Some(format!("{}@{index}", head.trim()))
-}
-
 /// Keeps the workspaces' branch and uncommitted lines (`gitRuntime.
 /// currentBranch`, `diffStat`) as the line under the composer shows them,
-/// as Lody does without polling the files: counted when the service
-/// starts or a workspace is new, when a turn in it ends, and when its git
-/// metadata moves (a switch, a commit, an add in a terminal). Run every
-/// few seconds; reading those two files is all it does unless one moved.
+/// at Lody's pace: counted once a workspace is known (the service started,
+/// or it is new) and when a turn in it begins or ends; nothing is polled.
+/// An edit or a checkout made outside an agent shows at its next turn.
 pub fn watch_checkouts(shared: &Shared) {
     let due: Vec<(String, String)> = {
         let mut host = shared.borrow_mut();
@@ -93,11 +70,10 @@ pub fn watch_checkouts(shared: &Shared) {
             .collect();
         let mut due = Vec::new();
         for (id, dir) in open {
-            let Some(mark) = checkout_mark(&dir) else { continue };
-            let moved = host.checkouts.get(&id) != Some(&mark);
-            let stale = host.stale.remove(&id);
-            if (moved || stale) && !host.counting.contains(&id) {
-                host.checkouts.insert(id.clone(), mark);
+            let new = !host.counted.contains(&id);
+            if (new || host.stale.contains(&id)) && !host.counting.contains(&id) {
+                host.stale.remove(&id);
+                host.counted.insert(id.clone());
                 host.counting.insert(id.clone());
                 due.push((id, dir));
             }
@@ -197,7 +173,7 @@ impl Host {
             timelines: HashMap::new(),
             terminals: Default::default(),
             probing: HashSet::new(),
-            checkouts: HashMap::new(),
+            counted: HashSet::new(),
             stale: HashSet::new(),
             counting: HashSet::new(),
         };
