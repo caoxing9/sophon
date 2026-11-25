@@ -2238,6 +2238,11 @@ pub(crate) fn group_summary(start: usize, end: usize) -> crate::fold::Summary {
 pub(crate) fn set_timeline_scroll(offset: f32, content: f32, height: f32) {
     let from_end = content - offset - height;
     TIMELINE_FROM_END.with(|d| d.set(from_end));
+    TIMELINE_HEIGHT.with(|h| h.set(height));
+    if content > height + 1.0 && TIMELINE_FILLING.with(|f| f.replace(false)) {
+        set_timeout(std::time::Duration::ZERO, timeline_to_end_now);
+    }
+    fill_timeline();
     // The content grew or shrank (a reply streaming, a group opened, a
     // page measured): the scroll that comes with it, and for a moment
     // after, is the list's own, not the user's.
@@ -2401,6 +2406,28 @@ pub(crate) fn timeline_loaded() -> bool {
 
 /// Whether the open conversation shows this device's copy still, the host
 /// not having said yet what came since.
+/// The page shown does not fill the view (a turn of tool calls folds to a
+/// row or two, and there is nothing to scroll to the start by): the pages
+/// before it come at once, one by one until it does, and then the list is
+/// at its end again. Asked as the list measures itself, and a moment
+/// after its rows or pages change.
+pub(crate) fn fill_timeline() {
+    let (content, height) = (TIMELINE_CONTENT.with(|c| c.get().0), TIMELINE_HEIGHT.with(std::cell::Cell::get));
+    if height <= 0.0 || content > height + 1.0 {
+        return;
+    }
+    if global::<Timeline>().with_untracked(|t| t.older.is_some() && !t.loading_older && !t.syncing) {
+        TIMELINE_FILLING.with(|f| f.set(true));
+        load_older();
+    }
+}
+
+/// Whether the conversation shown has earlier pages, and is settled with
+/// its host (read in an effect: a page coming asks [`fill_timeline`]).
+pub(crate) fn timeline_pages() -> (bool, bool, bool) {
+    global::<Timeline>().with(|t| (t.older.is_some(), t.loading_older, t.syncing))
+}
+
 pub(crate) fn timeline_syncing() -> bool {
     global::<Timeline>().with(|t| t.syncing)
 }
@@ -6759,6 +6786,11 @@ thread_local! {
     /// a scroll then is the list keeping its end in place (or settling),
     /// not the user's.
     static TIMELINE_CONTENT: std::cell::Cell<(f32, Option<std::time::Instant>)> = const { std::cell::Cell::new((0.0, None)) };
+    /// Earlier pages are on their way because the list did not fill the
+    /// view: once it does, it goes to its end.
+    static TIMELINE_FILLING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The list's height as last seen.
+    static TIMELINE_HEIGHT: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
 }
 
 pub(crate) fn set_timeline_list(list: ElementRef) {
@@ -6766,6 +6798,8 @@ pub(crate) fn set_timeline_list(list: ElementRef) {
     // Nothing known of the new list's place yet (the last one's is not it).
     TIMELINE_FROM_END.with(|d| d.set(f32::INFINITY));
     TIMELINE_CONTENT.with(|c| c.set((0.0, None)));
+    TIMELINE_FILLING.with(|f| f.set(false));
+    TIMELINE_HEIGHT.with(|h| h.set(0.0));
     // The list going to its end as it opens is not the user scrolling.
     TIMELINE_OPENED.with(|o| o.set(Some(std::time::Instant::now())));
     global::<TimelineScrolling>().set(TimelineScrolling(false));
