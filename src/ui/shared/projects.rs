@@ -43,21 +43,25 @@ fn row_status(status: impl Fn() -> Status + 'static) -> impl IntoElement {
 }
 
 /// A row's mark at its end, where its "…" is: the titles start flush,
-/// a row at rest leaving no gap before its own. Under the pointer the
-/// actions take its place; with ⌘ held, the row's ⌘1–9.
+/// and a row at rest has none and gives the title its whole width. One
+/// with a mark keeps room for it, so a long title ends before it rather
+/// than under it. Under the pointer the actions take its place; with ⌘
+/// held, the row's ⌘1–9.
 fn trailing_status(status: impl Fn() -> Status + 'static) -> impl IntoElement {
     let badges = || !MOBILE && store::command_held() && store::number_shortcuts();
+    let status = computed(status);
+    let marked = computed(move || status.get() != Status::Idle);
     view()
-        .absolute()
-        .top(px(0.0))
-        .bottom(px(0.0))
-        .right(px(S1 + 4.5))
+        .flex_shrink_0()
+        .items_center()
         .justify_center()
+        .overflow_hidden()
         .pointer_events(nsh_core::PointerEvents::None)
-        .opacity(move || if badges() { 0.0_f32 } else { 1.0 })
-        .group_hover(|s| s.opacity(0.0))
+        // Its mark where the "…" is under the pointer.
+        .max_w(move || px(if marked.get() && !badges() { 15.0 + 4.5 } else { 0.0 }))
+        .group_hover(|s| s.max_w(px(0.0)).opacity(0.0))
         .transition_opacity()
-        .child(row_status(status))
+        .child(view().mr(px(4.5)).child(row_status(move || status.get())))
 }
 
 /// The list; `actions` adds the desktop's (new workspace, pin, rename,
