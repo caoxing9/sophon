@@ -212,6 +212,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("That file is on the other computer", "这个文件在另一台电脑上"),
     ("Yesterday", "昨天"),
     ("Edit message", "编辑消息"),
+    ("Gemini API endpoint, e.g. https://example.com/gemini", "Gemini API 地址，如 https://example.com/gemini"),
     ("Use the suggestion", "使用建议"),
     ("Claude Code no longer has this conversation's record: it goes on in a new session, told what was said before.", "Claude Code 已没有这段对话的记录：改在新会话里继续，并把之前的对话内容带了过去。"),
     ("Claude Code no longer has this conversation's record: it goes on in a new session, without what was said before.", "Claude Code 已没有这段对话的记录：改在新会话里继续，之前的内容没能带过去。"),

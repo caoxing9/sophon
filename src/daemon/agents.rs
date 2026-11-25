@@ -196,6 +196,7 @@ pub fn remove_patch(id: &str) -> Value {
 pub enum Base {
     Claude,
     Codex,
+    Gemini,
 }
 
 impl Base {
@@ -203,6 +204,7 @@ impl Base {
         match self {
             Base::Claude => "claude",
             Base::Codex => "codex",
+            Base::Gemini => "gemini",
         }
     }
 
@@ -211,6 +213,8 @@ impl Base {
         match self {
             Base::Claude => "CLAUDE_CONFIG_DIR",
             Base::Codex => "CODEX_HOME",
+            // Gemini CLI keeps its `.gemini` inside this folder.
+            Base::Gemini => "GEMINI_CLI_HOME",
         }
     }
 
@@ -219,6 +223,7 @@ impl Base {
         match self {
             Base::Claude => format!("~/.claude-{slug}"),
             Base::Codex => format!("~/.codex-{slug}"),
+            Base::Gemini => format!("~/.gemini-{slug}"),
         }
     }
 }
@@ -274,6 +279,8 @@ pub fn login_command(base: Base, dir: &str) -> String {
         Base::Claude => format!("CLAUDE_CONFIG_DIR={dir} claude auth login"),
         // Codex refuses a CODEX_HOME that does not exist.
         Base::Codex => format!("mkdir -p {dir} && CODEX_HOME={dir} codex login"),
+        // Gemini CLI has no login command: started, it asks how to sign in.
+        Base::Gemini => format!("mkdir -p {dir} && GEMINI_CLI_HOME={dir} gemini"),
     }
 }
 
@@ -379,6 +386,10 @@ pub fn key_instance_patch(id: &str, k: &KeyInstance) -> Value {
             // ChatGPT login off (`requires_openai_auth = false`).
             env.insert("OPENAI_BASE_URL".into(), k.base_url.trim().into());
             env.insert("OPENAI_API_KEY".into(), k.key.trim().into());
+        }
+        Base::Gemini => {
+            env.insert("GOOGLE_GEMINI_BASE_URL".into(), k.base_url.trim().into());
+            env.insert("GEMINI_API_KEY".into(), k.key.trim().into());
         }
     }
     for (name, value) in &k.extra_env {
@@ -570,6 +581,9 @@ mod tests {
         assert_eq!(account_patch("cx", Base::Codex, "Cx", "/h/.codex-cx")["providers"]["cx"]["env"], json!({ "CODEX_HOME": "/h/.codex-cx" }));
         assert_eq!(login_command(Base::Claude, "/Users/me/.claude-work"), "CLAUDE_CONFIG_DIR=/Users/me/.claude-work claude auth login");
         assert_eq!(login_command(Base::Codex, "/a b"), "mkdir -p '/a b' && CODEX_HOME='/a b' codex login");
+        assert_eq!(login_command(Base::Gemini, "/h/.gemini-g"), "mkdir -p /h/.gemini-g && GEMINI_CLI_HOME=/h/.gemini-g gemini");
+        assert_eq!(account_patch("g", Base::Gemini, "G", "/h/.gemini-g")["providers"]["g"]["env"], json!({ "GEMINI_CLI_HOME": "/h/.gemini-g" }));
+        assert_eq!(account_patch("g", Base::Gemini, "G", "/h/.gemini-g")["providers"]["g"]["extends"], "gemini");
     }
 
     #[test]

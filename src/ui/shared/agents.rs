@@ -277,6 +277,8 @@ fn pending_login(p: &Provider, d: &Diagnostic, cfg: Option<&Value>) -> Option<St
         (Base::Claude, dir)
     } else if let Some(dir) = env.get("CODEX_HOME").filter(|_| env.get("OPENAI_BASE_URL").is_none()) {
         (Base::Codex, dir)
+    } else if let Some(dir) = env.get("GEMINI_CLI_HOME").filter(|_| env.get("GOOGLE_GEMINI_BASE_URL").is_none()) {
+        (Base::Gemini, dir)
     } else {
         return None;
     };
@@ -313,12 +315,19 @@ fn base_label(b: Base) -> &'static str {
     match b {
         Base::Claude => "Claude Code",
         Base::Codex => "Codex",
+        Base::Gemini => "Gemini CLI",
     }
 }
 
-fn base_choice(base: Signal<Base>) -> View {
+/// The agents an instance can run on: `gemini` too where it may (an
+/// account; an endpoint is Anthropic's or OpenAI's kind).
+fn base_choice(base: Signal<Base>, gemini: bool) -> View {
+    let mut bases = vec![Base::Claude, Base::Codex];
+    if gemini {
+        bases.push(Base::Gemini);
+    }
     segmented(
-        vec![(Base::Claude, base_label(Base::Claude).into()), (Base::Codex, base_label(Base::Codex).into())],
+        bases.into_iter().map(|b| (b, base_label(b).into())).collect(),
         move || base.get(),
         move |b| base.set(b),
     )
@@ -365,7 +374,7 @@ pub(crate) fn add_account() -> View {
             None => view()
                 .gap(sp(S3))
                 .child(hint(t("A separate agent with its own login, next to the one you have. Sophon never switches accounts on its own")))
-                .child(base_choice(base))
+                .child(base_choice(base, true))
                 .child(field().value(move || name.get()).on_change(move |v: &str| name.set(v.to_owned())).placeholder(t("Name, e.g. Work")))
                 .child(
                     field()
@@ -446,7 +455,7 @@ pub(crate) fn add_api_key() -> View {
                 if custom {
                     view()
                         .gap(sp(S3))
-                        .child(base_choice(base))
+                        .child(base_choice(base, false))
                         .child(
                             field()
                                 .value(move || url.get())
@@ -454,6 +463,7 @@ pub(crate) fn add_api_key() -> View {
                                 .placeholder(move || match base.get() {
                                     Base::Claude => t("Anthropic-compatible endpoint, e.g. https://example.com/anthropic"),
                                     Base::Codex => t("OpenAI Responses endpoint, e.g. https://example.com/v1"),
+                                    Base::Gemini => t("Gemini API endpoint, e.g. https://example.com/gemini"),
                                 })
                                 .font_family(mono_font),
                         )
