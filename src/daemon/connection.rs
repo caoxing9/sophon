@@ -693,6 +693,9 @@ pub struct Schedule {
     pub timed: bool,
     /// Why its probe last failed.
     pub probe_error: Option<String>,
+    /// What its trigger found when it began, left aside (it handles what
+    /// comes after): a run asked for by hand takes them.
+    pub skipped: usize,
 }
 
 /// One time a schedule ran.
@@ -806,6 +809,7 @@ impl Schedule {
             runs_today: v.get("runsToday").and_then(Value::as_u64).unwrap_or(0) as u32,
             timed: v.get("cadence").is_some_and(Value::is_object),
             probe_error: s("probeError").filter(|e| !e.is_empty()),
+            skipped: v.get("skipped").and_then(Value::as_array).map_or(0, Vec::len),
             status: s("status").unwrap_or_default(),
             next_run: s("nextRunAt"),
             last_run: s("lastRunAt"),

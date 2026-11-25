@@ -1098,6 +1098,9 @@ async fn a_probe_s_new_event_starts_a_run_that_answers_who_caused_it() {
     }
     let logs = ask(&mut socket, json!({"type":"schedule/logs","scheduleId":id})).await;
     assert_eq!(logs["payload"]["runs"], json!([]), "{logs}");
+    // Kept apart, for a run asked for by hand.
+    let list = ask(&mut socket, json!({"type":"schedule/list"})).await;
+    assert_eq!(list["payload"]["schedules"][0]["skipped"], json!(["old"]), "{list}");
 
     // A new one starts a run, once, with what it carries in the prompt.
     let mut events = fs::OpenOptions::new()
@@ -3357,4 +3360,41 @@ done
     assert_eq!(sent.matches(r#""second""#).count(), 2, "{sent}");
     let args = fs::read_to_string(service.0.path().join("args")).unwrap();
     assert!(args.contains("--replay-user-messages"), "{args}");
+}
+
+#[tokio::test]
+async fn what_was_there_when_an_automation_began_runs_when_asked_for_by_hand() {
+    let service = Service(tempfile::tempdir().unwrap());
+    let work = tempfile::tempdir().unwrap();
+    let work = work.path().canonicalize().unwrap();
+    install_provider(service.0.path());
+    service.cli("start");
+    let mut socket = service.connect(true).await;
+    // A review asked for before the automation was set up.
+    fs::write(work.join("events"), "{\"id\":\"old\",\"vars\":{\"url\":\"https://x/pull/1\"}}\n").unwrap();
+    let created = ask(&mut socket, json!({"type":"schedule/create","name":"Reviews","prompt":"Review {{url}}",
+        "cadence":{"type":"every","everyMs":300},"probe":"cat events",
+        "target":{"type":"new-agent","config":{"provider":"codex","cwd":work,"isolation":"local"}}})).await;
+    let id = created["payload"]["schedule"]["id"].clone();
+    for _ in 0..100 {
+        let list = ask(&mut socket, json!({"type":"schedule/list"})).await;
+        if list["payload"]["schedules"][0]["primed"] == true {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // Left aside by the looks that follow…
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    let logs = ask(&mut socket, json!({"type":"schedule/logs","scheduleId":id})).await;
+    assert_eq!(logs["payload"]["runs"], json!([]), "{logs}");
+    // …and run once asked for, once.
+    ask(&mut socket, json!({"type":"schedule/run-once","scheduleId":id})).await;
+    finished(&mut socket).await;
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    let logs = ask(&mut socket, json!({"type":"schedule/logs","scheduleId":id})).await;
+    let runs = logs["payload"]["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 1, "{logs}");
+    assert_eq!(runs[0]["event"]["id"], "old");
+    let list = ask(&mut socket, json!({"type":"schedule/list"})).await;
+    assert_eq!(list["payload"]["schedules"][0]["skipped"], json!([]), "{list}");
 }

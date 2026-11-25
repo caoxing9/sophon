@@ -604,6 +604,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Runs", "记录"),
     ("No runs yet", "还没有运行过"),
     ("This automation has not run yet", "这个自动化还没有运行过"),
+    ("{} were already waiting when this automation began, and were left: it handles what comes after. Run now handles them.", "启用时已经有 {} 个在等，当时没有处理（只处理之后的新请求）。点「立即运行」处理它们。"),
     ("Turn “{}” on or off", "开启或关闭「{}」"),
     ("Succeeded", "成功"),
     ("Open conversation", "打开对话"),
