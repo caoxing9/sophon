@@ -51,10 +51,12 @@ impl RowKind {
 }
 
 pub(crate) fn timeline() -> impl IntoElement {
-    let loaded = computed(store::timeline_loaded);
+    // A list of its own for each conversation: it opens at that
+    // conversation's end, wherever the last one was left.
+    let loaded = computed(|| (store::timeline_loaded(), store::selected_id()));
     let running = computed(|| store::selected_agent().is_some_and(|a| a.is_running()));
     view().flex_1().child(dynamic(move || {
-        let ready = loaded.get();
+        let (ready, _) = loaded.get();
         Some(untracked(move || {
             if !ready {
                 return view()
@@ -67,7 +69,6 @@ pub(crate) fn timeline() -> impl IntoElement {
             }
             // Rows, not items: a run of tool calls is one row while folded.
             let rows = computed(store::display_rows);
-            let count = rows.with_untracked(Vec::len);
             let list = element_ref();
             store::set_timeline_list(list.clone());
             view().flex_1().child(virtual_list(move || rows.with(Vec::len), move |at: Position| row(at, rows, running))
@@ -80,7 +81,9 @@ pub(crate) fn timeline() -> impl IntoElement {
                 // The turns' rail down the left is the desktop's map of the
                 // conversation: no scroll bar beside it.
                 .scrollbar(MOBILE)
-                .initial_scroll_index(count.saturating_sub(1))
+                // At its end, the last row at the bottom, kept there while
+                // the rows measure (nsh pins it): no jumps as they do.
+                .initial_scroll_to_end()
                 .follow_end(px(FOLLOW_END))
                 // How far from its end the list is, for what depends on
                 // its keeping the end in place (`store::set_group_open`).
