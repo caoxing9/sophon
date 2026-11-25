@@ -734,8 +734,18 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
                     let id = w.id.clone();
                     move || store::recover_workspace(&id)
                 }))
+                // The row shows its newest conversation, by that one's title:
+                // a rename names it (kept over what is said in it later); a
+                // workspace with none is renamed itself.
                 .child(menu_row(t("Rename"), Some(Icon::Pencil), None, false, move || {
-                    store::open_modal(store::Modal::RenameWorkspace { id: rename_id.clone(), name: name.clone() })
+                    let shown = store::workspace_agents(&rename_id)
+                        .into_iter()
+                        .filter(|a| !a.archived && a.parent_id.is_none() && !store::is_hidden_run(a))
+                        .max_by(|a, b| a.updated_at.cmp(&b.updated_at));
+                    match shown {
+                        Some(a) => store::open_modal(store::Modal::RenameAgent { id: a.id.clone(), name: store::conversation_title(&a) }),
+                        None => store::open_modal(store::Modal::RenameWorkspace { id: rename_id.clone(), name: name.clone() }),
+                    }
                 }))
                 .child(menu_divider())
                 .child(menu_row_danger(t("Archive workspace"), Icon::Archive, move || {
