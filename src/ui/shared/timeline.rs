@@ -76,7 +76,9 @@ pub(crate) fn timeline() -> impl IntoElement {
             // second; and this device's copy of it, shown first, grows when
             // the host's comes. It shows once the host's is there and it
             // stays at its end (most of a second at most), so a
-            // conversation opens where it ends.
+            // conversation opens where it ends. A change of its rows (the
+            // host's copy, a reply streaming in) lets go of nsh's hold on
+            // the end, so meanwhile it is sent there again.
             let settled = signal(false);
             let gone = std::rc::Rc::new(std::cell::Cell::new(false));
             {
@@ -91,7 +93,12 @@ pub(crate) fn timeline() -> impl IntoElement {
                         return;
                     }
                     let (from_end, content) = store::timeline_place();
-                    steady = if from_end <= 2.0 && content == last && !untracked(store::timeline_syncing) { steady + 1 } else { 0 };
+                    if from_end.is_finite() && from_end > 2.0 {
+                        store::timeline_to_end_now();
+                    }
+                    // A reply streaming in grows it on: at its end is enough.
+                    let streaming = untracked(|| store::selected_agent().is_some_and(|a| a.is_running()));
+                    steady = if from_end <= 2.0 && (content == last || streaming) && !untracked(store::timeline_syncing) { steady + 1 } else { 0 };
                     last = content;
                     if steady >= 3 {
                         break;
@@ -130,7 +137,13 @@ pub(crate) fn timeline() -> impl IntoElement {
                 .content_padding_bottom(px(if MOBILE { 200.0 } else { S4 }))
                 .footer(thinking(running))
                 // Earlier pages come as the conversation nears its start.
-                .on_load_more_at_start(store::load_older)
+                // Not while it opens: an earlier page put before the rows
+                // keeps what shows in place, away from the end.
+                .on_load_more_at_start(move || {
+                    if settled.get_untracked() {
+                        store::load_older();
+                    }
+                })
                 .load_more_at_start_threshold(1.0)
                 .flex_1())
                 // Earlier pages load by themselves as the start nears: a
