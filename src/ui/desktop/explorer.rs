@@ -86,7 +86,7 @@ pub(crate) fn explorer() -> View {
                 .pt(sp(S2))
                 .pb(sp(S1))
                 .window_drag(true)
-                .child(segmented(
+                .child(segmented_with(
                     vec![
                         (ExplorerTab::Artifacts, t("Artifacts").into()),
                         (ExplorerTab::Changes, t("Changes").into()),
@@ -94,34 +94,29 @@ pub(crate) fn explorer() -> View {
                     ],
                     store::explorer_tab,
                     store::set_explorer_tab,
+                    false,
                 ))
                 .child(view().flex_1())
                 .child(icon_btn(Icon::PanelRight, Sz::Sm, t("Toggle explorer"), store::toggle_explorer)),
         )
-        // The pages side by side, the row sliding to the picked one with
-        // the thumb above, as a pager does; each keeps its scroll.
-        .child(
-            view().flex_1().overflow_hidden().child(
-                view()
-                    .flex_1()
-                    .flex_row()
-                    .w(move || Length::from(px(width.get() * 3.0)))
-                    // Moved by its frame, not a transform, so the pages
-                    // coming in are laid out where they show; the switch's
-                    // layout spring (the thumb's) carries it.
-                    .ml(move || {
-                        let i = match tab.get() {
-                            ExplorerTab::Artifacts => 0.0,
-                            ExplorerTab::Changes => 1.0,
-                            ExplorerTab::Files => 2.0,
-                        };
-                        Length::from(px(-i * width.get()))
-                    })
-                    .child(view().w(page).child(super::artifacts::artifacts_view(computed(move || tab.get() == ExplorerTab::Artifacts)).flex_1()))
-                    .child(view().w(page).child(changes_view().flex_1()))
-                    .child(view().w(page).child(files_view().flex_1())),
-            ),
-        )
+        // Only the picked page laid out and shown, switched at once as T3
+        // Code's, Paseo's and Lody's panels are. The others stay built (each
+        // keeps its state) but take no room, so nothing of theirs is laid
+        // out or drawn while hidden.
+        .child({
+            let hidden = move |which: ExplorerTab| move || tab.get() != which;
+            view()
+                .flex_1()
+                .overflow_hidden()
+                .child(page_layer(super::artifacts::artifacts_view(computed(move || tab.get() == ExplorerTab::Artifacts)), hidden(ExplorerTab::Artifacts)))
+                .child(page_layer(changes_view(), hidden(ExplorerTab::Changes)))
+                .child(page_layer(files_view(), hidden(ExplorerTab::Files)))
+        })
+}
+
+/// One of the Explorer's pages, filling it, gone while `hidden` holds.
+fn page_layer(page: View, hidden: impl Fn() -> bool + 'static) -> View {
+    view().flex_1().style_when(hidden, |s| s.hidden()).child(page.flex_1())
 }
 
 /// Every changed file's diff, one under the other, each under its header
