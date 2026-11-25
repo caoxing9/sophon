@@ -19,7 +19,8 @@ const KEPT: &[&str] = &[
     "webm", "md", "docx", "xlsx", "csv", "txt",
 ];
 
-/// Folders whose files are a tool's, not a conversation's work.
+/// Folders whose files are a tool's, not a conversation's work, wherever
+/// they are.
 const SKIPPED: &[&str] = &[
     "/node_modules/",
     "/.git/",
@@ -27,9 +28,16 @@ const SKIPPED: &[&str] = &[
     "/cache/",
     "/caches/",
     "/target/",
+];
+
+/// The system's scratch places: left out when a file is there, by its
+/// whole path. A project's own `tmp` folder (where recordings and
+/// renders are often put) is not one.
+const SCRATCH: &[&str] = &[
     "/tmp/",
     "/private/tmp/",
     "/private/var/folders/",
+    "/var/folders/",
 ];
 
 /// How a file was found, the surer first: it wrote it, or named it.
@@ -220,7 +228,10 @@ pub fn existing(
             Some(inside) => inside,
             None => shown.as_str(),
         };
-        if SKIPPED.iter().any(|skip| judged.contains(skip)) {
+        let inside = judged.len() < shown.len();
+        if SKIPPED.iter().any(|skip| judged.contains(skip))
+            || !inside && SCRATCH.iter().any(|scratch| shown.starts_with(scratch))
+        {
             continue;
         }
         let Ok(meta) = fs::metadata(&real) else {
@@ -330,5 +341,25 @@ mod tests {
         // Named before the conversation began: not its work.
         let later = i64::MAX / 2;
         assert!(existing(&found[2..3], &cwd, Some(later), "a1").is_empty());
+    }
+
+    #[test]
+    fn a_project_s_own_tmp_folder_is_kept_and_the_system_s_is_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("work");
+        fs::create_dir_all(project.join("tmp/rec")).unwrap();
+        fs::write(project.join("tmp/rec/clip.mp4"), b"x").unwrap();
+        let cwd = project.to_str().unwrap().to_owned();
+        let found = vec![("tmp/rec/clip.mp4".to_owned(), "named")];
+        let kept = existing(&found, &cwd, Some(0), "a1");
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(kept[0]["kind"], "video");
+        // Seen from a conversation elsewhere, the same file is in the
+        // system's scratch place (a temporary folder): left out.
+        let absolute = kept[0]["path"].as_str().unwrap().to_owned();
+        if SCRATCH.iter().any(|scratch| absolute.starts_with(scratch)) {
+            let elsewhere = existing(&[(absolute, "named")], "/nowhere", Some(0), "a1");
+            assert!(elsewhere.is_empty(), "{elsewhere:?}");
+        }
     }
 }
