@@ -2038,9 +2038,11 @@ fn subagent_rows(mut list: Vec<crate::daemon::connection::Subagent>) -> View {
             _ => Status::Idle,
         };
         let (parent, id) = (s.parent.clone(), s.id.clone());
-        rows = rows.child(
+        let mut row = view().flex_row().items_center().child(
             nsh_base::button()
                 .on_press(move || store::open_tab(store::Tab::Subagent(parent.clone(), id.clone())))
+                .flex_1()
+                .min_w(px(0.0))
                 .flex_row()
                 .items_center()
                 .gap(sp(S2))
@@ -2052,6 +2054,12 @@ fn subagent_rows(mut list: Vec<crate::daemon::connection::Subagent>) -> View {
                 .child(text(s.title.clone()).text_size(tx(TEXT_BASE)).number_of_lines(1).flex_shrink(1.0))
                 .child(text(s.subtitle.clone()).text_size(tx(TEXT_SM)).text_color(FG_MUTED()).number_of_lines(1).flex_1()),
         );
+        // One in the background stops from here: it is not among the background work.
+        if let Some(token) = s.stop_token.clone().filter(|_| s.status == "running") {
+            let (agent, item) = (s.parent.clone(), s.id.clone());
+            row = row.child(icon_btn(Icon::X, Sz::Sm, "Stop", move || store::stop_background(&agent, &item, &token)));
+        }
+        rows = rows.child(row);
     }
     rows
 }

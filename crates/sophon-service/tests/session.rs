@@ -2625,7 +2625,7 @@ while IFS= read -r line; do
             printf '%s\n' "$line" >> prompts
             say '{"type":"system","subtype":"session_state_changed","state":"running"}'
             say '{"type":"system","subtype":"init","session_id":"session-1"}'
-            say '{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"bg1","task_type":"local_bash","description":"Dev server"}]}'
+            say '{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"bg1","task_type":"local_bash","description":"Dev server"},{"task_id":"a1","task_type":"local_agent","subagent_type":"general-purpose","description":"Build W1"}]}'
             say '{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m","model":"m","content":[{"type":"text","text":"ok"}]}}'
             say '{"type":"result","is_error":false}'
             say '{"type":"system","subtype":"session_state_changed","state":"idle"}' ;;

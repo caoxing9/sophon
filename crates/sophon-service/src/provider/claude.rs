@@ -815,11 +815,14 @@ impl Claude {
                     .as_str()
                     .filter(|id| self.agents.contains(*id))
                 {
-                    if event["is_backgrounded"] == true {
+                    // One in the background is stopped as its task is.
+                    let stop = (event["is_backgrounded"] == true).then(|| event["task_id"].clone());
+                    if stop.is_some() {
                         self.background.insert(id.to_owned());
                     }
                     (self.emit)(Event::Subagent(json!({"id":id,"status":"running",
-                        "title":event["description"],"subtitle":event["subagent_type"]})));
+                        "title":event["description"],"subtitle":event["subagent_type"],
+                        "stopToken":stop})));
                 }
             }
             Some("task_notification") => {
@@ -841,6 +844,8 @@ impl Claude {
                     .as_array()
                     .into_iter()
                     .flatten()
+                    // Its agents are its sub-agents, shown as those.
+                    .filter(|task| task["task_type"] != "local_agent")
                     .filter_map(|task| {
                         Some(
                             json!({"id":task["task_id"].as_str()?,"kind":task["task_type"],

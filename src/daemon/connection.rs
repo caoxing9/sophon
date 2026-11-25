@@ -983,6 +983,8 @@ pub struct Subagent {
     pub subtitle: String,
     /// `running` | `completed` | `failed` | `canceled`.
     pub status: String,
+    /// What stops it, for one running in the background.
+    pub stop_token: Option<String>,
 }
 
 impl Subagent {
@@ -994,6 +996,7 @@ impl Subagent {
             title: s("title").or_else(|| s("description")).unwrap_or_else(|| "Sub-agent".into()),
             subtitle: s("subtitle").or_else(|| s("description")).unwrap_or_default(),
             status: s("status").unwrap_or_default(),
+            stop_token: s("stopToken"),
         })
     }
 }
