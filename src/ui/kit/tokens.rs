@@ -5,7 +5,7 @@
 
 #![allow(dead_code)]
 
-use nsh_core::{Hsla, color::rgb, element::AdaptiveColor};
+use nsh_core::element::AdaptiveColor;
 
 pub(crate) const fn pair(light: u32, dark: u32) -> AdaptiveColor {
     AdaptiveColor::rgb(light, dark)
@@ -379,9 +379,12 @@ pub(crate) fn glass_fill_strong() -> AdaptiveColor {
     AdaptiveColor::new(p.light.opacity(0.93), p.dark.opacity(0.92))
 }
 
-/// The glass edge: a light catching rim.
+/// The glass edge: a hairline of the text colour. With no drop shadow it is
+/// what sets the card off the page, and as a tint of whatever text colour
+/// the theme (or the user's own background) gives, it reads on any page:
+/// darker on a light one, lighter on a dark one.
 pub(crate) fn glass_edge() -> AdaptiveColor {
-    AdaptiveColor::new(Hsla::from(rgb(0xffffff)).opacity(0.75), Hsla::from(rgb(0xffffff)).opacity(0.10))
+    tint(FG(), 0.10)
 }
 
 pub(crate) const GLASS_BLUR: f32 = 28.0;
