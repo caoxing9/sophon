@@ -153,6 +153,12 @@ fn agent_sheet() {
         SheetItem::new(t("Fork into new agent"), store::fork_selected).icon(Icon::GitCompare),
         SheetItem::new(t("Rename"), move || store::open_modal(store::Modal::RenameAgent { id: rename.clone(), name: title.clone() })).icon(Icon::Pencil),
     ]);
+    // Pinned, it heads the conversations list, as in the desktop's sidebar.
+    let (pin, pinned) = (a.id.clone(), a.pinned);
+    items.push(
+        SheetItem::new(if pinned { t("Unpin") } else { t("Pin") }, move || store::pin_agent(&pin, !pinned))
+            .icon(if pinned { Icon::PinOff } else { Icon::Pin }),
+    );
     let subs = store::subagents(&a.id).len();
     if subs > 0 {
         let parent = a.id.clone();

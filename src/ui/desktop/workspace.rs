@@ -112,8 +112,13 @@ fn header(compact: bool, explorer_shown: Memo<bool>) -> impl IntoElement {
         .pr(sp(S3))
         .window_drag(true)
         .when(compact, |v| v.child(icon_btn(Icon::ArrowLeft, Sz::Sm, t("Back"), store::go_home)))
+        // The open conversation's name, as its row in the sidebar has it
+        // (a rename shows in both); the workspace's while none is open.
         .child(
-            text(move || ws.with(|w| w.as_ref().map(|w| w.name.clone()).unwrap_or_default()))
+            text(move || match (store::tab(), store::selected_agent()) {
+                (store::Tab::Agent(_), Some(a)) => store::conversation_title(&a),
+                _ => ws.with(|w| w.as_ref().map(|w| w.name.clone()).unwrap_or_default()),
+            })
                 .text_size(tx(TEXT_BASE))
                 .font_weight(FontWeight(500))
                 .number_of_lines(1)

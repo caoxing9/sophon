@@ -438,10 +438,28 @@ fn chats(query: Signal<String>) -> impl IntoElement {
                 }
                 return empty(t("No conversations yet")).into_element();
             }
-            // One list, the latest first, as Messages' (the projects tab
-            // groups by project).
-            let rows = items.iter().cloned().enumerate().map(|(i, (a, w))| chat_row(a, w, i > 0)).collect();
-            let col = view().px(sp(S4)).pb(px(BAR_ROOM)).child(group_card(rows));
+            // The pinned first, under their heading, as the desktop's
+            // sidebar has them (a conversation pinned, or its workspace);
+            // then one list, the latest first, as Messages' (the projects
+            // tab groups by project).
+            let pinned_here = |(a, w): &(Agent, Option<Workspace>)| a.pinned || w.as_ref().is_some_and(|w| w.pinned);
+            let (pinned, rest): (Vec<_>, Vec<_>) = items.iter().cloned().partition(pinned_here);
+            let card = |list: Vec<(Agent, Option<Workspace>)>| {
+                group_card(list.into_iter().enumerate().map(|(i, (a, w))| chat_row(a, w, i > 0)).collect())
+            };
+            let label = |words: &'static str| {
+                text(words).text_size(tx(TEXT_SM)).font_weight(FontWeight(600)).text_color(FG_MUTED()).px(sp(S2)).pb(sp(S1))
+            };
+            let mut col = view().px(sp(S4)).pb(px(BAR_ROOM)).gap(sp(S2));
+            if !pinned.is_empty() {
+                col = col.child(label(t("Pinned"))).child(card(pinned));
+                if !rest.is_empty() {
+                    col = col.child(label(t("Recent")).pt(sp(S3)));
+                }
+            }
+            if !rest.is_empty() {
+                col = col.child(card(rest));
+            }
             col.into_element()
         }))
     }))

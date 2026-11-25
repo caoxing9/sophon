@@ -5957,6 +5957,10 @@ pub(crate) fn conversation_title(a: &Agent) -> String {
 /// its own title when there are several.
 pub(crate) fn conversation_name(a: &Agent) -> String {
     let Some(ws) = a.workspace_id.as_deref().and_then(workspace) else { return a.title.clone() };
+    // A name given to it holds over its workspace's.
+    if a.named {
+        return a.title.clone();
+    }
     let siblings = workspace_agents(&ws.id).iter().filter(|x| !x.archived && x.parent_id.is_none() && !is_hidden_run(x)).count();
     if siblings <= 1 && !ws.name.trim().is_empty() { ws.name } else { conversation_title(a) }
 }
