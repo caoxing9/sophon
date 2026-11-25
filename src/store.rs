@@ -6712,6 +6712,15 @@ pub(crate) fn set_timeline_list(list: ElementRef) {
     global::<TimelineScrolling>().set(TimelineScrolling(false));
 }
 
+/// Puts the conversation's list at its end now, unanimated.
+pub(crate) fn timeline_to_end_now() {
+    TIMELINE_LIST.with_borrow(|l| {
+        if let Some(list) = l {
+            list.scroll_to_end(false);
+        }
+    });
+}
+
 /// How far the conversation's list is from its end, and how tall its
 /// content is, as it last said.
 pub(crate) fn timeline_place() -> (f32, f32) {
