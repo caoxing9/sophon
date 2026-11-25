@@ -186,7 +186,7 @@ pub(crate) fn model_picker(live: bool, current_name: Memo<String>) -> impl IntoE
                 .px(sp(S2))
                 .min_w(px(0.0))
                 .flex_shrink(1.0)
-                .rounded(px(R_MD))
+                .rounded(px(R_FULL))
                 .label(t("Model"))
                 .group()
                 .hover(|s| s.bg(highlight()))

@@ -271,7 +271,6 @@ pub(crate) fn context_bar() -> impl IntoElement {
                     .min_w(px(0.0)),
             )
     };
-    let divider = || view().w(px(1.0)).h(px(14.0)).bg(BORDER());
     view()
         .flex_row()
         .items_center()
@@ -283,7 +282,6 @@ pub(crate) fn context_bar() -> impl IntoElement {
         // Nothing past its edge: a long name ends in an ellipsis.
         .overflow_hidden()
         .child(item(Icon::Monitor, host))
-        .child(divider())
         .child(item(Icon::Folder, folder))
         .child(dynamic(move || {
             branch.get()?;
@@ -294,7 +292,6 @@ pub(crate) fn context_bar() -> impl IntoElement {
                     .gap(sp(S3))
                     .min_w(px(0.0))
                     .flex_shrink(1.0)
-                    .child(divider())
                     .child(item(Icon::GitBranch, computed(move || branch.get().unwrap_or_default())))
                     .into_element()
             }))

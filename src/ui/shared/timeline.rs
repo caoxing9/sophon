@@ -1006,7 +1006,7 @@ fn user_row(item: Memo<Option<Item>>, bubble: impl Fn() -> View + 'static) -> im
 
 fn tool_icon(kind: &str, name: &str) -> Icon {
     match kind {
-        "shell" => Icon::Terminal,
+        "shell" => Icon::SquareTerminal,
         "read" => Icon::FileText,
         "edit" | "write" => Icon::Pencil,
         "search" => Icon::Search,
@@ -1387,6 +1387,9 @@ fn group_row(group: Memo<Option<Group>>) -> impl IntoElement {
         .gap(sp(S2))
         .px(sp(S2))
         .h(px(26.0))
+        // Set a point below the middle: centred, a row reads as floating;
+        // a little low, it sits on its line as writing does.
+        .pt(px(2.0))
         .rounded(px(R_LG))
         .hover(|s| s.bg(highlight()))
         .child(
@@ -1863,32 +1866,35 @@ pub(crate) fn tracks() -> View {
         }
         let open = open.get();
         Some(untracked(move || {
-            let mut line = view().flex_row().items_center().gap(px(2.0)).h(px(32.0)).min_w(px(0.0));
-            for (i, part) in parts.iter().copied().enumerate() {
-                if i > 0 {
-                    line = line.child(view().w(px(1.0)).h(px(14.0)).mx(sp(S1)).flex_shrink_0().bg(BORDER()));
-                }
+            let mut line = view().flex_row().items_center().gap(sp(S1)).h(sp(CONTROL_SM)).min_w(px(0.0));
+            for part in parts.iter().copied() {
                 line = line.child(track_tab(part, open == Some(part), todos, subs, work, move || {
                     chosen.set(Some(if open == Some(part) { None } else { Some(part) }));
                 }));
             }
-            let mut c = card().mb(sp(S2)).p(px(4.0)).child(line);
-            if let Some(part) = open {
+            let list = open.map(|part| {
                 let list = match part {
                     Track::Todo => todo_rows(todos.get_untracked().unwrap_or_default(), all_todos).into_element(),
                     Track::Subagents => subagent_rows(subs.get_untracked()).into_element(),
                     Track::Background => background_rows(work.get_untracked()).into_element(),
                 };
-                c = c.child(
-                    view()
-                        .mt(px(4.0))
-                        .pt(px(2.0))
-                        .border_t_1()
-                        .border_color(BORDER())
-                        .child(scroll().max_h(px(SUBAGENT_ROWS_MAX_H + 26.0)).child(list)),
-                );
+                scroll().max_h(px(SUBAGENT_ROWS_MAX_H + 26.0)).child(list)
+            });
+            // On the phone it floats over the conversation: a card keeps it
+            // readable. On the desktop the line is bare, as the composer's
+            // own row under it; only a list opened gets a card, under it.
+            if MOBILE {
+                let mut c = card().mb(sp(S2)).p(px(4.0)).child(line);
+                if let Some(list) = list {
+                    c = c.child(view().mt(px(4.0)).pt(px(2.0)).border_t_1().border_color(BORDER()).child(list));
+                }
+                return c.into_element();
             }
-            c.into_element()
+            view()
+                .mb(sp(S1))
+                .child(line.px(px(4.0)))
+                .when_some(list, |v, list| v.child(card().mt(px(2.0)).p(px(4.0)).child(list)))
+                .into_element()
         }))
     }))
 }
@@ -1907,9 +1913,9 @@ fn track_tab(
         .flex_row()
         .items_center()
         .gap(px(6.0))
-        .h(px(28.0))
+        .h(sp(CONTROL_SM))
         .px(sp(S2))
-        .rounded(px(9.0))
+        .rounded(px(R_FULL))
         .min_w(px(0.0))
         .bg(move || if open { highlight() } else { tint(FG(), 0.0) })
         .hover(|st| st.bg(highlight()));
@@ -1924,7 +1930,7 @@ fn track_tab(
                 .child(
                     text(tf("Tasks · {}/{} done", &[&done.to_string(), &lines.len().to_string()]))
                         .text_size(tx(TEXT_SM))
-                        .font_weight(FontWeight(500))
+                        .font_weight(FontWeight(500)).text_color(tint(FG(), 0.8))
                         .flex_shrink_0(),
                 )
                 .when_some(now, |v, now| v.child(text(now).text_size(tx(TEXT_SM)).text_color(FG_FAINT()).number_of_lines(1).flex_shrink(1.0)))
@@ -1934,7 +1940,7 @@ fn track_tab(
             let running = list.iter().filter(|s| s.status == "running").count();
             tab.flex_shrink_0()
                 .child(status_dot(move || if running > 0 { Status::Running } else { Status::Done }))
-                .child(text(tf("Sub-agents {}", &[&list.len().to_string()])).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)))
+                .child(text(tf("Sub-agents {}", &[&list.len().to_string()])).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(tint(FG(), 0.8)))
                 .when(running > 0, |v| {
                     v.child(text(tf("· {} running", &[&running.to_string()])).text_size(tx(TEXT_SM)).text_color(FG_MUTED()))
                 })
@@ -1942,7 +1948,7 @@ fn track_tab(
         Track::Background => tab
             .flex_shrink_0()
             .child(status_dot(|| Status::Running))
-            .child(text(format!("{} {}", t("Background task"), work.get_untracked().len())).text_size(tx(TEXT_SM)).font_weight(FontWeight(500))),
+            .child(text(format!("{} {}", t("Background task"), work.get_untracked().len())).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(tint(FG(), 0.8))),
     };
     tab.child(icon(if open { Icon::ChevronDown } else { Icon::ChevronRight }, 13.0).text_color(FG_FAINT()))
 }
