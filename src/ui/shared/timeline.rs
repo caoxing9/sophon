@@ -79,6 +79,13 @@ pub(crate) fn timeline() -> impl IntoElement {
             // conversation opens where it ends. A change of its rows (the
             // host's copy, a reply streaming in) lets go of nsh's hold on
             // the end, so meanwhile it is sent there again.
+            // Rows or pages changed: once they are laid out, whether the
+            // list fills the view yet (`store::fill_timeline`).
+            effect(move || {
+                rows.with(|_| ());
+                store::timeline_pages();
+                set_timeout(std::time::Duration::from_millis(150), store::fill_timeline);
+            });
             let settled = signal(false);
             let gone = std::rc::Rc::new(std::cell::Cell::new(false));
             {

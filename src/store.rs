@@ -2238,6 +2238,11 @@ pub(crate) fn group_summary(start: usize, end: usize) -> crate::fold::Summary {
 pub(crate) fn set_timeline_scroll(offset: f32, content: f32, height: f32) {
     let from_end = content - offset - height;
     TIMELINE_FROM_END.with(|d| d.set(from_end));
+    TIMELINE_HEIGHT.with(|h| h.set(height));
+    if content > height + 1.0 && TIMELINE_FILLING.with(|f| f.replace(false)) {
+        set_timeout(std::time::Duration::ZERO, timeline_to_end_now);
+    }
+    fill_timeline();
     // The content grew or shrank (a reply streaming, a group opened, a
     // page measured): the scroll that comes with it, and for a moment
     // after, is the list's own, not the user's.
@@ -2401,6 +2406,28 @@ pub(crate) fn timeline_loaded() -> bool {
 
 /// Whether the open conversation shows this device's copy still, the host
 /// not having said yet what came since.
+/// The page shown does not fill the view (a turn of tool calls folds to a
+/// row or two, and there is nothing to scroll to the start by): the pages
+/// before it come at once, one by one until it does, and then the list is
+/// at its end again. Asked as the list measures itself, and a moment
+/// after its rows or pages change.
+pub(crate) fn fill_timeline() {
+    let (content, height) = (TIMELINE_CONTENT.with(|c| c.get().0), TIMELINE_HEIGHT.with(std::cell::Cell::get));
+    if height <= 0.0 || content > height + 1.0 {
+        return;
+    }
+    if global::<Timeline>().with_untracked(|t| t.older.is_some() && !t.loading_older && !t.syncing) {
+        TIMELINE_FILLING.with(|f| f.set(true));
+        load_older();
+    }
+}
+
+/// Whether the conversation shown has earlier pages, and is settled with
+/// its host (read in an effect: a page coming asks [`fill_timeline`]).
+pub(crate) fn timeline_pages() -> (bool, bool, bool) {
+    global::<Timeline>().with(|t| (t.older.is_some(), t.loading_older, t.syncing))
+}
+
 pub(crate) fn timeline_syncing() -> bool {
     global::<Timeline>().with(|t| t.syncing)
 }
@@ -6206,8 +6233,11 @@ fn deliver_with(agent_id: &str, text: &str, behavior: Option<&'static str>, imag
 }
 
 /// A system notification when an agent starts needing you while you look
-/// elsewhere; the press opens it.
-fn notify_attention(next: &Agent) {
+/// elsewhere; the press opens it. A turn that ends on screen is read as it
+/// ends (`next` loses its unread mark); one that ends elsewhere is told only
+/// if it is still unread a moment later (not opened here or on another
+/// device meanwhile).
+fn notify_attention(next: &mut Agent) {
     use crate::daemon::push::{self, Reason};
     let before = agent(&next.id);
     // What a schedule ran on its own, and a sub-agent's turns (its parent's
@@ -6218,18 +6248,46 @@ fn notify_attention(next: &Agent) {
     // Only what is new and unseen: an approval, or a result the service
     // marks unread (`push::reason`); and not the agent on screen.
     let Some(why) = push::reason(before.as_ref(), next) else { return };
-    let on_screen = selected_id().as_deref() == Some(next.id.as_str()) && lifecycle_active();
+    if why != Reason::Permission && on_screen(&next.id) {
+        next.requires_attention = false;
+        next.attention_reason = None;
+        send(Command::ClearAgentAttention(next.id.clone()));
+        return;
+    }
     // The phones hear of what is not on screen here, as before.
-    if !on_screen {
+    if !on_screen(&next.id) {
         push_attention(next, why);
     }
     // The computer's push says it to this phone already.
     if cfg!(target_os = "ios") && push_served() {
         return;
     }
-    // Here, as the settings say (`Notifications`): a finished turn always,
-    // never, or only while Sophon is not the app in front (the default);
-    // the rest when asked for and not on screen.
+    if why == Reason::Permission {
+        show_attention(next, why);
+        return;
+    }
+    let id = next.id.clone();
+    set_timeout(UNREAD_GRACE, move || {
+        if let Some(now) = agent(&id).filter(|a| a.requires_attention && a.pending.is_empty() && !on_screen(&a.id)) {
+            show_attention(&now, why);
+        }
+    });
+}
+
+/// How long a finished turn waits before it is told: long enough for
+/// another device that has it open to mark it read.
+const UNREAD_GRACE: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Whether `id` is the conversation shown, with Sophon the app in front.
+fn on_screen(id: &str) -> bool {
+    selected_id().as_deref() == Some(id) && lifecycle_active()
+}
+
+/// Says why `agent` wants you, as the settings say (`Notifications`): a
+/// finished turn always, never, or only while Sophon is not the app in
+/// front (the default); the rest when asked for.
+fn show_attention(agent: &Agent, why: crate::daemon::push::Reason) {
+    use crate::daemon::push::Reason;
     let s = settings();
     let show = match why {
         Reason::Finished => match s.notify_finished {
@@ -6237,18 +6295,18 @@ fn notify_attention(next: &Agent) {
             NotifyWhen::Away => !lifecycle_active(),
             NotifyWhen::Never => false,
         },
-        Reason::Permission => s.notify_approval.0 && !on_screen,
-        Reason::Attention => s.notify_attention.0 && !on_screen,
+        Reason::Permission => s.notify_approval.0 && !on_screen(&agent.id),
+        Reason::Attention => s.notify_attention.0,
     };
     if !show {
         return;
     }
     let body = match why {
-        Reason::Permission => tf("Waiting for your approval: {}", &[next.pending.first().map(|p| p.title.as_str()).unwrap_or_default()]),
+        Reason::Permission => tf("Waiting for your approval: {}", &[agent.pending.first().map(|p| p.title.as_str()).unwrap_or_default()]),
         Reason::Finished => t("Finished its turn").to_owned(),
         Reason::Attention => t("Needs your attention").to_owned(),
     };
-    let n = nsh_core::notifications::Notification::new(format!("agent:{}", next.id), next.title.clone(), body)
+    let n = nsh_core::notifications::Notification::new(format!("agent:{}", agent.id), agent.title.clone(), body)
         .silent(!s.notify_sound.0);
     let _ = show_notification(n);
 }
@@ -6728,6 +6786,11 @@ thread_local! {
     /// a scroll then is the list keeping its end in place (or settling),
     /// not the user's.
     static TIMELINE_CONTENT: std::cell::Cell<(f32, Option<std::time::Instant>)> = const { std::cell::Cell::new((0.0, None)) };
+    /// Earlier pages are on their way because the list did not fill the
+    /// view: once it does, it goes to its end.
+    static TIMELINE_FILLING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The list's height as last seen.
+    static TIMELINE_HEIGHT: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
 }
 
 pub(crate) fn set_timeline_list(list: ElementRef) {
@@ -6735,6 +6798,8 @@ pub(crate) fn set_timeline_list(list: ElementRef) {
     // Nothing known of the new list's place yet (the last one's is not it).
     TIMELINE_FROM_END.with(|d| d.set(f32::INFINITY));
     TIMELINE_CONTENT.with(|c| c.set((0.0, None)));
+    TIMELINE_FILLING.with(|f| f.set(false));
+    TIMELINE_HEIGHT.with(|h| h.set(0.0));
     // The list going to its end as it opens is not the user scrolling.
     TIMELINE_OPENED.with(|o| o.set(Some(std::time::Instant::now())));
     global::<TimelineScrolling>().set(TimelineScrolling(false));
@@ -7148,12 +7213,12 @@ pub(crate) fn apply(event: Event) {
             open_pressed_agent();
             update_running_service();
         }
-        Event::AgentUpsert(agent) => {
+        Event::AgentUpsert(mut agent) => {
             let archived = agent.archived;
             let id = agent.id.clone();
             take_back_once_stopped(&agent);
             flush_queue(&agent);
-            notify_attention(&agent);
+            notify_attention(&mut agent);
             global::<Agents>().update(|a| {
                 a.0.retain(|x| x.id != agent.id);
                 if !agent.archived {
