@@ -7,5 +7,5 @@ license = "Apache-2.0"
 description = "A shadcn/ui-style component set for Native Shell (NSH), in Rust, after GPUI Component's"
 
 [dependencies]
-nsh-core = { git = "https://github.com/caoxing9/nsh", rev = "06869b3994f19f4736645f89bbf3c49b2e1225c6" }
-nsh-base = { git = "https://github.com/caoxing9/nsh", rev = "06869b3994f19f4736645f89bbf3c49b2e1225c6" }
+nsh-core = { git = "https://github.com/caoxing9/nsh", rev = "9a391f1625142869c64ad45baefcc55211f2c251" }
+nsh-base = { git = "https://github.com/caoxing9/nsh", rev = "9a391f1625142869c64ad45baefcc55211f2c251" }

@@ -86,7 +86,7 @@ pub(crate) fn explorer() -> View {
                 .pt(sp(S2))
                 .pb(sp(S1))
                 .window_drag(true)
-                .child(segmented_with(
+                .child(segmented(
                     vec![
                         (ExplorerTab::Artifacts, t("Artifacts").into()),
                         (ExplorerTab::Changes, t("Changes").into()),
@@ -94,19 +94,21 @@ pub(crate) fn explorer() -> View {
                     ],
                     store::explorer_tab,
                     store::set_explorer_tab,
-                    false,
                 ))
                 .child(view().flex_1())
                 .child(icon_btn(Icon::PanelRight, Sz::Sm, t("Toggle explorer"), store::toggle_explorer)),
         )
-        // Only the picked page laid out and shown, switched at once as T3
-        // Code's, Paseo's and Lody's panels are. The others stay built (each
-        // keeps its state) but take no room, so nothing of theirs is laid
-        // out or drawn while hidden.
+        // The pages stacked, only the picked one shown, switched at once as
+        // T3 Code's, Paseo's and Lody's panels are. The others stay built and
+        // laid out (each keeps its state and scroll) but invisible: their
+        // NSViews hidden, nothing of theirs is drawn or walked by AppKit.
+        // Their frames never change, so the switch's spring moves the thumb
+        // alone.
         .child({
             let hidden = move |which: ExplorerTab| move || tab.get() != which;
             view()
                 .flex_1()
+                .relative()
                 .overflow_hidden()
                 .child(page_layer(super::artifacts::artifacts_view(computed(move || tab.get() == ExplorerTab::Artifacts)), hidden(ExplorerTab::Artifacts)))
                 .child(page_layer(changes_view(), hidden(ExplorerTab::Changes)))
@@ -114,9 +116,9 @@ pub(crate) fn explorer() -> View {
         })
 }
 
-/// One of the Explorer's pages, filling it, gone while `hidden` holds.
+/// One of the Explorer's pages, filling it, invisible while `hidden` holds.
 fn page_layer(page: View, hidden: impl Fn() -> bool + 'static) -> View {
-    view().flex_1().style_when(hidden, |s| s.hidden()).child(page.flex_1())
+    view().absolute().inset_0().style_when(hidden, |s| s.invisible()).child(page.flex_1())
 }
 
 /// Every changed file's diff, one under the other, each under its header
