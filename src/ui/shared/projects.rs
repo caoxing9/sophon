@@ -445,13 +445,17 @@ fn conversation_row(agent: ReadSignal<crate::daemon::Agent>, actions: bool) -> i
 /// as on the rows without them.
 fn row_actions() -> View {
     let badges = || !MOBILE && store::command_held() && store::number_shortcuts();
+    // On the desktop they take no room until the pointer is on the row: the
+    // title has the row's whole width, cut short only while they show.
+    let shown = if MOBILE { 200.0 } else { 0.0 };
     view()
         .flex_row()
         .items_center()
-        .max_w(move || px(if badges() { 0.0 } else { 200.0 }))
+        .flex_shrink_0()
+        .max_w(move || px(if badges() { 0.0 } else { shown }))
         .overflow_hidden()
         .opacity(if MOBILE { 1.0_f32 } else { 0.0 })
-        .group_hover(|s| s.opacity(1.0))
+        .group_hover(|s| s.opacity(1.0).max_w(px(200.0)))
         .transition_opacity()
 }
 
