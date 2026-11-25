@@ -311,7 +311,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                 .hover(|s| s.bg(highlight()))
                 .child(icon(Icon::Plus, 18.0).text_color(FG_MUTED())),
         )
-        .child(view().flex_1().min_w(px(0.0)).min_h(sp(CONTROL_SM)).justify_center().child(editor(doc, text_value, placeholder, suggestion, TEXT_CONTENT, 220.0, changed).mx(sp(S1))))
+        .child(view().flex_1().min_w(px(0.0)).min_h(sp(CONTROL_SM)).justify_center().child(editor(doc, text_value, placeholder, suggestion, TEXT_BASE, 220.0, changed).mx(sp(S1))))
         .child(view().flex_shrink_0().child(mic_button(doc)))
         .child(when(stoppable, || {
             button()
