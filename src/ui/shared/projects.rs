@@ -43,21 +43,26 @@ fn row_status(status: impl Fn() -> Status + 'static) -> impl IntoElement {
 }
 
 /// A row's mark at its end, where its "…" is: the titles start flush,
-/// a row at rest leaving no gap before its own. Under the pointer the
-/// actions take its place; with ⌘ held, the row's ⌘1–9.
-fn trailing_status(status: impl Fn() -> Status + 'static) -> impl IntoElement {
+/// and a row at rest has none and gives the title its whole width. One
+/// with a mark keeps room for it, so a long title ends before it rather
+/// than under it. Under the pointer the actions take its place; with ⌘
+/// held, the row's ⌘1–9.
+fn trailing_status(status: impl Fn() -> Status + 'static, menu_open: Signal<bool>) -> impl IntoElement {
     let badges = || !MOBILE && store::command_held() && store::number_shortcuts();
+    let status = computed(status);
+    let marked = computed(move || status.get() != Status::Idle);
     view()
-        .absolute()
-        .top(px(0.0))
-        .bottom(px(0.0))
-        .right(px(S1 + 4.5))
+        .flex_shrink_0()
+        .items_center()
         .justify_center()
+        .overflow_hidden()
         .pointer_events(nsh_core::PointerEvents::None)
-        .opacity(move || if badges() { 0.0_f32 } else { 1.0 })
-        .group_hover(|s| s.opacity(0.0))
+        // Its mark where the "…" is under the pointer.
+        .max_w(move || px(if marked.get() && !badges() && !menu_open.get() { 15.0 + 4.5 } else { 0.0 }))
+        .opacity(move || if menu_open.get() { 0.0_f32 } else { 1.0 })
+        .group_hover(|s| s.max_w(px(0.0)).opacity(0.0))
         .transition_opacity()
-        .child(row_status(status))
+        .child(view().mr(px(4.5)).child(row_status(move || status.get())))
 }
 
 /// The list; `actions` adds the desktop's (new workspace, pin, rename,
@@ -368,6 +373,7 @@ fn conversation_row(agent: ReadSignal<crate::daemon::Agent>, actions: bool) -> i
             let id = id.clone();
             number_badge(move |e| matches!(e, Entry::Conversation(a) if a.id == id))
         });
+    let menu_open = signal(false);
     let more = dropdown(
         view()
             .w(px(24.0))
@@ -379,6 +385,11 @@ fn conversation_row(agent: ReadSignal<crate::daemon::Agent>, actions: bool) -> i
             .child(icon(Icon::Ellipsis, 15.0).text_color(FG_FAINT())),
     )
     .align(nsh_core::overlay::Align::End)
+    .on_open_change(move |e: &nsh_base::MenuEvent| {
+        if let nsh_base::MenuEvent::OpenChange(open, _) = e {
+            menu_open.set(*open);
+        }
+    })
     .child(
         view()
             .child({
@@ -434,27 +445,29 @@ fn conversation_row(agent: ReadSignal<crate::daemon::Agent>, actions: bool) -> i
                 .transition_colors()
                 .child(main)
                 .when(actions, |v| {
-                    v.child(row_actions().when(!MOBILE, |v| v.child(quick)).child(more))
+                    v.child(row_actions(menu_open).when(!MOBILE, |v| v.child(quick)).child(more))
                 })
-                .when(actions && !MOBILE, |v| v.child(trailing_status(move || agent.with(Status::of_agent_row)))),
+                .when(actions && !MOBILE, |v| v.child(trailing_status(move || agent.with(Status::of_agent_row), menu_open))),
         )
 }
 
 /// Where a row's actions go: shown under the pointer (always on a phone),
 /// and out of the way while ⌘ is held, so the row's ⌘1–9 sits at its end
 /// as on the rows without them.
-fn row_actions() -> View {
+fn row_actions(menu_open: Signal<bool>) -> View {
     let badges = || !MOBILE && store::command_held() && store::number_shortcuts();
     // On the desktop they take no room until the pointer is on the row: the
-    // title has the row's whole width, cut short only while they show.
-    let shown = if MOBILE { 200.0 } else { 0.0 };
+    // title has the row's whole width, cut short only while they show. They
+    // stay while the row's "…" menu is open: the pointer is on the menu
+    // then, and the row giving the room back moved the menu under it.
+    let shown = move || MOBILE || menu_open.get();
     view()
         .flex_row()
         .items_center()
         .flex_shrink_0()
-        .max_w(move || px(if badges() { 0.0 } else { shown }))
+        .max_w(move || px(if badges() && !menu_open.get() { 0.0 } else if shown() { 200.0 } else { 0.0 }))
         .overflow_hidden()
-        .opacity(if MOBILE { 1.0_f32 } else { 0.0 })
+        .opacity(move || if shown() { 1.0_f32 } else { 0.0 })
         .group_hover(|s| s.opacity(1.0).max_w(px(200.0)))
         .transition_opacity()
 }
@@ -678,6 +691,7 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
         .child(number_badge(move |e| matches!(e, Entry::Workspace(id) if ws.with_untracked(|w| w.as_ref().is_some_and(|w| &w.id == id)))))
 ;
 
+    let menu_open = signal(false);
     let more = dropdown(
         view()
             .w(px(24.0))
@@ -689,6 +703,11 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
             .child(icon(Icon::Ellipsis, 15.0).text_color(FG_FAINT())),
     )
     .align(nsh_core::overlay::Align::End)
+    .on_open_change(move |e: &nsh_base::MenuEvent| {
+        if let nsh_base::MenuEvent::OpenChange(open, _) = e {
+            menu_open.set(*open);
+        }
+    })
     .child(dynamic(move || {
         let w = ws.get()?;
         Some(untracked(move || {
@@ -715,8 +734,18 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
                     let id = w.id.clone();
                     move || store::recover_workspace(&id)
                 }))
+                // The row shows its newest conversation, by that one's title:
+                // a rename names it (kept over what is said in it later); a
+                // workspace with none is renamed itself.
                 .child(menu_row(t("Rename"), Some(Icon::Pencil), None, false, move || {
-                    store::open_modal(store::Modal::RenameWorkspace { id: rename_id.clone(), name: name.clone() })
+                    let shown = store::workspace_agents(&rename_id)
+                        .into_iter()
+                        .filter(|a| !a.archived && a.parent_id.is_none() && !store::is_hidden_run(a))
+                        .max_by(|a, b| a.updated_at.cmp(&b.updated_at));
+                    match shown {
+                        Some(a) => store::open_modal(store::Modal::RenameAgent { id: a.id.clone(), name: store::conversation_title(&a) }),
+                        None => store::open_modal(store::Modal::RenameWorkspace { id: rename_id.clone(), name: name.clone() }),
+                    }
                 }))
                 .child(menu_divider())
                 .child(menu_row_danger(t("Archive workspace"), Icon::Archive, move || {
@@ -761,9 +790,9 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
                 .child(main)
                 // The actions only under the pointer (always on a phone).
                 .when(actions, |v| {
-                    v.child(row_actions().when(!MOBILE, |v| v.child(quick)).child(more))
+                    v.child(row_actions(menu_open).when(!MOBILE, |v| v.child(quick)).child(more))
                 })
-                .when(actions && !MOBILE, |v| v.child(trailing_status(status))),
+                .when(actions && !MOBILE, |v| v.child(trailing_status(status, menu_open))),
         )
 }
 

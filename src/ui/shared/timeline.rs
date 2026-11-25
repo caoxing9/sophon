@@ -71,10 +71,47 @@ pub(crate) fn timeline() -> impl IntoElement {
             let rows = computed(store::display_rows);
             let list = element_ref();
             store::set_timeline_list(list.clone());
+            // Its rows measure themselves once shown, and the list goes on
+            // to its end as they do: a few moves in the first quarter
+            // second; and this device's copy of it, shown first, grows when
+            // the host's comes. It shows once the host's is there and it
+            // stays at its end (most of a second at most), so a
+            // conversation opens where it ends. A change of its rows (the
+            // host's copy, a reply streaming in) lets go of nsh's hold on
+            // the end, so meanwhile it is sent there again.
+            let settled = signal(false);
+            let gone = std::rc::Rc::new(std::cell::Cell::new(false));
+            {
+                let gone = gone.clone();
+                cleanup(move || gone.set(true));
+            }
+            store::spawn_detached(async move {
+                let (mut last, mut steady) = (f32::NAN, 0);
+                for _ in 0..45 {
+                    nsh_core::element::timer(std::time::Duration::from_millis(16)).await;
+                    if gone.get() {
+                        return;
+                    }
+                    let (from_end, content) = store::timeline_place();
+                    if from_end.is_finite() && from_end > 2.0 {
+                        store::timeline_to_end_now();
+                    }
+                    // A reply streaming in grows it on: at its end is enough.
+                    let streaming = untracked(|| store::selected_agent().is_some_and(|a| a.is_running()));
+                    steady = if from_end <= 2.0 && (content == last || streaming) && !untracked(store::timeline_syncing) { steady + 1 } else { 0 };
+                    last = content;
+                    if steady >= 3 {
+                        break;
+                    }
+                }
+                if !gone.get() {
+                    settled.set(true);
+                }
+            });
             // On the desktop the whole conversation is one selectable area:
             // a selection runs from reply to reply, as on a web page (each
             // reply its own area stopped it at the reply's edge).
-            view().flex_1().when(!MOBILE, |v| v.selectable(true).on_text_selection_change(list_chosen)).child(virtual_list(move || rows.with(Vec::len), move |at: Position| row(at, rows, running))
+            view().flex_1().opacity(move || if settled.get() { 1.0_f32 } else { 0.0 }).transition_opacity().when(!MOBILE, |v| v.selectable(true).on_text_selection_change(list_chosen)).child(virtual_list(move || rows.with(Vec::len), move |at: Position| row(at, rows, running))
                 // On the phone, a drag down the conversation takes the
                 // keyboard with it, as Messages does.
                 .keyboard_dismiss_mode(if MOBILE { KeyboardDismissMode::Interactive } else { KeyboardDismissMode::None })
@@ -100,7 +137,13 @@ pub(crate) fn timeline() -> impl IntoElement {
                 .content_padding_bottom(px(if MOBILE { 200.0 } else { S4 }))
                 .footer(thinking(running))
                 // Earlier pages come as the conversation nears its start.
-                .on_load_more_at_start(store::load_older)
+                // Not while it opens: an earlier page put before the rows
+                // keeps what shows in place, away from the end.
+                .on_load_more_at_start(move || {
+                    if settled.get_untracked() {
+                        store::load_older();
+                    }
+                })
                 .load_more_at_start_threshold(1.0)
                 .flex_1())
                 // Earlier pages load by themselves as the start nears: a

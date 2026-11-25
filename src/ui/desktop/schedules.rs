@@ -1139,7 +1139,8 @@ fn editor(existing: Option<Schedule>, template: Template, pane: Signal<Pane>, op
         }
         dynamic(move || {
             let runs = store::schedule_runs(&id)?;
-            Some(untracked(move || runs_list(runs)))
+            let skipped = store::schedules().unwrap_or_default().into_iter().find(|s| s.id == id).map_or(0, |s| s.skipped);
+            Some(untracked(move || view().gap(sp(S3)).when(skipped > 0, |v| v.child(skipped_note(skipped))).child(runs_list(runs))))
         })
     });
 
@@ -1219,6 +1220,26 @@ fn took(run: &ScheduleRun) -> Option<String> {
     let parse = crate::usage::parse::rfc3339;
     let secs = (parse(run.ended.as_deref()?)? - parse(&run.started)?).max(0);
     Some(if secs < 60 { format!("{secs}s") } else { format!("{}m {:02}s", secs / 60, secs % 60) })
+}
+
+/// What its trigger found when it began and left aside, and how to have
+/// them handled.
+fn skipped_note(count: usize) -> impl IntoElement {
+    view()
+        .flex_row()
+        .items_center()
+        .gap(sp(S2))
+        .px(sp(S3))
+        .py(sp(S2))
+        .rounded(px(R_LG))
+        .bg(tint(ACCENT(), 0.08))
+        .child(icon(Icon::Info, 14.0).text_color(ACCENT()))
+        .child(
+            text(tf("{} were already waiting when this automation began, and were left: it handles what comes after. Run now handles them.", &[&count.to_string()]))
+                .text_size(tx(TEXT_SM))
+                .text_color(FG())
+                .flex_1(),
+        )
 }
 
 /// An automation's runs, newest first. One that started a conversation

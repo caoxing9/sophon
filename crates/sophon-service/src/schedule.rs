@@ -795,8 +795,9 @@ fn seen(host: &mut Host, schedule_id: &str, id: &str) -> bool {
 /// not seen: as many as it may have at work at once, the rest left for
 /// the next look (a probe says again what is still there). The first
 /// look of an automation only notes what there is: what was there
-/// before it was set up is not its business. Asked for by hand
-/// (`asked`), a look starts what it finds all the same.
+/// before it was set up is not its business; it keeps those apart
+/// (`skipped`, while the probe still finds them), and a look asked for
+/// by hand (`asked`) starts them too.
 fn look(shared: &Shared, schedule: &Value, asked: bool) {
     let (Some(schedule_id), Some(probe)) = (
         schedule["id"].as_str().map(str::to_owned),
@@ -856,13 +857,25 @@ fn look(shared: &Shared, schedule: &Value, asked: bool) {
                     current["probeFailures"] = json!(0);
                     let primed = current["primed"] == true;
                     current["primed"] = json!(true);
+                    // Those left aside when it was set up, while still there.
+                    let found: Vec<&str> = list
+                        .iter()
+                        .filter_map(|event| event["id"].as_str())
+                        .collect();
+                    let mut skipped: Vec<String> = current["skipped"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .filter(|id| found.contains(id))
+                        .map(str::to_owned)
+                        .collect();
                     if !primed && !asked {
                         for event in &list {
-                            seen(
-                                &mut host,
-                                &schedule_id,
-                                event["id"].as_str().unwrap_or_default(),
-                            );
+                            let id = event["id"].as_str().unwrap_or_default();
+                            if !seen(&mut host, &schedule_id, id) {
+                                skipped.push(id.to_owned());
+                            }
                         }
                     } else if asked || current["status"] == "active" {
                         let working = host
@@ -885,15 +898,18 @@ fn look(shared: &Shared, schedule: &Value, asked: bool) {
                             if start.len() as u64 >= room {
                                 break;
                             }
-                            if !seen(
-                                &mut host,
-                                &schedule_id,
-                                event["id"].as_str().unwrap_or_default(),
-                            ) {
+                            let id = event["id"].as_str().unwrap_or_default().to_owned();
+                            // Asked for by hand, those left aside start too.
+                            let aside = asked && skipped.contains(&id);
+                            if aside {
+                                skipped.retain(|kept| *kept != id);
+                            }
+                            if !seen(&mut host, &schedule_id, &id) || aside {
                                 start.push(event);
                             }
                         }
                     }
+                    current["skipped"] = json!(skipped);
                 }
             }
             host.state

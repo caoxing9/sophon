@@ -6732,9 +6732,27 @@ thread_local! {
 
 pub(crate) fn set_timeline_list(list: ElementRef) {
     TIMELINE_LIST.with_borrow_mut(|l| *l = Some(list));
+    // Nothing known of the new list's place yet (the last one's is not it).
+    TIMELINE_FROM_END.with(|d| d.set(f32::INFINITY));
+    TIMELINE_CONTENT.with(|c| c.set((0.0, None)));
     // The list going to its end as it opens is not the user scrolling.
     TIMELINE_OPENED.with(|o| o.set(Some(std::time::Instant::now())));
     global::<TimelineScrolling>().set(TimelineScrolling(false));
+}
+
+/// Puts the conversation's list at its end now, unanimated.
+pub(crate) fn timeline_to_end_now() {
+    TIMELINE_LIST.with_borrow(|l| {
+        if let Some(list) = l {
+            list.scroll_to_end(false);
+        }
+    });
+}
+
+/// How far the conversation's list is from its end, and how tall its
+/// content is, as it last said.
+pub(crate) fn timeline_place() -> (f32, f32) {
+    (TIMELINE_FROM_END.with(std::cell::Cell::get), TIMELINE_CONTENT.with(|c| c.get().0))
 }
 
 /// Brings item `index` into view: its row, or its folded group's.
