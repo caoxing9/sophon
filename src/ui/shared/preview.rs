@@ -130,7 +130,7 @@ fn open_when_ready(path: String, tries: u32) {
 
 /// `bytes` as a file named as `path` in the temporary folder (a folder of
 /// its own per path, so two files of one name do not meet).
-fn temp_copy(path: &str, bytes: &[u8]) -> Result<std::path::PathBuf, String> {
+pub(crate) fn temp_copy(path: &str, bytes: &[u8]) -> Result<std::path::PathBuf, String> {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     path.hash(&mut h);
@@ -143,7 +143,7 @@ fn temp_copy(path: &str, bytes: &[u8]) -> Result<std::path::PathBuf, String> {
 }
 
 /// `file://` and the path, percent-encoded (spaces, CJK names).
-fn file_url(file: &std::path::Path) -> String {
+pub(crate) fn file_url(file: &std::path::Path) -> String {
     let mut url = String::from("file://");
     for b in file.to_string_lossy().bytes() {
         match b {

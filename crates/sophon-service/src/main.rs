@@ -224,6 +224,29 @@ async fn session(stream: TcpStream, shared: Shared, token: Rc<String>) -> Result
                                 payload["requestId"] = request["requestId"].clone();
                                 Ok(envelope(&kind.replace("request","response"),payload))
                             }
+                            // A file a conversation made, for a device that is
+                            // not this computer (its preview, a download):
+                            // only one the artifacts panel lists for it.
+                            "agent.artifact.download.request" => {
+                                let agent = request["agentId"].as_str().unwrap_or_default();
+                                let path = request["path"].as_str().unwrap_or_default();
+                                let listed = shared
+                                    .borrow_mut()
+                                    .artifacts(agent, true)
+                                    .is_ok_and(|list| list.iter().any(|artifact| artifact["path"] == path));
+                                let place = std::path::Path::new(path);
+                                match (listed, place.parent(), place.file_name().and_then(|name| name.to_str())) {
+                                    (true, Some(folder), Some(name)) => {
+                                        let mut asked = request.clone();
+                                        asked["path"] = json!(name);
+                                        match transfer::download(&mut socket, &folder.to_string_lossy(), &asked).await {
+                                            Ok(()) => continue,
+                                            Err(error) => Err(error.to_string()),
+                                        }
+                                    }
+                                    _ => Err("Not a file this conversation made".into()),
+                                }
+                            }
                             "file_explorer_request" if request["acceptBinary"] == true => {
                                 let cwd = request["cwd"].as_str().unwrap_or_default();
                                 if shared.borrow().state.workspaces.values().any(|workspace|workspace["workspaceDirectory"] == cwd) {

@@ -118,6 +118,9 @@ pub enum Command {
     /// The whole file, any size, as bytes (for saving it here): answered by
     /// [`Event::Downloaded`] with the same `id`.
     Download { id: String, cwd: String, path: String },
+    /// A file a conversation made (the artifacts page's `path`), from the
+    /// host whatever folder it is in: answered as [`Command::Download`].
+    DownloadArtifact { id: String, agent: String, path: String },
     WriteFile { cwd: String, path: String, content: String, modified_at: String, revision: Option<String> },
     /// Branch, dirty state, ahead / behind, and the pull request.
     GitStatus(String),
@@ -2095,7 +2098,7 @@ async fn session(
                 if !connected {
                     if let Command::Upload { id, .. } = cmd {
                         let _ = events.send(Event::Uploaded { id, result: Err("Not connected".into()) });
-                    } else if let Command::Download { id, .. } = cmd {
+                    } else if let Command::Download { id, .. } | Command::DownloadArtifact { id, .. } = cmd {
                         let _ = events.send(Event::Downloaded { id, result: Err("Not connected".into()) });
                     }
                     continue;
@@ -2110,6 +2113,17 @@ async fn session(
                         "path": path,
                         "mode": "file",
                         "acceptBinary": true,
+                        "requestId": id,
+                    }))).await?;
+                    continue;
+                }
+                if let Command::DownloadArtifact { id, agent, path } = cmd {
+                    downloads.insert(id.clone(), Vec::new());
+                    pending.insert(id.clone(), Pending::Download(id.clone()));
+                    send(&mut tx, &session_msg(json!({
+                        "type": "agent.artifact.download.request",
+                        "agentId": agent,
+                        "path": path,
                         "requestId": id,
                     }))).await?;
                     continue;
@@ -2464,7 +2478,7 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
     match cmd {
         Command::Open(id) => timeline_requests(&id, pending),
         // Sent by the session itself, with its binary frames.
-        Command::Upload { .. } | Command::Download { .. } | Command::Reconnect | Command::Resume { .. } | Command::NetworkChanged { .. } | Command::GitHub(_) | Command::AskPictures { .. } | Command::HostUsage | Command::PushRegister { .. } => vec![],
+        Command::Upload { .. } | Command::Download { .. } | Command::DownloadArtifact { .. } | Command::Reconnect | Command::Resume { .. } | Command::NetworkChanged { .. } | Command::GitHub(_) | Command::AskPictures { .. } | Command::HostUsage | Command::PushRegister { .. } => vec![],
         Command::Send { agent_id, text, behavior, images, attachments, message_id } => {
             let mut msg = json!({
                 "type": "send_agent_message_request",

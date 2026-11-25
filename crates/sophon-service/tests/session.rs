@@ -3130,6 +3130,39 @@ done
             "{answer}"
         );
     }
+    // A device that is not this computer has one of them sent whole, by its
+    // path wherever it is; a file the conversation did not make, never.
+    let listed = ask(&mut socket, json!({"type":"agent.artifacts.request","agentId":agent,"scope":"agent"})).await;
+    let page = listed["payload"]["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["name"] == "page.html")
+        .unwrap()["path"]
+        .clone();
+    send(&mut socket, json!({"type":"session","message":{"type":"agent.artifact.download.request","agentId":agent,"path":page,"requestId":"art"}})).await;
+    let mut bytes = Vec::new();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let Message::Binary(frame) = socket.next().await.unwrap().unwrap() else { continue };
+            let (opcode, rest) = (frame[0], &frame[2 + frame[1] as usize..]);
+            assert_eq!(&frame[2..2 + frame[1] as usize], b"art");
+            match opcode {
+                0x11 => bytes.extend_from_slice(rest),
+                0x12 => break,
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("the page's bytes");
+    assert_eq!(bytes, b"<p>hi</p>");
+    let secret = service.0.path().join("secret.txt");
+    fs::write(&secret, "private").unwrap();
+    for path in [json!(secret), json!(format!("{}/../secret.txt", service.0.path().join("out").display()))] {
+        let refused = ask(&mut socket, json!({"type":"agent.artifact.download.request","agentId":agent,"path":path})).await;
+        assert_eq!(refused["type"], "rpc_error", "{refused}");
+    }
 }
 
 #[tokio::test]

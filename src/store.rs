@@ -2595,16 +2595,35 @@ struct Downloads(HashMap<String, (String, bool)>);
 /// kind: on the Mac where the save panel says, on the phone in Sophon's
 /// folder of the Files app.
 pub(crate) fn download_file(path: &str) {
-    let Some(cwd) = tree_cwd() else { return };
     if downloading(path) {
         return;
     }
     let id = uuid::Uuid::new_v4().to_string();
+    let Some(fetch) = fetch(id.clone(), path) else { return };
     global::<Downloads>().update(|d| {
         d.0.insert(id.clone(), (path.to_owned(), false));
     });
     notify(tf("Downloading “{}”…", &[file_name(path)]));
-    send(Command::Download { id, cwd, path: path.to_owned() });
+    send(fetch);
+}
+
+/// What a file a conversation made goes by for [`preview`] and
+/// [`download_file`]: its path on the host, with its time (a file made again
+/// is fetched again).
+pub(crate) fn artifact_key(artifact: &crate::daemon::connection::Artifact) -> String {
+    format!("{ARTIFACT}{}:{}", artifact.modified, artifact.path)
+}
+
+const ARTIFACT: &str = "artifact:";
+
+/// The request for `path`'s bytes: a file of the open workspace, or (an
+/// [`artifact_key`]) one the open conversation's project made, wherever on
+/// the host it is.
+fn fetch(id: String, path: &str) -> Option<Command> {
+    match path.strip_prefix(ARTIFACT).and_then(|key| key.split_once(':')) {
+        Some((_, artifact)) => Some(Command::DownloadArtifact { id, agent: selected_id()?, path: artifact.to_owned() }),
+        None => Some(Command::Download { id, cwd: tree_cwd()?, path: path.to_owned() }),
+    }
 }
 
 /// Whether `path` is on its way here.
@@ -2634,15 +2653,15 @@ pub(crate) fn preview(path: &str) -> Preview {
     if let Some(p) = global::<Previews>().with(|p| p.0.get(path).cloned()) {
         return p;
     }
-    let state = match (tree_cwd(), entry_size(path)) {
+    let id = uuid::Uuid::new_v4().to_string();
+    let state = match (fetch(id.clone(), path), entry_size(path)) {
         (None, _) => Preview::Failed(t("No workspace is open").into()),
         (_, Some(size)) if size > PREVIEW_MAX_BYTES => Preview::TooLarge,
-        (Some(cwd), _) => {
-            let id = uuid::Uuid::new_v4().to_string();
+        (Some(fetch), _) => {
             untracked(|| global::<Downloads>().update(|d| {
                 d.0.insert(id.clone(), (path.to_owned(), true));
             }));
-            send(Command::Download { id, cwd, path: path.to_owned() });
+            send(fetch);
             Preview::Loading
         }
     };

@@ -145,19 +145,48 @@ fn kind_chips(list: &[Artifact], now: Option<String>) -> View {
 /// time; and what can be done with it.
 fn preview_card(artifact: Artifact) -> impl IntoElement {
     let here = store::on_this_mac();
-    let media = if artifact.kind == "image" && here {
-        view()
-            .h(px(170.0))
-            .bg(tint(FG(), 0.04))
-            .overflow_hidden()
-            .child(image(SharedString::from(format!("file://{}", artifact.path))).w_full().h_full().object_fit(nsh_core::ResizeMode::Cover))
-    } else {
+    // Another computer's: the picture comes over the connection first.
+    let key = store::artifact_key(&artifact);
+    let kind_badge = |artifact: &Artifact| {
         view()
             .h(px(96.0))
             .bg(tint(FG(), 0.04))
             .items_center()
             .justify_center()
-            .child(text(badge(&artifact)).text_size(tx(TEXT_LG)).font_weight(FontWeight(600)).text_color(FG_MUTED()).font_family(mono_font))
+            .child(text(badge(artifact)).text_size(tx(TEXT_LG)).font_weight(FontWeight(600)).text_color(FG_MUTED()).font_family(mono_font))
+    };
+    let picture = |url: String| {
+        view()
+            .h(px(170.0))
+            .bg(tint(FG(), 0.04))
+            .overflow_hidden()
+            .child(image(SharedString::from(url)).w_full().h_full().object_fit(nsh_core::ResizeMode::Cover))
+            .into_element()
+    };
+    let media = if artifact.kind != "image" {
+        kind_badge(&artifact).into_element()
+    } else if here {
+        picture(format!("file://{}", artifact.path))
+    } else {
+        let (key, shown) = (key.clone(), artifact.clone());
+        let state = computed({
+            let key = key.clone();
+            move || store::preview(&key)
+        });
+        view()
+            .child(dynamic(move || {
+                let state = state.get();
+                let (key, shown) = (key.clone(), shown.clone());
+                Some(untracked(move || match state {
+                    store::Preview::Ready(bytes) => match crate::ui::shared::preview::temp_copy(&key, &bytes) {
+                        Ok(file) => picture(crate::ui::shared::preview::file_url(&file)),
+                        Err(_) => kind_badge(&shown).into_element(),
+                    },
+                    store::Preview::Loading => view().h(px(170.0)).bg(tint(FG(), 0.04)).items_center().justify_center().child(loading()).into_element(),
+                    _ => kind_badge(&shown).into_element(),
+                }))
+            }))
+            .into_element()
     };
     let meta = match (artifact.width, artifact.height) {
         (Some(w), Some(h)) => format!("{w} × {h} · {}", stamp(artifact.modified)),
@@ -185,6 +214,13 @@ fn preview_card(artifact: Artifact) -> impl IntoElement {
         actions = actions
             .child(wide(t("Attach to message"), Icon::Plus, true, Box::new(move || crate::ui::shared::composer::dropped(&[format!("file://{attach}")]))))
             .child(wide(t("Show in Finder"), Icon::FolderOpen, false, Box::new(move || store::reveal_path(&reveal))));
+    } else {
+        // On the host, not here: fetched over the connection, saved where
+        // the save panel says or opened in its own app from a copy.
+        let (down, open) = (key.clone(), key.clone());
+        actions = actions
+            .child(wide(t("Download"), Icon::Download, true, Box::new(move || store::download_file(&down))))
+            .child(wide(t("Open in its app"), Icon::ExternalLink, false, Box::new(move || crate::ui::shared::preview::open_in_app(open.clone()))));
     }
     let page = artifact.kind == "page" && here;
     card()

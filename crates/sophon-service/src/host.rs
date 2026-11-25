@@ -64,7 +64,9 @@ pub fn watch_checkouts(shared: &Shared) {
             .iter()
             .filter(|(_, w)| w["archivedAt"].is_null())
             .filter_map(|(id, w)| {
-                let dir = w["workspaceDirectory"].as_str().or(w["projectRootPath"].as_str())?;
+                let dir = w["workspaceDirectory"]
+                    .as_str()
+                    .or(w["projectRootPath"].as_str())?;
                 Some((id.clone(), dir.to_owned()))
             })
             .collect();
@@ -86,11 +88,17 @@ pub fn watch_checkouts(shared: &Shared) {
             let summary = crate::git::summary(&dir).await;
             let mut host = shared.borrow_mut();
             host.counting.remove(&id);
-            let Some((branch, added, removed)) = summary else { return };
-            let Some(record) = host.state.workspaces.get_mut(&id) else { return };
+            let Some((branch, added, removed)) = summary else {
+                return;
+            };
+            let Some(record) = host.state.workspaces.get_mut(&id) else {
+                return;
+            };
             let stat = json!({"additions":added,"deletions":removed});
             let branch = (!branch.is_empty()).then_some(branch);
-            if record["diffStat"] == stat && record["gitRuntime"]["currentBranch"].as_str() == branch.as_deref() {
+            if record["diffStat"] == stat
+                && record["gitRuntime"]["currentBranch"].as_str() == branch.as_deref()
+            {
                 return;
             }
             record["diffStat"] = stat;
@@ -99,7 +107,10 @@ pub fn watch_checkouts(shared: &Shared) {
             }
             record["gitRuntime"]["currentBranch"] = json!(branch);
             let record = record.clone();
-            host.publish("workspace_update", json!({"kind":"upsert","workspace":record}));
+            host.publish(
+                "workspace_update",
+                json!({"kind":"upsert","workspace":record}),
+            );
         });
     }
 }
@@ -247,6 +258,72 @@ impl Host {
 
     fn publish(&self, kind: &str, payload: Value) {
         let _ = self.events.send(envelope(kind, payload));
+    }
+
+    /// What conversation `agent` made (`project_wide`: what every
+    /// conversation of its project made), as the artifacts panel lists it:
+    /// files found in their records and on this computer now, newest first.
+    pub fn artifacts(&mut self, agent: &str, project_wide: bool) -> Result<Vec<Value>, String> {
+        let record = self
+            .state
+            .agents
+            .get(agent)
+            .ok_or("Unknown conversation")?
+            .clone();
+        let project = record["workspaceId"]
+            .as_str()
+            .and_then(|ws| self.state.workspaces.get(ws))
+            .and_then(|ws| ws["projectId"].as_str())
+            .map(str::to_owned);
+        let mut agents: Vec<(String, Value)> = if project_wide && project.is_some() {
+            let workspaces: Vec<String> = self
+                .state
+                .workspaces
+                .iter()
+                .filter(|(_, ws)| ws["projectId"].as_str() == project.as_deref())
+                .map(|(id, _)| id.clone())
+                .collect();
+            self.state
+                .agents
+                .iter()
+                .filter(|(_, a)| a["archivedAt"].is_null())
+                .filter(|(_, a)| {
+                    a["workspaceId"]
+                        .as_str()
+                        .is_some_and(|ws| workspaces.iter().any(|w| w == ws))
+                })
+                .map(|(id, a)| (id.clone(), a.clone()))
+                .collect()
+        } else {
+            vec![(agent.to_owned(), record)]
+        };
+        // The latest conversations of a large project: their records
+        // are read to find them.
+        agents.sort_by(|a, b| b.1["updatedAt"].as_str().cmp(&a.1["updatedAt"].as_str()));
+        agents.truncate(60);
+        let mut artifacts: Vec<Value> = Vec::new();
+        for (id, record) in agents {
+            let Ok(timeline) = self.timeline(&id) else {
+                continue;
+            };
+            let found = crate::artifacts::candidates(timeline.items());
+            let since = record["createdAt"]
+                .as_str()
+                .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+                .map(|at| at.timestamp_millis());
+            let cwd = record["cwd"].as_str().unwrap_or_default();
+            for artifact in crate::artifacts::existing(&found, cwd, since, &id) {
+                if !artifacts
+                    .iter()
+                    .any(|known| known["path"] == artifact["path"])
+                {
+                    artifacts.push(artifact);
+                }
+            }
+        }
+        artifacts.sort_by_key(|a| std::cmp::Reverse(a["modifiedAt"].as_i64().unwrap_or(0)));
+        artifacts.truncate(300);
+        Ok(artifacts)
     }
 
     /// The agent's conversation, read from its log the first time. A
@@ -904,10 +981,14 @@ pub async fn commands(shared: &Shared, request: &Value) -> Result<Value, String>
         let host = shared.borrow();
         // A conversation's own, or a new one's: its provider and folder.
         let place = match host.state.agents.get(agent_id) {
-            Some(agent) => (text(agent, "provider")?.to_owned(), text(agent, "cwd")?.to_owned()),
-            None if request["provider"].is_string() && request["cwd"].is_string() => {
-                (text(request, "provider")?.to_owned(), text(request, "cwd")?.to_owned())
-            }
+            Some(agent) => (
+                text(agent, "provider")?.to_owned(),
+                text(agent, "cwd")?.to_owned(),
+            ),
+            None if request["provider"].is_string() && request["cwd"].is_string() => (
+                text(request, "provider")?.to_owned(),
+                text(request, "cwd")?.to_owned(),
+            ),
             None => return Err("Unknown agent".into()),
         };
         if let Some(known) = host.commands.get(&place) {
@@ -1095,66 +1176,7 @@ fn answer(shared: &Shared, request: &Value, mut made: Option<Value>) -> Result<V
         // wrote or named, that are on this computer now, newest first.
         "agent.artifacts.request" => {
             let agent = text(request, "agentId")?;
-            let record = host
-                .state
-                .agents
-                .get(agent)
-                .ok_or("Unknown conversation")?
-                .clone();
-            let project = record["workspaceId"]
-                .as_str()
-                .and_then(|ws| host.state.workspaces.get(ws))
-                .and_then(|ws| ws["projectId"].as_str())
-                .map(str::to_owned);
-            let mut agents: Vec<(String, Value)> =
-                if request["scope"] == "project" && project.is_some() {
-                    let workspaces: Vec<String> = host
-                        .state
-                        .workspaces
-                        .iter()
-                        .filter(|(_, ws)| ws["projectId"].as_str() == project.as_deref())
-                        .map(|(id, _)| id.clone())
-                        .collect();
-                    host.state
-                        .agents
-                        .iter()
-                        .filter(|(_, a)| a["archivedAt"].is_null())
-                        .filter(|(_, a)| {
-                            a["workspaceId"]
-                                .as_str()
-                                .is_some_and(|ws| workspaces.iter().any(|w| w == ws))
-                        })
-                        .map(|(id, a)| (id.clone(), a.clone()))
-                        .collect()
-                } else {
-                    vec![(agent.to_owned(), record)]
-                };
-            // The latest conversations of a large project: their records
-            // are read to find them.
-            agents.sort_by(|a, b| b.1["updatedAt"].as_str().cmp(&a.1["updatedAt"].as_str()));
-            agents.truncate(60);
-            let mut artifacts: Vec<Value> = Vec::new();
-            for (id, record) in agents {
-                let Ok(timeline) = host.timeline(&id) else {
-                    continue;
-                };
-                let found = crate::artifacts::candidates(timeline.items());
-                let since = record["createdAt"]
-                    .as_str()
-                    .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
-                    .map(|at| at.timestamp_millis());
-                let cwd = record["cwd"].as_str().unwrap_or_default();
-                for artifact in crate::artifacts::existing(&found, cwd, since, &id) {
-                    if !artifacts
-                        .iter()
-                        .any(|known| known["path"] == artifact["path"])
-                    {
-                        artifacts.push(artifact);
-                    }
-                }
-            }
-            artifacts.sort_by_key(|a| std::cmp::Reverse(a["modifiedAt"].as_i64().unwrap_or(0)));
-            artifacts.truncate(300);
+            let artifacts = host.artifacts(agent, request["scope"] == "project")?;
             json!({"agentId":agent,"scope":request["scope"],"artifacts":artifacts})
         }
         "fetch_agent_timeline_request" => {
