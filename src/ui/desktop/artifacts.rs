@@ -71,33 +71,105 @@ pub(crate) fn artifacts_view(shown: Memo<bool>) -> View {
             let Some(_) = all.get() else {
                 return Some(untracked(|| view().py(sp(S8)).items_center().child(loading()).into_element()));
             };
-            let list = listed.get();
-            let card = picked.get();
-            Some(untracked(move || {
-                if list.is_empty() {
-                    return super::explorer::empty_state(
+            if listed.with(Vec::is_empty) {
+                return Some(untracked(|| {
+                    super::explorer::empty_state(
                         Icon::Layers,
                         t("Nothing made yet"),
                         t("Files a conversation writes or names (pages, pictures, documents) show here once they are on the computer"),
                     )
-                    .into_element();
-                }
-                let mut page = view().px(sp(S3)).pt(sp(S1)).pb(sp(S4)).gap(sp(S1));
-                if let Some(card) = card {
-                    page = page.child(preview_card(card));
-                }
-                let mut day = String::new();
-                for artifact in list {
-                    let this = day_of(artifact.modified);
-                    if this != day {
-                        page = page.child(text(this.clone()).text_size(tx(TEXT_XS)).text_color(FG_FAINT()).px(sp(S1)).pt(sp(S3)).pb(sp(S1)));
-                        day = this;
-                    }
-                    page = page.child(artifact_row(artifact));
-                }
-                scroll().flex_1().child(page).into_element()
+                    .into_element()
+                }));
+            }
+            // Only the rows near the view are made: a picture of another
+            // computer comes over the connection when its row shows.
+            let rows = computed(move || rows_of(picked.get(), listed.get()));
+            Some(untracked(move || {
+                virtual_list(move || rows.with(Vec::len), move |at: nsh_core::element::Position| {
+                    let row = computed(move || rows.with(|r| r.get(at.index()).cloned()));
+                    view().px(sp(S3)).child(dynamic(move || {
+                        let row = row.get()?;
+                        Some(untracked(move || match row {
+                            Row::Card(artifact) => view().pt(sp(S1)).child(preview_card(artifact)).into_element(),
+                            Row::Day(day) => text(day).text_size(tx(TEXT_XS)).text_color(FG_FAINT()).px(sp(S1)).pt(sp(S3)).pb(sp(S1)).into_element(),
+                            Row::File(artifact) => view().pb(sp(S1)).child(artifact_row(artifact)).into_element(),
+                        }))
+                    }))
+                })
+                .keys(move || rows.with(|r| r.iter().map(Row::key).collect::<Vec<_>>()))
+                .estimated_item_size(px(42.0))
+                .content_padding_bottom(sp(S4))
+                .flex_1()
+                .into_element()
             }))
         })))
+}
+
+/// A row of the page: the card, a day's heading, or a file.
+#[derive(Clone, PartialEq)]
+enum Row {
+    Card(Artifact),
+    Day(String),
+    File(Artifact),
+}
+
+impl Row {
+    fn key(&self) -> String {
+        match self {
+            Row::Card(a) => format!("card:{}", a.path),
+            Row::Day(day) => format!("day:{day}"),
+            Row::File(a) => format!("file:{}", a.path),
+        }
+    }
+}
+
+/// The card (the one picked), then the files under the day each changed.
+fn rows_of(card: Option<Artifact>, list: Vec<Artifact>) -> Vec<Row> {
+    let mut rows: Vec<Row> = card.into_iter().map(Row::Card).collect();
+    let mut day = String::new();
+    for artifact in list {
+        let this = day_of(artifact.modified);
+        if this != day {
+            rows.push(Row::Day(this.clone()));
+            day = this;
+        }
+        rows.push(Row::File(artifact));
+    }
+    rows
+}
+
+/// The largest picture of another computer a row fetches for its
+/// thumbnail; a larger one shows its kind until it is the card's.
+const THUMB_MAX_BYTES: u64 = 5 * 1024 * 1024;
+
+/// A picture filling its box: this Mac's file, or another computer's
+/// fetched (its kind meanwhile, and when it cannot come).
+fn picture(artifact: &Artifact, here: bool, otherwise: impl Fn() -> AnyElement + 'static) -> AnyElement {
+    let fill = |url: String| image(SharedString::from(url)).w_full().h_full().object_fit(nsh_core::ResizeMode::Cover).into_element();
+    if here {
+        return fill(format!("file://{}", artifact.path));
+    }
+    let key = store::artifact_key(artifact);
+    let state = computed({
+        let key = key.clone();
+        move || store::preview(&key)
+    });
+    let otherwise = std::rc::Rc::new(otherwise);
+    view()
+        .w_full()
+        .h_full()
+        .child(dynamic(move || {
+            let state = state.get();
+            let (key, otherwise) = (key.clone(), otherwise.clone());
+            Some(untracked(move || match state {
+                store::Preview::Ready(bytes) => match crate::ui::shared::preview::temp_copy(&key, &bytes) {
+                    Ok(file) => fill(crate::ui::shared::preview::file_url(&file)),
+                    Err(_) => otherwise(),
+                },
+                _ => otherwise(),
+            }))
+        }))
+        .into_element()
 }
 
 /// One of the scope's two words: pressed, the list is that scope's.
@@ -145,48 +217,26 @@ fn kind_chips(list: &[Artifact], now: Option<String>) -> View {
 /// time; and what can be done with it.
 fn preview_card(artifact: Artifact) -> impl IntoElement {
     let here = store::on_this_mac();
-    // Another computer's: the picture comes over the connection first.
     let key = store::artifact_key(&artifact);
-    let kind_badge = |artifact: &Artifact| {
-        view()
-            .h(px(96.0))
-            .bg(tint(FG(), 0.04))
-            .items_center()
-            .justify_center()
-            .child(text(badge(artifact)).text_size(tx(TEXT_LG)).font_weight(FontWeight(600)).text_color(FG_MUTED()).font_family(mono_font))
+    let kind_badge = {
+        let shown = artifact.clone();
+        move || {
+            view()
+                .h(px(96.0))
+                .bg(tint(FG(), 0.04))
+                .items_center()
+                .justify_center()
+                .child(text(badge(&shown)).text_size(tx(TEXT_LG)).font_weight(FontWeight(600)).text_color(FG_MUTED()).font_family(mono_font))
+                .into_element()
+        }
     };
-    let picture = |url: String| {
-        view()
-            .h(px(170.0))
-            .bg(tint(FG(), 0.04))
-            .overflow_hidden()
-            .child(image(SharedString::from(url)).w_full().h_full().object_fit(nsh_core::ResizeMode::Cover))
-            .into_element()
-    };
-    let media = if artifact.kind != "image" {
-        kind_badge(&artifact).into_element()
-    } else if here {
-        picture(format!("file://{}", artifact.path))
+    let media = if artifact.kind == "image" {
+        view().h(px(170.0)).bg(tint(FG(), 0.04)).overflow_hidden().child(picture(&artifact, here, move || {
+            view().w_full().h_full().items_center().justify_center().child(loading()).into_element()
+        }))
+        .into_element()
     } else {
-        let (key, shown) = (key.clone(), artifact.clone());
-        let state = computed({
-            let key = key.clone();
-            move || store::preview(&key)
-        });
-        view()
-            .child(dynamic(move || {
-                let state = state.get();
-                let (key, shown) = (key.clone(), shown.clone());
-                Some(untracked(move || match state {
-                    store::Preview::Ready(bytes) => match crate::ui::shared::preview::temp_copy(&key, &bytes) {
-                        Ok(file) => picture(crate::ui::shared::preview::file_url(&file)),
-                        Err(_) => kind_badge(&shown).into_element(),
-                    },
-                    store::Preview::Loading => view().h(px(170.0)).bg(tint(FG(), 0.04)).items_center().justify_center().child(loading()).into_element(),
-                    _ => kind_badge(&shown).into_element(),
-                }))
-            }))
-            .into_element()
+        kind_badge()
     };
     let meta = match (artifact.width, artifact.height) {
         (Some(w), Some(h)) => format!("{w} × {h} · {}", stamp(artifact.modified)),
@@ -259,24 +309,26 @@ fn artifact_row(artifact: Artifact) -> impl IntoElement {
         let path = path.clone();
         computed(move || store::picked_artifact().as_deref() == Some(path.as_str()))
     };
-    let lead = if artifact.kind == "image" && store::on_this_mac() {
+    let here = store::on_this_mac();
+    let shown = artifact.clone();
+    let kind_lead = move || {
         view()
-            .w(px(40.0))
-            .h(px(28.0))
-            .rounded(px(R_SM))
-            .overflow_hidden()
-            .bg(tint(FG(), 0.05))
-            .child(image(SharedString::from(format!("file://{}", artifact.path))).w_full().h_full().object_fit(nsh_core::ResizeMode::Cover))
-    } else {
-        view()
-            .w(px(40.0))
-            .h(px(28.0))
-            .rounded(px(R_SM))
+            .w_full()
+            .h_full()
             .bg(tint(ACCENT(), 0.10))
             .items_center()
             .justify_center()
-            .child(text(badge(&artifact)).text_size(px(9.0)).font_weight(FontWeight(700)).text_color(ACCENT()))
+            .child(text(badge(&shown)).text_size(px(9.0)).font_weight(FontWeight(700)).text_color(ACCENT()))
+            .into_element()
     };
+    let thumb = artifact.kind == "image" && (here || artifact.size <= THUMB_MAX_BYTES);
+    let lead = view()
+        .w(px(40.0))
+        .h(px(28.0))
+        .rounded(px(R_SM))
+        .overflow_hidden()
+        .bg(tint(FG(), 0.05))
+        .child(if thumb { picture(&artifact, here, kind_lead) } else { kind_lead() });
     nsh_base::button()
         .on_press(move || store::pick_artifact(Some(path.clone())))
         .accessibility_label(artifact.name.clone())
