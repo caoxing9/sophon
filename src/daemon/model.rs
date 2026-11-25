@@ -416,6 +416,15 @@ impl Permission {
     }
 }
 
+/// A line of a todo list: done or not, what it says, and while it is the
+/// one under way, its wording for that ("Running the tests").
+#[derive(Clone, Debug, PartialEq)]
+pub struct TodoLine {
+    pub done: bool,
+    pub text: String,
+    pub doing: Option<String>,
+}
+
 /// One row of an agent's conversation.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
@@ -430,7 +439,9 @@ pub enum Item {
     /// `detail`: the call's detail object as the daemon sent it (its
     /// `type` says which fields it has), `error` what failed.
     Tool { call_id: String, name: String, kind: String, status: String, summary: String, detail: Value, error: Option<String> },
-    Todo { lines: Vec<(bool, String)> },
+    /// A todo list; `live`: Claude Code's task list, one list that each
+    /// change sends whole again (it takes the place of its last state).
+    Todo { lines: Vec<TodoLine>, live: bool },
     Error { message: String },
     Notice { message: String },
     /// Claude Code retrying a failed API request: the attempt that failed
@@ -519,13 +530,17 @@ impl Item {
                         items
                             .iter()
                             .map(|t| {
-                                let done = t.get("completed").and_then(Value::as_bool).unwrap_or(false)
-                                    || t.get("status").and_then(Value::as_str) == Some("completed");
-                                (done, str_of(t, "text").unwrap_or_default())
+                                let status = t.get("status").and_then(Value::as_str);
+                                let done = t.get("completed").and_then(Value::as_bool).unwrap_or(false) || status == Some("completed");
+                                let text = str_of(t, "text").unwrap_or_default();
+                                let doing = (status == Some("in_progress") && !done)
+                                    .then(|| str_of(t, "activeForm").filter(|a| !a.trim().is_empty()).unwrap_or_else(|| text.clone()));
+                                TodoLine { done, text, doing }
                             })
                             .collect()
                     })
                     .unwrap_or_default(),
+                live: v.get("tasks").and_then(Value::as_bool).unwrap_or(false),
             },
             "error" => Item::Error { message: str_of(v, "message").unwrap_or_default() },
             "notification" => {
@@ -581,6 +596,11 @@ pub fn apply_live(items: &mut Vec<Item>, incoming: Item) {
                 items.push(incoming);
             }
         }
+        // Claude Code's task list: its new state in place of the last.
+        Item::Todo { live: true, .. } => match items.iter().rposition(|i| matches!(i, Item::Todo { live: true, .. })) {
+            Some(at) => items[at] = incoming,
+            None => items.push(incoming),
+        },
         Item::Retry { .. } => {
             // The next attempt's word replaces the last one's.
             if matches!(items.last(), Some(Item::Retry { .. })) {
@@ -614,6 +634,7 @@ pub fn settled(rows: Vec<Item>) -> Vec<Item> {
     for row in rows {
         match row {
             Item::Notice { ref message } if message == COMPACTING || message == COMPACTED => apply_live(&mut items, row),
+            Item::Todo { live: true, .. } => apply_live(&mut items, row),
             other => items.push(other),
         }
     }
@@ -790,6 +811,25 @@ pub fn plan_of(input: &Value) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn claude_codes_task_list_is_one_row_its_last_state() {
+        let list = |items: Value| Item::from_json(&json!({ "type": "todo", "tasks": true, "items": items })).unwrap();
+        let first = list(json!([{ "text": "Test", "status": "pending" }]));
+        let then = list(json!([{ "text": "Test", "status": "in_progress", "activeForm": "Testing" }, { "text": "Ship", "status": "pending" }]));
+        let mut items = vec![Item::Notice { message: "x".into() }];
+        apply_live(&mut items, first.clone());
+        items.push(Item::Notice { message: "y".into() });
+        apply_live(&mut items, then.clone());
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[1], then);
+        let Item::Todo { lines, live } = &items[1] else { panic!() };
+        assert!(live);
+        assert_eq!(lines[0].doing.as_deref(), Some("Testing"));
+        assert_eq!(lines[1].doing, None);
+        // The host's rows, read again: the same one row.
+        assert_eq!(settled(vec![first, Item::Notice { message: "y".into() }, then.clone()]), vec![then, Item::Notice { message: "y".into() }]);
+    }
 
     #[test]
     fn a_compaction_is_one_row_however_often_it_is_said() {

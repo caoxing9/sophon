@@ -141,7 +141,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                 if let Some(id) = store::selected_id()
                     && store::send_message(&message)
                 {
-                    store::clear_notes(&id);
+                    store::clear_sent_notes(&id);
                     store::set_draft(&id, "");
                     // Its attachments went with it (sent, or queued with
                     // it): their chips go from the composer.
