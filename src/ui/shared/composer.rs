@@ -359,7 +359,8 @@ fn editor(
 ) -> View {
     let key = doc.key;
     let mut styles = RichEditorStyles::default();
-    let typography = |s: StyleRefinement| s.text_size(px(size)).line_height(px(22.0)).text_color(FG());
+    // At the size the user set (`tx`), the line with it.
+    let typography = |s: StyleRefinement| s.text_size(tx(size)).line_height(tx(22.0)).text_color(FG());
     styles.root = Some(PartStyle(typography(StyleRefinement::default()).into()));
     styles.caret = Some(PartStyle(StyleRefinement::default().bg(ACCENT()).into()));
     styles.selection = Some(PartStyle(StyleRefinement::default().bg(tint(ACCENT(), 0.3)).into()));
