@@ -119,6 +119,18 @@ pub(crate) fn segmented<T: Clone + PartialEq + 'static>(
     selected: impl Fn() -> T + 'static,
     on_select: impl Fn(T) + Clone + 'static,
 ) -> View {
+    segmented_with(options, selected, on_select, true)
+}
+
+/// [`segmented`], the thumb springing to the picked option only when
+/// `spring`: a press animates every frame the pick changes, so where the
+/// pick shows and hides whole pages the thumb steps instead.
+pub(crate) fn segmented_with<T: Clone + PartialEq + 'static>(
+    options: Vec<(T, SharedString)>,
+    selected: impl Fn() -> T + 'static,
+    on_select: impl Fn(T) + Clone + 'static,
+    spring: bool,
+) -> View {
     let selected = computed(selected);
     let values: Vec<T> = options.iter().map(|(v, _)| v.clone()).collect();
     // Where each option sits in the row (x, width), measured.
@@ -156,11 +168,13 @@ pub(crate) fn segmented<T: Clone + PartialEq + 'static>(
         }).child(
             button()
                 .on_press(move || {
-                    animate_layout(nsh_core::LayoutAnimation {
-                        create: None,
-                        update: Some(nsh_core::LayoutTransition::new(nsh_core::LayoutCurve::Spring { damping: 0.86 }, 320.0)),
-                        delete: None,
-                    });
+                    if spring {
+                        animate_layout(nsh_core::LayoutAnimation {
+                            create: None,
+                            update: Some(nsh_core::LayoutTransition::new(nsh_core::LayoutCurve::Spring { damping: 0.86 }, 320.0)),
+                            delete: None,
+                        });
+                    }
                     pick(value.clone())
                 })
                 .h(sp(CONTROL_SM - 2.0))
