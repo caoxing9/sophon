@@ -71,10 +71,40 @@ pub(crate) fn timeline() -> impl IntoElement {
             let rows = computed(store::display_rows);
             let list = element_ref();
             store::set_timeline_list(list.clone());
+            // Its rows measure themselves once shown, and the list goes on
+            // to its end as they do: a few moves in the first quarter
+            // second; and this device's copy of it, shown first, grows when
+            // the host's comes. It shows once the host's is there and it
+            // stays at its end (most of a second at most), so a
+            // conversation opens where it ends.
+            let settled = signal(false);
+            let gone = std::rc::Rc::new(std::cell::Cell::new(false));
+            {
+                let gone = gone.clone();
+                cleanup(move || gone.set(true));
+            }
+            store::spawn_detached(async move {
+                let (mut last, mut steady) = (f32::NAN, 0);
+                for _ in 0..45 {
+                    nsh_core::element::timer(std::time::Duration::from_millis(16)).await;
+                    if gone.get() {
+                        return;
+                    }
+                    let (from_end, content) = store::timeline_place();
+                    steady = if from_end <= 2.0 && content == last && !untracked(store::timeline_syncing) { steady + 1 } else { 0 };
+                    last = content;
+                    if steady >= 3 {
+                        break;
+                    }
+                }
+                if !gone.get() {
+                    settled.set(true);
+                }
+            });
             // On the desktop the whole conversation is one selectable area:
             // a selection runs from reply to reply, as on a web page (each
             // reply its own area stopped it at the reply's edge).
-            view().flex_1().when(!MOBILE, |v| v.selectable(true).on_text_selection_change(list_chosen)).child(virtual_list(move || rows.with(Vec::len), move |at: Position| row(at, rows, running))
+            view().flex_1().opacity(move || if settled.get() { 1.0_f32 } else { 0.0 }).transition_opacity().when(!MOBILE, |v| v.selectable(true).on_text_selection_change(list_chosen)).child(virtual_list(move || rows.with(Vec::len), move |at: Position| row(at, rows, running))
                 // On the phone, a drag down the conversation takes the
                 // keyboard with it, as Messages does.
                 .keyboard_dismiss_mode(if MOBILE { KeyboardDismissMode::Interactive } else { KeyboardDismissMode::None })
