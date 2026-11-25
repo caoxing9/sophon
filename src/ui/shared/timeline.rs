@@ -71,7 +71,10 @@ pub(crate) fn timeline() -> impl IntoElement {
             let rows = computed(store::display_rows);
             let list = element_ref();
             store::set_timeline_list(list.clone());
-            view().flex_1().child(virtual_list(move || rows.with(Vec::len), move |at: Position| row(at, rows, running))
+            // On the desktop the whole conversation is one selectable area:
+            // a selection runs from reply to reply, as on a web page (each
+            // reply its own area stopped it at the reply's edge).
+            view().flex_1().when(!MOBILE, |v| v.selectable(true).on_text_selection_change(list_chosen)).child(virtual_list(move || rows.with(Vec::len), move |at: Position| row(at, rows, running))
                 // On the phone, a drag down the conversation takes the
                 // keyboard with it, as Messages does.
                 .keyboard_dismiss_mode(if MOBILE { KeyboardDismissMode::Interactive } else { KeyboardDismissMode::None })
@@ -322,6 +325,16 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                     // Words chosen in it offer a note where the pointer let
                     // them go; a press on that opens the note's card there.
                     let pointer = signal((0.0_f32, 0.0_f32));
+                    // On the desktop the words are chosen in the list's one
+                    // area: they are this reply's while the pointer is on it
+                    // (where a selection is let go).
+                    if !MOBILE {
+                        effect(move || {
+                            let all = global::<ListChosen>().with(|c| c.0.clone());
+                            let here = hover.get_untracked() || all.words.trim().is_empty() || all.cleared.is_some();
+                            chosen.set(if here { all } else { Chosen::default() });
+                        });
+                    }
                     let offer = signal(None::<(f32, f32, String)>);
                     let noting = signal(None::<(f32, f32, String)>);
                     effect(move || {
@@ -705,6 +718,26 @@ mod quote_tests {
     }
 }
 
+/// The words chosen in the conversation's list (the desktop's one
+/// selectable area), for the reply under the pointer to offer a note on
+/// and to quote.
+#[derive(Clone, Default, PartialEq)]
+struct ListChosen(Chosen);
+
+fn list_chosen(e: &nsh_core::element::TextSelectionEvent) {
+    take_copy(e);
+    global::<ListChosen>().update(|c| choose(&mut c.0, &e.text));
+}
+
+/// `c` after a selection of `words` (empty: none), keeping when it was let go.
+fn choose(c: &mut Chosen, words: &str) {
+    if !words.trim().is_empty() {
+        *c = Chosen { words: words.to_owned(), cleared: None };
+    } else if c.cleared.is_none() && !c.words.is_empty() {
+        c.cleared = Some(std::time::Instant::now());
+    }
+}
+
 fn copy_area(content: impl IntoElement) -> View {
     view().selectable(true).on_text_selection_change(take_copy).child(content)
 }
@@ -732,13 +765,7 @@ fn copy_area_choosing(chosen: Signal<Chosen>, content: impl IntoElement) -> View
         .selectable(true)
         .on_text_selection_change(move |e: &nsh_core::element::TextSelectionEvent| {
             take_copy(e);
-            chosen.update(|c| {
-                if !e.text.trim().is_empty() {
-                    *c = Chosen { words: e.text.clone(), cleared: None };
-                } else if c.cleared.is_none() && !c.words.is_empty() {
-                    c.cleared = Some(std::time::Instant::now());
-                }
-            });
+            chosen.update(|c| choose(c, &e.text));
         })
         .child(content)
 }
