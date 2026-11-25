@@ -30,6 +30,16 @@ struct Ask {
     suggestions: Value,
 }
 
+/// A task of Claude Code's list: its number once known, the call that
+/// made it, what it says, its wording while under way, and how it stands.
+struct Task {
+    id: Option<String>,
+    call: String,
+    subject: String,
+    active: Option<String>,
+    status: String,
+}
+
 /// A call begun and not answered: its tool and input, and the agent
 /// that made it if that is one this conversation's agent started (by
 /// the call that started it).
@@ -55,6 +65,9 @@ struct Claude {
     /// What was set needs a new process, once this turn is over.
     restart: bool,
     calls: HashMap<String, Call>,
+    /// Claude Code's task list (`TaskCreate`, `TaskUpdate`), shown as a
+    /// todo list: each change sends the whole of it again.
+    tasks: Vec<Task>,
     /// Agents this one started whose last item was text: their next
     /// message starts a new paragraph.
     wordy: HashSet<String>,
@@ -102,6 +115,7 @@ pub async fn run(start: Start, mut inbox: UnboundedReceiver<Command>, emit: Emit
         outcome: Outcome::Completed,
         restart: false,
         calls: HashMap::new(),
+        tasks: Vec::new(),
         wordy: HashSet::new(),
         agents: HashSet::new(),
         background: HashSet::new(),
@@ -920,9 +934,14 @@ impl Claude {
                 .as_array()
                 .into_iter()
                 .flatten()
-                .map(|todo| json!({"text":todo["content"],"completed":todo["status"] == "completed"}))
+                .map(|todo| json!({"text":todo["content"],"completed":todo["status"] == "completed",
+                    "status":todo["status"],"activeForm":todo["activeForm"]}))
                 .collect();
             return self.within(within, json!({"type":"todo","items":items}));
+        }
+        // The agent's own list, not its agents' (theirs are their calls).
+        if within.is_none() && matches!(name, "TaskCreate" | "TaskUpdate") {
+            self.task_called(id, name, input);
         }
         // A call that starts an agent: that agent is known by the call.
         if matches!(name, "Task" | "Agent") {
@@ -941,6 +960,69 @@ impl Claude {
         self.within(within, tool(id, name, "running", detail(name, input), None));
     }
 
+    /// A task made or changed: the list as it now stands goes out.
+    fn task_called(&mut self, call: &str, name: &str, input: &Value) {
+        let text = |k: &str| input[k].as_str().map(str::to_owned).filter(|s| !s.trim().is_empty());
+        if name == "TaskCreate" {
+            // A list all done is over: a task made after it begins another.
+            if !self.tasks.is_empty() && self.tasks.iter().all(|t| t.status == "completed") {
+                self.tasks.clear();
+            }
+            self.tasks.push(Task {
+                id: None,
+                call: call.to_owned(),
+                subject: text("subject").unwrap_or_default(),
+                active: text("activeForm"),
+                status: "pending".to_owned(),
+            });
+        } else {
+            let id = match &input["taskId"] {
+                Value::String(s) => s.clone(),
+                Value::Number(n) => n.to_string(),
+                _ => return,
+            };
+            let Some(at) = self.tasks.iter().position(|t| t.id.as_deref() == Some(&id)) else { return };
+            if let Some(status) = text("status") {
+                if status == "deleted" {
+                    self.tasks.remove(at);
+                } else {
+                    self.tasks[at].status = status;
+                }
+            }
+            if let Some(task) = self.tasks.get_mut(at).filter(|_| input["status"] != "deleted") {
+                if let Some(subject) = text("subject") {
+                    task.subject = subject;
+                }
+                if let Some(active) = text("activeForm") {
+                    task.active = Some(active);
+                }
+            }
+        }
+        let items: Vec<_> = self
+            .tasks
+            .iter()
+            .map(|t| {
+                json!({"text": t.subject, "status": t.status, "completed": t.status == "completed",
+                    "activeForm": t.active})
+            })
+            .collect();
+        self.item(json!({"type":"todo","items":items,"tasks":true}));
+    }
+
+    /// Its number, as Claude Code's answer gives it ("Task #3 created…"):
+    /// what later changes name it by. One that failed was never made.
+    fn task_created(&mut self, call: &str, text: &str, failed: bool) {
+        let Some(at) = self.tasks.iter().position(|t| t.call == call) else { return };
+        if failed {
+            self.tasks.remove(at);
+            return;
+        }
+        self.tasks[at].id = text
+            .split_once('#')
+            .map(|(_, rest)| rest.chars().take_while(char::is_ascii_digit).collect::<String>())
+            .filter(|n| !n.is_empty());
+    }
+
     /// What the agent's calls came back with.
     fn returned(&mut self, event: &Value) {
         for block in event["message"]["content"].as_array().into_iter().flatten() {
@@ -956,6 +1038,9 @@ impl Claude {
             };
             let text = said(&block["content"]);
             let failed = block["is_error"] == true;
+            if name == "TaskCreate" {
+                self.task_created(block["tool_use_id"].as_str().unwrap_or_default(), &text, failed);
+            }
             let detail = answered(
                 detail(&name, &input),
                 &text,

@@ -3829,6 +3829,20 @@ fn apply_color_theme(theme: &ColorTheme) {
         }
     };
     set_palette(palette);
+    // `nsh/base`'s parts (a reply's links, the selection's highlight,
+    // menus' checks) draw with the theme's `primary`: theme.json's clay
+    // unless it is the accent chosen.
+    let mut tokens = (*nsh_core::element::tokens()).clone();
+    let (accent, on_accent) = (crate::ui::kit::ACCENT(), crate::ui::kit::ACCENT_FG());
+    for name in ["primary", "ring", "sidebar-primary", "sidebar-ring"] {
+        tokens.set_color(name, accent);
+    }
+    for name in ["primary-foreground", "sidebar-primary-foreground"] {
+        tokens.set_color(name, on_accent);
+    }
+    if *nsh_core::element::tokens() != tokens {
+        nsh_core::element::set_tokens(tokens);
+    }
 }
 
 /// `#rrggbb` (or `rrggbb`, `#rgb`) as `0xRRGGBB`.
@@ -6099,9 +6113,23 @@ pub(crate) fn remove_note(agent: &str, index: usize) {
     });
 }
 
-pub(crate) fn clear_notes(agent: &str) {
+/// The notes sent go; the drafts stay for the next message.
+pub(crate) fn clear_sent_notes(agent: &str) {
     global::<Notes>().update(|n| {
-        n.0.remove(agent);
+        if let Some(list) = n.0.get_mut(agent) {
+            list.retain(|note| note.draft);
+            if list.is_empty() {
+                n.0.remove(agent);
+            }
+        }
+    });
+}
+
+pub(crate) fn set_note(agent: &str, index: usize, note: crate::notes::Note) {
+    global::<Notes>().update(|n| {
+        if let Some(slot) = n.0.get_mut(agent).and_then(|list| list.get_mut(index)) {
+            *slot = note;
+        }
     });
 }
 

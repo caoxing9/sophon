@@ -5,10 +5,13 @@
 //! a "N notes" chip in their place (`split`).
 
 /// A passage of a reply and the comment on it (empty: quoted alone).
+/// A draft (its card let go with words typed) waits in the composer and
+/// is not sent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Note {
     pub(crate) quote: String,
     pub(crate) comment: String,
+    pub(crate) draft: bool,
 }
 
 const HEAD: &str = "Notes on your reply:\n\n";
@@ -16,6 +19,7 @@ const END: &str = "\n\n(End of notes)";
 
 /// `message` with `notes` ahead of it.
 pub(crate) fn with_notes(notes: &[Note], message: &str) -> String {
+    let notes: Vec<&Note> = notes.iter().filter(|n| !n.draft).collect();
     if notes.is_empty() {
         return message.to_owned();
     }
@@ -50,7 +54,7 @@ pub(crate) fn split(text: &str) -> (Vec<Note>, &str) {
                 n.quote.push('\n');
                 n.quote.push_str(q);
             }
-            (Some(q), _) => notes.push(Note { quote: q.to_owned(), comment: String::new() }),
+            (Some(q), _) => notes.push(Note { quote: q.to_owned(), comment: String::new(), draft: false }),
             (None, Some(n)) => {
                 if !n.comment.is_empty() || !line.is_empty() {
                     if !n.comment.is_empty() {
@@ -79,7 +83,7 @@ mod tests {
     use super::*;
 
     fn note(q: &str, c: &str) -> Note {
-        Note { quote: q.into(), comment: c.into() }
+        Note { quote: q.into(), comment: c.into(), draft: false }
     }
 
     #[test]
@@ -98,6 +102,10 @@ mod tests {
         assert_eq!(split(&sent), (vec![note("a", "b")], ""));
         assert_eq!(split("hello"), (vec![], "hello"));
         assert_eq!(with_notes(&[], "hi"), "hi");
+        // Drafts stay behind.
+        let draft = Note { draft: true, ..note("d", "e") };
+        assert_eq!(with_notes(&[draft.clone()], "hi"), "hi");
+        assert_eq!(split(&with_notes(&[draft, note("a", "b")], "hi")), (vec![note("a", "b")], "hi"));
         assert_eq!(body("Notes on your reply:\n\nno end"), "Notes on your reply:\n\nno end");
     }
 }

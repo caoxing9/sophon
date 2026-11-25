@@ -243,7 +243,7 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
         .rounded(px(R_LG))
         .bg(move || match hit.get() {
             2 => tint(ACCENT(), 0.14),
-            1 => tint(DOT_WARNING, 0.10),
+            1 => tint(ACCENT(), 0.06),
             _ => tint(ACCENT(), 0.0),
         })
         .child(dynamic(
@@ -252,7 +252,7 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
             Some(untracked(move || match kind {
                 // The phone: no button on the bubble; a tap opens its
                 // actions, copying among them.
-                RowKind::User if MOBILE => user_row(item, view().child(dynamic(move || {
+                RowKind::User if MOBILE => user_row(item, move || view().child(dynamic(move || {
                     let selecting = index.get().is_some() && selecting_text() == index.get();
                     Some(untracked(move || {
                         let bubble = view().px(px(14.0)).py(px(9.0)).rounded(px(18.0)).bg(user_bubble());
@@ -280,7 +280,7 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                     let hover = signal(false);
                     user_row(
                         item,
-                        view()
+                        move || view()
                             .items_end()
                             .gap(px(4.0))
                             .on_mouse_enter(move |_: &MouseEvent| hover.set(true))
@@ -322,9 +322,16 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                 RowKind::Assistant => {
                     let hover = signal(false);
                     let chosen = signal(Chosen::default());
-                    // Words chosen in it offer a note where the pointer let
-                    // them go; a press on that opens the note's card there.
+                    // Words chosen in it offer a note over them; a press on
+                    // that opens the note's card there.
                     let pointer = signal((0.0_f32, 0.0_f32));
+                    // Where the press that chose them began: the pointer
+                    // as it last moved with no button down.
+                    let pressed_at = signal((0.0_f32, 0.0_f32));
+                    // Where this reply stands on the page (the pointer's
+                    // page position less its own): what puts a selection's
+                    // page box in the reply's coordinates.
+                    let origin = signal(None::<(f32, f32)>);
                     // On the desktop the words are chosen in the list's one
                     // area: they are this reply's while the pointer is on it
                     // (where a selection is let go).
@@ -335,13 +342,28 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                             chosen.set(if here { all } else { Chosen::default() });
                         });
                     }
-                    let offer = signal(None::<(f32, f32, String)>);
-                    let noting = signal(None::<(f32, f32, String)>);
+                    let offer = signal(super::notes::Chosen::None);
+                    let noting = signal(super::notes::Chosen::None);
                     effect(move || {
                         let c = chosen.get();
                         if c.cleared.is_none() && !c.words.trim().is_empty() {
-                            let (x, y) = pointer.get_untracked();
-                            offer.set(Some((x, y, c.words.trim().to_owned())));
+                            let anchor = match (c.page, origin.get_untracked()) {
+                                (Some(b), Some((x, y))) => {
+                                    let mut b = b;
+                                    b.origin.x.0 -= x;
+                                    b.origin.y.0 -= y;
+                                    super::notes::Anchor::of(b)
+                                }
+                                // Where the platform does not place them: the
+                                // line the drag began on, or let go on if it
+                                // went up.
+                                _ => {
+                                    let (up, down) = (pointer.get_untracked(), pressed_at.get_untracked());
+                                    let (x, y) = if up.1 < down.1 { up } else { down };
+                                    super::notes::Anchor { top: y - 12.0, bottom: y + 12.0, center: x }
+                                }
+                            };
+                            offer.set(Some((anchor, c.words.trim().to_owned())));
                         } else {
                             // A moment later: the press on "Note" itself
                             // lets the words go first.
@@ -386,7 +408,14 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                     view()
                         .on_mouse_enter(move |_: &MouseEvent| hover.set(true))
                         .on_mouse_leave(move |_: &MouseEvent| hover.set(false))
-                        .on_mouse_move(move |e: &MouseEvent| pointer.set((e.position.x.0, e.position.y.0)))
+                        .on_mouse_move(move |e: &MouseEvent| {
+                            let at = (e.position.x.0, e.position.y.0);
+                            pointer.set(at);
+                            origin.set(Some((e.page_position.x.0 - at.0, e.page_position.y.0 - at.1)));
+                            if e.pressed_button.is_none() {
+                                pressed_at.set(at);
+                            }
+                        })
                         .child(copy_area_choosing(chosen, dynamic(move || {
                             let list = pieces.get();
                             Some(untracked(move || {
@@ -726,13 +755,13 @@ struct ListChosen(Chosen);
 
 fn list_chosen(e: &nsh_core::element::TextSelectionEvent) {
     take_copy(e);
-    global::<ListChosen>().update(|c| choose(&mut c.0, &e.text));
+    global::<ListChosen>().update(|c| choose(&mut c.0, e));
 }
 
 /// `c` after a selection of `words` (empty: none), keeping when it was let go.
-fn choose(c: &mut Chosen, words: &str) {
-    if !words.trim().is_empty() {
-        *c = Chosen { words: words.to_owned(), cleared: None };
+fn choose(c: &mut Chosen, e: &nsh_core::element::TextSelectionEvent) {
+    if !e.text.trim().is_empty() {
+        *c = Chosen { words: e.text.clone(), cleared: None, page: e.page_bounds };
     } else if c.cleared.is_none() && !c.words.is_empty() {
         c.cleared = Some(std::time::Instant::now());
     }
@@ -748,6 +777,9 @@ fn copy_area(content: impl IntoElement) -> View {
 struct Chosen {
     words: String,
     cleared: Option<std::time::Instant>,
+    /// The box around them on the page (the window's root view), when
+    /// the platform knows it.
+    page: Option<Bounds<Points>>,
 }
 
 impl Chosen {
@@ -765,7 +797,7 @@ fn copy_area_choosing(chosen: Signal<Chosen>, content: impl IntoElement) -> View
         .selectable(true)
         .on_text_selection_change(move |e: &nsh_core::element::TextSelectionEvent| {
             take_copy(e);
-            chosen.update(|c| choose(c, &e.text));
+            chosen.update(|c| choose(c, e));
         })
         .child(content)
 }
@@ -810,7 +842,7 @@ fn user_text(item: Memo<Option<Item>>, selectable: bool) -> impl IntoElement {
                             if !t.is_char_boundary(start) || !t.is_char_boundary(end) {
                                 break;
                             }
-                            line = line.child(text(t[at..start].to_owned())).child(text(t[start..end].to_owned()).bg(tint(DOT_WARNING, 0.35)));
+                            line = line.child(text(t[at..start].to_owned())).child(text(t[start..end].to_owned()).bg(tint(ACCENT(), 0.28)));
                             at = end;
                         }
                         line.child(text(t[at..].to_owned()))
@@ -869,8 +901,11 @@ fn sent_chip(name: String, thumb: Option<String>) -> View {
     view().pl(px(1.0)).pr(px(5.0)).align_middle().child(chip)
 }
 
-fn user_row(item: Memo<Option<Item>>, bubble: impl IntoElement + 'static) -> impl IntoElement {
-    let (images, has_text) = item.with_untracked(|i| match i {
+fn user_row(item: Memo<Option<Item>>, bubble: impl Fn() -> View + 'static) -> impl IntoElement {
+    // Read as the row's message goes: a row is kept while the message in
+    // its place changes (its text follows in the bubble; its notes and
+    // pictures must too).
+    let parts = computed(move || item.with(|i| match i {
         Some(Item::User { images, text, .. }) => {
             // The pictures the text names show as chips in it; the rest (a
             // message sent before chips were named) stay above it.
@@ -878,34 +913,45 @@ fn user_row(item: Memo<Option<Item>>, bubble: impl IntoElement + 'static) -> imp
                 .iter()
                 .filter(|s| matches!(s, crate::ui::shared::composer_doc::Segment::Chip(n) if crate::ui::shared::composer_doc::is_image_name(n)))
                 .count();
-            (images.iter().skip(named).cloned().collect::<Vec<_>>(), !crate::notes::body(text).trim().is_empty())
+            let images = images.iter().skip(named).cloned().collect::<Vec<_>>();
+            (crate::notes::split(text).0, images, !crate::notes::body(text).trim().is_empty())
         }
-        _ => (vec![], true),
-    });
-    let notes = item.with_untracked(|i| match i {
-        Some(Item::User { text, .. }) => crate::notes::split(text).0,
-        _ => Vec::new(),
-    });
-    let mut thumbs = view().flex_row().flex_wrap().justify_end().gap(px(6.0));
-    for uri in &images {
-        thumbs = thumbs.child(
-            image(SharedString::from(uri.clone()))
-                .w(px(132.0))
-                .h(px(132.0))
-                .object_fit(nsh_core::ResizeMode::Cover)
-                .rounded(px(14.0))
-                .border_1()
-                .border_color(tint(BORDER(), 0.8)),
-        );
-    }
+        _ => (Vec::new(), vec![], true),
+    }));
+    let notes = computed(move || parts.with(|p| p.0.clone()));
+    let images = computed(move || parts.with(|p| p.1.clone()));
+    let has_text = computed(move || parts.with(|p| p.2));
     view()
         .self_end()
         .items_end()
         .gap(px(6.0))
         .max_w(relative(0.82))
-        .when(!notes.is_empty(), |v| v.child(super::notes::sent_notes(notes)))
-        .when(!images.is_empty(), |v| v.child(thumbs))
-        .when(has_text, |v| v.child(bubble))
+        .child(dynamic(move || {
+            let notes = notes.get();
+            (!notes.is_empty()).then(|| untracked(move || super::notes::sent_notes(notes).into_element()))
+        }))
+        .child(dynamic(move || {
+            let images = images.get();
+            (!images.is_empty()).then(|| {
+                untracked(move || {
+                    let mut thumbs = view().flex_row().flex_wrap().justify_end().gap(px(6.0));
+                    for uri in &images {
+                        thumbs = thumbs.child(
+                            image(SharedString::from(uri.clone()))
+                                .w(px(132.0))
+                                .h(px(132.0))
+                                .object_fit(nsh_core::ResizeMode::Cover)
+                                .rounded(px(14.0))
+                                .border_1()
+                                .border_color(tint(BORDER(), 0.8)),
+                        );
+                    }
+                    thumbs.into_element()
+                })
+            })
+        }))
+        // None for a message of notes or pictures alone.
+        .child(when(move || has_text.get(), bubble))
 }
 
 fn tool_icon(kind: &str, name: &str) -> Icon {
@@ -1472,14 +1518,14 @@ fn tool_row(item: Memo<Option<Item>>) -> impl IntoElement {
 
 fn todo_card(item: Memo<Option<Item>>) -> impl IntoElement {
     let lines = computed(move || match item.get() {
-        Some(Item::Todo { lines }) => lines,
+        Some(Item::Todo { lines, .. }) => lines,
         _ => vec![],
     });
     card().p(sp(S3)).gap(px(6.0)).child(section_label(t("Tasks"))).child(dynamic(move || {
         let lines = lines.get();
         Some(untracked(move || {
             let mut list = view().gap(px(6.0));
-            for (done, t) in lines.clone() {
+            for crate::daemon::model::TodoLine { done, text: t, .. } in lines.clone() {
                 list = list.child(
                     view()
                         .flex_row()
@@ -1702,162 +1748,287 @@ fn question_card(p: Permission, questions: Vec<Question>) -> View {
         )
 }
 
-/// The most the sub-agents' rows take over the composer before they
-/// scroll: three 30pt rows and the gaps between them.
+/// The most a track's list takes over the composer before it scrolls:
+/// three 30pt rows and the gaps between them.
 const SUBAGENT_ROWS_MAX_H: f32 = 3.0 * 30.0 + 2.0 * 2.0;
 
-/// Sub-agents and background work of the open agent, as tracks above the
-/// composer.
+/// The tasks a folded todo list shows, as Claude Code's: so many at
+/// most, the rest one line ("… +2 pending, 3 completed").
+const TODO_SHOWN: usize = 3;
+
+/// One part of the line over the composer.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Track {
+    Todo,
+    Subagents,
+    Background,
+}
+
+/// The agent's todo list, its sub-agents and its background work, as one
+/// line over the composer: a part for each there is ("Tasks · 3/7 done",
+/// "Sub-agents 2 · 1 running", "Background tasks 1"). A press on a part
+/// opens its list under the line, one at a time.
 pub(crate) fn tracks() -> View {
     let todos = computed(|| {
         (0..store::item_count()).rev().find_map(|i| match store::item_at(i) {
-            Some(Item::Todo { lines }) => Some(lines),
+            Some(Item::Todo { lines, .. }) => Some(lines),
             _ => None,
         })
     });
     let subs = computed(|| store::selected_id().map(|id| store::subagents(&id)).unwrap_or_default());
-    // The sub-agents' list as the user left it (open or folded), if they did.
-    let subs_open = signal(None::<bool>);
     let work = computed(|| store::selected_id().map(|id| store::background(&id)).unwrap_or_default());
-    // The background list stays one line until opened: it runs on its own
-    // and should not take the view from the conversation.
-    let work_open = signal(false);
-    view()
-        .w_full()
-        .max_w(px(CONTENT_MAX_WIDTH()))
-        .self_center()
-        .child(dynamic(move || {
-            let lines = todos.get()?;
-            let done = lines.iter().filter(|(d, _)| *d).count();
-            if lines.is_empty() || done == lines.len() {
-                return None;
+    // The part opened, as the user left it (`None`: not chosen yet, the
+    // sub-agents' while one runs).
+    let chosen = signal(None::<Option<Track>>);
+    // The whole todo list, past the three a folded one shows.
+    let all_todos = signal(false);
+    let parts = computed(move || {
+        let mut parts = Vec::new();
+        if todos.with(|t| t.as_ref().is_some_and(|l| !l.is_empty() && !l.iter().all(|l| l.done))) {
+            parts.push(Track::Todo);
+        }
+        // Over the composer while one runs. Once all have ended they are
+        // out of the conversation's way: the agent's menu lists them again.
+        let shown = subs.with(|l| {
+            !l.is_empty() && (l.iter().any(|s| s.status == "running") || l.first().is_some_and(|s| store::subagents_shown(&s.parent)))
+        });
+        if shown {
+            parts.push(Track::Subagents);
+        }
+        if work.with(|w| !w.is_empty()) {
+            parts.push(Track::Background);
+        }
+        parts
+    });
+    let open = computed(move || {
+        let parts = parts.get();
+        let running = subs.with(|l| l.iter().any(|s| s.status == "running"));
+        let want = chosen.get().unwrap_or(running.then_some(Track::Subagents));
+        want.filter(|t| parts.contains(t))
+    });
+    view().w_full().max_w(px(CONTENT_MAX_WIDTH())).self_center().child(dynamic(move || {
+        let parts = parts.get();
+        if parts.is_empty() {
+            return None;
+        }
+        let open = open.get();
+        Some(untracked(move || {
+            let mut line = view().flex_row().items_center().gap(px(2.0)).h(px(32.0)).min_w(px(0.0));
+            for (i, part) in parts.iter().copied().enumerate() {
+                if i > 0 {
+                    line = line.child(view().w(px(1.0)).h(px(14.0)).mx(sp(S1)).flex_shrink_0().bg(BORDER()));
+                }
+                line = line.child(track_tab(part, open == Some(part), todos, subs, work, move || {
+                    chosen.set(Some(if open == Some(part) { None } else { Some(part) }));
+                }));
             }
-            Some(untracked(move || {
-                let next = lines.iter().find(|(d, _)| !*d).map(|(_, t)| t.clone()).unwrap_or_default();
-                card()
-                    .mb(sp(S2))
-                    .px(sp(S3))
-                    .py(sp(S2))
-                    .flex_row()
-                    .items_center()
-                    .gap(sp(S2))
-                    .child(icon(Icon::ListTodo, 15.0).text_color(ACCENT()))
-                    .child(text(tf("Tasks {}/{}", &[&done.to_string(), &lines.len().to_string()])).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)))
-                    .child(text(next).text_size(tx(TEXT_SM)).text_color(FG_MUTED()).number_of_lines(1).flex_1())
-            }))
-        }))
-        .child(dynamic(move || {
-            let list = subs.get();
-            if list.is_empty() {
-                return None;
-            }
-            // Over the composer while one runs. Once all have ended they
-            // are out of the conversation's way: the agent's menu lists
-            // them again. A press on the first line folds or opens it.
-            let running = list.iter().filter(|s| s.status == "running").count();
-            let asked = list.first().is_some_and(|s| store::subagents_shown(&s.parent));
-            if running == 0 && !asked {
-                return None;
-            }
-            let open = subs_open.get().unwrap_or(true);
-            Some(untracked(move || {
-                let label = if running > 0 {
-                    tf("Sub-agents · {} · {} running", &[&list.len().to_string(), &running.to_string()])
-                } else {
-                    tf("Sub-agents · {}", &[&list.len().to_string()])
+            let mut c = card().mb(sp(S2)).p(px(4.0)).child(line);
+            if let Some(part) = open {
+                let list = match part {
+                    Track::Todo => todo_rows(todos.get_untracked().unwrap_or_default(), all_todos).into_element(),
+                    Track::Subagents => subagent_rows(subs.get_untracked()).into_element(),
+                    Track::Background => background_rows(work.get_untracked()).into_element(),
                 };
-                let c = card().mb(sp(S2)).px(sp(S3)).py(sp(S2)).gap(px(2.0)).child(
-                    nsh_base::button()
-                        .on_press(move || subs_open.set(Some(!open)))
-                        .flex_row()
-                        .items_center()
-                        .gap(sp(S1))
-                        .child(icon(if open { Icon::ChevronDown } else { Icon::ChevronRight }, 13.0).text_color(FG_MUTED()))
-                        .child(section_label(label)),
+                c = c.child(
+                    view()
+                        .mt(px(4.0))
+                        .pt(px(2.0))
+                        .border_t_1()
+                        .border_color(BORDER())
+                        .child(scroll().max_h(px(SUBAGENT_ROWS_MAX_H + 26.0)).child(list)),
                 );
-                if !open {
-                    return c;
-                }
-                // Running ones first: past the height below, the rest scroll.
-                let mut list = list.clone();
-                list.sort_by_key(|s| s.status != "running");
-                let mut rows = view().gap(px(2.0));
-                for s in list {
-                    let status = match s.status.as_str() {
-                        "running" => Status::Running,
-                        "failed" => Status::Failed,
-                        "completed" => Status::Done,
-                        _ => Status::Idle,
-                    };
-                    let (parent, id) = (s.parent.clone(), s.id.clone());
-                    rows = rows.child(
-                        nsh_base::button()
-                            .on_press(move || store::open_tab(store::Tab::Subagent(parent.clone(), id.clone())))
-                            .flex_row()
-                            .items_center()
-                            .gap(sp(S2))
-                            .h(px(30.0))
-                            .px(sp(S1))
-                            .rounded(px(R_LG))
-                            .hover(|st| st.bg(highlight()))
-                            .child(status_dot(move || status))
-                            .child(text(s.title.clone()).text_size(tx(TEXT_BASE)).number_of_lines(1).flex_shrink(1.0))
-                            .child(text(s.subtitle.clone()).text_size(tx(TEXT_SM)).text_color(FG_MUTED()).number_of_lines(1).flex_1()),
-                    );
-                }
-                // Three rows at most, so the fold above stays on screen
-                // however many there are.
-                c.child(scroll().max_h(px(SUBAGENT_ROWS_MAX_H)).child(rows))
-            }))
-        }))
-        .child(dynamic(move || {
-            let list = work.get();
-            if list.is_empty() {
-                return None;
             }
-            let open = work_open.get();
-            Some(untracked(move || {
-                // Folded: one line saying how many run; what each is for
-                // shows when opened.
-                let head = nsh_base::button()
-                    .on_press(move || work_open.set(!open))
-                    .flex_row()
-                    .items_center()
-                    .gap(sp(S2))
-                    .h(px(26.0))
-                    .px(sp(S2))
-                    .rounded(px(R_LG))
-                    .hover(|st| st.bg(highlight()))
-                    .child(status_dot(|| Status::Running))
-                    .child(text(format!("{} {}", t("Background task"), list.len())).text_size(tx(TEXT_SM)).text_color(FG_MUTED()))
-                    .child(view().flex_1())
-                    .child(icon(if open { Icon::ChevronDown } else { Icon::ChevronUp }, 13.0).text_color(FG_FAINT()));
-                let mut c = view().mb(sp(S1)).child(head);
-                if !open {
-                    return c;
-                }
-                for w in list.clone() {
-                    let mut row = view()
+            c.into_element()
+        }))
+    }))
+}
+
+/// A part of the tracks' line: what it is and how many, pressed, its list.
+fn track_tab(
+    part: Track,
+    open: bool,
+    todos: Memo<Option<Vec<crate::daemon::model::TodoLine>>>,
+    subs: Memo<Vec<crate::daemon::connection::Subagent>>,
+    work: Memo<Vec<crate::daemon::connection::BackgroundItem>>,
+    on_press: impl Fn() + 'static,
+) -> impl IntoElement {
+    let tab = nsh_base::button()
+        .on_press(on_press)
+        .flex_row()
+        .items_center()
+        .gap(px(6.0))
+        .h(px(28.0))
+        .px(sp(S2))
+        .rounded(px(9.0))
+        .min_w(px(0.0))
+        .bg(move || if open { highlight() } else { tint(FG(), 0.0) })
+        .hover(|st| st.bg(highlight()));
+    let tab = match part {
+        Track::Todo => {
+            let lines = todos.get_untracked().unwrap_or_default();
+            let done = lines.iter().filter(|l| l.done).count();
+            // Under way, in its own wording; else the next to do.
+            let now = lines.iter().find_map(|l| l.doing.clone()).or_else(|| lines.iter().find(|l| !l.done).map(|l| l.text.clone()));
+            tab.flex_shrink(1.0)
+                .child(icon(Icon::ListTodo, 14.0).text_color(ACCENT()))
+                .child(
+                    text(tf("Tasks · {}/{} done", &[&done.to_string(), &lines.len().to_string()]))
+                        .text_size(tx(TEXT_SM))
+                        .font_weight(FontWeight(500))
+                        .flex_shrink_0(),
+                )
+                .when_some(now, |v, now| v.child(text(now).text_size(tx(TEXT_SM)).text_color(FG_FAINT()).number_of_lines(1).flex_shrink(1.0)))
+        }
+        Track::Subagents => {
+            let list = subs.get_untracked();
+            let running = list.iter().filter(|s| s.status == "running").count();
+            tab.flex_shrink_0()
+                .child(status_dot(move || if running > 0 { Status::Running } else { Status::Done }))
+                .child(text(tf("Sub-agents {}", &[&list.len().to_string()])).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)))
+                .when(running > 0, |v| {
+                    v.child(text(tf("· {} running", &[&running.to_string()])).text_size(tx(TEXT_SM)).text_color(FG_MUTED()))
+                })
+        }
+        Track::Background => tab
+            .flex_shrink_0()
+            .child(status_dot(|| Status::Running))
+            .child(text(format!("{} {}", t("Background task"), work.get_untracked().len())).text_size(tx(TEXT_SM)).font_weight(FontWeight(500))),
+    };
+    tab.child(icon(if open { Icon::ChevronDown } else { Icon::ChevronRight }, 13.0).text_color(FG_FAINT()))
+}
+
+/// A todo list as Claude Code shows it: three at most when folded (under
+/// way first, then to do, then done, in their own order), the rest one
+/// line that, pressed, shows them all.
+fn todo_rows(lines: Vec<crate::daemon::model::TodoLine>, all: Signal<bool>) -> impl IntoElement {
+    dynamic(move || {
+        let whole = all.get();
+        let lines = lines.clone();
+        Some(untracked(move || {
+            let rank: Vec<usize> = (0..lines.len())
+                .filter(|&i| lines[i].doing.is_some())
+                .chain((0..lines.len()).filter(|&i| !lines[i].done && lines[i].doing.is_none()))
+                .chain((0..lines.len()).filter(|&i| lines[i].done))
+                .collect();
+            let shown: Vec<usize> = if whole || lines.len() <= TODO_SHOWN { (0..lines.len()).collect() } else {
+                let mut s = rank[..TODO_SHOWN].to_vec();
+                s.sort_unstable();
+                s
+            };
+            let rest: Vec<usize> = rank.iter().copied().filter(|i| !shown.contains(i)).collect();
+            let mut col = view().gap(px(2.0));
+            for i in shown {
+                let l = &lines[i];
+                let (glyph, color) = match (l.done, l.doing.is_some()) {
+                    (true, _) => (Icon::Check, DOT_SUCCESS),
+                    (false, true) => (Icon::Square, ACCENT()),
+                    _ => (Icon::Square, FG_FAINT()),
+                };
+                col = col.child(
+                    view()
                         .flex_row()
                         .items_center()
                         .gap(sp(S2))
                         .h(px(26.0))
-                        .pl(sp(S6))
-                        .pr(sp(S1))
-                        .child(text(if w.label.is_empty() { t("Background task").to_owned() } else { w.label.clone() }).text_size(tx(TEXT_SM)).text_color(FG_MUTED()).number_of_lines(1).flex_1());
-                    if let Some(token) = w.stop_token.clone() {
-                        let item = w.id.clone();
-                        row = row.child(icon_btn(Icon::X, Sz::Sm, "Stop", move || {
-                            if let Some(agent) = store::selected_id() {
-                                store::stop_background(&agent, &item, &token);
-                            }
-                        }));
+                        .px(sp(S2))
+                        .child(icon(glyph, 13.0).text_color(color))
+                        .child(
+                            text(l.text.clone())
+                                .text_size(tx(TEXT_SM))
+                                .number_of_lines(1)
+                                .flex_1()
+                                .font_weight(FontWeight(if l.doing.is_some() { 600 } else { 400 }))
+                                .text_color(if l.doing.is_some() { FG() } else { FG_MUTED() }),
+                        ),
+                );
+            }
+            if !rest.is_empty() || (whole && lines.len() > TODO_SHOWN) {
+                let label = if rest.is_empty() {
+                    t("Show less").to_owned()
+                } else {
+                    let count = |f: &dyn Fn(&crate::daemon::model::TodoLine) -> bool| rest.iter().filter(|&&i| f(&lines[i])).count();
+                    let mut said = Vec::new();
+                    for (n, key) in [
+                        (count(&|l| l.doing.is_some()), "{} in progress"),
+                        (count(&|l| !l.done && l.doing.is_none()), "{} pending"),
+                        (count(&|l| l.done), "{} completed"),
+                    ] {
+                        if n > 0 {
+                            said.push(tf(key, &[&n.to_string()]));
+                        }
                     }
-                    c = c.child(row);
-                }
-                c
-            }))
+                    format!("… +{}", said.join(t(", ")))
+                };
+                col = col.child(
+                    nsh_base::button()
+                        .on_press(move || all.update(|a| *a = !*a))
+                        .flex_row()
+                        .items_center()
+                        .h(px(26.0))
+                        .px(sp(S2))
+                        .rounded(px(R_LG))
+                        .hover(|st| st.bg(highlight()))
+                        .child(text(label).text_size(tx(TEXT_SM)).text_color(FG_FAINT())),
+                );
+            }
+            col.into_element()
         }))
+    })
+}
+
+/// The sub-agents' rows, running ones first; a press opens one's tab.
+fn subagent_rows(mut list: Vec<crate::daemon::connection::Subagent>) -> View {
+    list.sort_by_key(|s| s.status != "running");
+    let mut rows = view().gap(px(2.0));
+    for s in list {
+        let status = match s.status.as_str() {
+            "running" => Status::Running,
+            "failed" => Status::Failed,
+            "completed" => Status::Done,
+            _ => Status::Idle,
+        };
+        let (parent, id) = (s.parent.clone(), s.id.clone());
+        rows = rows.child(
+            nsh_base::button()
+                .on_press(move || store::open_tab(store::Tab::Subagent(parent.clone(), id.clone())))
+                .flex_row()
+                .items_center()
+                .gap(sp(S2))
+                .h(px(30.0))
+                .px(sp(S2))
+                .rounded(px(R_LG))
+                .hover(|st| st.bg(highlight()))
+                .child(status_dot(move || status))
+                .child(text(s.title.clone()).text_size(tx(TEXT_BASE)).number_of_lines(1).flex_shrink(1.0))
+                .child(text(s.subtitle.clone()).text_size(tx(TEXT_SM)).text_color(FG_MUTED()).number_of_lines(1).flex_1()),
+        );
+    }
+    rows
+}
+
+/// The background work's rows: what each is for, and its stop.
+fn background_rows(list: Vec<crate::daemon::connection::BackgroundItem>) -> View {
+    let mut rows = view().gap(px(2.0));
+    for w in list {
+        let mut row = view()
+            .flex_row()
+            .items_center()
+            .gap(sp(S2))
+            .h(px(30.0))
+            .px(sp(S2))
+            .child(status_dot(|| Status::Running))
+            .child(text(if w.label.is_empty() { t("Background task").to_owned() } else { w.label.clone() }).text_size(tx(TEXT_SM)).text_color(FG_MUTED()).number_of_lines(1).flex_1());
+        if let Some(token) = w.stop_token.clone() {
+            let item = w.id.clone();
+            row = row.child(icon_btn(Icon::X, Sz::Sm, "Stop", move || {
+                if let Some(agent) = store::selected_id() {
+                    store::stop_background(&agent, &item, &token);
+                }
+            }));
+        }
+        rows = rows.child(row);
+    }
+    rows
 }
 
 /// A sub-agent's conversation, read-only.
@@ -1938,7 +2109,7 @@ fn static_row(item: Item) -> AnyElement {
         Item::Error { message } => text(message).text_size(tx(TEXT_BASE)).text_color(DANGER).into_element(),
         Item::Notice { message } => text(message).text_size(tx(TEXT_SM)).text_color(FG_FAINT()).into_element(),
         retry @ Item::Retry { .. } => text(retry_words(&retry, false)).text_size(tx(TEXT_SM)).text_color(WARNING).into_element(),
-        Item::Todo { lines } => text(lines.iter().map(|(d, t)| format!("{} {t}", if *d { "☑" } else { "☐" })).collect::<Vec<_>>().join("\n"))
+        Item::Todo { lines, .. } => text(lines.iter().map(|l| format!("{} {}", if l.done { "☑" } else { "☐" }, l.text)).collect::<Vec<_>>().join("\n"))
             .text_size(tx(TEXT_BASE))
             .into_element(),
     }
