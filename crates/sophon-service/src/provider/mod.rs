@@ -1,6 +1,7 @@
-//! Agents: the host's own `claude` and `codex`, each driven over the
-//! protocol its CLI speaks to a program (Claude Code's stream of JSON
-//! with its control requests, Codex's app server).
+//! Agents: the host's own `claude`, `codex` and `gemini`, each driven
+//! over the protocol its CLI speaks to a program (Claude Code's stream of
+//! JSON with its control requests, Codex's app server, Gemini CLI's Agent
+//! Client Protocol).
 //!
 //! An agent here is a session that outlives its process: it is given
 //! commands (a prompt, a stop, an answer to what it asked) and says what
@@ -11,6 +12,7 @@
 
 pub(crate) mod claude;
 mod codex;
+mod gemini;
 
 use serde_json::{Value, json};
 use std::{
@@ -161,6 +163,8 @@ pub fn start(start: Start, emit: Emit) -> mpsc::UnboundedSender<Command> {
     let (commands, inbox) = mpsc::unbounded_channel();
     if start.family == "codex" {
         tokio::task::spawn_local(codex::run(start, inbox, emit));
+    } else if start.family == "gemini" {
+        tokio::task::spawn_local(gemini::run(start, inbox, emit));
     } else {
         tokio::task::spawn_local(claude::run(start, inbox, emit));
     }
@@ -185,10 +189,10 @@ pub async fn diagnostic(provider: &str, settings: &Value) -> String {
     let Some(family) = family(provider, settings) else {
         return format!("{provider}\n  Not a provider this host runs");
     };
-    let name = if family == "codex" {
-        "Codex"
-    } else {
-        "Claude Code"
+    let name = match family {
+        "codex" => "Codex",
+        "gemini" => "Gemini CLI",
+        _ => "Claude Code",
     };
     let Some(program) = executable(family, settings) else {
         return format!("{name}\n  Not installed on this host");
@@ -207,10 +211,10 @@ pub async fn diagnostic(provider: &str, settings: &Value) -> String {
     .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned())
     .filter(|version| !version.is_empty())
     .unwrap_or_else(|| "did not answer".to_owned());
-    let (variable, usual) = if family == "codex" {
-        ("CODEX_HOME", ".codex")
-    } else {
-        ("CLAUDE_CONFIG_DIR", ".claude")
+    let (variable, usual) = match family {
+        "codex" => ("CODEX_HOME", ".codex"),
+        "gemini" => ("GEMINI_CLI_HOME", ".gemini"),
+        _ => ("CLAUDE_CONFIG_DIR", ".claude"),
     };
     let models = crate::models::list(family, settings);
     let starts = models
@@ -242,7 +246,7 @@ pub async fn diagnostic(provider: &str, settings: &Value) -> String {
 }
 
 pub(crate) fn binary(provider: &str) -> Option<PathBuf> {
-    if !matches!(provider, "codex" | "claude") {
+    if !matches!(provider, "codex" | "claude" | "gemini") {
         return None;
     }
     let mut paths: Vec<_> = env::split_paths(&env::var_os("PATH").unwrap_or_default())
@@ -265,6 +269,18 @@ pub(crate) fn binary(provider: &str) -> Option<PathBuf> {
     for dir in ["/opt/homebrew/bin", "/usr/local/bin"] {
         paths.push(PathBuf::from(dir).join(provider));
     }
+    // Installed with npm under nvm (Gemini CLI's own way): the newest
+    // Node's first.
+    if let Some(home) = env::var_os("HOME").map(PathBuf::from) {
+        let mut nodes: Vec<PathBuf> = std::fs::read_dir(home.join(".nvm/versions/node"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path().join("bin").join(provider))
+            .collect();
+        nodes.sort_by_key(|path| std::cmp::Reverse(node_version(path)));
+        paths.extend(nodes);
+    }
     if cfg!(target_os = "macos") && provider == "codex" {
         for app in ["ChatGPT", "Codex"] {
             paths.push(
@@ -273,6 +289,14 @@ pub(crate) fn binary(provider: &str) -> Option<PathBuf> {
         }
     }
     paths.into_iter().find(|path| path.is_file())
+}
+
+/// The Node version a path under `~/.nvm/versions/node/v<version>/` is of.
+fn node_version(path: &std::path::Path) -> Vec<u64> {
+    path.components()
+        .filter_map(|part| part.as_os_str().to_str()?.strip_prefix('v'))
+        .find_map(|version| version.split('.').map(|n| n.parse().ok()).collect())
+        .unwrap_or_default()
 }
 
 fn executable(family: &str, settings: &Value) -> Option<PathBuf> {
@@ -290,12 +314,22 @@ pub fn family(provider: &str, settings: &Value) -> Option<&'static str> {
     match settings["extends"].as_str().unwrap_or(provider) {
         "claude" => Some("claude"),
         "codex" => Some("codex"),
+        "gemini" => Some("gemini"),
         _ => None,
     }
 }
 
 /// The modes an agent of `family` can be in, the first the default.
 pub fn modes(family: &str) -> Value {
+    if family == "gemini" {
+        // Gemini CLI's approval modes, as its sessions name them.
+        return json!([
+            {"id":"default","label":"Always Ask","description":"Prompts for approval before edits and commands"},
+            {"id":"autoEdit","label":"Accept File Edits","description":"Automatically approves edit tools"},
+            {"id":"plan","label":"Plan Mode","description":"Read-only: plans without editing or running"},
+            {"id":"yolo","label":"Bypass","description":"Approves every tool without prompting (use with caution)"},
+        ]);
+    }
     if family == "codex" {
         json!([
             {"id":"auto","label":"Default Permissions","description":"Edit files and run commands with Codex's own approval settings."},
@@ -318,8 +352,13 @@ pub fn modes(family: &str) -> Value {
 /// nor skips them all), and for Codex its own default permissions. It is
 /// on the composer, a press from any other; a request that names no mode
 /// still gets the first, which asks ([`mode`]).
-pub fn offered_mode(_family: &str) -> &'static str {
-    "auto"
+pub fn offered_mode(family: &str) -> &'static str {
+    // Gemini CLI has no mode that reviews its own prompts: it asks.
+    if family == "gemini" {
+        "default"
+    } else {
+        "auto"
+    }
 }
 
 /// `wanted` if `family` has that mode, else its default.
@@ -340,7 +379,7 @@ pub fn mode(family: &str, wanted: Option<&str>) -> String {
 }
 
 pub fn snapshot(config: &Value) -> Value {
-    let mut providers = std::collections::BTreeSet::from(["codex", "claude"]);
+    let mut providers = std::collections::BTreeSet::from(["codex", "claude", "gemini"]);
     if let Some(settings) = config["providers"].as_object() {
         providers.extend(settings.keys().map(String::as_str));
     }
@@ -523,7 +562,13 @@ mod tests {
         let snapshot = snapshot(&json!({}));
         for entry in snapshot["entries"].as_array().unwrap() {
             let offered = entry["defaultModeId"].as_str().unwrap();
-            assert_eq!(offered, "auto");
+            // Gemini CLI has no auto mode: it is offered the one that asks.
+            let wanted = if entry["provider"] == "gemini" {
+                "default"
+            } else {
+                "auto"
+            };
+            assert_eq!(offered, wanted);
             // One of the modes it lists, so a client can show it.
             assert!(
                 entry["modes"]

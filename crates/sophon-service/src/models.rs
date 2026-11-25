@@ -210,6 +210,11 @@ fn read(path: PathBuf) -> Value {
 /// The models of a provider of `family`, as its CLI lists them on this
 /// host: none if the CLI keeps no list here yet.
 pub fn list(family: &str, settings: &Value) -> Vec<Value> {
+    if family == "gemini" {
+        return gemini(&read(
+            kept(settings, "GEMINI_CLI_HOME", ".gemini").join("settings.json"),
+        ));
+    }
     if family == "codex" {
         let dir = kept(settings, "CODEX_HOME", ".codex");
         let config = fs::read_to_string(dir.join("config.toml")).unwrap_or_default();
@@ -229,12 +234,60 @@ pub fn list(family: &str, settings: &Value) -> Vec<Value> {
     claude(&catalog, &read(dir.join("settings.json")))
 }
 
+/// Gemini CLI's models, as its sessions offer them (it lists them only to
+/// a session it has opened): "Auto" lets it choose. The one its settings
+/// name (`model.name`) is the default, and is listed if it is not here.
+fn gemini(settings: &Value) -> Vec<Value> {
+    let named = settings
+        .pointer("/model/name")
+        .or_else(|| settings.get("model").filter(|model| model.is_string()))
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty());
+    let mut models: Vec<(String, String)> = [
+        ("auto", "Auto"),
+        ("gemini-3.1-pro-preview", "Gemini 3.1 Pro"),
+        ("gemini-3.8-flash", "Gemini 3.8 Flash"),
+        ("gemini-3-flash-preview", "Gemini 3 Flash"),
+        ("gemini-2.5-pro", "Gemini 2.5 Pro"),
+        ("gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite"),
+    ]
+    .into_iter()
+    .map(|(id, label)| (id.to_owned(), label.to_owned()))
+    .collect();
+    if let Some(named) = named
+        && !models.iter().any(|(id, _)| id == named)
+    {
+        models.insert(1, (named.to_owned(), named.to_owned()));
+    }
+    let default = named.unwrap_or("auto");
+    models
+        .into_iter()
+        .map(|(id, label)| json!({"id":id,"label":label,"isDefault":id == default,"thinkingOptions":[]}))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn ids(models: &[Value], key: &str) -> Vec<Value> {
         models.iter().map(|model| model[key].clone()).collect()
+    }
+
+    #[test]
+    fn gemini_starts_on_the_model_its_settings_name() {
+        let models = gemini(&json!({"model":{"name":"gemini-2.5-pro"}}));
+        let default: Vec<_> = models
+            .iter()
+            .filter(|m| m["isDefault"] == true)
+            .map(|m| m["id"].clone())
+            .collect();
+        assert_eq!(default, [json!("gemini-2.5-pro")]);
+        // One it does not know is listed, second after Auto.
+        let named = gemini(&json!({"model":{"name":"gemini-9-ultra"}}));
+        assert_eq!(named[1]["id"], "gemini-9-ultra");
+        // None named: Auto.
+        assert_eq!(gemini(&Value::Null)[0]["isDefault"], true);
     }
 
     #[test]

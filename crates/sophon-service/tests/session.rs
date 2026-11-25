@@ -3358,3 +3358,133 @@ done
     let args = fs::read_to_string(service.0.path().join("args")).unwrap();
     assert!(args.contains("--replay-user-messages"), "{args}");
 }
+
+/// A `gemini` that speaks the Agent Client Protocol: signed in only the
+/// way its settings name and with the key of its `.env`; its first turn
+/// replies, asks before a command and runs it; a later one replies.
+const ACP_GEMINI: &str = r#"#!/bin/sh
+case " $* " in *" --acp "*) ;; *) exit 2 ;; esac
+say() { printf '%s\n' "$1"; }
+note() { printf '%s\n' "$1" >> gemini-calls; }
+update() { say "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"gem-1\",\"update\":$1}}"; }
+modes='{"availableModes":[{"id":"default","name":"Default"},{"id":"autoEdit","name":"Auto Edit"},{"id":"yolo","name":"YOLO"},{"id":"plan","name":"Plan"}],"currentModeId":"default"}'
+authed=no
+turns=0
+while IFS= read -r line; do
+    id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+    case "$line" in
+        *'"id":900'*'"result"'*)
+            note "answer $(printf '%s' "$line" | sed -n 's/.*"optionId":"\([a-z_]*\)".*/\1/p')"
+            update '{"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"completed","content":[{"type":"content","content":{"type":"text","text":"files"}}]}'
+            update '{"sessionUpdate":"usage_update","used":42,"size":1000}'
+            say "{\"jsonrpc\":\"2.0\",\"id\":$prompt,\"result\":{\"stopReason\":\"end_turn\"}}" ;;
+        *'"method":"initialize"'*)
+            say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocolVersion\":1,\"authMethods\":[{\"id\":\"oauth-personal\",\"name\":\"Google\"},{\"id\":\"gemini-api-key\",\"name\":\"Key\"}],\"agentCapabilities\":{\"loadSession\":true}}}" ;;
+        *'"method":"authenticate"'*)
+            case "$line" in *'"methodId":"gemini-api-key"'*) authed=yes ;; esac
+            say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{}}" ;;
+        *'"method":"session/new"'*)
+            if [ "$authed" = yes ] && [ "${GEMINI_API_KEY:-}" = k-1 ]; then
+                say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"sessionId\":\"gem-1\",\"modes\":$modes}}"
+            else
+                say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"error\":{\"code\":-32000,\"message\":\"Gemini API key is missing or not configured.\"}}"
+            fi ;;
+        *'"method":"session/load"'*)
+            note "load $*"
+            update '{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"OLD"}}'
+            say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"modes\":$modes}}" ;;
+        *'"method":"session/set_mode"'*)
+            note "mode $(printf '%s' "$line" | sed -n 's/.*"modeId":"\([A-Za-z]*\)".*/\1/p')"
+            say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{}}" ;;
+        *'"method":"session/prompt"'*)
+            prompt=$id
+            turns=$((turns + 1))
+            update '{"sessionUpdate":"agent_message_chunk","messageId":"m1","content":{"type":"text","text":"re"}}'
+            update '{"sessionUpdate":"agent_message_chunk","messageId":"m1","content":{"type":"text","text":"ply"}}'
+            if [ "$turns" = 1 ] && [ ! -f answered ]; then
+                touch answered
+                update '{"sessionUpdate":"tool_call","toolCallId":"t1","title":"ls","kind":"execute","status":"pending","rawInput":{"command":"ls"}}'
+                say '{"jsonrpc":"2.0","id":900,"method":"session/request_permission","params":{"sessionId":"gem-1","toolCall":{"toolCallId":"t1"},"options":[{"optionId":"proceed_once","name":"Allow","kind":"allow_once"},{"optionId":"proceed_always","name":"Always","kind":"allow_always"},{"optionId":"cancel","name":"No","kind":"reject_once"}]}}'
+            else
+                say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"stopReason\":\"end_turn\"}}"
+            fi ;;
+    esac
+done
+"#;
+
+#[tokio::test]
+async fn gemini_runs_over_acp_signs_in_as_its_settings_say_and_asks_before_a_command() {
+    let service = Service(tempfile::tempdir().unwrap());
+    install(service.0.path(), "gemini", ACP_GEMINI);
+    // Its folder: the way it signs in, and the key of its `.env`.
+    let folder = service.0.path().join("gemini-home");
+    fs::create_dir_all(folder.join(".gemini")).unwrap();
+    fs::write(folder.join(".gemini/.env"), "GEMINI_API_KEY=\"k-1\"\n").unwrap();
+    fs::write(
+        folder.join(".gemini/settings.json"),
+        json!({"security":{"auth":{"selectedType":"gemini-api-key"}}}).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        service.0.path().join("config.json"),
+        json!({"providers":{"gemini":{"env":{"GEMINI_CLI_HOME":folder}}}}).to_string(),
+    )
+    .unwrap();
+    service.cli("start");
+    let mut socket = service.connect(true).await;
+    let created = ask(&mut socket, json!({"type":"workspace.create.request",
+        "source":{"kind":"directory","path":service.0.path()},
+        "agent":{"config":{"provider":"gemini","modeId":"autoEdit","model":"gemini-2.5-pro"},"initialPrompt":"go"}})).await;
+    assert_eq!(created["type"], "workspace.create.response", "{created}");
+    let agent = created["payload"]["agent"].clone();
+    assert_eq!(agent["currentModeId"], "autoEdit");
+    assert_eq!(agent["availableModes"].as_array().unwrap().len(), 4);
+    send(&mut socket, json!({"type":"session","message":
+        {"type":"agent.timeline.set_subscription.request","agentIds":[agent["id"]],"requestId":"s"}})).await;
+
+    let asked = until(&mut socket, "permission_requested").await;
+    assert_eq!(asked["request"]["name"], "ls", "{asked}");
+    assert_eq!(asked["request"]["input"]["command"], "ls");
+    let waiting = ask(&mut socket, json!({"type":"fetch_agent_request","agentId":agent["id"]})).await;
+    let permission = waiting["payload"]["agent"]["pendingPermissions"][0].clone();
+    assert_eq!(permission["actions"].as_array().unwrap().len(), 3, "{permission}");
+    send(
+        &mut socket,
+        json!({"type":"session","message":{"type":"agent_permission_response","agentId":agent["id"],
+        "requestId":permission["id"],"response":{"behavior":"allow","selectedActionId":"allow_always"}}}),
+    )
+    .await;
+    finished(&mut socket).await;
+    let timeline = ask(&mut socket, json!({"type":"fetch_agent_timeline_request","agentId":agent["id"]})).await;
+    let rows = timeline["payload"]["entries"].as_array().unwrap();
+    assert_eq!(rows.len(), 3, "{timeline}");
+    assert_eq!(without_time(&rows[1]["item"]), json!({"type":"assistant_message","text":"reply"}));
+    assert_eq!(rows[2]["item"]["status"], "completed");
+    assert_eq!(
+        (&rows[2]["item"]["detail"]["type"], &rows[2]["item"]["detail"]["command"], &rows[2]["item"]["detail"]["output"]),
+        (&json!("shell"), &json!("ls"), &json!("files"))
+    );
+    let done = &timeline["payload"]["agent"];
+    assert_eq!(done["persistence"]["sessionId"], "gem-1");
+    assert_eq!(done["lastUsage"]["contextWindowUsedTokens"], 42);
+    let calls = fs::read_to_string(service.0.path().join("gemini-calls")).unwrap();
+    assert!(calls.contains("mode autoEdit") && calls.contains("answer proceed_always"), "{calls}");
+
+    // Started again, it goes on in the session it had, on its model; what
+    // the session says again as it loads is not said twice.
+    service.cli("stop");
+    service.cli("start");
+    let mut socket = service.connect(true).await;
+    ask(&mut socket, json!({"type":"send_agent_message_request","agentId":agent["id"],"text":"again"})).await;
+    finished(&mut socket).await;
+    let calls = fs::read_to_string(service.0.path().join("gemini-calls")).unwrap();
+    assert!(calls.contains("load --acp --model gemini-2.5-pro"), "{calls}");
+    let timeline = ask(&mut socket, json!({"type":"fetch_agent_timeline_request","agentId":agent["id"]})).await;
+    let said: Vec<_> = timeline["payload"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|row| row["item"]["text"].as_str())
+        .collect();
+    assert_eq!(said, ["go", "reply", "again", "reply"], "{timeline}");
+}
