@@ -311,7 +311,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                 .hover(|s| s.bg(highlight()))
                 .child(icon(Icon::Plus, 18.0).text_color(FG_MUTED())),
         )
-        .child(view().flex_1().min_w(px(0.0)).min_h(sp(CONTROL_SM)).justify_center().child(editor(doc, text_value, placeholder, suggestion, TEXT_CONTENT, 220.0, changed).mx(sp(S1))))
+        .child(view().flex_1().min_w(px(0.0)).min_h(sp(CONTROL_SM)).justify_center().child(editor(doc, text_value, placeholder, suggestion, TEXT_BASE, 220.0, changed).mx(sp(S1))))
         .child(view().flex_shrink_0().child(mic_button(doc)))
         .child(when(stoppable, || {
             button()
@@ -359,7 +359,8 @@ fn editor(
 ) -> View {
     let key = doc.key;
     let mut styles = RichEditorStyles::default();
-    let typography = |s: StyleRefinement| s.text_size(px(size)).line_height(px(22.0)).text_color(FG());
+    // At the size the user set (`tx`), the line with it.
+    let typography = |s: StyleRefinement| s.text_size(tx(size)).line_height(tx(22.0)).text_color(FG());
     styles.root = Some(PartStyle(typography(StyleRefinement::default()).into()));
     styles.caret = Some(PartStyle(StyleRefinement::default().bg(ACCENT()).into()));
     styles.selection = Some(PartStyle(StyleRefinement::default().bg(tint(ACCENT(), 0.3)).into()));
