@@ -273,6 +273,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Diagnostics copied: paste them where you report the problem", "诊断信息已复制，可粘贴到问题反馈中"),
     ("Unpin", "取消置顶"),
     ("Pinned", "已置顶"),
+    ("Recent", "最近"),
     ("Attach as context", "附加为上下文"),
     ("Use a reset credit?", "使用一次重置额度？"),
     ("This uses 1 of your {} {} reset credits ({}). It cannot be undone.", "将使用你 {} 次 {} 重置额度中的 1 次（{}），无法撤销。"),
