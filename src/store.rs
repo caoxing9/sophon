@@ -6206,8 +6206,11 @@ fn deliver_with(agent_id: &str, text: &str, behavior: Option<&'static str>, imag
 }
 
 /// A system notification when an agent starts needing you while you look
-/// elsewhere; the press opens it.
-fn notify_attention(next: &Agent) {
+/// elsewhere; the press opens it. A turn that ends on screen is read as it
+/// ends (`next` loses its unread mark); one that ends elsewhere is told only
+/// if it is still unread a moment later (not opened here or on another
+/// device meanwhile).
+fn notify_attention(next: &mut Agent) {
     use crate::daemon::push::{self, Reason};
     let before = agent(&next.id);
     // What a schedule ran on its own, and a sub-agent's turns (its parent's
@@ -6218,18 +6221,46 @@ fn notify_attention(next: &Agent) {
     // Only what is new and unseen: an approval, or a result the service
     // marks unread (`push::reason`); and not the agent on screen.
     let Some(why) = push::reason(before.as_ref(), next) else { return };
-    let on_screen = selected_id().as_deref() == Some(next.id.as_str()) && lifecycle_active();
+    if why != Reason::Permission && on_screen(&next.id) {
+        next.requires_attention = false;
+        next.attention_reason = None;
+        send(Command::ClearAgentAttention(next.id.clone()));
+        return;
+    }
     // The phones hear of what is not on screen here, as before.
-    if !on_screen {
+    if !on_screen(&next.id) {
         push_attention(next, why);
     }
     // The computer's push says it to this phone already.
     if cfg!(target_os = "ios") && push_served() {
         return;
     }
-    // Here, as the settings say (`Notifications`): a finished turn always,
-    // never, or only while Sophon is not the app in front (the default);
-    // the rest when asked for and not on screen.
+    if why == Reason::Permission {
+        show_attention(next, why);
+        return;
+    }
+    let id = next.id.clone();
+    set_timeout(UNREAD_GRACE, move || {
+        if let Some(now) = agent(&id).filter(|a| a.requires_attention && a.pending.is_empty() && !on_screen(&a.id)) {
+            show_attention(&now, why);
+        }
+    });
+}
+
+/// How long a finished turn waits before it is told: long enough for
+/// another device that has it open to mark it read.
+const UNREAD_GRACE: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Whether `id` is the conversation shown, with Sophon the app in front.
+fn on_screen(id: &str) -> bool {
+    selected_id().as_deref() == Some(id) && lifecycle_active()
+}
+
+/// Says why `agent` wants you, as the settings say (`Notifications`): a
+/// finished turn always, never, or only while Sophon is not the app in
+/// front (the default); the rest when asked for.
+fn show_attention(agent: &Agent, why: crate::daemon::push::Reason) {
+    use crate::daemon::push::Reason;
     let s = settings();
     let show = match why {
         Reason::Finished => match s.notify_finished {
@@ -6237,18 +6268,18 @@ fn notify_attention(next: &Agent) {
             NotifyWhen::Away => !lifecycle_active(),
             NotifyWhen::Never => false,
         },
-        Reason::Permission => s.notify_approval.0 && !on_screen,
-        Reason::Attention => s.notify_attention.0 && !on_screen,
+        Reason::Permission => s.notify_approval.0 && !on_screen(&agent.id),
+        Reason::Attention => s.notify_attention.0,
     };
     if !show {
         return;
     }
     let body = match why {
-        Reason::Permission => tf("Waiting for your approval: {}", &[next.pending.first().map(|p| p.title.as_str()).unwrap_or_default()]),
+        Reason::Permission => tf("Waiting for your approval: {}", &[agent.pending.first().map(|p| p.title.as_str()).unwrap_or_default()]),
         Reason::Finished => t("Finished its turn").to_owned(),
         Reason::Attention => t("Needs your attention").to_owned(),
     };
-    let n = nsh_core::notifications::Notification::new(format!("agent:{}", next.id), next.title.clone(), body)
+    let n = nsh_core::notifications::Notification::new(format!("agent:{}", agent.id), agent.title.clone(), body)
         .silent(!s.notify_sound.0);
     let _ = show_notification(n);
 }
@@ -7148,12 +7179,12 @@ pub(crate) fn apply(event: Event) {
             open_pressed_agent();
             update_running_service();
         }
-        Event::AgentUpsert(agent) => {
+        Event::AgentUpsert(mut agent) => {
             let archived = agent.archived;
             let id = agent.id.clone();
             take_back_once_stopped(&agent);
             flush_queue(&agent);
-            notify_attention(&agent);
+            notify_attention(&mut agent);
             global::<Agents>().update(|a| {
                 a.0.retain(|x| x.id != agent.id);
                 if !agent.archived {
