@@ -3296,3 +3296,65 @@ async fn a_workspace_tells_its_branch_and_uncommitted_lines() {
         }
     }
 }
+
+#[tokio::test]
+async fn a_message_claude_code_lets_fall_as_a_turn_ends_is_sent_again() {
+    let service = Service(tempfile::tempdir().unwrap());
+    // A `claude` that, as its first turn ends, takes no message sent into
+    // it (as Claude Code once did): it neither queues it nor says it back.
+    // Sent again, it answers it.
+    install(
+        service.0.path(),
+        "claude",
+        r#"#!/bin/sh
+printf '%s\n' "$*" >> args
+say() { printf '%s\n' "$1"; }
+turns=0
+while IFS= read -r line; do
+    case "$line" in *'"type":"user"'*)
+        printf '%s\n' "$line" >> sent
+        case "$line" in
+            *'"second"'*)
+                if [ ! -f dropped ]; then touch dropped; continue; fi
+                id=$(printf '%s' "$line" | sed -n 's/.*"uuid":"\([^"]*\)".*/\1/p')
+                say "{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"$id\",\"message\":{\"role\":\"user\",\"content\":\"second\"}}"
+                say '{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m2","content":[{"type":"text","text":"two"}]}}'
+                say '{"type":"result","is_error":false}' ;;
+            *)
+                say '{"type":"system","subtype":"init","session_id":"s-1"}'
+                sleep 1
+                say '{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m1","content":[{"type":"text","text":"one"}]}}'
+                say '{"type":"result","is_error":false}' ;;
+        esac ;;
+    esac
+done
+"#,
+    );
+    service.cli("start");
+    let mut socket = service.connect(true).await;
+    let created = ask(&mut socket, json!({"type":"workspace.create.request","source":{"kind":"directory","path":service.0.path()},
+        "agent":{"config":{"provider":"claude"},"initialPrompt":"first"}})).await;
+    let agent = created["payload"]["agent"]["id"].clone();
+    // Into the turn underway, which ends without it.
+    ask(&mut socket, json!({"type":"send_agent_message_request","agentId":agent,"text":"second",
+        "messageId":"8f2c1d7e-0000-4000-8000-000000000002"})).await;
+    let mut answered = false;
+    for _ in 0..80 {
+        let timeline = ask(&mut socket, json!({"type":"fetch_agent_timeline_request","agentId":agent})).await;
+        let said: Vec<String> = timeline["payload"]["entries"].as_array().unwrap().iter()
+            .filter(|row| row["item"]["type"] == "assistant_message")
+            .map(|row| row["item"]["text"].as_str().unwrap_or_default().to_owned())
+            .collect();
+        if said.iter().any(|t| t.ends_with("two")) {
+            answered = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let sent = fs::read_to_string(service.0.path().join("sent")).unwrap_or_default();
+    let timeline = ask(&mut socket, json!({"type":"fetch_agent_timeline_request","agentId":agent})).await;
+    assert!(answered, "the dropped message was not sent again: {sent}\n{timeline}");
+    assert_eq!(sent.matches(r#""second""#).count(), 2, "{sent}");
+    let args = fs::read_to_string(service.0.path().join("args")).unwrap();
+    assert!(args.contains("--replay-user-messages"), "{args}");
+}

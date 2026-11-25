@@ -50,6 +50,13 @@ struct Claude {
     states: bool,
     /// The turn underway was told to stop.
     stopping: bool,
+    /// Messages sent into a turn underway that Claude Code has not taken
+    /// yet (it says when it does, `--replay-user-messages`), by id: one
+    /// sent as the turn ends can fall between it and the next, taken by
+    /// neither.
+    unheard: Vec<(String, Value)>,
+    /// When to send again what is still unheard, once nothing is underway.
+    recheck: Option<tokio::time::Instant>,
     /// How the turn underway has gone, by its last result.
     outcome: Outcome,
     /// What was set needs a new process, once this turn is over.
@@ -91,6 +98,10 @@ struct Claude {
     spent: f64,
 }
 
+/// How long after a turn ends a message Claude Code did not take waits
+/// for it before it is sent again.
+const UNHEARD_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
 pub async fn run(start: Start, mut inbox: UnboundedReceiver<Command>, emit: Emit) {
     let mut claude = Claude {
         start,
@@ -99,6 +110,8 @@ pub async fn run(start: Start, mut inbox: UnboundedReceiver<Command>, emit: Emit
         busy: false,
         states: false,
         stopping: false,
+        unheard: Vec::new(),
+        recheck: None,
         outcome: Outcome::Completed,
         restart: false,
         calls: HashMap::new(),
@@ -136,7 +149,12 @@ pub async fn run(start: Start, mut inbox: UnboundedReceiver<Command>, emit: Emit
                 }
                 None => claude.stopped().await,
             },
-            _ = tokio::time::sleep(IDLE), if claude.process.is_some() && !claude.busy => claude.close(),
+            _ = tokio::time::sleep_until(claude.recheck.unwrap_or_else(tokio::time::Instant::now)), if claude.recheck.is_some() => {
+                if let Err(error) = claude.send_unheard().await {
+                    claude.fail(error.to_string());
+                }
+            }
+            _ = tokio::time::sleep(IDLE), if claude.process.is_some() && !claude.busy && claude.recheck.is_none() => claude.close(),
         }
     }
 }
@@ -411,6 +429,9 @@ impl Claude {
             "stream-json",
             "--verbose",
             "--include-partial-messages",
+            // Each message said back as it is taken: one left untaken is
+            // sent again (`unheard`).
+            "--replay-user-messages",
             "--permission-prompt-tool",
             "stdio",
             "--allow-dangerously-skip-permissions",
@@ -465,6 +486,25 @@ impl Claude {
             .await
     }
 
+    /// What Claude Code did not take sends again as a turn of its own,
+    /// once; nothing while a turn is underway (it may yet take it).
+    async fn send_unheard(&mut self) -> io::Result<()> {
+        self.recheck = None;
+        if self.busy || self.unheard.is_empty() {
+            return Ok(());
+        }
+        let unheard = std::mem::take(&mut self.unheard);
+        self.open().await?;
+        self.begin();
+        for (_, mut message) in unheard {
+            // Under its own id still (a rewind names it); not watched
+            // again: a second loss is the CLI's to say.
+            message["session_id"] = json!(self.start.session.clone().unwrap_or_default());
+            self.send(message).await?;
+        }
+        Ok(())
+    }
+
     fn begin(&mut self) {
         self.busy = true;
         self.stopping = false;
@@ -488,6 +528,12 @@ impl Claude {
             &mut self.outcome,
             Outcome::Completed,
         )));
+        // A message sent as the turn ended that Claude Code did not take
+        // (it starts the next turn with one it queued at once): a moment
+        // later, it is sent again.
+        if !self.unheard.is_empty() {
+            self.recheck = Some(tokio::time::Instant::now() + UNHEARD_WAIT);
+        }
         if self.restart {
             self.close();
         }
@@ -534,6 +580,8 @@ impl Claude {
                     json!(content)
                 };
                 self.open().await?;
+                // Into a turn underway: Claude Code queues it for the next.
+                let steering = self.busy;
                 if !self.busy {
                     self.begin();
                 }
@@ -545,6 +593,9 @@ impl Claude {
                     message["uuid"] = json!(id);
                 }
                 self.sent = Some(message.clone());
+                if steering && uuid::Uuid::parse_str(&id).is_ok() {
+                    self.unheard.push((id, message.clone()));
+                }
                 self.send(message).await
             }
             Command::Interrupt => {
@@ -552,6 +603,8 @@ impl Claude {
                     return Ok(());
                 }
                 self.stopping = true;
+                // Stopped: what was waiting for the turn is not sent again.
+                self.unheard.clear();
                 self.control(json!({"subtype":"interrupt"})).await
             }
             Command::Answer { id, response } => {
@@ -656,7 +709,12 @@ impl Claude {
             Some("system") => self.system(&event),
             Some("stream_event") if own => self.streaming(&event["event"]),
             Some("assistant") => self.said(&event, within),
-            Some("user") if event["isReplay"] != true => self.returned(&event),
+            Some("user") if event["isReplay"] == true => {
+                if let Some(id) = event["uuid"].as_str() {
+                    self.unheard.retain(|(sent, _)| sent != id);
+                }
+            }
+            Some("user") => self.returned(&event),
             Some("prompt_suggestion") if own => {
                 if let Some(text) = event["suggestion"]
                     .as_str()
