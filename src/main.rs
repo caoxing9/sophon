@@ -20,6 +20,12 @@ fn main() -> impl std::process::Termination {
             #[cfg(any(target_os = "linux", target_os = "windows"))]
             app_id: "dev.sophon.app".to_owned(),
             size: (1100, 760),
+            // Closing the window (⌘W, the red button) hides it, as Lody's
+            // and Paseo's do: the app goes on, and with it what it does
+            // for the agents at work (the Mac kept awake, the timers),
+            // until ⌘Q; the Dock icon shows it again.
+            #[cfg(target_os = "macos")]
+            keep_alive_on_close: true,
             ..Default::default()
         },
     )

@@ -7789,13 +7789,9 @@ pub(crate) fn set_terminal_focused(on: bool) {
     global::<TerminalFocus>().set(TerminalFocus(on));
 }
 
-/// ⌘W: closes the tab where the keyboard is, and nothing wider: the
-/// terminal shown in the panel when it has the focus; else a file, diff,
-/// sub-agent or new-chat tab (back to the conversation). A conversation
-/// itself, or a screen with no tabs, stays: quitting is ⌘Q's.
 /// ⌘W: what is in front closes (a dialog, the focused terminal, a file,
-/// diff or sub-agent tab); with none, the window does, as a Mac app's
-/// (Sophon keeps running: the Dock icon opens it again).
+/// diff or sub-agent tab); with none, the window hides, as a Mac app's
+/// (Sophon and its agents keep running: the Dock icon shows it again).
 pub(crate) fn close_current() {
     if !close_in_window() {
         #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
