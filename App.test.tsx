@@ -51,6 +51,18 @@ test("attaches a file dropped on the composer", async () => {
   expect(app.count("label:moon@2x.png")).toBe(1);
 });
 
+test("a folder dropped on the composer is named by its path", async () => {
+  const app = await open(".", { width: 1100, height: 760, platform: "macos" });
+  await newWorkspace(app);
+  // A folder: the agent on this Mac reads it where it is, as a terminal
+  // takes a dropped folder.
+  const here = import.meta.url.replace(/[^/]*$/, "").replace(/^[a-z]+:(\/\/)?/, "file://");
+  await app.dropFiles("id:composer", [`${here}assets/loader/`]);
+  const named = () => app.texts().some((t) => t.trim().endsWith("/assets/loader/"));
+  for (let i = 0; i < 20 && !named(); i++) await new Promise((r) => setTimeout(r, 50));
+  expect(named()).toBe(true);
+});
+
 test("Backspace deletes a chip as one unit", async () => {
   const app = await open(".", { width: 1100, height: 760 });
   await newWorkspace(app);

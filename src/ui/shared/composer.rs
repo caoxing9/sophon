@@ -1704,8 +1704,10 @@ pub(crate) fn dropped(uris: &[String]) {
 
 /// Files by their `file:` addresses, pasted (copied in Finder) or dropped
 /// on the composer: read here and attached, images as images, the rest
-/// uploaded to the host (which may be another computer). Folders are left
-/// out. `pasted`: one that cannot be read may be on the clipboard itself.
+/// uploaded to the host (which may be another computer). A folder is named
+/// by its path in the text, as a terminal takes it, when the host is this
+/// Mac (the agent reads it there); another computer cannot reach it.
+/// `pasted`: one that cannot be read may be on the clipboard itself.
 #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
 fn attach_uris(key: &str, uris: &[String], pasted: bool) {
     use base64::Engine;
@@ -1714,6 +1716,11 @@ fn attach_uris(key: &str, uris: &[String], pasted: bool) {
         let Some(path) = uri.strip_prefix("file://") else { continue };
         let path = std::path::PathBuf::from(percent_decode(path));
         if path.is_dir() {
+            if store::on_this_mac() {
+                insert_text(key, &format!("{} ", path.display()));
+            } else {
+                store::notify(t("A folder on this computer cannot be sent to the other one").to_owned());
+            }
             continue;
         }
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
@@ -1748,6 +1755,14 @@ fn attach_uris(key: &str, uris: &[String], pasted: bool) {
             insert_file(key, name, mime, bytes);
         }
     }
+}
+
+/// `text` typed into composer `key` at its caret.
+#[cfg(not(target_arch = "wasm32"))]
+fn insert_text(key: &str, text: &str) {
+    let Some(session) = composer_doc::existing(key) else { return };
+    let at = session.state().selection().from();
+    composer_doc::replace_text(&session, at, at, text);
 }
 
 /// The image on the clipboard, as the JPEG or PNG the copying app offers.
