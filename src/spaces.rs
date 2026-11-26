@@ -97,6 +97,33 @@ mod imp {
         std::fs::File::open(home.join("service.lock")).is_ok_and(|file|matches!(file.try_lock_shared(), Err(std::fs::TryLockError::WouldBlock)))
     }
 
+    /// The version of the service running for the space in `home`, as its
+    /// `sophon.pid` says ("0" from one before it said so), or nothing when
+    /// none runs.
+    pub(crate) fn version_of(home: &Path) -> Option<String> {
+        if !running(home) {
+            return None;
+        }
+        let pid: Value = serde_json::from_slice(&std::fs::read(home.join("sophon.pid")).ok()?).ok()?;
+        Some(pid.get("version").and_then(Value::as_str).unwrap_or("0").to_owned())
+    }
+
+    /// Whether nothing goes on in the space in `home`: no conversation
+    /// running, and none changed for `quiet` (a message just sent is not
+    /// a turn yet). Its record unread or unknown, it is not.
+    pub(crate) fn quiet(home: &Path, quiet: std::time::Duration) -> bool {
+        let Some(state) = std::fs::read(home.join("state.json")).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) else {
+            return false;
+        };
+        let Some(agents) = state.get("agents").and_then(Value::as_object) else { return true };
+        let since = chrono::Utc::now() - chrono::TimeDelta::from_std(quiet).unwrap_or_default();
+        agents.values().all(|agent| {
+            let at = |key: &str| agent.get(key).and_then(Value::as_str).and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok().map(|t| t.to_utc()));
+            agent.get("status").and_then(Value::as_str) != Some("running")
+                && [at("updatedAt"), at("lastUserMessageAt")].into_iter().flatten().all(|t| t < since)
+        })
+    }
+
     /// The first space's folder.
     pub(crate) fn home_of_first() -> PathBuf {
         std::env::var_os("SOPHON_SERVICE_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".sophon/service"))
@@ -182,5 +209,26 @@ mod tests {
         let home = Path::new("/Users/me/.sophon/spaces/lin");
         assert_eq!(home_of(&url_of(home)).as_deref(), Some(home));
         assert_eq!(home_of("ws://1.2.3.4:6767/ws"), None);
+    }
+
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+    #[test]
+    fn a_space_is_still_when_nothing_runs_or_changed_lately() {
+        let home = std::env::temp_dir().join(format!("sophon-quiet-{}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
+        let wait = std::time::Duration::from_secs(30);
+        let at = |ago: i64| (chrono::Utc::now() - chrono::TimeDelta::seconds(ago)).to_rfc3339();
+        let with = |agents: serde_json::Value| {
+            std::fs::write(home.join("state.json"), serde_json::json!({"agents": agents}).to_string()).unwrap();
+            quiet(&home, wait)
+        };
+        // No record: not known to be still.
+        assert!(!quiet(&home, wait));
+        assert!(with(serde_json::json!({"a": {"status": "idle", "updatedAt": at(600), "lastUserMessageAt": at(600)}})));
+        assert!(!with(serde_json::json!({"a": {"status": "running", "updatedAt": at(600)}})));
+        // A message sent a moment ago, its turn not begun.
+        assert!(!with(serde_json::json!({"a": {"status": "idle", "updatedAt": at(600), "lastUserMessageAt": at(5)}})));
+        assert!(!with(serde_json::json!({"a": {"status": "idle", "updatedAt": at(5)}})));
+        let _ = std::fs::remove_dir_all(&home);
     }
 }

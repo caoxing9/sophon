@@ -3147,6 +3147,17 @@ pub(crate) fn start_spaces() {
     }
     #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
     {
+        // The other spaces' services are brought up to the carried one's
+        // version once they are still: looked at every few minutes.
+        static WATCHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !WATCHING.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            spawn_detached(async {
+                loop {
+                    nsh_core::element::timer(std::time::Duration::from_secs(120)).await;
+                    update_space_services();
+                }
+            });
+        }
         let homes: Vec<_> = spaces().iter().filter_map(|h| crate::spaces::home_of(&h.url)).collect();
         if !homes.is_empty() {
             std::thread::spawn(move || {
@@ -4179,58 +4190,141 @@ fn newer_version(a: &str, b: &str) -> bool {
 #[derive(Clone, Copy, Default)]
 struct ServiceUpdated(bool);
 
+/// A replacement of the running service waits for (`update_running_service`).
+#[derive(Clone, Copy, Default)]
+struct ServiceUpdatePending(bool);
+
+/// How long a space stays still before its service is replaced: a message
+/// sent as a turn ends is a turn a moment later, and a replacement in that
+/// moment lost it (the old service had it, the new one never sent it on).
+#[cfg(not(target_arch = "wasm32"))]
+const SERVICE_QUIET: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The running service's version and the carried one's, when the carried
+/// one is newer and nothing of the running one runs an agent.
+#[cfg(not(target_arch = "wasm32"))]
+fn service_update_due() -> Option<(String, String)> {
+    if crate::ui::kit::MOBILE || !on_this_mac() || global::<ServiceUpdated>().with_untracked(|u| u.0) {
+        return None;
+    }
+    let running = global::<ConnState>().with_untracked(|c| match &c.0 {
+        Conn::Connected { version, .. } => Some(version.clone()),
+        _ => None,
+    })?;
+    let carried = bundled_service_version()?;
+    if running.trim().is_empty() || !newer_version(&carried, &running) {
+        return None;
+    }
+    if global::<Agents>().with_untracked(|a| a.0.iter().any(|x| x.is_running())) {
+        return None;
+    }
+    Some((running, carried))
+}
+
 /// This Mac's service keeps running when Sophon is updated, so after an
 /// update that carries a newer one the old still answers. Once nothing of
-/// it runs an agent it is stopped and the carried one started (a restart
+/// it runs an agent, and nothing has changed for a while
+/// (`SERVICE_QUIET`), it is stopped and the carried one started (a restart
 /// asked of the service would keep the old one's supervisor). Looked at
 /// whenever the agents' states are heard, once done a run; terminals open
 /// in the old service end with it.
 fn update_running_service() {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        if crate::ui::kit::MOBILE || !on_this_mac() || global::<ServiceUpdated>().with_untracked(|u| u.0) {
+        if global::<ServiceUpdatePending>().with_untracked(|p| p.0) || service_update_due().is_none() {
             return;
         }
-        let Some(running) = global::<ConnState>().with_untracked(|c| match &c.0 {
-            Conn::Connected { version, .. } => Some(version.clone()),
-            _ => None,
-        }) else {
-            return;
-        };
-        let Some(carried) = bundled_service_version() else { return };
-        if running.trim().is_empty() || !newer_version(&carried, &running) {
-            return;
-        }
-        if global::<Agents>().with_untracked(|a| a.0.iter().any(|x| x.is_running())) {
-            return;
-        }
-        let Some(cli) = service_cli() else { return };
-        global::<ServiceUpdated>().set(ServiceUpdated(true));
-        // The start is this function's, after the stop: not the one a lost
-        // connection brings, which would race the stop.
-        global::<AutoStart>().update(|a| a.tried = true);
-        global::<Restarting>().set(Restarting(true));
-        log::info!("the running service is {running}, Sophon carries {carried}: replacing it");
-        notify(t("Updating the service…").into());
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
-        let home = current_space_home();
-        std::thread::spawn(move || {
-            let mut args = vec!["daemon".to_owned(), "stop".to_owned()];
-            if let Some(home) = home {
-                args.extend(["--home".to_owned(), home.to_string_lossy().into_owned()]);
-            }
-            if let Err(e) = std::process::Command::new(&cli).args(&args).env("PATH", service_path(&cli)).output() {
-                log::warn!("stopping the older service failed: {e}");
-            }
-            let _ = tx.send(());
-        });
-        spawn(async move {
-            rx.recv().await;
-            // Started now; were it still up, the start says so and the
-            // connection goes on with it.
-            start_service();
-        });
+        global::<ServiceUpdatePending>().set(ServiceUpdatePending(true));
+        set_timeout(SERVICE_QUIET, confirm_service_update);
     }
+}
+
+/// The wait for a still moment is over: the service is replaced if it is
+/// still due and nothing changed meanwhile, looked at again later if
+/// something did.
+#[cfg(not(target_arch = "wasm32"))]
+fn confirm_service_update() {
+    let Some((running, carried)) = service_update_due() else {
+        global::<ServiceUpdatePending>().set(ServiceUpdatePending(false));
+        return;
+    };
+    let since = chrono::Utc::now() - chrono::TimeDelta::from_std(SERVICE_QUIET).unwrap_or_default();
+    let stirred = global::<Agents>().with_untracked(|a| {
+        a.0.iter().any(|x| {
+            [&x.updated_at, &x.last_user_message_at]
+                .into_iter()
+                .filter_map(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                .any(|t| t.to_utc() >= since)
+        })
+    });
+    if stirred {
+        set_timeout(SERVICE_QUIET, confirm_service_update);
+        return;
+    }
+    global::<ServiceUpdatePending>().set(ServiceUpdatePending(false));
+    replace_running_service(&running, &carried);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn replace_running_service(running: &str, carried: &str) {
+    let Some(cli) = service_cli() else { return };
+    global::<ServiceUpdated>().set(ServiceUpdated(true));
+    // The start is this function's, after the stop: not the one a lost
+    // connection brings, which would race the stop.
+    global::<AutoStart>().update(|a| a.tried = true);
+    global::<Restarting>().set(Restarting(true));
+    log::info!("the running service is {running}, Sophon carries {carried}: replacing it");
+    notify(t("Updating the service…").into());
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let home = current_space_home();
+    std::thread::spawn(move || {
+        let mut args = vec!["daemon".to_owned(), "stop".to_owned()];
+        if let Some(home) = home {
+            args.extend(["--home".to_owned(), home.to_string_lossy().into_owned()]);
+        }
+        if let Err(e) = std::process::Command::new(&cli).args(&args).env("PATH", service_path(&cli)).output() {
+            log::warn!("stopping the older service failed: {e}");
+        }
+        let _ = tx.send(());
+    });
+    spawn(async move {
+        rx.recv().await;
+        // Started now; were it still up, the start says so and the
+        // connection goes on with it.
+        start_service();
+    });
+}
+
+/// The services of this Mac's other spaces (not the one in use, which
+/// `update_running_service` replaces): Sophon updated, an older one goes
+/// on answering the people who connect to it. Each that is older than the
+/// carried one is replaced once its space is still (`SERVICE_QUIET`), as
+/// looked at every few minutes.
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+fn update_space_services() {
+    if !local_service() {
+        return;
+    }
+    let current = current_space_home().unwrap_or_else(crate::spaces::home_of_first);
+    let mut homes: Vec<_> = spaces().iter().filter_map(|h| crate::spaces::home_of(&h.url)).collect();
+    homes.push(crate::spaces::home_of_first());
+    homes.retain(|h| *h != current);
+    if homes.is_empty() {
+        return;
+    }
+    std::thread::spawn(move || {
+        let Some(carried) = bundled_service_version() else { return };
+        for home in homes {
+            let Some(running) = crate::spaces::version_of(&home) else { continue };
+            if !newer_version(&carried, &running) || !crate::spaces::quiet(&home, SERVICE_QUIET) {
+                continue;
+            }
+            log::info!("space {}: its service is {running}, Sophon carries {carried}: replacing it", home.display());
+            if let Err(e) = crate::spaces::stop(&home).and_then(|()| crate::spaces::start(&home)) {
+                log::warn!("space {}: {e}", home.display());
+            }
+        }
+    });
 }
 
 /// Sets the UI's language and remembers it.
