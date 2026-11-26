@@ -103,12 +103,12 @@ fn rows_of(p: &Provider) -> Vec<Row> {
 }
 
 /// The agent's mark: Claude's and Codex's (OpenAI's) own, a spark for
-/// Gemini, else a glyph.
+/// Gemini and Antigravity, else a glyph.
 pub(crate) fn mark(provider: &str, size: f32) -> impl IntoElement {
     match provider {
         "claude" => icon(Icon::Claude, size),
         "codex" => icon(Icon::Codex, size).text_color(FG()),
-        "gemini" => icon(Icon::Gemini, size).text_color(ACCENT()),
+        "gemini" | "antigravity" => icon(Icon::Gemini, size).text_color(ACCENT()),
         _ => icon(Icon::Cpu, size).text_color(FG_MUTED()),
     }
 }

@@ -1363,6 +1363,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("(Settings → Coding agents)", "（设置 → 编程 Agent）"),
     ("Checking…", "检查中…"),
     ("Claude account", "Claude 账号"),
+    ("Google account", "Google 账号"),
     ("Command copied", "命令已复制"),
     ("Custom", "自定义"),
     ("Give it a name", "给它起个名字"),

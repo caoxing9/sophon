@@ -1,7 +1,7 @@
-//! Agents: the host's own `claude`, `codex` and `gemini`, each driven
-//! over the protocol its CLI speaks to a program (Claude Code's stream of
-//! JSON with its control requests, Codex's app server, Gemini CLI's Agent
-//! Client Protocol).
+//! Agents: the host's own `claude`, `codex`, `gemini` and `antigravity`,
+//! each driven over the protocol its CLI speaks to a program (Claude
+//! Code's stream of JSON with its control requests, Codex's app server,
+//! the Agent Client Protocol of Gemini CLI and of Antigravity CLI).
 //!
 //! An agent here is a session that outlives its process: it is given
 //! commands (a prompt, a stop, an answer to what it asked) and says what
@@ -10,6 +10,7 @@
 //! process goes after a while with nothing to do and comes back with the
 //! next prompt.
 
+pub(crate) mod antigravity;
 pub(crate) mod claude;
 mod codex;
 mod gemini;
@@ -165,6 +166,8 @@ pub fn start(start: Start, emit: Emit) -> mpsc::UnboundedSender<Command> {
         tokio::task::spawn_local(codex::run(start, inbox, emit));
     } else if start.family == "gemini" {
         tokio::task::spawn_local(gemini::run(start, inbox, emit));
+    } else if start.family == "antigravity" {
+        tokio::task::spawn_local(antigravity::run(start, inbox, emit));
     } else {
         tokio::task::spawn_local(claude::run(start, inbox, emit));
     }
@@ -191,6 +194,7 @@ pub async fn diagnostic(provider: &str, settings: &Value) -> String {
     let name = match family {
         "codex" => "Codex",
         "gemini" => "Gemini CLI",
+        "antigravity" => "Antigravity CLI",
         _ => "Claude Code",
     };
     let Some(program) = executable(family, settings) else {
@@ -213,6 +217,7 @@ pub async fn diagnostic(provider: &str, settings: &Value) -> String {
     let (variable, usual) = match family {
         "codex" => ("CODEX_HOME", ".codex"),
         "gemini" => ("GEMINI_CLI_HOME", ".gemini"),
+        "antigravity" => (antigravity::HOME_VAR, antigravity::DEFAULT_HOME),
         _ => ("CLAUDE_CONFIG_DIR", ".claude"),
     };
     let models = crate::models::list(family, settings);
@@ -236,8 +241,16 @@ pub async fn diagnostic(provider: &str, settings: &Value) -> String {
         .find(|(key, _)| key.ends_with("_BASE_URL"))
         .and_then(|(_, value)| value.as_str())
         .unwrap_or("its own");
+    // Whether it is signed in, as a client reads it: Antigravity's sign-in
+    // is its own folder's (its key in its settings, or its credentials
+    // file, of which only the being there is looked at).
+    let auth = if family == "antigravity" {
+        format!("\n  Auth: {}", antigravity::auth_status(settings))
+    } else {
+        String::new()
+    };
     format!(
-        "{name}\n  Binary: {}\n  Version: {version}\n  Files: {}\n  Models listed: {}\n  Starts on: {starts}\n  Endpoint: {endpoint}",
+        "{name}\n  Binary: {}\n  Version: {version}\n  Files: {}\n  Models listed: {}\n  Starts on: {starts}\n  Endpoint: {endpoint}{auth}",
         program.display(),
         crate::models::kept(settings, variable, usual).display(),
         models.len()
@@ -245,9 +258,15 @@ pub async fn diagnostic(provider: &str, settings: &Value) -> String {
 }
 
 pub(crate) fn binary(provider: &str) -> Option<PathBuf> {
-    if !matches!(provider, "codex" | "claude" | "gemini") {
+    if !matches!(provider, "codex" | "claude" | "gemini" | "antigravity") {
         return None;
     }
+    // Antigravity's CLI is `agy` (`antigravity` may be its editor's).
+    let provider = if provider == "antigravity" {
+        antigravity::PROGRAM
+    } else {
+        provider
+    };
     let mut paths: Vec<_> = env::split_paths(&env::var_os("PATH").unwrap_or_default())
         .filter(|dir| dir.is_absolute())
         .map(|dir| dir.join(provider))
@@ -314,12 +333,25 @@ pub fn family(provider: &str, settings: &Value) -> Option<&'static str> {
         "claude" => Some("claude"),
         "codex" => Some("codex"),
         "gemini" => Some("gemini"),
+        "antigravity" => Some("antigravity"),
         _ => None,
     }
 }
 
 /// The modes an agent of `family` can be in, the first the default.
 pub fn modes(family: &str) -> Value {
+    if family == "antigravity" {
+        // As T3 Code runs it: Antigravity asks for each tool in its own
+        // default mode and this host answers as the mode chosen here says
+        // (`antigravity::answered`); plan and auto are Antigravity's own.
+        return json!([
+            {"id":"default","label":"Always Ask","description":"Prompts for approval before edits and commands"},
+            {"id":"acceptEdits","label":"Accept File Edits","description":"Approves edits inside the workspace; asks before the rest"},
+            {"id":"plan","label":"Plan Mode","description":"Plans before it changes anything"},
+            {"id":"auto","label":"Auto","description":"Antigravity reviews its own requests where the account offers it"},
+            {"id":"bypassPermissions","label":"Full Access","description":"Approves every tool without prompting (use with caution)"},
+        ]);
+    }
     if family == "gemini" {
         // Gemini CLI's approval modes, as its sessions name them.
         return json!([
@@ -352,8 +384,9 @@ pub fn modes(family: &str) -> Value {
 /// on the composer, a press from any other; a request that names no mode
 /// still gets the first, which asks ([`mode`]).
 pub fn offered_mode(family: &str) -> &'static str {
-    // Gemini CLI has no mode that reviews its own prompts: it asks.
-    if family == "gemini" {
+    // Gemini CLI has no mode that reviews its own prompts, and
+    // Antigravity's is not every account's: they ask.
+    if matches!(family, "gemini" | "antigravity") {
         "default"
     } else {
         "auto"
@@ -378,7 +411,8 @@ pub fn mode(family: &str, wanted: Option<&str>) -> String {
 }
 
 pub fn snapshot(config: &Value) -> Value {
-    let mut providers = std::collections::BTreeSet::from(["codex", "claude", "gemini"]);
+    let mut providers =
+        std::collections::BTreeSet::from(["codex", "claude", "gemini", "antigravity"]);
     if let Some(settings) = config["providers"].as_object() {
         providers.extend(settings.keys().map(String::as_str));
     }
@@ -426,6 +460,19 @@ impl Process {
         args: &[String],
         env: &[(&str, &str)],
     ) -> io::Result<Self> {
+        Self::spawn_without(family, settings, cwd, args, env, &[])
+    }
+
+    /// [`Self::spawn`], the service's variables `removed` left out first
+    /// (what the CLI must not take from the service's environment).
+    fn spawn_without(
+        family: &str,
+        settings: &Value,
+        cwd: &str,
+        args: &[String],
+        env: &[(&str, &str)],
+        removed: &[&str],
+    ) -> io::Result<Self> {
         if settings["enabled"] == false {
             return Err(io::Error::other("This provider is disabled"));
         }
@@ -434,6 +481,9 @@ impl Process {
         let mut command = tokio::process::Command::new(program);
         if let Some(extra) = settings["command"].as_array() {
             command.args(extra.iter().skip(1).filter_map(Value::as_str));
+        }
+        for name in removed {
+            command.env_remove(name);
         }
         command.args(args).envs(env.iter().copied());
         if let Some(env) = settings["env"].as_object() {
@@ -562,7 +612,7 @@ mod tests {
         for entry in snapshot["entries"].as_array().unwrap() {
             let offered = entry["defaultModeId"].as_str().unwrap();
             // Gemini CLI has no auto mode: it is offered the one that asks.
-            let wanted = if entry["provider"] == "gemini" {
+            let wanted = if matches!(entry["provider"].as_str(), Some("gemini" | "antigravity")) {
                 "default"
             } else {
                 "auto"
