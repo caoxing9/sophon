@@ -148,6 +148,7 @@ fn agent_row(p: Provider, d: Option<Diagnostic>, u: Option<store::AgentUpdate>, 
             "claude" => d.login.as_ref().filter(|l| !l.signed_in).and(d.path.clone()).map(|path| format!("'{}' auth login", path.replace('\'', ""))),
             // Codex says nothing of its login to the service: asked here.
             // Through a gateway it signs in to none.
+            "antigravity" => antigravity_login(&d),
             "codex" if !gateway => d.path.clone().filter(|path| store::codex_signed_out(path)).map(|path| format!("'{}' login", path.replace('\'', ""))),
             _ => None,
         })
@@ -263,7 +264,8 @@ fn login_line(d: &Diagnostic) -> Option<nsh_core::element::Text> {
     }
     let mut parts: Vec<String> = vec![match l.method.as_deref() {
         Some("claude.ai") => t("Claude account").into(),
-        Some("api_key" | "apiKey") => t("API key").into(),
+        Some("api_key" | "apiKey" | "gemini-api-key" | "agent-platform") => t("API key").into(),
+        Some("oauth-personal" | "oauth-business") => t("Google account").into(),
         Some(m) => m.to_owned(),
         None => t("Signed in").into(),
     }];
@@ -278,6 +280,11 @@ fn login_line(d: &Diagnostic) -> Option<nsh_core::element::Text> {
 /// The login command of an account instance Sophon added that is not
 /// signed in yet.
 fn pending_login(p: &Provider, d: &Diagnostic, cfg: Option<&Value>) -> Option<String> {
+    // Antigravity itself, on another computer (on this Mac its Sign in
+    // button runs it).
+    if p.id == "antigravity" && !store::on_this_mac() {
+        return antigravity_login(d);
+    }
     if !agents::created_by_sophon(cfg, &p.id) {
         return None;
     }
@@ -287,12 +294,19 @@ fn pending_login(p: &Provider, d: &Diagnostic, cfg: Option<&Value>) -> Option<St
     } else if let Some(dir) = env.get("CODEX_HOME").filter(|_| env.get("OPENAI_BASE_URL").is_none()) {
         (Base::Codex, dir)
     } else {
-        return None;
+        (Base::Antigravity, env.get("GEMINI_HOME").filter(|_| agents::family(&p.id, cfg) == "antigravity")?)
     };
     // Codex does not report its login: an unavailable instance is the hint.
     let signed_out = d.login.as_ref().map(|l| !l.signed_in).unwrap_or(!p.available());
     let dir = dir.as_str()?;
     signed_out.then(|| agents::login_command(base, dir))
+}
+
+/// Antigravity's sign-in to a Google account, in the folder it says it
+/// keeps, when it says it is signed out of one.
+fn antigravity_login(d: &Diagnostic) -> Option<String> {
+    let l = d.login.as_ref().filter(|l| !l.signed_in && l.method.as_deref() == Some("oauth-personal"))?;
+    Some(agents::login_command(Base::Antigravity, l.config_dir.as_deref()?))
 }
 
 /// A command in a mono box with a copy button.
@@ -322,12 +336,19 @@ fn base_label(b: Base) -> &'static str {
     match b {
         Base::Claude => "Claude Code",
         Base::Codex => "Codex",
+        Base::Antigravity => "Antigravity",
     }
 }
 
-fn base_choice(base: Signal<Base>) -> View {
+/// The CLIs to choose from; Antigravity only for an account (it takes no
+/// other endpoint).
+fn base_choice(base: Signal<Base>, antigravity: bool) -> View {
+    let mut bases = vec![Base::Claude, Base::Codex];
+    if antigravity {
+        bases.push(Base::Antigravity);
+    }
     segmented(
-        vec![(Base::Claude, base_label(Base::Claude).into()), (Base::Codex, base_label(Base::Codex).into())],
+        bases.into_iter().map(|b| (b, base_label(b).into())).collect(),
         move || base.get(),
         move |b| base.set(b),
     )
@@ -374,7 +395,7 @@ pub(crate) fn add_account() -> View {
             None => view()
                 .gap(sp(S3))
                 .child(hint(t("A separate agent with its own login, next to the one you have. Sophon never switches accounts on its own")))
-                .child(base_choice(base))
+                .child(base_choice(base, true))
                 .child(field().value(move || name.get()).on_change(move |v: &str| name.set(v.to_owned())).placeholder(t("Name, e.g. Work")))
                 .child(
                     field()
@@ -455,14 +476,14 @@ pub(crate) fn add_api_key() -> View {
                 if custom {
                     view()
                         .gap(sp(S3))
-                        .child(base_choice(base))
+                        .child(base_choice(base, false))
                         .child(
                             field()
                                 .value(move || url.get())
                                 .on_change(move |v: &str| url.set(v.to_owned()))
                                 .placeholder(move || match base.get() {
                                     Base::Claude => t("Anthropic-compatible endpoint, e.g. https://example.com/anthropic"),
-                                    Base::Codex => t("OpenAI Responses endpoint, e.g. https://example.com/v1"),
+                                    Base::Codex | Base::Antigravity => t("OpenAI Responses endpoint, e.g. https://example.com/v1"),
                                 })
                                 .font_family(mono_font),
                         )

@@ -18,6 +18,18 @@ target/debug/sophon-service daemon stop
 
 - **Claude Code**：`claude -p` 的双向 stream-json。回复和思考按增量推送，工具调用带输入、输出和 diff；需要授权时，CLI 的 `can_use_tool` 请求变成客户端的审批卡（工具、计划、提问三种）。模式切换、换模型和中断都通过控制请求作用于正在运行的进程，回合进行中发来的消息会并入当前回合。
 - **Codex**：`codex app-server` 的 JSON-RPC。一个线程对应一个会话，一条消息对应一个回合；命令执行、文件修改和提问的审批同样变成审批卡。默认模式沿用 `~/.codex/config.toml` 里的审批与沙箱设置，`read-only` 和 `full-access` 模式会覆盖它。
+- **Antigravity**：Google 的 Antigravity CLI（`agy acp`，取代个人账号已停用的 Gemini CLI），走 Agent Client Protocol，启动和授权方式照 T3 Code 的做法：
+  - 要求 CLI 版本至少 1.5.1、低于 2。
+  - 每个提供商有自己的目录（`GEMINI_HOME`，默认 `~/.sophon-antigravity`），用 `--gemini-dir` 交给 CLI。
+  - 登录凭据以文件形式存在这个目录里（`AGY_ACP_FORCE_FILE_STORAGE=1`），不进所有目录共用的钥匙串。
+  - 不让 CLI 自动更新。
+  - 服务环境里的 `GEMINI_API_KEY`、`GOOGLE_*` 等变量不会传给它。
+  - CLI 要打开浏览器时只记一个标记，不打开，也不显示链接。没登录的会话会提示去“设置 › Agents”登录；登录用 CLI 自己的 `agy acp --login`。
+  - 服务不读凭据，也不直接调 Google 的接口。
+  - 模型和思考强度取自会话的 `configOptions`。
+  - 读取、搜索直接放行，其余按所选模式决定是否弹审批卡。
+  - 回合中追加的消息会并入当前回合。
+  - 停止时等 CLI 结束回合，15 秒内没结束就结束进程。
 
 ### 账号与接口
 

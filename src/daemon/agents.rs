@@ -196,6 +196,8 @@ pub fn remove_patch(id: &str) -> Value {
 pub enum Base {
     Claude,
     Codex,
+    /// Antigravity CLI (`agy`), on a Google account.
+    Antigravity,
 }
 
 impl Base {
@@ -203,6 +205,7 @@ impl Base {
         match self {
             Base::Claude => "claude",
             Base::Codex => "codex",
+            Base::Antigravity => "antigravity",
         }
     }
 
@@ -211,6 +214,7 @@ impl Base {
         match self {
             Base::Claude => "CLAUDE_CONFIG_DIR",
             Base::Codex => "CODEX_HOME",
+            Base::Antigravity => "GEMINI_HOME",
         }
     }
 
@@ -219,6 +223,7 @@ impl Base {
         match self {
             Base::Claude => format!("~/.claude-{slug}"),
             Base::Codex => format!("~/.codex-{slug}"),
+            Base::Antigravity => format!("~/.sophon-antigravity-{slug}"),
         }
     }
 }
@@ -274,6 +279,20 @@ pub fn login_command(base: Base, dir: &str) -> String {
         Base::Claude => format!("CLAUDE_CONFIG_DIR={dir} claude auth login"),
         // Codex refuses a CODEX_HOME that does not exist.
         Base::Codex => format!("mkdir -p {dir} && CODEX_HOME={dir} codex login"),
+        // Its own sign-in (`--login`), as T3 Code runs it: kept in the
+        // folder as a file (not the keyring all folders share), with no
+        // key or Cloud project of the shell's in the way. It prints a link
+        // to open and asks for the code the page gives.
+        Base::Antigravity => {
+            let app = format!("{dir}/antigravity-acp");
+            format!(
+                "mkdir -p {app} && printf '%s' '{{\"auth\":{{\"type\":\"oauth-personal\"}}}}' > {app}/settings.json && \
+                 env -u GEMINI_API_KEY -u GOOGLE_API_KEY -u GOOGLE_APPLICATION_CREDENTIALS -u GOOGLE_CLOUD_PROJECT \
+                 -u DISPLAY -u WAYLAND_DISPLAY GEMINI_HOME={dir} AGY_ACP_FORCE_FILE_STORAGE=1 \
+                 AGY_CLI_DISABLE_AUTO_UPDATE=true SSH_CONNECTION='127.0.0.1 0 127.0.0.1 0' \
+                 agy acp --gemini-dir {dir} --app-data-dir antigravity-acp --login"
+            )
+        }
     }
 }
 
@@ -380,6 +399,8 @@ pub fn key_instance_patch(id: &str, k: &KeyInstance) -> Value {
             env.insert("OPENAI_BASE_URL".into(), k.base_url.trim().into());
             env.insert("OPENAI_API_KEY".into(), k.key.trim().into());
         }
+        // Not offered for an endpoint: it runs on Google's only.
+        Base::Antigravity => {}
     }
     for (name, value) in &k.extra_env {
         env.insert(name.clone(), value.clone().into());
@@ -570,6 +591,10 @@ mod tests {
         assert_eq!(account_patch("cx", Base::Codex, "Cx", "/h/.codex-cx")["providers"]["cx"]["env"], json!({ "CODEX_HOME": "/h/.codex-cx" }));
         assert_eq!(login_command(Base::Claude, "/Users/me/.claude-work"), "CLAUDE_CONFIG_DIR=/Users/me/.claude-work claude auth login");
         assert_eq!(login_command(Base::Codex, "/a b"), "mkdir -p '/a b' && CODEX_HOME='/a b' codex login");
+        let agy = login_command(Base::Antigravity, "/h/.sophon-antigravity-w");
+        assert!(agy.starts_with("mkdir -p /h/.sophon-antigravity-w/antigravity-acp && printf '%s' '{\"auth\":{\"type\":\"oauth-personal\"}}' > /h/.sophon-antigravity-w/antigravity-acp/settings.json && env -u GEMINI_API_KEY"), "{agy}");
+        assert!(agy.contains(" GEMINI_HOME=/h/.sophon-antigravity-w AGY_ACP_FORCE_FILE_STORAGE=1 AGY_CLI_DISABLE_AUTO_UPDATE=true SSH_CONNECTION='127.0.0.1 0 127.0.0.1 0' "), "{agy}");
+        assert!(agy.ends_with("agy acp --gemini-dir /h/.sophon-antigravity-w --app-data-dir antigravity-acp --login"), "{agy}");
     }
 
     #[test]

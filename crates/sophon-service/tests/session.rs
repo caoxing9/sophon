@@ -3493,6 +3493,175 @@ async fn gemini_runs_over_acp_signs_in_as_its_settings_say_and_asks_before_a_com
     assert_eq!(said, ["go", "reply", "again", "reply"], "{timeline}");
 }
 
+/// An `agy` that is Antigravity's ACP server, as far as Sophon drives it:
+/// of the version `agy-version` names (1.5.14 else), signed in when its
+/// folder holds a credentials file, its session offering two models; its
+/// first turn reads a file, then asks before a command; a later one
+/// replies. What it was given goes to `agy-calls`.
+const ACP_ANTIGRAVITY: &str = r#"#!/bin/sh
+say() { printf '%s\n' "$1"; }
+note() { printf '%s\n' "$1" >> agy-calls; }
+update() { say "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"agy-1\",\"update\":$1}}"; }
+note "args $*"
+note "env FS=$AGY_ACP_FORCE_FILE_STORAGE UP=$AGY_CLI_DISABLE_AUTO_UPDATE SSH=${SSH_CONNECTION:-} KEY=${GEMINI_API_KEY:-none} HOME=$GEMINI_HOME BROWSER=${BROWSER:-} TMP=$TMPDIR"
+version=$(cat agy-version 2>/dev/null || echo 1.5.14)
+opened='{"sessionId":"agy-1","modes":{"availableModes":[{"id":"default","name":"Default"},{"id":"plan","name":"Plan"}],"currentModeId":"default"},"configOptions":[{"id":"model","category":"model","type":"select","currentValue":"gemini-3-pro","options":[{"value":"gemini-3-pro","name":"Gemini 3 Pro"},{"value":"claude-sonnet","name":"Claude Sonnet"}]}]}'
+turns=0
+while IFS= read -r line; do
+    id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+    case "$line" in
+        *'"id":901'*'"result"'*)
+            note "read $(printf '%s' "$line" | sed -n 's/.*"optionId":"\([a-z_]*\)".*/\1/p')"
+            update '{"sessionUpdate":"tool_call","toolCallId":"t1","title":"ls","kind":"execute","status":"pending","rawInput":{"command":"ls"}}'
+            say '{"jsonrpc":"2.0","id":902,"method":"session/request_permission","params":{"sessionId":"agy-1","toolCall":{"toolCallId":"t1"},"options":[{"optionId":"allow","name":"Allow","kind":"allow_once"},{"optionId":"always","name":"Always","kind":"allow_always"},{"optionId":"reject","name":"No","kind":"reject_once"}]}}' ;;
+        *'"id":902'*'"result"'*)
+            note "exec $(printf '%s' "$line" | sed -n 's/.*"optionId":"\([a-z_]*\)".*/\1/p')"
+            update '{"sessionUpdate":"tool_call_update","toolCallId":"t1","status":"completed","content":[{"type":"content","content":{"type":"text","text":"files"}}]}'
+            say "{\"jsonrpc\":\"2.0\",\"id\":$prompt,\"result\":{\"stopReason\":\"end_turn\"}}" ;;
+        *'"method":"initialize"'*)
+            note "initialize $line"
+            say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocolVersion\":1,\"agentInfo\":{\"name\":\"Antigravity ACP Server\",\"version\":\"$version\"},\"authMethods\":[{\"id\":\"oauth-personal\",\"name\":\"Google\"}],\"agentCapabilities\":{\"loadSession\":true,\"sessionCapabilities\":{\"resume\":{}}}}}" ;;
+        *'"method":"authenticate"'*)
+            note "authenticate $(printf '%s' "$line" | sed -n 's/.*"methodId":"\([a-z-]*\)".*/\1/p')"
+            if [ -f "$GEMINI_HOME/antigravity-acp/acp_token.json" ]; then
+                say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{}}"
+            else
+                say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"error\":{\"code\":-32000,\"message\":\"Authentication required\"}}"
+            fi ;;
+        *'"method":"session/new"'*)
+            note "new"
+            say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":$opened}" ;;
+        *'"method":"session/resume"'*)
+            note "resume $(printf '%s' "$line" | sed -n 's/.*"sessionId":"\([a-z0-9-]*\)".*/\1/p')"
+            say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":$opened}" ;;
+        *'"method":"session/set_config_option"'*)
+            note "set $(printf '%s' "$line" | sed -n 's/.*"configId":"\([a-z_]*\)".*"value":"\([a-z0-9-]*\)".*/\1 \2/p')"
+            say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{}}" ;;
+        *'"method":"session/set_mode"'*)
+            note "mode"
+            say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{}}" ;;
+        *'"method":"session/prompt"'*)
+            prompt=$id
+            turns=$((turns + 1))
+            update '{"sessionUpdate":"agent_message_chunk","messageId":"m1","content":{"type":"text","text":"reply"}}'
+            if [ "$turns" = 1 ] && [ ! -f answered ]; then
+                touch answered
+                update '{"sessionUpdate":"tool_call","toolCallId":"t0","title":"Read a.txt","kind":"read","status":"pending","rawInput":{"path":"a.txt"}}'
+                say '{"jsonrpc":"2.0","id":901,"method":"session/request_permission","params":{"sessionId":"agy-1","toolCall":{"toolCallId":"t0"},"options":[{"optionId":"allow","name":"Allow","kind":"allow_once"},{"optionId":"reject","name":"No","kind":"reject_once"}]}}'
+            else
+                say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"stopReason\":\"end_turn\"}}"
+            fi ;;
+    esac
+done
+"#;
+
+/// Reads until the turn underway fails, and gives why.
+async fn failed(socket: &mut Socket, agent: &Value) -> String {
+    loop {
+        let frame = read(socket).await;
+        if frame["message"]["payload"]["event"]["type"] == "turn_failed" {
+            break;
+        }
+    }
+    let timeline = ask(socket, json!({"type":"fetch_agent_timeline_request","agentId":agent})).await;
+    let last = timeline["payload"]["entries"].as_array().unwrap().last().unwrap().clone();
+    assert_eq!(last["item"]["type"], "error", "{timeline}");
+    last["item"]["message"].as_str().unwrap().to_owned()
+}
+
+#[tokio::test]
+async fn antigravity_runs_as_t3_code_runs_it_and_asks_only_what_its_mode_does_not_allow() {
+    let service = Service(tempfile::tempdir().unwrap());
+    install(service.0.path(), "agy", ACP_ANTIGRAVITY);
+    let folder = service.0.path().join("agy-home");
+    fs::write(service.0.path().join("agy-version"), "1.5.0").unwrap();
+    fs::write(
+        service.0.path().join("config.json"),
+        json!({"providers":{"antigravity":{"env":{"GEMINI_HOME":folder}}}}).to_string(),
+    )
+    .unwrap();
+    // What the service's own environment holds is not the CLI's.
+    service.cli_with_env("start", &[("GEMINI_API_KEY", "leaked"), ("BROWSER", "open")]);
+    let mut socket = service.connect(true).await;
+    let created = ask(&mut socket, json!({"type":"workspace.create.request",
+        "source":{"kind":"directory","path":service.0.path()},
+        "agent":{"config":{"provider":"antigravity","modeId":"acceptEdits","model":"claude-sonnet"},"initialPrompt":"go"}})).await;
+    assert_eq!(created["type"], "workspace.create.response", "{created}");
+    let agent = created["payload"]["agent"].clone();
+    assert_eq!(agent["currentModeId"], "acceptEdits");
+    send(&mut socket, json!({"type":"session","message":
+        {"type":"agent.timeline.set_subscription.request","agentIds":[agent["id"]],"requestId":"s"}})).await;
+
+    // A CLI older than 1.5.1 is not driven.
+    let why = failed(&mut socket, &agent["id"]).await;
+    assert!(why.contains("update it to 1.5.1"), "{why}");
+    let calls = fs::read_to_string(service.0.path().join("agy-calls")).unwrap();
+    assert!(!calls.contains("authenticate"), "{calls}");
+
+    // Not signed in: it says so, and nothing opens a session.
+    fs::remove_file(service.0.path().join("agy-version")).unwrap();
+    ask(&mut socket, json!({"type":"send_agent_message_request","agentId":agent["id"],"text":"go"})).await;
+    let why = failed(&mut socket, &agent["id"]).await;
+    assert!(why.contains("not signed in") && !why.contains("http"), "{why}");
+    let calls = fs::read_to_string(service.0.path().join("agy-calls")).unwrap();
+    assert!(!calls.contains("new"), "{calls}");
+
+    // Signed in (by its own `--login`, of which the file is all there is
+    // to see): a reading goes through, a command is asked.
+    fs::write(folder.join("antigravity-acp/acp_token.json"), "{}").unwrap();
+    ask(&mut socket, json!({"type":"send_agent_message_request","agentId":agent["id"],"text":"go"})).await;
+    let asked = until(&mut socket, "permission_requested").await;
+    assert_eq!(asked["request"]["name"], "ls", "{asked}");
+    let waiting = ask(&mut socket, json!({"type":"fetch_agent_request","agentId":agent["id"]})).await;
+    let permission = waiting["payload"]["agent"]["pendingPermissions"][0].clone();
+    assert_eq!(permission["actions"].as_array().unwrap().len(), 3, "{permission}");
+    send(
+        &mut socket,
+        json!({"type":"session","message":{"type":"agent_permission_response","agentId":agent["id"],
+        "requestId":permission["id"],"response":{"behavior":"allow","selectedActionId":"allow"}}}),
+    )
+    .await;
+    finished(&mut socket).await;
+
+    let calls = fs::read_to_string(service.0.path().join("agy-calls")).unwrap();
+    let home = folder.display().to_string();
+    assert!(
+        calls.contains(&format!("args acp --gemini-dir {home} --app-data-dir antigravity-acp\n")),
+        "{calls}"
+    );
+    assert!(calls.contains("FS=1 UP=true SSH=") && !calls.contains("SSH= "), "{calls}");
+    assert!(calls.contains(&format!("KEY=none HOME={home} BROWSER={home}/browser TMP={home}/runs/")), "{calls}");
+    assert!(calls.contains(r#""clientInfo":{"name":"sophon""#), "{calls}");
+    assert!(calls.contains(r#""writeTextFile":false"#) && calls.contains(r#""terminal":false"#), "{calls}");
+    let order: Vec<&str> = calls
+        .lines()
+        .filter(|line| !line.starts_with("args") && !line.starts_with("env") && !line.starts_with("initialize"))
+        .collect();
+    assert_eq!(
+        order[order.len() - 5..],
+        ["authenticate oauth-personal", "new", "set model claude-sonnet", "read allow", "exec allow"],
+        "{calls}"
+    );
+    // Its settings say how it signs in, never with what.
+    let settings: Value =
+        serde_json::from_slice(&fs::read(folder.join("antigravity-acp/settings.json")).unwrap()).unwrap();
+    assert_eq!(settings, json!({"auth":{"type":"oauth-personal"}}));
+    let models: Value =
+        serde_json::from_slice(&fs::read(folder.join("antigravity-acp/sophon-models.json")).unwrap()).unwrap();
+    assert_eq!(models[1]["id"], "claude-sonnet");
+    let timeline = ask(&mut socket, json!({"type":"fetch_agent_timeline_request","agentId":agent["id"]})).await;
+    assert_eq!(timeline["payload"]["agent"]["persistence"]["sessionId"], "agy-1");
+
+    // Started again, it resumes the session it had.
+    service.cli("stop");
+    service.cli("start");
+    let mut socket = service.connect(true).await;
+    ask(&mut socket, json!({"type":"send_agent_message_request","agentId":agent["id"],"text":"again"})).await;
+    finished(&mut socket).await;
+    let calls = fs::read_to_string(service.0.path().join("agy-calls")).unwrap();
+    assert!(calls.contains("resume agy-1"), "{calls}");
+}
+
 #[tokio::test]
 async fn what_was_there_when_an_automation_began_runs_when_asked_for_by_hand() {
     let service = Service(tempfile::tempdir().unwrap());

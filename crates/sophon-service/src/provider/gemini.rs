@@ -238,7 +238,7 @@ fn content_text(call: &Value) -> String {
 
 /// A call as the timeline shows it: by what kind of thing it does, with
 /// what it was given and what came of it.
-fn row(id: &str, call: &Value) -> Value {
+pub(super) fn row(id: &str, call: &Value) -> Value {
     let input = &call["rawInput"];
     let title = call["title"].as_str().unwrap_or_default();
     let path = call["locations"][0]["path"]

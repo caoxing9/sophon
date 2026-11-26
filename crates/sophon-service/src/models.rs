@@ -210,6 +210,10 @@ fn read(path: PathBuf) -> Value {
 /// The models of a provider of `family`, as its CLI lists them on this
 /// host: none if the CLI keeps no list here yet.
 pub fn list(family: &str, settings: &Value) -> Vec<Value> {
+    if family == "antigravity" {
+        // Those its account offered the last session it opened.
+        return crate::provider::antigravity::models(settings);
+    }
     if family == "gemini" {
         return gemini(&read(
             kept(settings, "GEMINI_CLI_HOME", ".gemini").join("settings.json"),
