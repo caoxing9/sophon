@@ -145,6 +145,7 @@ while IFS= read -r line; do
     case "$line" in
         *'"method":"initialize"'*) say "{\"id\":$id,\"result\":{}}" ;;
         *'"method":"thread/start"'*) say "{\"id\":$id,\"result\":{\"thread\":{\"id\":\"session-123\"}}}" ;;
+        *'"method":"skills/list"'*) say "{\"id\":$id,\"result\":{\"data\":[]}}" ;;
         *'"method":"thread/resume"'*)
             case "$line" in *'"threadId":"session-123"'*) ;; *) exit 3 ;; esac
             say "{\"id\":$id,\"result\":{\"thread\":{\"id\":\"session-123\"}}}" ;;

@@ -350,6 +350,8 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                     Some(untracked(move || {
                         let reply = text_view()
                             .links(nsh_base::TextViewLinks::Open)
+                            // A file's (Codex links the files it names): opened here.
+                            .on_link_press(super::file_links::press_link)
                             .code_block_actions(vec![nsh_base::TextViewCodeAction::new("copy").with_label(crate::i18n::t("Copy"))])
                             .markdown(move || Some(SharedString::from(text_of())))
                             .options(move || MarkdownOptions { streaming: streaming.get(), ..MarkdownOptions::default() })
@@ -429,6 +431,8 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                         text_view()
                             // A link opens in the browser (or the app it belongs to).
                             .links(nsh_base::TextViewLinks::Open)
+                            // A file's (Codex links the files it names): opened here.
+                            .on_link_press(super::file_links::press_link)
                             // A copy button on each code block (under the pointer on the
                             // desktop, always on the phone).
                             .code_block_actions(vec![nsh_base::TextViewCodeAction::new("copy").with_label(crate::i18n::t("Copy"))])
@@ -1694,6 +1698,8 @@ fn plan_card(p: Permission, plan: String) -> View {
                 text_view()
                     // A link opens in the browser (or the app it belongs to).
                     .links(nsh_base::TextViewLinks::Open)
+                    // A file's (Codex links the files it names): opened here.
+                    .on_link_press(super::file_links::press_link)
                     // A copy button on each code block (under the pointer on the
                     // desktop, always on the phone).
                     .code_block_actions(vec![nsh_base::TextViewCodeAction::new("copy").with_label(crate::i18n::t("Copy"))])
@@ -2149,6 +2155,8 @@ fn static_row(item: Item) -> AnyElement {
         Item::Assistant { text: t, .. } => copy_area(text_view()
             // A link opens in the browser (or the app it belongs to).
             .links(nsh_base::TextViewLinks::Open)
+            // A file's (Codex links the files it names): opened here.
+            .on_link_press(super::file_links::press_link)
                     // A copy button on each code block (under the pointer on the
                     // desktop, always on the phone).
                     .code_block_actions(vec![nsh_base::TextViewCodeAction::new("copy").with_label(crate::i18n::t("Copy"))])

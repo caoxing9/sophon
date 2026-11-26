@@ -467,8 +467,8 @@ fn run_native(native: crate::slash::Native, live: bool) {
         Native::Status => store::notify(status_words(live)),
         Native::Config if MOBILE => store::notify(t("Settings are on the home screen's Settings tab").into()),
         Native::Config => store::open_settings(),
-        Native::Memory if MOBILE => store::notify(t("CLAUDE.md is in the conversation's files").into()),
-        Native::Memory => store::open_file("CLAUDE.md"),
+        Native::Memory if MOBILE => store::notify(t("AGENTS.md is in the conversation's files").into()),
+        Native::Memory => store::open_file(memory_file()),
         Native::Mcp => store::open_mcp(),
         // The phone has no terminal: run on the computer.
         Native::Terminal(cmd) if MOBILE => store::notify(tf("Run “claude /{}” in a terminal on the computer", &[cmd])),
@@ -480,6 +480,14 @@ fn run_native(native: crate::slash::Native, live: bool) {
         },
         Native::Terminal(cmd) => store::run_in_workspace_terminal(crate::slash::terminal_line(cmd)),
     }
+}
+
+/// The project's instructions for its agents: `AGENTS.md`, which every
+/// agent reads (a `CLAUDE.md` points Claude Code to it); a project with
+/// only a `CLAUDE.md`, that.
+fn memory_file() -> &'static str {
+    let has = |name: &str| store::dir_entries(".").is_some_and(|list| list.iter().any(|e| !e.is_dir && e.name == name));
+    if !has("AGENTS.md") && has("CLAUDE.md") { "CLAUDE.md" } else { "AGENTS.md" }
 }
 
 /// `/status`: the computer, its service, and the agent's model and mode.

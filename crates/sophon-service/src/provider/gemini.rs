@@ -103,6 +103,69 @@ fn folder(settings: &Value) -> Option<PathBuf> {
     })
 }
 
+/// What Gemini CLI's lowest layer of settings (its system defaults, under
+/// the user's and the project's) says with `AGENTS.md` among the files of
+/// instructions it reads: the file every agent reads, as Codex does
+/// (`GEMINI.md` alone otherwise). `existing`: what that layer says now.
+/// `None`: it reads it already, or was told what to read and not this.
+fn with_agents_md(mut existing: Value) -> Option<Value> {
+    const AGENTS: &str = "AGENTS.md";
+    let files = match &existing["context"]["fileName"] {
+        Value::Null => vec![json!(AGENTS), json!("GEMINI.md")],
+        Value::String(name) if name == AGENTS => return None,
+        Value::String(name) => vec![json!(AGENTS), json!(name)],
+        Value::Array(names) if names.iter().any(|name| name == AGENTS) => return None,
+        Value::Array(names) => std::iter::once(json!(AGENTS)).chain(names.iter().cloned()).collect(),
+        _ => return None,
+    };
+    if !existing.is_object() {
+        existing = json!({});
+    }
+    if !existing["context"].is_object() {
+        existing["context"] = json!({});
+    }
+    existing["context"]["fileName"] = json!(files);
+    Some(existing)
+}
+
+/// A file of Gemini CLI's system defaults that reads `AGENTS.md`, for
+/// `GEMINI_CLI_SYSTEM_DEFAULTS_PATH`: the host's own defaults (if any)
+/// with it added, written where the service keeps such things. `None`
+/// when that variable is named already or nothing needs adding.
+fn system_defaults(settings: &Value, env: &[(&str, &str)]) -> Option<PathBuf> {
+    let named = |name: &str| {
+        env.iter()
+            .find(|(own, _)| *own == name)
+            .map(|(_, value)| value.to_string())
+            .or_else(|| settings.pointer(&format!("/env/{name}")).and_then(Value::as_str).map(str::to_owned))
+            .or_else(|| std::env::var(name).ok())
+            .filter(|value| !value.is_empty())
+    };
+    if named("GEMINI_CLI_SYSTEM_DEFAULTS_PATH").is_some() {
+        return None;
+    }
+    // Where Gemini CLI looks for them: beside its system settings.
+    let system = named("GEMINI_CLI_SYSTEM_SETTINGS_PATH").map(PathBuf::from).unwrap_or_else(|| {
+        PathBuf::from(if cfg!(target_os = "macos") {
+            "/Library/Application Support/GeminiCli/settings.json"
+        } else if cfg!(windows) {
+            "C:\\ProgramData\\gemini-cli\\settings.json"
+        } else {
+            "/etc/gemini-cli/settings.json"
+        })
+    });
+    let existing = system
+        .parent()
+        .and_then(|dir| std::fs::read_to_string(dir.join("system-defaults.json")).ok())
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or(json!({}));
+    let defaults = with_agents_md(existing)?;
+    let path = std::env::temp_dir().join("sophon").join("gemini-system-defaults.json");
+    std::fs::create_dir_all(path.parent()?).ok()?;
+    std::fs::write(&path, defaults.to_string()).ok()?;
+    Some(path)
+}
+
 /// The variables of a `.env` file: `NAME=value` lines, a value in quotes
 /// without them; comments and blank lines are not.
 fn dotenv(text: &str) -> Vec<(String, String)> {
@@ -348,11 +411,17 @@ impl Gemini {
             .filter(|(name, _)| !self.start.env.iter().any(|(own, _)| own == name))
             .collect();
         let way = sign_in(&settings, &given);
-        let env: Vec<_> = given
+        let mut env: Vec<_> = given
             .iter()
             .chain(self.start.env.iter())
             .map(|(name, value)| (name.as_str(), value.as_str()))
             .collect();
+        // The project's `AGENTS.md`, read as every other agent reads it.
+        let defaults = system_defaults(&settings, &env);
+        let defaults = defaults.as_deref().and_then(|path| path.to_str());
+        if let Some(path) = defaults {
+            env.push(("GEMINI_CLI_SYSTEM_DEFAULTS_PATH", path));
+        }
         self.process = Some(Process::spawn(
             "gemini",
             &settings,
@@ -786,6 +855,20 @@ impl Gemini {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agents_md_is_added_to_what_gemini_reads_unless_it_is_there() {
+        assert_eq!(
+            with_agents_md(json!({})),
+            Some(json!({"context":{"fileName":["AGENTS.md","GEMINI.md"]}}))
+        );
+        assert_eq!(
+            with_agents_md(json!({"ui":{"theme":"x"},"context":{"fileName":"RULES.md"}})),
+            Some(json!({"ui":{"theme":"x"},"context":{"fileName":["AGENTS.md","RULES.md"]}}))
+        );
+        assert_eq!(with_agents_md(json!({"context":{"fileName":["GEMINI.md","AGENTS.md"]}})), None);
+        assert_eq!(with_agents_md(json!({"context":{"fileName":"AGENTS.md"}})), None);
+    }
 
     #[test]
     fn a_dotenv_file_is_its_variables() {

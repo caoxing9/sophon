@@ -25,7 +25,7 @@ pub(crate) enum Native {
     Status,
     /// Sophon's settings.
     Config,
-    /// The project's `CLAUDE.md`.
+    /// The project's `AGENTS.md` (its `CLAUDE.md` when it has only that).
     Memory,
     /// The MCP servers, and signing in to them (`mcp`).
     Mcp,

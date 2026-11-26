@@ -172,13 +172,12 @@ pub fn start(start: Start, emit: Emit) -> mpsc::UnboundedSender<Command> {
 }
 
 /// The commands `family`'s CLI offers in `cwd`, as a client lists them
-/// when `/` is typed. Codex's are its terminal's own and it does not
-/// say what they are.
+/// when `/` is typed.
 pub async fn commands(family: &str, settings: &Value, cwd: &str) -> io::Result<Value> {
-    if family == "claude" {
-        claude::commands(settings, cwd).await
-    } else {
-        Ok(json!([]))
+    match family {
+        "claude" => claude::commands(settings, cwd).await,
+        "codex" => codex::commands(settings, cwd).await,
+        _ => Ok(json!([])),
     }
 }
 
