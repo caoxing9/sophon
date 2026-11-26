@@ -877,7 +877,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Not connected", "未连接"),
     ("service {}", "服务 {}"),
     ("Run “claude /{}” in a terminal on the computer", "请在电脑的终端里运行“claude /{}”"),
-    ("CLAUDE.md is in the conversation's files", "CLAUDE.md 在对话的文件里"),
+    ("AGENTS.md is in the conversation's files", "AGENTS.md 在对话的文件里"),
     ("Settings are on the home screen's Settings tab", "设置在首页的“设置”标签里"),
     ("Usage is on the home screen's Usage tab", "用量在首页的“用量”标签里"),
     ("Open a workspace to run it in a terminal", "先打开一个工作区，才能在终端里运行"),

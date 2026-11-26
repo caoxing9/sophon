@@ -128,6 +128,32 @@ fn open(path: &str, reveal: bool) {
     }
 }
 
+/// The file a link of a reply points to, when it is a path: absolute
+/// (`/a/b`, `~/a`), percent-escapes read, a line after it (`:12`, `#L12`)
+/// kept as a chip's is. Codex writes the files it names so:
+/// `[report](/Users/me/report.docx)`. A `file://` URL has a scheme, which
+/// the text view opens itself.
+fn file_of_link(url: &str) -> Option<String> {
+    let path = decode(url.trim());
+    // `#L12` (or `#L12C4`, `#L12-L20`): the line, as `:12`.
+    let path = match path.rsplit_once("#L") {
+        Some((file, line)) => {
+            let n: String = line.chars().take_while(char::is_ascii_digit).collect();
+            if n.is_empty() { file.to_owned() } else { format!("{file}:{n}") }
+        }
+        None => path,
+    };
+    is_path(&path).then_some(path)
+}
+
+/// A press on a reply's link: a file's opens as its chip does (⌘: shown in
+/// the Finder); any other is the text view's to open.
+pub(crate) fn press_link(e: &nsh_base::TextViewLinkPressEvent) {
+    if let Some(path) = file_of_link(&e.url) {
+        open(&path, e.modifiers.cmd);
+    }
+}
+
 /// A chip's height: under the line's (24), so a line with one is no
 /// taller than one without.
 const CHIP_H: f32 = 20.0;
@@ -269,6 +295,17 @@ fn decode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_link_to_a_file_is_the_file() {
+        assert_eq!(file_of_link("/Users/me/a.tar.gz").as_deref(), Some("/Users/me/a.tar.gz"));
+        assert_eq!(file_of_link("/Users/me/%E6%8A%A5%E5%91%8A.docx").as_deref(), Some("/Users/me/报告.docx"));
+        assert_eq!(file_of_link("/Users/me/src/a.rs#L12").as_deref(), Some("/Users/me/src/a.rs:12"));
+        assert_eq!(file_of_link("~/notes/a.md").as_deref(), Some("~/notes/a.md"));
+        for not in ["https://example.com/a/b", "file:///Users/me/a.txt", "#anchor", "relative/a", "/single"] {
+            assert_eq!(file_of_link(not), None, "{not}");
+        }
+    }
 
     fn all(_: &str) -> bool {
         true

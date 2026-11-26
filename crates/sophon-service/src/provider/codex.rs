@@ -54,6 +54,8 @@ struct Codex {
     retried: bool,
     /// The images of the turn underway, kept as files while it runs.
     images: Vec<tempfile::NamedTempFile>,
+    /// The skills Codex has where the agent runs, by name: their files.
+    skills: HashMap<String, String>,
 }
 
 pub async fn run(start: Start, mut inbox: UnboundedReceiver<Command>, emit: Emit) {
@@ -76,6 +78,7 @@ pub async fn run(start: Start, mut inbox: UnboundedReceiver<Command>, emit: Emit
         fresh: false,
         retried: false,
         images: Vec::new(),
+        skills: HashMap::new(),
     };
     loop {
         tokio::select! {
@@ -170,7 +173,124 @@ fn rows(item: &Value) -> Vec<Value> {
     }
 }
 
+/// Codex's own commands Sophon offers when `/` is typed: the ones its
+/// app server does here (`compact`, `review`) and the ones Sophon does
+/// with its own screens (`slash::native` in the app). The rest of
+/// Codex's are its terminal's.
+const COMMANDS: [(&str, &str); 8] = [
+    ("compact", "Summarize the conversation to free up context"),
+    ("review", "Review the uncommitted changes, or what follows the command"),
+    ("model", "Choose the model and its reasoning"),
+    ("permissions", "Choose what Codex may do without asking"),
+    ("new", "Start a new conversation"),
+    ("resume", "Open an earlier conversation"),
+    ("status", "Show the model, the mode and the computer"),
+    ("memory", "Edit the project's AGENTS.md"),
+];
+
+/// The skills in an answer to `skills/list`, enabled ones: each as a
+/// command is listed (`name`, `description`, `kind`) with its `path`.
+fn skills_of(result: &Value) -> Vec<Value> {
+    result["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|entry| entry["skills"].as_array().into_iter().flatten())
+        .filter(|skill| skill["enabled"] != false)
+        .filter_map(|skill| {
+            let description = skill["interface"]["shortDescription"]
+                .as_str()
+                .or(skill["shortDescription"].as_str())
+                .or(skill["description"].as_str())
+                .unwrap_or_default();
+            Some(json!({"name":skill["name"].as_str()?,"description":description,
+                "kind":"skill","path":skill["path"].as_str()?}))
+        })
+        .collect()
+}
+
+/// A message that starts with a command: its name and what follows it.
+fn slash(text: &str) -> Option<(&str, &str)> {
+    let rest = text.trim_start().strip_prefix('/')?;
+    let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+    let name = &rest[..end];
+    (!name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_:.".contains(&b)))
+    .then(|| (name, rest[end..].trim()))
+}
+
+/// The commands Codex has in `cwd`: those Sophon does for it and its
+/// skills, asked of an app server started for the question.
+pub async fn commands(settings: &Value, cwd: &str) -> io::Result<Value> {
+    let mut codex = Codex::asking(settings, cwd)?;
+    let asking = async {
+        codex
+            .call(
+                "initialize",
+                json!({"clientInfo":{"name":"sophon","title":"Sophon","version":env!("CARGO_PKG_VERSION")},
+                    "capabilities":null}),
+            )
+            .await?;
+        codex.send(json!({"method":"initialized"})).await?;
+        codex.call("skills/list", json!({"cwds":[cwd]})).await
+    };
+    // Without its skills, the commands Sophon does are still there.
+    let skills = tokio::time::timeout(Duration::from_secs(20), asking)
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .map(|result| skills_of(&result))
+        .unwrap_or_default();
+    let mut list: Vec<Value> = COMMANDS
+        .iter()
+        .map(|(name, description)| json!({"name":name,"description":description}))
+        .collect();
+    list.extend(skills);
+    Ok(json!(list))
+}
+
 impl Codex {
+    /// An app server in `cwd` for a question, with no conversation.
+    fn asking(settings: &Value, cwd: &str) -> io::Result<Self> {
+        let start = Start {
+            family: "codex",
+            cwd: cwd.to_owned(),
+            settings: settings.clone(),
+            session: None,
+            model: None,
+            thinking: None,
+            mode: String::new(),
+            cost: 0.0,
+            env: Vec::new(),
+            plugins: Vec::new(),
+            record: None,
+        };
+        let process = Process::spawn("codex", settings, cwd, &["app-server".to_owned()], &[])?;
+        Ok(Codex {
+            thread: None,
+            start,
+            emit: Box::new(|_| {}),
+            process: Some(process),
+            turn: None,
+            busy: false,
+            stopping: false,
+            restart: false,
+            outcome: Outcome::Completed,
+            next: 0,
+            sent: HashMap::new(),
+            held: Vec::new(),
+            asks: HashMap::new(),
+            streamed: HashSet::new(),
+            spoke: false,
+            fresh: false,
+            retried: false,
+            images: Vec::new(),
+            skills: HashMap::new(),
+        })
+    }
+
     fn item(&mut self, item: Value) {
         self.spoke = false;
         (self.emit)(Event::Item(item));
@@ -325,6 +445,21 @@ impl Codex {
             (self.emit)(Event::Session(thread.clone()));
         }
         self.thread = Some(thread);
+        // The skills a `/name` message may call on; none if Codex cannot say.
+        let cwd = self.start.cwd.clone();
+        if let Ok(Ok(result)) = tokio::time::timeout(
+            Duration::from_secs(10),
+            self.call("skills/list", json!({"cwds":[cwd]})),
+        )
+        .await
+        {
+            self.skills = skills_of(&result)
+                .into_iter()
+                .filter_map(|skill| {
+                    Some((skill["name"].as_str()?.to_owned(), skill["path"].as_str()?.to_owned()))
+                })
+                .collect();
+        }
         Ok(())
     }
 
@@ -400,7 +535,41 @@ impl Codex {
     async fn command(&mut self, command: Command) -> io::Result<()> {
         match command {
             Command::Prompt { text, images, .. } => {
-                let mut input = vec![json!({"type":"text","text":text,"text_elements":[]})];
+                self.open().await?;
+                // Codex's own commands, done by its app server: the
+                // terminal's, which the model would only read as words.
+                match slash(&text) {
+                    Some(("compact", "")) if !self.busy => {
+                        self.begin();
+                        let params = json!({"threadId":self.thread});
+                        return self
+                            .request("thread/compact/start", params, Sent::Turn)
+                            .await
+                            .map(drop);
+                    }
+                    Some(("review", what)) if !self.busy => {
+                        self.begin();
+                        let target = if what.is_empty() {
+                            json!({"type":"uncommittedChanges"})
+                        } else {
+                            json!({"type":"custom","instructions":what})
+                        };
+                        let params = json!({"threadId":self.thread,"target":target});
+                        return self.request("review/start", params, Sent::Turn).await.map(drop);
+                    }
+                    _ => {}
+                }
+                // A skill, called as Codex's terminal calls one: `$name`,
+                // with its file.
+                let skill = slash(&text).and_then(|(name, what)| {
+                    let path = self.skills.get(name)?;
+                    let text = if what.is_empty() { format!("${name}") } else { format!("${name} {what}") };
+                    Some((text, json!({"type":"skill","name":name,"path":path})))
+                });
+                let mut input = match skill {
+                    Some((text, skill)) => vec![json!({"type":"text","text":text,"text_elements":[]}), skill],
+                    None => vec![json!({"type":"text","text":text,"text_elements":[]})],
+                };
                 for image in &images {
                     let (_, extension, data) = super::image(image)?;
                     let mut file = tempfile::Builder::new().suffix(extension).tempfile()?;
@@ -412,7 +581,6 @@ impl Codex {
                     input.push(json!({"type":"localImage","path":file.path()}));
                     self.images.push(file);
                 }
-                self.open().await?;
                 match (self.busy, self.turn.is_some()) {
                     (true, true) => self.steer(json!(input)).await,
                     (true, false) => {
@@ -796,6 +964,12 @@ impl Codex {
                             self.item(json!({"type":"reasoning","text":summary.join("\n\n")}));
                         }
                     }
+                    // A review's findings, as Codex's terminal shows them.
+                    Some("exitedReviewMode") if method == "item/completed" => {
+                        self.fresh = true;
+                        self.reply(item["review"].as_str().unwrap_or_default());
+                    }
+                    Some("enteredReviewMode") => {}
                     Some("contextCompaction") if method == "item/completed" => {
                         self.item(json!({"type":"compaction","status":"completed"}));
                     }
