@@ -7910,6 +7910,10 @@ pub(crate) fn local_models(provider: &str) -> Option<Vec<crate::models::LocalMod
     global::<LocalModels>().with(|m| m.0.get(provider).cloned())
 }
 
+/// The Codex version that fetched Codex's model list on this computer.
+#[derive(Clone, Default)]
+struct CodexCatalogClient(Option<String>);
+
 /// Reads the agents' own model lists again.
 pub(crate) fn load_local_models() {
     let mut map = HashMap::new();
@@ -7919,6 +7923,20 @@ pub(crate) fn load_local_models() {
         }
     }
     global::<LocalModels>().set(LocalModels(map));
+    global::<CodexCatalogClient>().set(CodexCatalogClient(crate::models::read_codex_catalog_client()));
+}
+
+/// (the CLI's version, the list's) when the Codex CLI the service runs is
+/// older than the Codex that fetched its model list (the desktop app's
+/// newer CLI, say): the list's newest models may be refused to it
+/// ("… is not supported when using Codex with a ChatGPT account").
+pub(crate) fn codex_behind_its_models() -> Option<(String, String)> {
+    if !on_this_mac() {
+        return None;
+    }
+    let catalog = global::<CodexCatalogClient>().with(|c| c.0.clone())?;
+    let installed = diagnostic("codex")?.version.as_deref().and_then(crate::agent_update::version_of)?;
+    crate::agent_update::newer(&installed, &catalog).then_some((installed, catalog))
 }
 
 #[cfg(test)]

@@ -123,19 +123,12 @@ fn agent_row(p: Provider, d: Option<Diagnostic>, u: Option<store::AgentUpdate>, 
         body = body.child(text(why).text_size(tx(TEXT_SM)).text_color(DANGER));
     }
     if gateway && native_claude {
-        body = body.child(
-            view()
-                .flex_row()
-                .items_start()
-                .gap(px(6.0))
-                .child(icon(Icon::TriangleAlert, 14.0).text_color(WARNING).mt(px(2.0)))
-                .child(
-                    text(t("Some of its models come through a gateway. Claude Code must run natively, on your own account: use its own models"))
-                        .flex_1()
-                        .text_size(tx(TEXT_SM))
-                        .text_color(WARNING),
-                ),
-        );
+        body = body.child(warning_line(t("Some of its models come through a gateway. Claude Code must run natively, on your own account: use its own models").into()));
+    }
+    if p.id == "codex"
+        && let Some((installed, catalog)) = store::codex_behind_its_models()
+    {
+        body = body.child(warning_line(codex_behind_text(&installed, &catalog)));
     }
     if let Some(cmd) = pending_login(&p, &d, cfg) {
         body = body.child(muted(t("Sign in on that computer:").to_owned())).child(command_box(cmd));
@@ -239,6 +232,22 @@ fn update_line(u: &store::AgentUpdate, newer: Option<&str>) -> Option<View> {
     }
     let latest = newer?;
     Some(row.child(text(tf("Version {} is out", &[latest])).text_size(tx(TEXT_SM)).text_color(ACCENT())))
+}
+
+/// A warning under an agent's name, its triangle at the first line.
+fn warning_line(s: String) -> View {
+    view()
+        .flex_row()
+        .items_start()
+        .gap(px(6.0))
+        .child(icon(Icon::TriangleAlert, 14.0).text_color(WARNING).mt(px(2.0)))
+        .child(text(s).flex_1().text_size(tx(TEXT_SM)).text_color(WARNING))
+}
+
+/// The Codex CLI the service runs is older than the Codex that fetched its
+/// model list ([`store::codex_behind_its_models`]).
+pub(crate) fn codex_behind_text(installed: &str, catalog: &str) -> String {
+    tf("This Codex CLI ({}) is older than the Codex its model list came from ({}): the newest models may be refused until it is updated", &[installed, catalog])
 }
 
 fn muted(s: String) -> nsh_core::element::Text {

@@ -101,6 +101,14 @@ pub(crate) fn parse_codex(text: &str) -> Option<Vec<LocalModel>> {
     (!list.is_empty()).then_some(list)
 }
 
+/// The Codex version that fetched a catalog (its cache's `client_version`):
+/// the backend serves the models a client that new runs, which an older CLI
+/// may be refused.
+pub(crate) fn codex_catalog_client(text: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(text).ok()?;
+    v.get("client_version")?.as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned)
+}
+
 /// `xhigh` as `Xhigh`: a level's label where the catalog gives none.
 fn title(id: &str) -> String {
     let mut s = id.to_owned();
@@ -223,9 +231,28 @@ pub(crate) fn read_local(_provider: &str) -> Option<Vec<LocalModel>> {
     None
 }
 
+/// The Codex version that fetched the catalog Codex reads on this computer.
+#[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+pub(crate) fn read_codex_catalog_client() -> Option<String> {
+    let dir = std::env::var_os("CODEX_HOME").map(std::path::PathBuf::from).or_else(|| Some(std::path::PathBuf::from(std::env::var_os("HOME")?).join(".codex")))?;
+    let config = std::fs::read_to_string(dir.join("config.toml")).unwrap_or_default();
+    codex_catalog_client(&std::fs::read_to_string(codex_catalog_path(&config, &dir)).ok()?)
+}
+
+#[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
+pub(crate) fn read_codex_catalog_client() -> Option<String> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_codex_cache_names_the_version_that_fetched_it() {
+        assert_eq!(codex_catalog_client(r#"{"client_version":"0.171.0","models":[]}"#).as_deref(), Some("0.171.0"));
+        assert_eq!(codex_catalog_client(r#"{"models":[]}"#), None);
+    }
 
     #[test]
     fn claude_code_s_catalog_in_its_order_with_its_main_section_and_levels() {
