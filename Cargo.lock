@@ -1868,7 +1868,7 @@ dependencies = [
 [[package]]
 name = "nsh-base"
 version = "0.4.0"
-source = "git+https://github.com/caoxing9/nsh?rev=604dbf02c3e62a0b4cb40afc848a84b8a36e92bf#604dbf02c3e62a0b4cb40afc848a84b8a36e92bf"
+source = "git+https://github.com/caoxing9/nsh?rev=91d3a5e13ef3c07cfe4dcfa4d1b96a6765496eb2#91d3a5e13ef3c07cfe4dcfa4d1b96a6765496eb2"
 dependencies = [
  "chrono",
  "html5ever",
@@ -1892,7 +1892,7 @@ dependencies = [
 [[package]]
 name = "nsh-core"
 version = "0.4.0"
-source = "git+https://github.com/caoxing9/nsh?rev=604dbf02c3e62a0b4cb40afc848a84b8a36e92bf#604dbf02c3e62a0b4cb40afc848a84b8a36e92bf"
+source = "git+https://github.com/caoxing9/nsh?rev=91d3a5e13ef3c07cfe4dcfa4d1b96a6765496eb2#91d3a5e13ef3c07cfe4dcfa4d1b96a6765496eb2"
 dependencies = [
  "cap-std",
  "crc32fast",
@@ -1928,7 +1928,7 @@ dependencies = [
 [[package]]
 name = "nsh-engine"
 version = "0.4.0"
-source = "git+https://github.com/caoxing9/nsh?rev=604dbf02c3e62a0b4cb40afc848a84b8a36e92bf#604dbf02c3e62a0b4cb40afc848a84b8a36e92bf"
+source = "git+https://github.com/caoxing9/nsh?rev=91d3a5e13ef3c07cfe4dcfa4d1b96a6765496eb2#91d3a5e13ef3c07cfe4dcfa4d1b96a6765496eb2"
 dependencies = [
  "crossbeam-channel",
  "libc",
@@ -1944,7 +1944,7 @@ dependencies = [
 [[package]]
 name = "nsh-macros"
 version = "0.4.0"
-source = "git+https://github.com/caoxing9/nsh?rev=604dbf02c3e62a0b4cb40afc848a84b8a36e92bf#604dbf02c3e62a0b4cb40afc848a84b8a36e92bf"
+source = "git+https://github.com/caoxing9/nsh?rev=91d3a5e13ef3c07cfe4dcfa4d1b96a6765496eb2#91d3a5e13ef3c07cfe4dcfa4d1b96a6765496eb2"
 dependencies = [
  "imagesize 0.15.0",
  "proc-macro2",
@@ -1957,7 +1957,7 @@ dependencies = [
 [[package]]
 name = "nsh-platform-apple"
 version = "0.4.0"
-source = "git+https://github.com/caoxing9/nsh?rev=604dbf02c3e62a0b4cb40afc848a84b8a36e92bf#604dbf02c3e62a0b4cb40afc848a84b8a36e92bf"
+source = "git+https://github.com/caoxing9/nsh?rev=91d3a5e13ef3c07cfe4dcfa4d1b96a6765496eb2#91d3a5e13ef3c07cfe4dcfa4d1b96a6765496eb2"
 dependencies = [
  "block2",
  "dispatch2",
@@ -1974,7 +1974,7 @@ dependencies = [
 [[package]]
 name = "nsh-platform-ios"
 version = "0.4.0"
-source = "git+https://github.com/caoxing9/nsh?rev=604dbf02c3e62a0b4cb40afc848a84b8a36e92bf#604dbf02c3e62a0b4cb40afc848a84b8a36e92bf"
+source = "git+https://github.com/caoxing9/nsh?rev=91d3a5e13ef3c07cfe4dcfa4d1b96a6765496eb2#91d3a5e13ef3c07cfe4dcfa4d1b96a6765496eb2"
 dependencies = [
  "block2",
  "dispatch2",
@@ -1999,7 +1999,7 @@ dependencies = [
 [[package]]
 name = "nsh-platform-linux"
 version = "0.4.0"
-source = "git+https://github.com/caoxing9/nsh?rev=604dbf02c3e62a0b4cb40afc848a84b8a36e92bf#604dbf02c3e62a0b4cb40afc848a84b8a36e92bf"
+source = "git+https://github.com/caoxing9/nsh?rev=91d3a5e13ef3c07cfe4dcfa4d1b96a6765496eb2#91d3a5e13ef3c07cfe4dcfa4d1b96a6765496eb2"
 dependencies = [
  "crossbeam-channel",
  "gstreamer",
@@ -2021,7 +2021,7 @@ dependencies = [
 [[package]]
 name = "nsh-platform-macos"
 version = "0.4.0"
-source = "git+https://github.com/caoxing9/nsh?rev=604dbf02c3e62a0b4cb40afc848a84b8a36e92bf#604dbf02c3e62a0b4cb40afc848a84b8a36e92bf"
+source = "git+https://github.com/caoxing9/nsh?rev=91d3a5e13ef3c07cfe4dcfa4d1b96a6765496eb2#91d3a5e13ef3c07cfe4dcfa4d1b96a6765496eb2"
 dependencies = [
  "block2",
  "crossbeam-channel",
@@ -2048,7 +2048,7 @@ dependencies = [
 [[package]]
 name = "nsh-platform-windows"
 version = "0.4.0"
-source = "git+https://github.com/caoxing9/nsh?rev=604dbf02c3e62a0b4cb40afc848a84b8a36e92bf#604dbf02c3e62a0b4cb40afc848a84b8a36e92bf"
+source = "git+https://github.com/caoxing9/nsh?rev=91d3a5e13ef3c07cfe4dcfa4d1b96a6765496eb2#91d3a5e13ef3c07cfe4dcfa4d1b96a6765496eb2"
 dependencies = [
  "crossbeam-channel",
  "image",
@@ -2077,7 +2077,7 @@ dependencies = [
 [[package]]
 name = "nsh-updater"
 version = "0.4.0"
-source = "git+https://github.com/caoxing9/nsh?rev=604dbf02c3e62a0b4cb40afc848a84b8a36e92bf#604dbf02c3e62a0b4cb40afc848a84b8a36e92bf"
+source = "git+https://github.com/caoxing9/nsh?rev=91d3a5e13ef3c07cfe4dcfa4d1b96a6765496eb2#91d3a5e13ef3c07cfe4dcfa4d1b96a6765496eb2"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
