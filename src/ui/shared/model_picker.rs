@@ -749,8 +749,26 @@ fn footer(live: bool) -> impl IntoElement {
         .bg(column_fill())
         .child(dynamic(move || {
             let features = store::features(live);
+            // Codex older than its model list: what a refused model means.
+            let behind = (store::controls(live).provider == "codex").then(store::codex_behind_its_models).flatten();
             Some(untracked(move || {
                 let mut row = view().flex_row().flex_wrap().items_center().gap(sp(S2));
+                if let Some((installed, catalog)) = &behind {
+                    row = row.child(
+                        view()
+                            .w_full()
+                            .flex_row()
+                            .items_start()
+                            .gap(px(6.0))
+                            .child(icon(Icon::TriangleAlert, 12.0).text_color(WARNING).mt(px(2.0)))
+                            .child(
+                                text(format!("{} {}", crate::ui::shared::agents::codex_behind_text(installed, catalog), t("(Settings → Coding agents)")))
+                                    .flex_1()
+                                    .text_size(tx(TEXT_XS))
+                                    .text_color(WARNING),
+                            ),
+                    );
+                }
                 for f in features {
                     let id = f.id.clone();
                     row = row.child(match f.value.clone() {

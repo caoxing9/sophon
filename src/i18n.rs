@@ -1358,6 +1358,8 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Update failed: {}", "更新失败：{}"),
     ("Run it yourself: {}", "可以自己运行：{}"),
     ("Version {} is out", "有新版本 {}"),
+    ("This Codex CLI ({}) is older than the Codex its model list came from ({}): the newest models may be refused until it is updated", "当前 Codex CLI（{}）比拉取模型列表的 Codex（{}）旧，更新前最新的模型可能用不了"),
+    ("(Settings → Coding agents)", "（设置 → 编程 Agent）"),
     ("Checking…", "检查中…"),
     ("Claude account", "Claude 账号"),
     ("Command copied", "命令已复制"),

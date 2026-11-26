@@ -44,9 +44,10 @@ pub(crate) fn install_of(real: &str) -> Option<Install> {
 }
 
 /// The version in a CLI's own words: `2.1.321 (Claude Code)`, `codex-cli
-/// 0.163.0` give `2.1.321`, `0.163.0`.
+/// 0.163.0` give `2.1.321`, `0.163.0`; a build's suffix is dropped
+/// (`0.171.0-alpha.13.2` gives `0.171.0`).
 pub(crate) fn version_of(text: &str) -> Option<String> {
-    text.split(|c: char| c.is_whitespace() || c == '(' || c == ')' || c == 'v')
+    text.split(|c: char| c.is_whitespace() || c == '(' || c == ')' || c == 'v' || c == '-')
         .find(|w| w.split('.').count() >= 2 && w.split('.').all(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())))
         .map(str::to_owned)
 }
@@ -237,6 +238,7 @@ mod tests {
     fn versions_read_and_compare() {
         assert_eq!(version_of("2.1.321 (Claude Code)").as_deref(), Some("2.1.321"));
         assert_eq!(version_of("codex-cli 0.163.0").as_deref(), Some("0.163.0"));
+        assert_eq!(version_of("codex-cli 0.171.0-alpha.13.2").as_deref(), Some("0.171.0"));
         assert_eq!(version_of("v1.2.3").as_deref(), Some("1.2.3"));
         assert!(newer("0.163.0", "0.166.0"));
         assert!(newer("2.1.321", "2.1.322"));
