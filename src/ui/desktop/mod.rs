@@ -59,8 +59,8 @@ pub(crate) fn shell() -> impl IntoElement {
         .flex_1()
         .p_safe_area()
         .text_color(FG())
-        // Files dragged from Finder: the whole window takes them, for the
-        // composer on screen.
+        // Files dragged from Finder, a chat app or a browser: the whole
+        // window takes them, for the composer on screen.
         .on_file_drag_enter(|| crate::ui::shared::composer::dragging_over(true))
         .on_file_drag_leave(|| crate::ui::shared::composer::dragging_over(false))
         .on_file_drop(|e: &nsh_core::element::FileDropEvent| crate::ui::shared::composer::dropped(&e.uris))
