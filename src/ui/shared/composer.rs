@@ -1433,7 +1433,7 @@ fn pick_files_into(key: String) {
 struct Dictating(bool);
 
 thread_local! {
-    static SPEECH: std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<nsh_core::element::SpeechRecognition>>>> =
+    static SPEECH: std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<nsh_extra::speech::SpeechRecognition>>>> =
         const { std::cell::RefCell::new(None) };
     /// The composer on screen, for the dictation shortcut.
     static MIC_DOC: std::cell::Cell<Option<Doc>> = const { std::cell::Cell::new(None) };
@@ -1580,22 +1580,22 @@ fn dictate(doc: Doc) {
     let spaced = at > 1
         && state.doc().text_between(at - 1, at, Some("\n"), Some(composer_doc::OBJECT)).chars().all(|c| !c.is_whitespace());
     let inserted = std::rc::Rc::new(std::cell::Cell::new(0usize));
-    let mut request = nsh_core::speech::SpeechRequest::default();
+    let mut request = nsh_extra::speech::SpeechRequest::default();
     request.lang = dictation_lang();
-    let speech = std::rc::Rc::new(std::cell::RefCell::new(recognize_speech(request)));
+    let speech = std::rc::Rc::new(std::cell::RefCell::new(nsh_extra::speech::recognize(request)));
     on.update(|d| d.0 = true);
     SPEECH.with_borrow_mut(|s| *s = Some(speech.clone()));
     spawn(async move {
         // Borrowed only while polled, so Stop can reach the session.
         while let Some(ev) = std::future::poll_fn(|cx| speech.borrow_mut().poll_next(cx)).await {
             match ev {
-                nsh_core::speech::SpeechEvent::Result { text, .. } => {
+                nsh_extra::speech::SpeechEvent::Result { text, .. } => {
                     // Chinese runs on without spaces.
                     let text = if spaced && !text.starts_with(|c: char| !c.is_ascii()) { format!(" {text}") } else { text };
                     composer_doc::replace_text(&session, at, at + inserted.get(), &text);
                     inserted.set(text.encode_utf16().count());
                 }
-                nsh_core::speech::SpeechEvent::End { error } => {
+                nsh_extra::speech::SpeechEvent::End { error } => {
                     if let Some(e) = error {
                         store::notify(tf("Dictation stopped: {}", &[&format!("{e:?}")]));
                     }
@@ -1698,16 +1698,55 @@ pub(crate) fn dragging_over(over: bool) {
 /// Files let go anywhere in the window: attached to the composer on screen
 /// (the open conversation's, or the new conversation's).
 pub(crate) fn dropped(uris: &[String]) {
+    dropped_files(uris, &[]);
+}
+
+/// A drop's files: by their addresses (`uris`, Finder's), or as their
+/// contents (`files`: what a drag only carries, a picture out of a chat
+/// app or a browser, or a file it promised and wrote once dropped).
+pub(crate) fn dropped_files(uris: &[String], files: &[nsh_core::picker::PickedFile]) {
     dragging_over(false);
     let key = match (store::screen(), store::tab()) {
         (store::Screen::Workspace(_), store::Tab::Agent(id)) => Some(format!("agent:{id}")),
         (store::Screen::Workspace(_), store::Tab::Draft) | (store::Screen::NewWorkspace, _) => Some("form".to_owned()),
         _ => None,
     };
-    match key.filter(|k| composer_doc::existing(k).is_some()) {
-        Some(key) => attach_uris(&key, uris, false),
-        None => store::notify(t("Open a conversation to attach files to").to_owned()),
+    let Some(key) = key.filter(|k| composer_doc::existing(k).is_some()) else {
+        store::notify(t("Open a conversation to attach files to").to_owned());
+        return;
+    };
+    attach_uris(&key, uris, false);
+    attach_contents(&key, files);
+}
+
+/// Files dropped as their contents: images as images, the rest uploaded.
+fn attach_contents(key: &str, files: &[nsh_core::picker::PickedFile]) {
+    use base64::Engine;
+    for file in files {
+        if file.status != nsh_core::picker::PickedStatus::Read {
+            store::notify(tf("“{}” is too large to attach", &[&file.name]));
+            continue;
+        }
+        let bytes = file.data.bytes();
+        let mime = if file.mime.is_empty() { nsh_core::picker::mime_for_file(&file.name, bytes).to_owned() } else { file.mime.clone() };
+        if mime.starts_with("image/") {
+            insert_images(key, vec![crate::daemon::connection::ImageInput {
+                name: file.name.clone(),
+                mime,
+                data: base64::engine::general_purpose::STANDARD.encode(bytes),
+            }]);
+        } else {
+            insert_file(key, file.name.clone(), mime, bytes.to_vec());
+        }
     }
+}
+
+/// `text` typed into composer `key` at its caret.
+#[cfg(not(target_arch = "wasm32"))]
+fn insert_text(key: &str, text: &str) {
+    let Some(session) = composer_doc::existing(key) else { return };
+    let at = session.state().selection().from();
+    composer_doc::replace_text(&session, at, at, text);
 }
 
 /// Files by their `file:` addresses, pasted (copied in Finder) or dropped
@@ -1763,14 +1802,6 @@ fn attach_uris(key: &str, uris: &[String], pasted: bool) {
             insert_file(key, name, mime, bytes);
         }
     }
-}
-
-/// `text` typed into composer `key` at its caret.
-#[cfg(not(target_arch = "wasm32"))]
-fn insert_text(key: &str, text: &str) {
-    let Some(session) = composer_doc::existing(key) else { return };
-    let at = session.state().selection().from();
-    composer_doc::replace_text(&session, at, at, text);
 }
 
 /// The image on the clipboard, as the JPEG or PNG the copying app offers.

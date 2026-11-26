@@ -218,7 +218,7 @@ fn start_desktop() {
                     }
                     let _ = tx.send(Msg::Installing);
                     let _ = tx.send(match installation.install(&archive) {
-                        Ok(()) => Msg::Ready,
+                        Ok(_) => Msg::Ready,
                         Err(e) => Msg::Failed(e.to_string()),
                     });
                     continue;

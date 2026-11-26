@@ -136,6 +136,40 @@ pub fn App() -> impl IntoElement {
     // (The phone asks in `start_push`, and for Apple's token after.)
     #[cfg(not(target_os = "ios"))]
     let _ = request_notification_permission();
+    // The desktops show the app in a window of its own (window model v2:
+    // the app root renders into the hidden host). Closing it leaves
+    // Sophon running, as a Mac app (⌘W with nothing else to close); the
+    // Dock icon opens it again. Off the desktops its content is the app's
+    // one surface.
+    let open = signal(true);
+    #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
+    nsh_core::element::desktop::on_reopen(move || open.set(true));
+    nsh_core::element::desktop::window()
+        .id("main")
+        .title("Sophon")
+        .default_size(nsh_core::geometry::size(px(1200.0), px(800.0)))
+        .restore_bounds(true)
+        .attributes(main_window_attributes())
+        .open(open)
+        .on_open_change(move |change: &nsh_core::element::desktop::OpenChange| open.set(change.open))
+        .content(window_content)
+}
+
+/// The main window's look: on the desktops no system title bar, the
+/// window controls on the app's own surface (Claude's look).
+fn main_window_attributes() -> nsh_core::desktop::WindowAttributes {
+    let mut attributes = nsh_core::desktop::WindowAttributes::default();
+    if is_desktop() {
+        let mut bar = nsh_core::desktop::TitleBarOptions::default();
+        bar.style = nsh_core::desktop::TitleBarStyle::Hidden;
+        bar.height = Some(px(44.0));
+        attributes.title_bar = Some(bar);
+    }
+    attributes
+}
+
+/// What the main window shows, made each time it opens.
+fn window_content() -> impl IntoElement {
     view()
         .flex_1()
         .bg(move || theme().background)

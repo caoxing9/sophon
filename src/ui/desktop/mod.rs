@@ -18,11 +18,7 @@ mod terminal;
 mod workspace;
 
 use crate::i18n::t;
-use nsh_core::{
-    element::desktop::{set_title_bar, title_bar},
-    desktop::TitleBarStyle,
-    prelude::*,
-};
+use nsh_core::{element::desktop::title_bar, prelude::*};
 
 use crate::store::{self, Screen};
 use crate::ui::{kit::*, shared::{modals, notice}};
@@ -40,9 +36,6 @@ enum Layout {
 pub(crate) fn shell() -> impl IntoElement {
     if is_desktop() {
         shortcuts::bind();
-        // Claude's look: no system bar, the traffic lights sit
-        // on the app's own surface.
-        set_title_bar(TitleBarStyle::Hidden, Some(px(44.0)));
     }
     let layout = computed(|| {
         if window().width >= px(SPLIT_WIDTH) {
@@ -63,7 +56,7 @@ pub(crate) fn shell() -> impl IntoElement {
         // window takes them, for the composer on screen.
         .on_file_drag_enter(|| crate::ui::shared::composer::dragging_over(true))
         .on_file_drag_leave(|| crate::ui::shared::composer::dragging_over(false))
-        .on_file_drop(|e: &nsh_core::element::FileDropEvent| crate::ui::shared::composer::dropped(&e.uris))
+        .on_file_drop(|e: &nsh_core::element::FileDropEvent| crate::ui::shared::composer::dropped_files(&e.uris, &e.files))
         .child(ambient())
         .child(modals::modal_layer())
         .child(dynamic(move || {

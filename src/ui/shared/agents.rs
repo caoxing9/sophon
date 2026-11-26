@@ -594,7 +594,7 @@ fn command_box(cmd: String) -> View {
         .border_color(BORDER())
         .child(text(cmd).flex_1().min_w(px(0.0)).font_family(mono_font).text_size(tx(TEXT_SM)))
         .child(icon_btn(Icon::Copy, Sz::Sm, t("Copy"), move || {
-            set_clipboard(copy.clone());
+            let _ = set_clipboard(copy.clone());
             store::notify(t("Command copied").into());
         }))
 }

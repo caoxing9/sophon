@@ -1267,7 +1267,7 @@ pub(crate) fn set_explorer_tab(tab: ExplorerTab) {
     // asks: the switch, Browse files, the diff count over the composer.
     animate_layout(nsh_core::LayoutAnimation {
         create: None,
-        update: Some(nsh_core::LayoutTransition::new(nsh_core::LayoutCurve::Spring { damping: 0.86 }, 320.0)),
+        update: Some(nsh_core::LayoutTransition::new(nsh_core::LayoutCurve::FittedSpring { damping_ratio: 0.86 }, 320.0)),
         delete: None,
     });
     global::<Explorer>().update(|e| e.tab = tab);
@@ -3071,7 +3071,7 @@ pub(crate) fn copy_prompt_link() {
     let ws = current_workspace().map(|w| w.id);
     match crate::prompt_link::PromptLink::format(&text, ws.as_deref()) {
         Some(link) => {
-            set_clipboard(link);
+            let _ = set_clipboard(link);
             notify(t("Prompt link copied").into());
         }
         None => notify(t("This draft is too long for a link").into()),
@@ -4153,7 +4153,7 @@ pub(crate) fn copy_diagnostics() {
     let home = on_this_mac().then(|| current_space_home().unwrap_or_else(crate::spaces::home_of_first));
     #[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
     let home: Option<std::path::PathBuf> = None;
-    set_clipboard(crate::applog::diagnostics(home.as_deref(), &versions));
+    let _ = set_clipboard(crate::applog::diagnostics(home.as_deref(), &versions));
     notify(t("Diagnostics copied: paste them where you report the problem").into());
 }
 
@@ -7729,7 +7729,7 @@ pub(crate) fn apply(event: Event) {
             global::<PluginsState>().update(|s| s.away = list);
         }
         Event::PluginExported(config) => {
-            set_clipboard(config);
+            let _ = set_clipboard(config);
             notify(crate::i18n::t("Copied. Whoever gets it pastes it under Integrations; it has the secrets in it").to_owned());
         }
         Event::PluginPacked { name, bytes } => save_download(name, bytes),
@@ -7816,7 +7816,7 @@ pub(crate) fn set_terminal_focused(on: bool) {
 pub(crate) fn close_current() {
     if !close_in_window() {
         #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
-        nsh_core::element::desktop::close_window();
+        nsh_core::element::desktop::current_window().close();
     }
 }
 

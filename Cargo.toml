@@ -8,8 +8,10 @@ publish = false
 members = ["crates/nsh-ui", "crates/sophon-service"]
 
 [dependencies]
-nsh-core = { git = "https://github.com/caoxing9/nsh", rev = "6ddc21ad6601e9e1944e5a25ec9772a48549af33" }
-nsh-base = { git = "https://github.com/caoxing9/nsh", rev = "6ddc21ad6601e9e1944e5a25ec9772a48549af33" }
+nsh-core = "0.7.1"
+nsh-base = "0.7.1"
+# Dictation (`speech`), nsh's own module for it.
+nsh-extra = { version = "0.7.1", default-features = false, features = ["speech"] }
 log = "0.4"
 serde_json = "1"
 tokio = { version = "1", default-features = false, features = ["sync", "macros"] }
@@ -26,7 +28,7 @@ nsh-ui = { path = "crates/nsh-ui" }
 # Natively the connection runs on a thread of its own with tokio; in a
 # browser on the page's WebSocket (`daemon::rt`).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-nsh-updater = { git = "https://github.com/caoxing9/nsh", rev = "6ddc21ad6601e9e1944e5a25ec9772a48549af33" }
+nsh-updater = "0.7.1"
 tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net", "fs"] }
 tokio-tungstenite = "0.28"
 if-addrs = "0.13"
@@ -48,7 +50,7 @@ getrandom03 = { package = "getrandom", version = "0.3" }
 uuid = { version = "1", features = ["v4", "rng-getrandom"] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
-nsh-platform-ios = { git = "https://github.com/caoxing9/nsh", rev = "6ddc21ad6601e9e1944e5a25ec9772a48549af33", default-features = false }
+nsh-platform-ios = { version = "0.7.1", default-features = false }
 objc2 = "0.6.5"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSString", "NSObject"] }
 objc2-ui-kit = { version = "0.3.2", default-features = false, features = ["std", "objc2-quartz-core", "UIView", "UIResponder"] }
@@ -56,10 +58,10 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = ["std",
 block2 = "0.6.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-nsh-platform-linux = { git = "https://github.com/caoxing9/nsh", rev = "6ddc21ad6601e9e1944e5a25ec9772a48549af33", default-features = false }
+nsh-platform-linux = { version = "0.7.1", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-nsh-platform-macos = { git = "https://github.com/caoxing9/nsh", rev = "6ddc21ad6601e9e1944e5a25ec9772a48549af33", default-features = false }
+nsh-platform-macos = { version = "0.7.1", default-features = false }
 # The pasteboard's image, for a copied file the app may not read (already in the tree through nsh-platform-macos).
 objc2 = "0.6.5"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSData"] }
@@ -68,4 +70,22 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std"
 block2 = "0.6.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-nsh-platform-windows = { git = "https://github.com/caoxing9/nsh", rev = "6ddc21ad6601e9e1944e5a25ec9772a48549af33", default-features = false }
+nsh-platform-windows = { version = "0.7.1", default-features = false }
+
+# nsh is longbridge's, as published (above); until its fixes Sophon needs
+# are there too, they come from caoxing9/nsh's `sophon-sync`: upstream nsh
+# with them on top. Each one merged upstream leaves it; with none left,
+# this goes.
+#   - macOS: files and pictures dragged out of chat apps (longbridge/nsh#3385)
+#   - macOS: a view hidden with `visibility: hidden` hides its NSView (#3386)
+#   - macOS: input methods read the character before the caret
+#   - iOS: `selectAll` on a selectable view
+[patch.crates-io]
+nsh-core = { git = "https://github.com/caoxing9/nsh", rev = "67631c877474aa2871839f6ce348b8d81e56c49a" }
+nsh-base = { git = "https://github.com/caoxing9/nsh", rev = "67631c877474aa2871839f6ce348b8d81e56c49a" }
+nsh-extra = { git = "https://github.com/caoxing9/nsh", rev = "67631c877474aa2871839f6ce348b8d81e56c49a" }
+nsh-updater = { git = "https://github.com/caoxing9/nsh", rev = "67631c877474aa2871839f6ce348b8d81e56c49a" }
+nsh-platform-ios = { git = "https://github.com/caoxing9/nsh", rev = "67631c877474aa2871839f6ce348b8d81e56c49a" }
+nsh-platform-linux = { git = "https://github.com/caoxing9/nsh", rev = "67631c877474aa2871839f6ce348b8d81e56c49a" }
+nsh-platform-macos = { git = "https://github.com/caoxing9/nsh", rev = "67631c877474aa2871839f6ce348b8d81e56c49a" }
+nsh-platform-windows = { git = "https://github.com/caoxing9/nsh", rev = "67631c877474aa2871839f6ce348b8d81e56c49a" }

@@ -709,7 +709,7 @@ fn head(repo: &str, d: &Detail) -> View {
                 .child(
                     nsh_base::button()
                         .on_press(move || {
-                            set_clipboard(head_branch.clone());
+                            let _ = set_clipboard(head_branch.clone());
                             store::notify(t("Copied").into());
                         })
                         .accessibility_label(t("Copy branch name"))
