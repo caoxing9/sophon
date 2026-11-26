@@ -409,7 +409,7 @@ async fn serve(home: PathBuf) -> Result<(), Error> {
     state::write(
         &home,
         "sophon.pid",
-        &serde_json::to_vec(&json!({"listen":address.to_string(),"pid":std::process::id()}))?,
+        &serde_json::to_vec(&json!({"listen":address.to_string(),"pid":std::process::id(),"version":env!("CARGO_PKG_VERSION")}))?,
     )?;
     // `sophon` for the agents of automations: this program, under the
     // name their prompts are told.
