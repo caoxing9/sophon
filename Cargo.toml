@@ -40,6 +40,9 @@ nsh-shadcn = { path = "crates/nsh-shadcn" }
 nsh-updater = { git = "https://github.com/longbridge/nsh", rev = "311fb08dee34ef6a110efa5f3062475169c75205" }
 tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net", "fs"] }
 tokio-tungstenite = "0.28"
+# Peer to peer to a paired computer (QUIC, hole punching, relayed when it
+# cannot be direct): tried before the relay.
+iroh = "1.5"
 if-addrs = "0.13"
 # Local days for the usage page's sums (already in the tree through nsh-base).
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }

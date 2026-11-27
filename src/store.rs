@@ -2927,10 +2927,14 @@ pub(crate) fn pairing_link(daemon_relay: Option<&str>) -> Option<String> {
     #[cfg(not(target_arch = "wasm32"))]
     let lan = {
         let home = space.as_ref().and_then(|h| crate::spaces::home_of(&h.url)).map(|h| h.to_string_lossy().into_owned());
-        crate::daemon::bridge::info_for(home.as_deref()).map(|b| (b.addr, b.key, b.token))
+        crate::daemon::bridge::info_for(home.as_deref())
     };
+    #[cfg(not(target_arch = "wasm32"))]
+    let p2p = lan.as_ref().and_then(|b| b.p2p.clone());
+    #[cfg(not(target_arch = "wasm32"))]
+    let lan = lan.map(|b| (b.addr, b.key, b.token));
     #[cfg(target_arch = "wasm32")]
-    let lan: Option<(String, [u8; 32], String)> = None;
+    let (lan, p2p): (Option<(String, [u8; 32], String)>, Option<String>) = (None, None);
     if lan.is_none() && relay_link.is_none() {
         return None;
     }
@@ -2939,6 +2943,7 @@ pub(crate) fn pairing_link(daemon_relay: Option<&str>) -> Option<String> {
         lan.as_ref().map(|(a, k, t)| (a.as_str(), k, t.as_str())),
         relay_link,
         name.as_deref(),
+        p2p.as_deref(),
     ))
 }
 
