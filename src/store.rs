@@ -6162,7 +6162,17 @@ pub(crate) fn conversation_context(agent_id: &str) -> Option<String> {
 /// workspace (new-workspace screen).
 pub(crate) fn submit_form() {
     let f = form();
-    if f.busy || f.path.trim().is_empty() || f.provider.is_empty() {
+    if f.busy {
+        return;
+    }
+    // A conversation runs in its project's folder: with none chosen, Return
+    // says so rather than doing nothing.
+    if f.path.trim().is_empty() {
+        notify(t("Choose a project first: the conversation runs in its folder").into());
+        return;
+    }
+    if f.provider.is_empty() {
+        notify(t("Choose an agent first").into());
         return;
     }
     if f.model.as_deref().is_some_and(|m| refuse_model(&f.provider, m)) {

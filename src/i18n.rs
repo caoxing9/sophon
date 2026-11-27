@@ -1400,6 +1400,8 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("{} conversations", "{} 个对话"),
     ("{} folders", "{} 个文件夹"),
     ("{} of {} selected", "已选 {} / {}"),
+    ("Choose a project first: the conversation runs in its folder", "请先选择项目：对话会在项目的文件夹里运行"),
+    ("Choose an agent first", "请先选择 Agent"),
     ("Account", "账号"),
     ("Not reported", "未知"),
     ("A separate work account is fine. Sophon does not manage a pile of {} accounts and never switches between them on its own: switching to get around a plan's limits can get them banned", "多一个工作账号没问题。Sophon 不帮你管理一堆 {} 账号，也从不自动在它们之间切换：为了绕开套餐额度来回切换账号，可能导致账号被封"),

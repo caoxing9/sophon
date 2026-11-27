@@ -187,6 +187,14 @@ test("import shows the projects it found, or that it is looking", async () => {
   expect(app.texts()).toContain("Import projects");
 });
 
+test("Return with no project chosen says to choose one", async () => {
+  const app = await open(".", { width: 1100, height: 760 });
+  await newWorkspace(app);
+  await app.type("id:composer", "hi");
+  await app.keyboard.press("Enter");
+  await app.waitFor("text:Choose a project first: the conversation runs in its folder");
+});
+
 test("opens the usage page from the sidebar", async () => {
   const app = await open(".", { width: 1100, height: 760 });
   // An icon of the foot's row, beside Settings and History.
