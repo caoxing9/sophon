@@ -1,8 +1,8 @@
 {
   "id": "github-pr-watch",
   "name": "GitHub PR 值守",
-  "description": "有人在 GitHub 上把你设为 reviewer 时，替你 review 这个 PR；结论提交在 PR 上，并在飞书通知作者",
-  "version": "0.6.0",
+  "description": "有人在 GitHub 上把你设为 reviewer 时，在飞书告诉对方你在 review，替你 review 这个 PR；结论提交在 PR 上，并在飞书通知作者",
+  "version": "0.7.0",
   "requires": [
     "github",
     "feishu"
