@@ -157,8 +157,10 @@ test("settings lists the agents and adds a provider in steps", async () => {
   await app.press("text:Add and sign in");
   await app.waitFor("text:Continue with ChatGPT");
   expect(app.texts()).toContain("“Codex (Work)” is added. Sign it in: it uses this account until you remove it");
+  // (The list shows it once the service has its settings: CI runs no
+  // service.)
   await app.press("text:Done");
-  await app.waitFor("text:Codex (Work)");
+  await app.waitFor("text:Continue with ChatGPT", { state: "gone" });
 });
 
 test("an Antigravity account asks how it signs in", async () => {
