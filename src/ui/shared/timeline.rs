@@ -130,7 +130,7 @@ pub(crate) fn timeline() -> impl IntoElement {
                 .scrollbar(MOBILE)
                 // At its end, the last row at the bottom, kept there while
                 // the rows measure (nsh pins it): no jumps as they do.
-                .initial_scroll_to_end()
+                .initial_scroll_at_end()
                 .follow_end(px(FOLLOW_END))
                 // How far from its end the list is, for what depends on
                 // its keeping the end in place (`store::set_group_open`).
@@ -765,7 +765,7 @@ fn quote_with_copy(quote: impl IntoElement, words: String) -> View {
                 .transition_opacity()
                 .pointer_events(move || if hover.get() { nsh_core::PointerEvents::Auto } else { nsh_core::PointerEvents::None })
                 .child(icon_btn(Icon::Copy, Sz::Sm, t("Copy quote"), move || {
-                    set_clipboard(words.clone());
+                    let _ = set_clipboard(words.clone());
                     store::notify(t("Copied").into());
                 })),
         )
@@ -1044,7 +1044,9 @@ fn select_in_place(content: View) -> View {
     let area = element_ref();
     let selected_once = signal(false);
     let select = area.clone();
-    // Once its texts are laid out.
+    // Once its texts are laid out. nsh's selectable views do not take
+    // `selectAll` from an app yet (only Sophon's fork of nsh did): until
+    // they do, the message opens ready to select, with nothing selected.
     set_timeout(std::time::Duration::from_millis(120), move || select.command("selectAll", nsh_core::JsonValue::Null));
     view()
         .gap(px(6.0))
@@ -1071,7 +1073,7 @@ fn message_sheet(item: Memo<Option<Item>>, index: Option<usize>) {
     let quoted = words.clone();
     let mut items = vec![
         SheetItem::new(t("Copy"), move || {
-            set_clipboard(words.clone());
+            let _ = set_clipboard(words.clone());
             store::notify(t("Copied").into());
         })
         .icon(Icon::Copy),
@@ -1096,7 +1098,7 @@ fn reply_sheet(body: String, index: Option<usize>) {
     let quoted = body.clone();
     show_sheet(None, vec![
         SheetItem::new(t("Copy"), move || {
-            set_clipboard(body.clone());
+            let _ = set_clipboard(body.clone());
             store::notify(t("Copied").into());
         })
         .icon(Icon::Copy),
@@ -1144,7 +1146,7 @@ fn reply_actions(item: Memo<Option<Item>>, text_of: impl Fn() -> String + Copy +
             Icon::Copy,
             t("Copy message"),
             Box::new(move || {
-                set_clipboard(text_of());
+                let _ = set_clipboard(text_of());
                 store::notify(t("Copied").into());
             }),
         ))
@@ -1229,7 +1231,7 @@ fn user_actions(item: Memo<Option<Item>>) -> View {
                     Icon::Copy,
                     t("Copy message"),
                     Box::new(move || {
-                        set_clipboard(copied.clone());
+                        let _ = set_clipboard(copied.clone());
                         store::notify(t("Copied").into());
                     }),
                 ));

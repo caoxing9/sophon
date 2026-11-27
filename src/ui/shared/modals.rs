@@ -1923,12 +1923,12 @@ fn pair_device() -> View {
                 }
                 let (sophon_link, daemon_link) = (link.clone(), st.url.clone());
                 let mut buttons = view().flex_row().gap(sp(S2)).child(btn(t("Copy link"), Variant::Secondary, Sz::Md, Some(Icon::Copy), move || {
-                    set_clipboard(sophon_link.clone());
+                    let _ = set_clipboard(sophon_link.clone());
                     store::notify(t("Pairing link copied").into());
                 }));
                 if let Some(pl) = daemon_link.filter(|_| st.relay_enabled) {
                     buttons = buttons.child(btn(t("Copy relay link"), Variant::Ghost, Sz::Md, None, move || {
-                        set_clipboard(pl.clone());
+                        let _ = set_clipboard(pl.clone());
                         store::notify(t("Relay pairing link copied").into());
                     }));
                 }

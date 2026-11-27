@@ -158,7 +158,7 @@ pub(crate) fn segmented<T: Clone + PartialEq + 'static>(
                 .on_press(move || {
                     animate_layout(nsh_core::LayoutAnimation {
                         create: None,
-                        update: Some(nsh_core::LayoutTransition::new(nsh_core::LayoutCurve::Spring { damping: 0.86 }, 320.0)),
+                        update: Some(nsh_core::LayoutTransition::new(nsh_core::LayoutCurve::FittedSpring { damping_ratio: 0.86 }, 320.0)),
                         delete: None,
                     });
                     pick(value.clone())
