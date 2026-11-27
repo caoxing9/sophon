@@ -72,6 +72,10 @@ enum Standing {
     Off,
     Checking,
     Ready,
+    Authenticated,
+    Unchecked,
+    UncheckedCreds,
+    Unauthenticated,
     SignedOut,
     Missing,
 }
@@ -84,8 +88,17 @@ impl Standing {
             Standing::Checking
         } else if !p.available() {
             Standing::Missing
-        } else if d.login.as_ref().is_some_and(|l| !l.signed_in) {
-            Standing::SignedOut
+        } else if let Some(l) = &d.login {
+            match l.status.as_deref() {
+                Some("authenticated") => Standing::Authenticated,
+                Some("unknown") if matches!(l.method.as_deref(), Some("gemini-api-key" | "agent-platform")) => {
+                    Standing::UncheckedCreds
+                }
+                Some("unknown") => Standing::Unchecked,
+                Some("unauthenticated") => Standing::Unauthenticated,
+                _ if !l.signed_in => Standing::SignedOut,
+                _ => Standing::Ready,
+            }
         } else {
             Standing::Ready
         }
@@ -96,6 +109,10 @@ impl Standing {
             Standing::Off => t("Disabled"),
             Standing::Checking => t("Checking…"),
             Standing::Ready => t("Ready"),
+            Standing::Authenticated => t("Authenticated"),
+            Standing::Unchecked => t("Installed · Sign-in not checked"),
+            Standing::UncheckedCreds => t("Configured · Not verified yet"),
+            Standing::Unauthenticated => t("Not authenticated"),
             Standing::SignedOut => t("Not signed in"),
             Standing::Missing => t("Unavailable"),
         }
@@ -104,8 +121,9 @@ impl Standing {
     fn color(self) -> AdaptiveColor {
         match self {
             Standing::Off | Standing::Checking => FG_FAINT(),
-            Standing::Ready => SUCCESS,
-            Standing::SignedOut => WARNING,
+            Standing::Unchecked | Standing::UncheckedCreds => FG_MUTED(),
+            Standing::Ready | Standing::Authenticated => SUCCESS,
+            Standing::SignedOut | Standing::Unauthenticated => WARNING,
             Standing::Missing => DANGER,
         }
     }
@@ -169,17 +187,26 @@ fn agent_row(
         title = title.child(badge(t("Through a gateway"), if native_claude { WARNING } else { FG_MUTED() }));
     }
 
+    let model_count = store::offered_models(&p).len();
     // How it stands: the dot, the word, then what it is signed in with,
     // or why it cannot run.
     let mut summary: Vec<String> = Vec::new();
     match standing {
         Standing::Missing => summary.extend(p.error.clone().or(d.error.clone()).or_else(|| Some(t("Not installed, or not found on the service's PATH").into()))),
+        Standing::Unchecked | Standing::UncheckedCreds | Standing::Unauthenticated => {
+            if let Some(m) = d.login.as_ref().and_then(|l| l.method.as_deref()).and_then(method_label) {
+                summary.push(m);
+            }
+            if model_count > 0 {
+                summary.push(tf("{} models", &[&model_count.to_string()]));
+            }
+        }
         _ => {
             if let Some(l) = d.login.as_ref().filter(|l| l.signed_in) {
                 summary.push(login_summary(l));
             }
-            if !p.models.is_empty() {
-                summary.push(tf("{} models", &[&p.models.len().to_string()]));
+            if model_count > 0 {
+                summary.push(tf("{} models", &[&model_count.to_string()]));
             }
         }
     }
@@ -225,7 +252,7 @@ fn agent_row(
         let id = p.id.clone();
         top = top.child(switch(move || on, move |next| store::patch_providers(agents::enable_patch(&id, next))));
     }
-    let details = details(p, d, u, cfg, editable, family, gateway, newer);
+    let cfg_owned = cfg.cloned();
     view()
         .px(sp(S4))
         .py(sp(S4))
@@ -235,22 +262,38 @@ fn agent_row(
         .child(top)
         .child(dynamic(move || {
             let shown = opened.get();
-            let details = details.clone();
-            shown.then(|| untracked(move || details.into_element()))
+            if !shown {
+                return None;
+            }
+            let (p, d, u, cfg, family, newer) = (p.clone(), d.clone(), u.clone(), cfg_owned.clone(), family.clone(), newer.clone());
+            Some(untracked(move || {
+                store::load_local_models();
+                details(p, d, u, cfg.as_ref(), editable, family, gateway, newer).into_element()
+            }))
         }))
+}
+
+/// Human-readable label for a provider's auth method.
+fn method_label(method: &str) -> Option<String> {
+    Some(match method {
+        "claude.ai" => t("Claude account").into(),
+        "chatgpt" => t("ChatGPT account").into(),
+        "api_key" | "apiKey" => t("API key").into(),
+        "oauth-personal" => t("Google account").into(),
+        "oauth-business" => "Gemini Enterprise".into(),
+        "gemini-api-key" => t("Gemini API key").into(),
+        "agent-platform" => "Agent Platform".into(),
+        other if !other.is_empty() => other.to_owned(),
+        _ => return None,
+    })
 }
 
 /// `ChatGPT account · me@x.com · ChatGPT Plus`: what a provider is signed
 /// in with.
 fn login_summary(l: &agents::Login) -> String {
-    let mut parts: Vec<String> = vec![match l.method.as_deref() {
-        Some("claude.ai") => t("Claude account").into(),
-        Some("chatgpt") => t("ChatGPT account").into(),
-        Some("api_key" | "apiKey" | "gemini-api-key" | "agent-platform") => t("API key").into(),
-        Some("oauth-personal" | "oauth-business") => t("Google account").into(),
-        Some(m) => m.to_owned(),
-        None => t("Signed in").into(),
-    }];
+    let mut parts: Vec<String> = vec![
+        l.method.as_deref().and_then(method_label).unwrap_or_else(|| t("Signed in").into()),
+    ];
     parts.extend(l.email.clone());
     parts.extend(l.plan.clone());
     parts.join(" · ")
@@ -289,11 +332,42 @@ fn details(
         v = v.child(line);
     }
 
-    // Signed in: with what. Not: how to.
+    // Signed in: with what (with Sign out for Antigravity OAuth). Not: how to.
     let mut login = view().gap(sp(S2));
     match sign_in_way(&p, &d, cfg, &family) {
         Some(way) => login = login.child(sign_in_block(p.id.clone(), way, editable)),
-        None => login = login.child(login_line(&d).unwrap_or_else(|| muted(t("Not reported").into()))),
+        None => {
+            let can_logout = editable
+                && family == "antigravity"
+                && d.login.as_ref().is_some_and(|l| {
+                    l.signed_in && l.method.as_deref().is_some_and(|m| m.starts_with("oauth"))
+                });
+            let line = login_line(&d).unwrap_or_else(|| muted(t("Not reported").into()));
+            if can_logout {
+                let id = p.id.clone();
+                login = login.child(
+                    view()
+                        .flex_row()
+                        .flex_wrap()
+                        .items_center()
+                        .gap(sp(S2))
+                        .child(line)
+                        .child(
+                            button()
+                                .on_press(move || store::sign_out(&id))
+                                .px(sp(S2))
+                                .h(px(22.0))
+                                .rounded(px(R_MD))
+                                .items_center()
+                                .justify_center()
+                                .hover(|s| s.bg(highlight()))
+                                .child(text(t("Sign out")).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG_MUTED())),
+                        ),
+                );
+            } else {
+                login = login.child(line);
+            }
+        }
     }
     v = v.child(field_row(t("Account"), login));
 
@@ -305,6 +379,14 @@ fn details(
     }
     if let Some(files) = &d.files {
         v = v.child(field_row(t("Config folder"), mono(files.clone())));
+    }
+
+    let has_favorites = {
+        let prefix = format!("{}:", p.id);
+        store::favorite_models().iter().any(|k| k.starts_with(&prefix))
+    };
+    if p.available() || !store::offered_models(&p).is_empty() || has_favorites {
+        v = v.child(models_section(p.clone(), editable));
     }
 
     // Not installed on this Mac (Sophon looked in the usual folders and
@@ -363,6 +445,400 @@ fn mono(s: String) -> nsh_core::element::Text {
     text(s).font_family(mono_font).text_size(tx(TEXT_SM)).text_color(FG())
 }
 
+const MODEL_FILTER_THRESHOLD: usize = 8;
+
+#[derive(Clone)]
+struct ListedModel {
+    id: String,
+    name: String,
+    reported: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ModelGroup {
+    Favorite,
+    Visible,
+    Hidden,
+}
+
+/// The provider's model list with favorite stars, custom ordering (↑/↓),
+/// and per-model picker visibility switches.
+fn models_section(p: Provider, editable: bool) -> View {
+    let filter = signal(String::new());
+    // A row toggled on its own keeps its placement until a bulk toggle or
+    // re-opening the provider row regroups the list.
+    let held_hidden: Signal<std::collections::HashMap<String, bool>> = signal(std::collections::HashMap::new());
+    let show_filter = store::offered_models(&p).len() > MODEL_FILTER_THRESHOLD;
+
+    let mut section = view()
+        .gap(sp(S2))
+        .pt(sp(S3))
+        .mt(sp(S1))
+        .border_t_1()
+        .border_color(BORDER());
+
+    // Header: title, live counts, Reset order, and bulk Show all / Hide all.
+    let p_hdr = p.clone();
+    section = section.child(dynamic(move || {
+        let raw = store::offered_models(&p_hdr);
+        let favs = store::favorite_models();
+        let order = store::model_order(&p_hdr.id);
+        let hidden = store::hidden_models(&p_hdr.id);
+        let pid = p_hdr.id.clone();
+        Some(untracked(move || {
+            let prefix = format!("{pid}:");
+            let is_fav = |id: &str| favs.iter().any(|k| k == &format!("{pid}:{id}"));
+            let unreported_favs = favs
+                .iter()
+                .filter_map(|k| k.strip_prefix(&prefix))
+                .filter(|slug| !raw.iter().any(|m| m.id == *slug))
+                .count();
+            let fav_count = raw.iter().filter(|m| is_fav(&m.id)).count() + unreported_favs;
+            let hidden_count = raw.iter().filter(|m| hidden.iter().any(|h| h == &m.id)).count();
+            let all_hidden = !raw.is_empty() && raw.iter().all(|m| hidden.iter().any(|h| h == &m.id));
+            let all_ids: Vec<String> = raw.iter().map(|m| m.id.clone()).collect();
+
+            let mut stats = vec![tf("{} models", &[&raw.len().to_string()])];
+            if fav_count > 0 {
+                stats.push(tf("{} favorites", &[&fav_count.to_string()]));
+            }
+            if hidden_count > 0 {
+                stats.push(tf("{} hidden", &[&hidden_count.to_string()]));
+            }
+
+            let mut bar = view()
+                .flex_row()
+                .flex_wrap()
+                .items_center()
+                .gap(sp(S2))
+                .child(text(t("Models")).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG()))
+                .child(text(stats.join(" · ")).text_size(tx(TEXT_XS)).text_color(FG_MUTED()))
+                .child(view().flex_1());
+
+            if editable && !order.is_empty() {
+                let pid = pid.clone();
+                bar = bar.child(
+                    button()
+                        .on_press(move || store::set_model_order(&pid, Vec::new()))
+                        .px(sp(S2))
+                        .h(px(24.0))
+                        .rounded(px(R_MD))
+                        .items_center()
+                        .justify_center()
+                        .hover(|s| s.bg(highlight()))
+                        .child(text(t("Reset order")).text_size(tx(TEXT_XS)).text_color(FG_MUTED())),
+                );
+            }
+            if editable && !all_ids.is_empty() {
+                let pid = pid.clone();
+                bar = bar.child(
+                    button()
+                        .on_press(move || {
+                            held_hidden.set(std::collections::HashMap::new());
+                            store::set_models_hidden(&pid, &all_ids, !all_hidden);
+                        })
+                        .px(sp(S2))
+                        .h(px(24.0))
+                        .rounded(px(R_MD))
+                        .items_center()
+                        .justify_center()
+                        .hover(|s| s.bg(highlight()))
+                        .child(
+                            text(if all_hidden { t("Show all") } else { t("Hide all") })
+                                .text_size(tx(TEXT_XS))
+                                .text_color(FG_MUTED()),
+                        ),
+                );
+            }
+            bar.into_element()
+        }))
+    }));
+
+    // Filter bar (kept outside the list's dynamic so typing never drops focus).
+    if show_filter {
+        section = section.child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap(sp(S2))
+                .child(
+                    field()
+                        .w(px(220.0))
+                        .value(move || filter.get())
+                        .on_change(move |v: &str| filter.set(v.to_owned()))
+                        .placeholder(t("Filter models…")),
+                )
+                .child(dynamic(move || {
+                    (!filter.get().is_empty()).then(|| {
+                        untracked(move || {
+                            button()
+                                .on_press(move || filter.set(String::new()))
+                                .accessibility_label(t("Clear"))
+                                .w(px(24.0))
+                                .h(px(24.0))
+                                .rounded(px(R_MD))
+                                .items_center()
+                                .justify_center()
+                                .hover(|s| s.bg(highlight()))
+                                .child(icon(Icon::X, 13.0).text_color(FG_MUTED()))
+                                .into_element()
+                        })
+                    })
+                })),
+        );
+    }
+
+    // Grouped scrollable model rows.
+    section = section.child(dynamic(move || {
+        let raw = store::offered_models(&p);
+        let favs = store::favorite_models();
+        let order = store::model_order(&p.id);
+        let hidden = store::hidden_models(&p.id);
+        let held = held_hidden.get();
+        let needle = filter.get().trim().to_lowercase();
+        let pid = p.id.clone();
+
+        Some(untracked(move || {
+            let prefix = format!("{pid}:");
+            let mut display: Vec<ListedModel> = raw
+                .iter()
+                .map(|m| ListedModel { id: m.id.clone(), name: m.name.clone(), reported: true })
+                .collect();
+            for key in &favs {
+                if let Some(slug) = key.strip_prefix(&prefix)
+                    && !display.iter().any(|m| m.id == slug)
+                {
+                    display.push(ListedModel { id: slug.to_owned(), name: slug.to_owned(), reported: false });
+                }
+            }
+            let is_fav = |id: &str| favs.iter().any(|k| k == &format!("{pid}:{id}"));
+            let is_hidden = |id: &str| hidden.iter().any(|h| h == id);
+            let placed_hidden = |id: &str| held.get(id).copied().unwrap_or_else(|| is_hidden(id));
+
+            store::group_provider_models(&mut display, |m| &m.id, is_fav, placed_hidden, &order);
+
+            let group_of = |m: &ListedModel| -> ModelGroup {
+                if is_fav(&m.id) {
+                    ModelGroup::Favorite
+                } else if m.reported && placed_hidden(&m.id) {
+                    ModelGroup::Hidden
+                } else {
+                    ModelGroup::Visible
+                }
+            };
+            let fav_count = display.iter().filter(|m| group_of(m) == ModelGroup::Favorite).count();
+            let is_filtering = show_filter && !needle.is_empty();
+            let visible: Vec<(usize, ListedModel)> = display
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| {
+                    !is_filtering
+                        || m.name.to_lowercase().contains(&needle)
+                        || m.id.to_lowercase().contains(&needle)
+                })
+                .map(|(idx, m)| (idx, m.clone()))
+                .collect();
+
+            if visible.is_empty() {
+                let empty_msg = if is_filtering {
+                    t("No matching models")
+                } else {
+                    t("No models reported for this provider yet")
+                };
+                return view()
+                    .px(sp(S3))
+                    .py(sp(S2))
+                    .rounded(px(R_LG))
+                    .border_1()
+                    .border_color(BORDER())
+                    .bg(SURFACE0())
+                    .child(text(empty_msg).text_size(tx(TEXT_XS)).text_color(FG_MUTED()))
+                    .into_element();
+            }
+
+            let display_ids: Vec<String> = display.iter().map(|m| m.id.clone()).collect();
+            let mut list = view().p(sp(S1)).gap(px(2.0));
+            let mut prev_group: Option<ModelGroup> = None;
+
+            for (pos, (idx, m)) in visible.iter().enumerate() {
+                let g = group_of(m);
+                let starts_group = prev_group != Some(g);
+                prev_group = Some(g);
+
+                if starts_group {
+                    let heading = match g {
+                        ModelGroup::Favorite if fav_count > 0 => Some(t("Favorites")),
+                        ModelGroup::Visible if fav_count > 0 => Some(t("All")),
+                        ModelGroup::Hidden => Some(t("Hidden from picker")),
+                        _ => None,
+                    };
+                    if let Some(label) = heading {
+                        list = list.child(
+                            view()
+                                .px(sp(S2))
+                                .pt(if pos == 0 { px(4.0) } else { px(10.0) })
+                                .pb(px(2.0))
+                                .child(text(label).text_size(tx(TEXT_XS)).font_weight(FontWeight(500)).text_color(FG_FAINT())),
+                        );
+                    }
+                }
+
+                let m_fav = g == ModelGroup::Favorite;
+                let m_hidden = m.reported && is_hidden(&m.id);
+                let can_move_up = !is_filtering && *idx > 0 && group_of(&display[idx - 1]) == g;
+                let can_move_down = !is_filtering && idx + 1 < display.len() && group_of(&display[idx + 1]) == g;
+
+                let fav_key = format!("{pid}:{}", m.id);
+                let star_btn = view()
+                    .tooltip(tooltip_text(if m_fav { t("Remove from favorites") } else { t("Add to favorites") }))
+                    .child(
+                        button()
+                            .disabled(!editable)
+                            .on_press(move || store::toggle_favorite_model(&fav_key))
+                            .accessibility_label(if m_fav { t("Remove from favorites") } else { t("Add to favorites") })
+                            .w(px(24.0))
+                            .h(px(24.0))
+                            .rounded(px(R_MD))
+                            .items_center()
+                            .justify_center()
+                            .hover(|s| s.bg(highlight()))
+                            .child(if m_fav {
+                                icon(Icon::StarFilled, 13.0).text_color(WARNING).into_element()
+                            } else {
+                                icon(Icon::Star, 13.0).text_color(FG_FAINT()).into_element()
+                            }),
+                    );
+
+                let mut label_col = view()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .flex_row()
+                    .items_baseline()
+                    .gap(sp(S2))
+                    .child(
+                        text(m.name.clone())
+                            .text_size(tx(TEXT_SM))
+                            .text_color(if m_hidden { FG_MUTED() } else { FG() })
+                            .number_of_lines(1)
+                            .flex_shrink(1.0)
+                            .min_w(px(0.0)),
+                    );
+                if m.id != m.name {
+                    label_col = label_col.child(
+                        text(m.id.clone())
+                            .font_family(mono_font)
+                            .text_size(tx(TEXT_XS))
+                            .text_color(FG_FAINT())
+                            .number_of_lines(1)
+                            .flex_shrink(1.0)
+                            .min_w(px(0.0)),
+                    );
+                }
+
+                let mut row = view()
+                    .flex_row()
+                    .items_center()
+                    .gap(sp(S2))
+                    .h(px(34.0))
+                    .px(sp(S2))
+                    .rounded(px(R_MD))
+                    .opacity(if m_hidden { 0.55 } else { 1.0 })
+                    .hover(|s| s.bg(highlight()))
+                    .child(star_btn)
+                    .child(label_col);
+
+                if editable && !m_hidden && !is_filtering {
+                    let up_ids = display_ids.clone();
+                    let up_pid = pid.clone();
+                    let up_idx = *idx;
+                    let up_btn = view()
+                        .tooltip(tooltip_text(t("Move up")))
+                        .child(
+                            button()
+                                .disabled(!can_move_up)
+                                .on_press(move || {
+                                    if up_idx > 0 {
+                                        let mut next = up_ids.clone();
+                                        next.swap(up_idx, up_idx - 1);
+                                        store::set_model_order(&up_pid, next);
+                                    }
+                                })
+                                .accessibility_label(t("Move up"))
+                                .w(px(22.0))
+                                .h(px(22.0))
+                                .rounded(px(R_MD))
+                                .items_center()
+                                .justify_center()
+                                .opacity(if can_move_up { 1.0 } else { 0.25 })
+                                .when(can_move_up, |b| b.hover(|s| s.bg(highlight())))
+                                .child(icon(Icon::ArrowUp, 12.0).text_color(FG_MUTED())),
+                        );
+
+                    let dn_ids = display_ids.clone();
+                    let dn_pid = pid.clone();
+                    let dn_idx = *idx;
+                    let dn_btn = view()
+                        .tooltip(tooltip_text(t("Move down")))
+                        .child(
+                            button()
+                                .disabled(!can_move_down)
+                                .on_press(move || {
+                                    if dn_idx + 1 < dn_ids.len() {
+                                        let mut next = dn_ids.clone();
+                                        next.swap(dn_idx, dn_idx + 1);
+                                        store::set_model_order(&dn_pid, next);
+                                    }
+                                })
+                                .accessibility_label(t("Move down"))
+                                .w(px(22.0))
+                                .h(px(22.0))
+                                .rounded(px(R_MD))
+                                .items_center()
+                                .justify_center()
+                                .opacity(if can_move_down { 1.0 } else { 0.25 })
+                                .when(can_move_down, |b| b.hover(|s| s.bg(highlight())))
+                                .child(icon(Icon::ArrowDown, 12.0).text_color(FG_MUTED())),
+                        );
+
+                    row = row.child(view().flex_row().items_center().gap(px(2.0)).flex_shrink_0().child(up_btn).child(dn_btn));
+                }
+
+                if editable && m.reported {
+                    let sw_pid = pid.clone();
+                    let sw_mid = m.id.clone();
+                    let was_hidden = m_hidden;
+                    row = row.child(
+                        view()
+                            .tooltip(tooltip_text(if m_hidden { t("Hidden from picker") } else { t("Shown in picker") }))
+                            .child(switch(
+                                move || !was_hidden,
+                                move |shown| {
+                                    held_hidden.update(|map| {
+                                        map.entry(sw_mid.clone()).or_insert(was_hidden);
+                                    });
+                                    store::set_model_hidden(&sw_pid, &sw_mid, !shown);
+                                },
+                            )),
+                    );
+                }
+
+                list = list.child(row);
+            }
+
+            view()
+                .rounded(px(R_LG))
+                .border_1()
+                .border_color(BORDER())
+                .bg(SURFACE0())
+                .overflow_hidden()
+                .child(scroll().max_h(px(280.0)).child(list))
+                .into_element()
+        }))
+    }));
+
+    section
+}
+
 /// An instance's name, changed when it is submitted or saved.
 fn name_field(id: String, label: String) -> View {
     let typed = signal(label.clone());
@@ -409,6 +885,7 @@ enum Way {
 pub(crate) enum Brand {
     ChatGpt,
     Google,
+    AntigravityConnect,
 }
 
 /// How `p` signs in, when it says it is not signed in (or, for an
@@ -432,12 +909,19 @@ fn sign_in_way(p: &Provider, d: &Diagnostic, cfg: Option<&Value>, family: &str) 
         "codex" => Some(Way::App(Brand::ChatGpt)),
         "claude" if mine => dir("CLAUDE_CONFIG_DIR").map(|dir| Way::Command(agents::login_command(Base::Claude, &dir))),
         "claude" => d.path.clone().map(|path| Way::Command(format!("'{}' auth login", path.replace('\'', "")))),
+        "gemini" if mine => dir("GEMINI_CLI_HOME").map(|dir| Way::Command(agents::login_command(Base::Gemini, &dir))),
         // In the browser for a Google account; by its key or project
-        // otherwise, which the settings give.
+        // otherwise (offering a Connect button when configured but unchecked).
         "antigravity" => {
             let configured = cfg.and_then(|c| c["providers"][&p.id]["authMethod"].as_str().map(str::to_owned));
             let method = configured.or_else(|| d.login.as_ref().and_then(|l| l.method.clone()));
-            method.is_none_or(|m| m.starts_with("oauth")).then_some(Way::App(Brand::Google))
+            if method.as_deref().is_none_or(|m| m.starts_with("oauth")) {
+                Some(Way::App(Brand::Google))
+            } else if d.login.as_ref().and_then(|l| l.status.as_deref()) == Some("unknown") {
+                Some(Way::App(Brand::AntigravityConnect))
+            } else {
+                None
+            }
         }
         _ => None,
     }
@@ -473,7 +957,8 @@ pub(crate) fn app_sign_in(id: String, brand: Brand) -> View {
     let device = brand == Brand::ChatGpt && !store::on_this_mac();
     let (label, mark) = match brand {
         Brand::ChatGpt => (t("Continue with ChatGPT"), Icon::Codex),
-        Brand::Google => (t("Continue with Google"), Icon::Gemini),
+        Brand::Google => (t("Continue with Google"), Icon::Antigravity),
+        Brand::AntigravityConnect => (t("Connect and load models"), Icon::Antigravity),
     };
     view().gap(sp(S2)).child(dynamic(move || {
         let state = store::sign_in_state(&id);
@@ -496,18 +981,30 @@ pub(crate) fn app_sign_in(id: String, brand: Brand) -> View {
                     .child(row.child(btn(t("Try again"), Variant::Primary, Sz::Sm, Some(mark), start)))
                     .into_element(),
                 Some(SignIn::Starting) => row.child(working(t("Opening the sign-in…"))).child(btn(t("Cancel"), Variant::Ghost, Sz::Sm, None, cancel)).into_element(),
-                Some(SignIn::Waiting { url, code: None, paste }) => {
+                Some(SignIn::Verifying) => row.child(working(t("Verifying sign-in and loading models…"))).child(btn(t("Cancel"), Variant::Ghost, Sz::Sm, None, cancel)).into_element(),
+                Some(SignIn::Waiting { url, code: None, paste, code_login }) => {
+                    let copy_url = url.clone();
+                    let open_row = row
+                        .child(btn(t("Open the page again"), Variant::Outline, Sz::Sm, Some(Icon::ExternalLink), move || {
+                            drop(open_url(url.clone()));
+                        }))
+                        .when(code_login, |r| {
+                            r.child(btn(t("Copy link"), Variant::Ghost, Sz::Sm, Some(Icon::Copy), move || {
+                                let _ = set_clipboard(copy_url.clone());
+                                store::notify(t("Link copied").into());
+                            }))
+                        })
+                        .child(btn(t("Cancel"), Variant::Ghost, Sz::Sm, None, cancel));
                     let mut v = view()
                         .gap(sp(S2))
-                        .child(muted(t("Finish signing in in your browser. Choose the account this provider is for").to_owned()))
-                        .child(
-                            row.child(btn(t("Open the page again"), Variant::Outline, Sz::Sm, Some(Icon::ExternalLink), move || {
-                                drop(open_url(url.clone()));
-                            }))
-                            .child(btn(t("Cancel"), Variant::Ghost, Sz::Sm, None, cancel)),
-                        );
+                        .child(muted(if code_login {
+                            t("Finish signing in in your browser, then paste the code from the Antigravity page (or that page's full URL) here:").to_owned()
+                        } else {
+                            t("Finish signing in in your browser. Choose the account this provider is for").to_owned()
+                        }))
+                        .child(open_row);
                     if paste {
-                        v = v.child(paste_reply(id.clone()));
+                        v = v.child(paste_reply(id.clone(), code_login));
                     }
                     v.into_element()
                 }
@@ -535,11 +1032,9 @@ pub(crate) fn app_sign_in(id: String, brand: Brand) -> View {
     }))
 }
 
-/// Where the address a Google sign-in's page went to is pasted, when the
-/// browser was on another device than the host (its page, after the
-/// sign-in, goes to the host's own address, which that device cannot
-/// reach).
-fn paste_reply(id: String) -> View {
+/// Where either the Antigravity page's code/URL (`code_login`, for
+/// `agy acp --login`) or a remote loopback redirect URL is pasted.
+fn paste_reply(id: String, code_login: bool) -> View {
     let typed = signal(String::new());
     let send = move || {
         let url = typed.get_untracked();
@@ -548,25 +1043,30 @@ fn paste_reply(id: String) -> View {
         }
     };
     let submit = send.clone();
-    view()
-        .gap(sp(S1))
-        .child(muted(t("Signing in on another device? Paste the address its page went to after you signed in:").to_owned()))
-        .child(
-            view()
-                .flex_row()
-                .items_center()
-                .gap(sp(S2))
-                .child(
-                    field()
-                        .flex_1()
-                        .value(move || typed.get())
-                        .on_change(move |v: &str| typed.set(v.to_owned()))
-                        .on_submit(move |_: &str| submit())
-                        .placeholder("http://127.0.0.1:…/?state=…&code=…")
-                        .font_family(mono_font),
-                )
-                .child(btn(t("Send"), Variant::Secondary, Sz::Sm, None, send).disabled(move || typed.with(|t| t.trim().is_empty()))),
-        )
+    let mut v = view().gap(sp(S1));
+    if !code_login {
+        v = v.child(muted(t("Signing in on another device? Paste the address its page went to after you signed in:").to_owned()));
+    }
+    v.child(
+        view()
+            .flex_row()
+            .items_center()
+            .gap(sp(S2))
+            .child(
+                field()
+                    .flex_1()
+                    .value(move || typed.get())
+                    .on_change(move |v: &str| typed.set(v.to_owned()))
+                    .on_submit(move |_: &str| submit())
+                    .placeholder(if code_login {
+                        "Code or https://antigravity.google/oauth-callback?…"
+                    } else {
+                        "http://127.0.0.1:…/?state=…&code=…"
+                    })
+                    .font_family(mono_font),
+            )
+            .child(btn(t("Send"), Variant::Secondary, Sz::Sm, None, send).disabled(move || typed.with(|t| t.trim().is_empty()))),
+    )
 }
 
 /// A newer version, the update under way, or why it failed.
@@ -611,16 +1111,16 @@ fn muted(s: String) -> nsh_core::element::Text {
 fn login_line(d: &Diagnostic) -> Option<nsh_core::element::Text> {
     let l = d.login.as_ref()?;
     if !l.signed_in {
-        return Some(text(t("Not signed in")).text_size(tx(TEXT_SM)).text_color(WARNING));
+        let label = match (l.status.as_deref(), l.method.as_deref().and_then(method_label)) {
+            (Some("unauthenticated"), Some(m)) => format!("{} · {m}", t("Not authenticated")),
+            (Some("unauthenticated"), None) => t("Not authenticated").into(),
+            _ => t("Not signed in").into(),
+        };
+        return Some(text(label).text_size(tx(TEXT_SM)).text_color(WARNING));
     }
-    let mut parts: Vec<String> = vec![match l.method.as_deref() {
-        Some("claude.ai") => t("Claude account").into(),
-        Some("chatgpt") => t("ChatGPT account").into(),
-        Some("api_key" | "apiKey" | "gemini-api-key" | "agent-platform") => t("API key").into(),
-        Some("oauth-personal" | "oauth-business") => t("Google account").into(),
-        Some(m) => m.to_owned(),
-        None => t("Signed in").into(),
-    }];
+    let mut parts: Vec<String> = vec![
+        l.method.as_deref().and_then(method_label).unwrap_or_else(|| t("Signed in").into()),
+    ];
     parts.extend(l.email.clone());
     parts.extend(l.plan.clone());
     if let Some(day) = &l.expires {
@@ -657,6 +1157,7 @@ fn base_label(b: Base) -> &'static str {
         Base::Claude => "Claude Code",
         Base::Codex => "Codex",
         Base::Antigravity => "Antigravity",
+        Base::Gemini => "Gemini CLI",
     }
 }
 
@@ -687,6 +1188,7 @@ impl Kind {
 /// then (an account) signing it in.
 pub(crate) fn add_provider() -> View {
     let kind = signal(Kind::Account(Base::Claude));
+    let show_more = signal(false);
     let step = signal(0usize);
     // An account: its name and folder. An endpoint: its name, base,
     // address, models and key.
@@ -704,10 +1206,18 @@ pub(crate) fn add_provider() -> View {
     // The account added: its id, label and kind (the last step signs it in).
     let added: Signal<Option<(String, String, Base, String)>> = signal(None);
 
-    let slug = move || agents::new_id(&name.get(), "account", &[]);
+    let account_plan = move |b: Base| {
+        agents::account_id_and_dir(
+            b,
+            &name.get(),
+            &store::provider_ids(),
+            store::daemon_config().as_ref(),
+            store::agent_home().as_deref(),
+        )
+    };
     let folder = move |b: Base| {
         let typed = dir.get();
-        if typed.trim().is_empty() { b.default_dir(&slug()) } else { typed }
+        if typed.trim().is_empty() { account_plan(b).1 } else { typed }
     };
     let target = computed(move || match kind.get() {
         Kind::Account(b) => agents::absolute_dir(&folder(b), store::agent_home().as_deref()),
@@ -755,7 +1265,13 @@ pub(crate) fn add_provider() -> View {
             Kind::Account(b) => {
                 let Some(dir) = target.get_untracked() else { return };
                 let n = name.get_untracked();
-                let id = agents::new_id(&n, b.id(), &store::provider_ids());
+                let (id, _) = agents::account_id_and_dir(
+                    b,
+                    &n,
+                    &store::provider_ids(),
+                    store::daemon_config().as_ref(),
+                    store::agent_home().as_deref(),
+                );
                 let label = format!("{} ({})", base_label(b), n.trim());
                 store::patch_providers(match b {
                     Base::Antigravity => agents::agy_patch(
@@ -792,7 +1308,7 @@ pub(crate) fn add_provider() -> View {
         .child(dynamic(move || {
             let at = step.get();
             Some(untracked(move || match at {
-                0 => choose_kind(kind).into_element(),
+                0 => choose_kind(kind, show_more).into_element(),
                 1 => details_step(kind, name, dir, base, url, models, key, target, folder_placeholder(kind, name))
                     .child(agy_details(kind, agy_auth, key, gcp_project, gcp_location))
                     .into_element(),
@@ -873,8 +1389,8 @@ fn kind_card(k: Kind, family: &'static str, label: &'static str, note: &'static 
     let selected = computed(move || kind.get() == k);
     button()
         .on_press(move || kind.set(k))
-        .flex_1()
         .min_w(px(0.0))
+        .min_h(px(62.0))
         .flex_row()
         .items_center()
         .gap(sp(S3))
@@ -891,17 +1407,23 @@ fn kind_card(k: Kind, family: &'static str, label: &'static str, note: &'static 
                 .flex_1()
                 .min_w(px(0.0))
                 .gap(px(2.0))
-                .child(text(t(label)).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)))
-                .child(text(t(note)).text_size(tx(TEXT_XS)).text_color(FG_MUTED())),
+                .child(text(t(label)).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)).number_of_lines(1))
+                .child(text(t(note)).text_size(tx(TEXT_XS)).text_color(FG_MUTED()).number_of_lines(1)),
         )
         .child(dynamic(move || {
             selected.get().then(|| icon(Icon::Check, 14.0).text_color(ACCENT()).into_element())
         }))
 }
 
-fn choose_kind(kind: Signal<Kind>) -> View {
+fn choose_kind(kind: Signal<Kind>, show_more: Signal<bool>) -> View {
+    // Wrap both slots in identical zero-padding flex-1 columns so every card
+    // has the exact same width even on single-card rows.
     fn pair(a: impl IntoElement, b: impl IntoElement) -> View {
-        view().flex_row().gap(sp(S3)).child(a).child(b)
+        view()
+            .flex_row()
+            .gap(sp(S3))
+            .child(view().flex_1().min_w(px(0.0)).child(a))
+            .child(view().flex_1().min_w(px(0.0)).child(b))
     }
     let mut endpoints = vec![];
     for (i, p) in PRESETS.iter().enumerate() {
@@ -921,14 +1443,34 @@ fn choose_kind(kind: Signal<Kind>) -> View {
         ))
         .child(pair(
             kind_card(Kind::Account(Base::Antigravity), "antigravity", "Antigravity", "Google account", kind),
-            view().flex_1(),
+            view(),
         ))
+        .child(dynamic(move || {
+            let expanded = show_more.get();
+            Some(untracked(move || {
+                let toggle = btn(
+                    if expanded { t("Show less") } else { t("Show more") },
+                    Variant::Ghost,
+                    Sz::Sm,
+                    Some(if expanded { Icon::ChevronUp } else { Icon::ChevronDown }),
+                    move || show_more.update(|open| *open = !*open),
+                );
+                let mut block = view().gap(sp(S2)).child(view().flex_row().child(toggle));
+                if expanded {
+                    block = block.child(pair(
+                        kind_card(Kind::Account(Base::Gemini), "gemini", "Gemini CLI", "Gemini CLI account", kind),
+                        view(),
+                    ));
+                }
+                block.into_element()
+            }))
+        }))
         .child(section_label(t("API endpoints")));
     let mut it = endpoints.into_iter();
     while let Some(a) = it.next() {
         list = list.child(match it.next() {
             Some(b) => pair(a, b),
-            None => pair(a, view().flex_1()),
+            None => pair(a, view()),
         });
     }
     list
@@ -938,7 +1480,16 @@ fn choose_kind(kind: Signal<Kind>) -> View {
 /// is typed.
 fn folder_placeholder(kind: Signal<Kind>, name: Signal<String>) -> impl Fn() -> String + 'static {
     move || match kind.get() {
-        Kind::Account(b) => b.default_dir(&agents::new_id(&name.get(), "account", &[])),
+        Kind::Account(b) => {
+            agents::account_id_and_dir(
+                b,
+                &name.get(),
+                &store::provider_ids(),
+                store::daemon_config().as_ref(),
+                store::agent_home().as_deref(),
+            )
+            .1
+        }
         Kind::Endpoint(_) => String::new(),
     }
 }
@@ -1003,7 +1554,7 @@ fn details_step(
                                 .on_change(move |v: &str| url.set(v.to_owned()))
                                 .placeholder(move || match base.get() {
                                     Base::Claude => t("Anthropic-compatible endpoint, e.g. https://example.com/anthropic"),
-                                    Base::Codex | Base::Antigravity => t("OpenAI Responses endpoint, e.g. https://example.com/v1"),
+                                    Base::Codex | Base::Antigravity | Base::Gemini => t("OpenAI Responses endpoint, e.g. https://example.com/v1"),
                                 })
                                 .font_family(mono_font),
                         ))

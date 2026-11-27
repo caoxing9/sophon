@@ -102,13 +102,14 @@ fn rows_of(p: &Provider) -> Vec<Row> {
         .collect()
 }
 
-/// The agent's mark: Claude's and Codex's (OpenAI's) own, a spark for
-/// Gemini and Antigravity, else a glyph.
+/// The agent's mark: Claude's, Codex's (OpenAI's), Antigravity's, or
+/// Gemini's own, else a glyph.
 pub(crate) fn mark(provider: &str, size: f32) -> impl IntoElement {
     match provider {
         "claude" => icon(Icon::Claude, size),
         "codex" => icon(Icon::Codex, size).text_color(FG()),
-        "gemini" | "antigravity" => icon(Icon::Gemini, size).text_color(ACCENT()),
+        "antigravity" => icon(Icon::Antigravity, size),
+        "gemini" => icon(Icon::Gemini, size).text_color(ACCENT()),
         _ => icon(Icon::Cpu, size).text_color(FG_MUTED()),
     }
 }
@@ -196,7 +197,9 @@ pub(crate) fn model_picker(live: bool, current_name: Memo<String>) -> impl IntoE
                 .bg(move || if open.get() { highlight() } else { tint(FG(), 0.0) })
                 .child(dynamic(move || {
                     let p = provider.get();
-                    Some(untracked(move || mark(&p, 16.0).into_element()))
+                    let cfg = store::daemon_config();
+                    let family = crate::daemon::agents::family(&p, cfg.as_ref());
+                    Some(untracked(move || mark(&family, 16.0).into_element()))
                 }))
                 .child(
                     // As the bar's other chips (the project, the mode): the
@@ -435,36 +438,63 @@ fn list(live: bool, open: Signal<bool>, providers: Memo<Vec<Provider>>, tab: Sig
                     }
                 }
             }
-            let rows: Vec<Row> = all
-                .iter()
-                .filter(|p| p.available())
-                .flat_map(rows_of)
-                .filter(|r| {
-                    if !needle.is_empty() {
-                        return r.name.to_lowercase().contains(&needle) || r.model.to_lowercase().contains(&needle) || r.agent.to_lowercase().contains(&needle);
+            let mut provider_had_models = false;
+            let mut rows: Vec<Row> = Vec::new();
+            for p in all.iter().filter(|p| p.available()) {
+                let mut p_rows = rows_of(p);
+                if matches!(&tab, Tab::Agent(id) if id == &p.id) && !p_rows.is_empty() {
+                    provider_had_models = true;
+                }
+                let hidden = store::hidden_models(&p.id);
+                let order = store::model_order(&p.id);
+                let group_favorites = !matches!(tab, Tab::Favorites) && needle.is_empty();
+                store::sort_provider_models(
+                    &mut p_rows,
+                    |r| &r.model,
+                    |id| favs.contains(&format!("{}:{id}", p.id)),
+                    &order,
+                    group_favorites,
+                );
+                for r in p_rows {
+                    let is_current = r.provider == c.provider && c.model.as_deref() == Some(r.model.as_str());
+                    if hidden.iter().any(|h| h == &r.model) && !is_current {
+                        continue;
                     }
-                    match &tab {
-                        Tab::Favorites => favs.contains(&r.key()),
-                        Tab::Agent(id) => &r.provider == id,
+                    let keep = if !needle.is_empty() {
+                        r.name.to_lowercase().contains(&needle) || r.model.to_lowercase().contains(&needle) || r.agent.to_lowercase().contains(&needle)
+                    } else {
+                        match &tab {
+                            Tab::Favorites => favs.contains(&r.key()),
+                            Tab::Agent(id) => &r.provider == id,
+                        }
+                    };
+                    if keep {
+                        rows.push(r);
                     }
-                })
-                .collect();
+                }
+            }
             if rows.is_empty() {
-                let why = if needle.is_empty() && tab == Tab::Favorites { t("No favorites yet") } else { t("No matching models") };
+                let why = if needle.is_empty() && tab == Tab::Favorites {
+                    t("No favorites yet")
+                } else if needle.is_empty() && provider_had_models {
+                    t("All models are hidden in Settings")
+                } else {
+                    t("No matching models")
+                };
                 DIGITS.with_borrow_mut(|d| *d = None);
                 return note(why.into(), String::new());
             }
             let show_agent = !needle.is_empty() || tab == Tab::Favorites;
             // The agent's own models first, then those a gateway serves.
-            let mut rows = rows;
             rows.sort_by_key(|r| r.gateway);
             // A search puts the starred first, as T3's ranking does.
             if !needle.is_empty() {
                 rows.sort_by_key(|r| !favs.contains(&r.key()));
             }
             // Claude: each family's newest, as Claude Code lists them; the
-            // earlier ones folded under "Show more" (the starred stay).
-            let older = if tab == Tab::Agent("claude".into()) && needle.is_empty() {
+            // earlier ones folded under "Show more" (the starred stay, and a
+            // custom order in Settings shows models in that order directly).
+            let older = if tab == Tab::Agent("claude".into()) && needle.is_empty() && store::model_order("claude").is_empty() {
                 let selected = c.model.as_deref().unwrap_or("");
                 match store::local_models("claude") {
                     Some(local) => rows
@@ -562,6 +592,7 @@ fn list(live: bool, open: Signal<bool>, providers: Memo<Vec<Provider>>, tab: Sig
 fn row(live: bool, open: Signal<bool>, r: Row, selected: bool, show_agent: bool, favs: &[String], number: Option<usize>) -> impl IntoElement {
     let starred = favs.contains(&r.key());
     let (picked, key) = (r.clone(), r.key());
+    let family = crate::daemon::agents::family(&r.provider, store::daemon_config().as_ref());
     view()
         .flex_row()
         .items_center()
@@ -581,7 +612,7 @@ fn row(live: bool, open: Signal<bool>, r: Row, selected: bool, show_agent: bool,
                 .items_center()
                 .gap(sp(S2))
                 .pl(sp(S2))
-                .child(mark(&r.provider, 16.0))
+                .child(mark(&family, 16.0))
                 .child(text(r.name.clone()).text_size(tx(TEXT_BASE)).text_color(FG()).number_of_lines(1).flex_shrink(1.0).min_w(px(0.0)))
                 .when(selected, |v| v.child(icon(Icon::Check, 14.0).text_color(FG_MUTED())))
                 .when(r.subscription, |v| {

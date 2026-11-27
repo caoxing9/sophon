@@ -9,6 +9,7 @@ use nsh_core::{element::{ImageSrc, Svg}, prelude::*};
 #[allow(dead_code)]
 pub(crate) enum Icon {
     Activity,
+    Antigravity,
     Archive,
     ArrowDown,
     ArrowLeft,
@@ -157,6 +158,7 @@ fn markup(icon: Icon) -> &'static str {
         Icon::FileText => include_str!("../../../assets/icons/file-text.svg"),
         Icon::Claude => include_str!("../../../assets/icons/claude.svg"),
         Icon::Codex => include_str!("../../../assets/icons/codex.svg"),
+        Icon::Antigravity => include_str!("../../../assets/icons/antigravity.svg"),
         Icon::Gemini => include_str!("../../../assets/icons/gemini.svg"),
         Icon::Star => include_str!("../../../assets/icons/star.svg"),
         Icon::StarFilled => include_str!("../../../assets/icons/star-filled.svg"),

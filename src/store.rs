@@ -1918,6 +1918,14 @@ struct Collapsed(Vec<String>);
 #[derive(Clone, Default)]
 struct FavoriteModels(Vec<String>);
 
+/// User-chosen order of model ids per provider (`provider_id -> [model_id, ...]`).
+#[derive(Clone, Default)]
+struct ProviderModelOrder(std::collections::HashMap<String, Vec<String>>);
+
+/// Models hidden from the model picker per provider (`provider_id -> [model_id, ...]`).
+#[derive(Clone, Default)]
+struct HiddenModels(std::collections::HashMap<String, Vec<String>>);
+
 /// What a new conversation starts with: an agent, its model and (when the
 /// model has levels) how hard it thinks. `None`: the one used last, else
 /// the agent's own default.
@@ -2045,6 +2053,102 @@ pub(crate) fn toggle_favorite_model(key: &str) {
         }
     });
     save_prefs();
+}
+
+pub(crate) fn model_order(provider: &str) -> Vec<String> {
+    global::<ProviderModelOrder>().with(|m| m.0.get(provider).cloned().unwrap_or_default())
+}
+
+pub(crate) fn set_model_order(provider: &str, order: Vec<String>) {
+    global::<ProviderModelOrder>().update(|m| {
+        if order.is_empty() {
+            m.0.remove(provider);
+        } else {
+            m.0.insert(provider.to_owned(), order);
+        }
+    });
+    save_prefs();
+}
+
+pub(crate) fn hidden_models(provider: &str) -> Vec<String> {
+    global::<HiddenModels>().with(|m| m.0.get(provider).cloned().unwrap_or_default())
+}
+
+pub(crate) fn set_model_hidden(provider: &str, model: &str, hidden: bool) {
+    global::<HiddenModels>().update(|m| {
+        let entry = m.0.entry(provider.to_owned()).or_default();
+        if hidden {
+            if !entry.iter().any(|x| x == model) {
+                entry.push(model.to_owned());
+            }
+        } else {
+            entry.retain(|x| x != model);
+        }
+        if entry.is_empty() {
+            m.0.remove(provider);
+        }
+    });
+    save_prefs();
+}
+
+pub(crate) fn set_models_hidden(provider: &str, models: &[String], hidden: bool) {
+    global::<HiddenModels>().update(|m| {
+        let entry = m.0.entry(provider.to_owned()).or_default();
+        if hidden {
+            for model in models {
+                if !entry.iter().any(|x| x == model) {
+                    entry.push(model.clone());
+                }
+            }
+        } else {
+            entry.retain(|x| !models.iter().any(|model| model == x));
+        }
+        if entry.is_empty() {
+            m.0.remove(provider);
+        }
+    });
+    save_prefs();
+}
+
+/// Orders a provider's models: favorites first (when `group_favorites` is
+/// true), then explicit `model_order` rank, then original relative order.
+pub(crate) fn sort_provider_models<T>(
+    items: &mut [T],
+    id_of: impl Fn(&T) -> &str,
+    is_favorite: impl Fn(&str) -> bool,
+    model_order: &[String],
+    group_favorites: bool,
+) {
+    let rank = |id: &str| model_order.iter().position(|x| x == id).unwrap_or(usize::MAX);
+    items.sort_by_key(|item| {
+        let id = id_of(item);
+        let fav = if group_favorites && is_favorite(id) { 0u8 } else { 1u8 };
+        (fav, rank(id))
+    });
+}
+
+/// Groups a provider's models for the Settings list: favorites, then visible
+/// non-favorites, then hidden non-favorites, each ordered by `model_order`
+/// then original order.
+pub(crate) fn group_provider_models<T>(
+    items: &mut [T],
+    id_of: impl Fn(&T) -> &str,
+    is_favorite: impl Fn(&str) -> bool,
+    is_hidden: impl Fn(&str) -> bool,
+    model_order: &[String],
+) {
+    let rank = |id: &str| model_order.iter().position(|x| x == id).unwrap_or(usize::MAX);
+    items.sort_by_key(|item| {
+        let id = id_of(item);
+        let group = if is_favorite(id) {
+            0u8
+        } else if !is_hidden(id) {
+            1u8
+        } else {
+            2u8
+        };
+        (group, rank(id))
+    });
 }
 
 pub(crate) fn is_collapsed(project_id: &str) -> bool {
@@ -3426,6 +3530,8 @@ fn save_prefs() {
         "lastAgent": global::<LastOpen>().with_untracked(|l| l.agent.clone()),
         "collapsedProjects": global::<Collapsed>().with_untracked(|c| c.0.clone()),
         "favoriteModels": global::<FavoriteModels>().with_untracked(|f| f.0.clone()),
+        "providerModelOrder": global::<ProviderModelOrder>().with_untracked(|m| m.0.clone()),
+        "hiddenModels": global::<HiddenModels>().with_untracked(|m| m.0.clone()),
         "defaultModel": global::<DefaultModelPref>().with_untracked(|d| d.0.as_ref().map(|c| serde_json::json!({
             "provider": c.provider, "model": c.model, "thinking": c.thinking,
         }))),
@@ -3635,6 +3741,26 @@ pub(crate) fn load_prefs() {
     global::<Collapsed>().set(Collapsed(strings("collapsedProjects")));
     global::<KeptRuns>().set(KeptRuns(strings("keptRuns")));
     global::<FavoriteModels>().set(FavoriteModels(strings("favoriteModels")));
+    let string_map = |k: &str| -> std::collections::HashMap<String, Vec<String>> {
+        v.get(k)
+            .and_then(serde_json::Value::as_object)
+            .map(|obj| {
+                obj.iter()
+                    .filter_map(|(pid, val)| {
+                        let items: Vec<String> = val
+                            .as_array()?
+                            .iter()
+                            .filter_map(|x| x.as_str().map(str::to_owned))
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                        (!items.is_empty()).then(|| (pid.clone(), items))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    global::<ProviderModelOrder>().set(ProviderModelOrder(string_map("providerModelOrder")));
+    global::<HiddenModels>().set(HiddenModels(string_map("hiddenModels")));
     global::<DefaultModelPref>().set(DefaultModelPref(v.get("defaultModel").and_then(|d| {
         let field = |k: &str| d.get(k).and_then(serde_json::Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned);
         Some(DefaultModel { provider: field("provider")?, model: field("model")?, thinking: field("thinking") })
@@ -5429,9 +5555,11 @@ pub(crate) enum SignIn {
     /// Asked for; no page yet.
     Starting,
     /// Waiting for the person on the page `url`, with the `code` to type
-    /// there for a sign-in by code; `paste`: the address the page goes to
-    /// can be pasted back from another device.
-    Waiting { url: String, code: Option<String>, paste: bool },
+    /// there for a device-code sign-in; `paste`: a reply can be pasted back;
+    /// `code_login`: the Antigravity page shows a code to paste back.
+    Waiting { url: String, code: Option<String>, paste: bool, code_login: bool },
+    /// Code/callback received; verifying access and loading models.
+    Verifying,
     /// Signed in.
     Done,
     Failed(String),
@@ -5475,6 +5603,12 @@ pub(crate) fn clear_sign_in(provider: &str) {
     global::<SignIns>().update(|s| {
         s.0.remove(provider);
     });
+}
+
+/// Signs `provider` out through its CLI's native logout.
+pub(crate) fn sign_out(provider: &str) {
+    clear_sign_in(provider);
+    send(Command::ProviderLogout(provider.to_owned()));
 }
 
 /// Updates the CLI at `path` the way it was installed, then asks the
@@ -7761,13 +7895,18 @@ pub(crate) fn apply(event: Event) {
                 return;
             }
             let state = match step {
-                crate::daemon::LoginStep::Started { url, code, paste } => {
-                    // The page the CLI waits for on the host opens here.
+                crate::daemon::LoginStep::Started { url, code, paste, code_login } => {
+                    // The page the CLI waits for opens in this computer's browser.
                     if code.is_none() && !url.is_empty() && on_this_mac() {
                         drop(open_url(url.clone()));
                     }
-                    SignIn::Waiting { url, code, paste }
+                    if url.is_empty() {
+                        SignIn::Verifying
+                    } else {
+                        SignIn::Waiting { url, code, paste, code_login }
+                    }
                 }
+                crate::daemon::LoginStep::Verifying => SignIn::Verifying,
                 crate::daemon::LoginStep::Ended(Ok(())) => SignIn::Done,
                 crate::daemon::LoginStep::Ended(Err(error)) => SignIn::Failed(error),
             };
@@ -7779,8 +7918,16 @@ pub(crate) fn apply(event: Event) {
                 refresh_agents();
             }
         }
+        Event::ProviderLoggedOut(provider) => {
+            clear_sign_in(&provider);
+            refresh_agents();
+            notify(t("Signed out").into());
+        }
         Event::Diagnostic { provider, text } => {
             let d = crate::daemon::agents::parse_diagnostic(&text);
+            if d.login.as_ref().is_some_and(|l| l.signed_in) && sign_in_state(&provider) == Some(SignIn::Done) {
+                clear_sign_in(&provider);
+            }
             if let Some(path) = d.path.clone().filter(|_| d.version.is_some()) {
                 check_agent_update(path);
             }
@@ -8102,6 +8249,20 @@ mod default_model_tests {
         // And the service's models after them.
         let names: Vec<_> = offered(&list[0]).into_iter().map(|m| m.name).collect();
         assert_eq!(names, ["Fable 5.2", "Opus 5.5", "Haiku 5.5"]);
+    }
+
+    #[test]
+    fn provider_models_sort_and_group_by_preferences() {
+        let mut items = vec!["a", "b", "c", "d", "e"];
+        let order = vec!["d".to_owned(), "b".to_owned(), "c".to_owned()];
+        super::sort_provider_models(&mut items, |s| s, |s| s == "c" || s == "e", &order, true);
+        // Favorites first (c before e because c is ranked in model_order), then d, b, then unranked a.
+        assert_eq!(items, ["c", "e", "d", "b", "a"]);
+
+        let mut grouped = vec!["a", "b", "c", "d", "e"];
+        super::group_provider_models(&mut grouped, |s| s, |s| s == "e", |s| s == "b" || s == "a", &order);
+        // Favorites: [e]; visible: [d, c]; hidden: [b, a] (b ranked before a).
+        assert_eq!(grouped, ["e", "d", "c", "b", "a"]);
     }
 }
 

@@ -934,8 +934,11 @@ struct Login {
     outcome: tokio::sync::watch::Receiver<Option<Result<(), String>>>,
     /// Ends it.
     cancel: Option<tokio::sync::oneshot::Sender<()>>,
-    /// Antigravity's: where Google's reply goes back to the CLI.
+    /// Antigravity's: where Google's reply goes back to the CLI (either
+    /// `--login` code paste or loopback redirect).
     pending: Option<provider::antigravity::Pending>,
+    /// Sends a validated code/URL to `agy acp --login`'s stdin (used once).
+    submit: Option<UnboundedSender<String>>,
 }
 
 thread_local! {
@@ -986,40 +989,63 @@ pub async fn slow(shared: &Shared, request: &Value) -> Option<Result<Value, Stri
             let (settings, family) = provider_of(name)?;
             cancel_login(name);
             let device = request["device"].as_bool().unwrap_or(false);
-            // Codex's sign-in to ChatGPT, or Antigravity's to Google (whose
-            // reply, from another device, is pasted: `.callback`).
-            let (started, pending, signing): (Value, _, std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>>>>) = match family {
+            // Codex's sign-in to ChatGPT, or Antigravity's to Google (either
+            // `agy acp --login` code paste or loopback `.callback`).
+            let (started, pending, submit, signing): (
+                Value,
+                _,
+                Option<UnboundedSender<String>>,
+                std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>>>>,
+            ) = match family {
                 Some("codex") => {
                     let (started, signing) = provider::codex::login(&settings, device)
                         .await
                         .map_err(|error| error.to_string())?;
-                    (started, None, Box::pin(signing))
+                    (started, None, None, Box::pin(signing))
                 }
                 Some("antigravity") => {
-                    let (started, pending, signing) = provider::antigravity::login(&settings)
-                        .await
-                        .map_err(|error| error.to_string())?;
-                    (started, pending, Box::pin(signing))
+                    let (started, pending, submit, signing) =
+                        provider::antigravity::login(&settings)
+                            .await
+                            .map_err(|error| error.to_string())?;
+                    (started, pending, submit, signing)
                 }
                 _ => return Err(format!("{name} does not sign in from here")),
             };
             let (done, outcome) = tokio::sync::watch::channel(None);
             let (cancel, canceled) = tokio::sync::oneshot::channel::<()>();
             let pasted = pending.is_some();
+            let code_login = matches!(pending, Some(provider::antigravity::Pending::Code { .. }));
             LOGINS.with_borrow_mut(|logins| {
-                logins.insert(name.to_owned(), Login { outcome, cancel: Some(cancel), pending })
+                logins.insert(
+                    name.to_owned(),
+                    Login {
+                        outcome,
+                        cancel: Some(cancel),
+                        pending,
+                        submit,
+                    },
+                )
             });
+            let shared_done = shared.clone();
             tokio::task::spawn_local(async move {
                 let ended = tokio::select! {
                     ended = signing => ended,
                     _ = canceled => Err("Canceled".to_owned()),
                     _ = tokio::time::sleep(LOGIN_WAIT) => Err("The sign-in took too long".to_owned()),
                 };
+                if ended.is_ok()
+                    && let Ok(config) = crate::config::read(&shared_done.borrow().home)
+                {
+                    shared_done
+                        .borrow()
+                        .publish("providers_snapshot_update", provider::snapshot(&config));
+                }
                 let _ = done.send(Some(ended));
             });
             Ok(reply(json!({"provider":name,"authUrl":started["authUrl"],
                 "verificationUrl":started["verificationUrl"],"userCode":started["userCode"],
-                "pasteReply":pasted})))
+                "pasteReply":pasted,"codeLogin":code_login})))
         }
         .await,
         "provider.login.wait.request" => async {
@@ -1035,8 +1061,8 @@ pub async fn slow(shared: &Shared, request: &Value) -> Option<Result<Value, Stri
             Ok(reply(json!({"provider":name,"success":ended.is_ok(),"error":ended.err()})))
         }
         .await,
-        // The address a Google sign-in's page went to, pasted from another
-        // device than the host: handed to the CLI waiting for it there.
+        // Either the code/URL pasted for `agy acp --login`, or the loopback
+        // redirect URL pasted from another device for `oauth-business`.
         "provider.login.callback.request" => async {
             let name = text(request, "provider")?;
             let pasted = text(request, "url")?;
@@ -1044,13 +1070,55 @@ pub async fn slow(shared: &Shared, request: &Value) -> Option<Result<Value, Stri
                 .with_borrow(|logins| logins.get(name).and_then(|login| login.pending.clone()))
                 .ok_or("No sign-in under way")?;
             let answer = provider::antigravity::reply_for(&pending, pasted)?;
-            provider::antigravity::forward(&answer).await?;
+            match pending {
+                provider::antigravity::Pending::Code { .. } => {
+                    let submit = LOGINS
+                        .with_borrow_mut(|logins| {
+                            logins.get_mut(name).and_then(|login| login.submit.take())
+                        })
+                        .ok_or("The sign-in response was already sent")?;
+                    submit
+                        .send(answer)
+                        .map_err(|_| "Antigravity is no longer waiting for this sign-in".to_owned())?;
+                }
+                provider::antigravity::Pending::Loopback { .. } => {
+                    provider::antigravity::forward(&answer).await?;
+                }
+            }
             Ok(reply(json!({"provider":name})))
         }
         .await,
         "provider.login.cancel.request" => async {
             let name = text(request, "provider")?;
             cancel_login(name);
+            Ok(reply(json!({"provider":name})))
+        }
+        .await,
+        "provider.logout.request" => async {
+            let name = text(request, "provider")?;
+            let (settings, family) = provider_of(name)?;
+            cancel_login(name);
+            {
+                let mut host = shared.borrow_mut();
+                let owned: HashSet<String> = host
+                    .state
+                    .agents
+                    .iter()
+                    .filter(|(_, record)| record["provider"].as_str() == Some(name))
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                host.sessions.retain(|agent, _| !owned.contains(agent));
+            }
+            tokio::task::yield_now().await;
+            match family {
+                Some("antigravity") => provider::antigravity::logout(&settings).await?,
+                _ => return Err(format!("{name} does not sign out from here")),
+            }
+            if let Ok(config) = crate::config::read(&shared.borrow().home) {
+                shared
+                    .borrow()
+                    .publish("providers_snapshot_update", provider::snapshot(&config));
+            }
             Ok(reply(json!({"provider":name})))
         }
         .await,

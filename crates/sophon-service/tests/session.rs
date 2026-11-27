@@ -3530,7 +3530,7 @@ say() { printf '%s\n' "$1"; }
 note() { printf '%s\n' "$1" >> agy-calls; }
 update() { say "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"agy-1\",\"update\":$1}}"; }
 note "args $*"
-note "env FS=$AGY_ACP_FORCE_FILE_STORAGE SSH=${SSH_CONNECTION:-none} KEY=${GEMINI_API_KEY:-none} HOME=$GEMINI_HOME BROWSER=${BROWSER:-} TMP=$TMPDIR"
+note "env FS=$AGY_ACP_FORCE_FILE_STORAGE UPD=${AGY_CLI_DISABLE_AUTO_UPDATE:-none} SSH=${SSH_CONNECTION:-none} KEY=${GEMINI_API_KEY:-none} HOME=$GEMINI_HOME BROWSER=${BROWSER:-} TMP=$TMPDIR"
 version=$(cat agy-version 2>/dev/null || echo 1.5.14)
 opened='{"sessionId":"agy-1","modes":{"availableModes":[{"id":"default","name":"Default"},{"id":"plan","name":"Plan"}],"currentModeId":"default"},"configOptions":[{"id":"model","category":"model","type":"select","currentValue":"gemini-3-pro","options":[{"value":"gemini-3-pro","name":"Gemini 3 Pro"},{"value":"claude-sonnet","name":"Claude Sonnet"}]}]}'
 turns=0
@@ -3547,13 +3547,13 @@ while IFS= read -r line; do
             say "{\"jsonrpc\":\"2.0\",\"id\":$prompt,\"result\":{\"stopReason\":\"end_turn\"}}" ;;
         *'"method":"initialize"'*)
             note "initialize $line"
-            say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocolVersion\":1,\"agentInfo\":{\"name\":\"Antigravity ACP Server\",\"version\":\"$version\"},\"authMethods\":[{\"id\":\"oauth-personal\",\"name\":\"Google\"}],\"agentCapabilities\":{\"loadSession\":true,\"sessionCapabilities\":{\"resume\":{}}}}}" ;;
+            say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocolVersion\":1,\"agentInfo\":{\"name\":\"Antigravity ACP Server\",\"version\":\"$version\"},\"authMethods\":[{\"id\":\"oauth-personal\",\"name\":\"Google\"}],\"agentCapabilities\":{\"loadSession\":true,\"auth\":{\"logout\":{}},\"sessionCapabilities\":{\"resume\":{}}}}}" ;;
         *'"method":"authenticate"'*)
             note "authenticate $(printf '%s' "$line" | sed -n 's/.*"methodId":"\([a-z-]*\)".*/\1/p')"
-            if [ -f "$GEMINI_HOME/antigravity-acp/acp_token.json" ]; then
+            if [ -f "$GEMINI_HOME/antigravity-acp/antigravity-oauth-token" ] || [ -f "$GEMINI_HOME/antigravity-acp/acp_token.json" ]; then
                 say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{}}"
             else
-                say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"error\":{\"code\":-32000,\"message\":\"Authentication required\"}}"
+                say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"error\":{\"code\":-32603,\"message\":\"No browser is available here (this is a remote (SSH) session)\"}}"
             fi ;;
         *'"method":"session/new"'*)
             note "new"
@@ -3706,28 +3706,43 @@ async fn codex_signs_in_by_its_own_and_says_with_which_account() {
     assert_eq!(refused["type"], "rpc_error", "{refused}");
 }
 
-/// An `agy` that signs in as Antigravity does: `authenticate` without its
-/// credentials file starts Google's sign-in, its link said on its output
-/// (or given to `$BROWSER` when `by-browser` is beside its folder), and
-/// waits on this host's loopback (`agy-port`) for the page's reply; the
-/// reply kept (`callback.txt`), it is signed in. A session it opens offers
-/// two models.
+/// An `agy` that signs in as Antigravity 1.5.x does:
+/// - `acp ... --login` (for `oauth-personal`, with `SSH_CONNECTION` set and
+///   `DISPLAY`/`WAYLAND_DISPLAY` unset): prints Google's code-login link,
+///   reads the code from stdin, and writes `antigravity-oauth-token`.
+/// - `acp ...` (ACP server): supports `initialize`, `authenticate` (for
+///   `oauth-business` runs loopback OAuth, for `oauth-personal` checks
+///   `antigravity-oauth-token`), `session/new`, and `logout`.
 const AGY_SIGN_IN: &str = r#"#!/bin/sh
 say() { printf '%s\n' "$1"; }
 D="$GEMINI_HOME/.."
+case " $* " in
+    *" --login "*)
+        printf 'login SSH=%s DISPLAY=%s UPD=%s\n' "${SSH_CONNECTION:-none}" "${DISPLAY:-none}" "${AGY_CLI_DISABLE_AUTO_UPDATE:-none}" >> "$D/agy-login.log"
+        say "Open this link in a browser to log in with Google:"
+        say ""
+        say "  https://accounts.google.com/o/oauth2/auth?access_type=offline&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&state=code-s1"
+        IFS= read -r code || exit 1
+        printf '%s' "$code" > "$D/code.txt"
+        echo '{}' > "$GEMINI_HOME/antigravity-acp/antigravity-oauth-token"
+        exit 0 ;;
+esac
 while IFS= read -r line; do
     id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
     case "$line" in
         *'"method":"initialize"'*)
-            say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocolVersion\":1,\"agentInfo\":{\"name\":\"Antigravity ACP Server\",\"version\":\"1.5.14\"}}}" ;;
+            say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocolVersion\":1,\"agentInfo\":{\"name\":\"Antigravity ACP Server\",\"version\":\"1.5.14\"},\"agentCapabilities\":{\"auth\":{\"logout\":{}}}}}" ;;
+        *'"method":"logout"'*)
+            rm -f "$GEMINI_HOME/antigravity-acp/antigravity-oauth-token" "$GEMINI_HOME/antigravity-acp/acp_token.json"
+            say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{}}" ;;
         *'"method":"authenticate"'*)
-            if [ -f "$GEMINI_HOME/antigravity-acp/acp_token.json" ]; then
+            if [ -f "$GEMINI_HOME/antigravity-acp/antigravity-oauth-token" ] || [ -f "$GEMINI_HOME/antigravity-acp/acp_token.json" ]; then
                 say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{}}"
             else
                 PORT=$(cat "$D/agy-port")
                 URL="https://accounts.google.com/o/oauth2/v2/auth?response_type=code&state=s1&redirect_uri=http%3A%2F%2F127.0.0.1%3A$PORT%2F"
                 rm -f "$D/listening"
-                ( python3 "$D/loopback.py" "$PORT" "$D/callback.txt" "$D/listening" < /dev/null && echo '{}' > "$GEMINI_HOME/antigravity-acp/acp_token.json" \
+                ( python3 "$D/loopback.py" "$PORT" "$D/callback.txt" "$D/listening" < /dev/null && echo '{}' > "$GEMINI_HOME/antigravity-acp/antigravity-oauth-token" \
                     && say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{}}" ) &
                 # The link once the loopback listens, as the CLI gives it.
                 while [ ! -f "$D/listening" ]; do sleep 0.05; done
@@ -3765,49 +3780,88 @@ async fn antigravity_signs_in_to_google_by_its_own_and_takes_a_pasted_reply() {
     fs::write(service.0.path().join("loopback.py"), LOOPBACK).unwrap();
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     fs::write(service.0.path().join("agy-port"), port.to_string()).unwrap();
-    let folder = service.0.path().join("agy-home");
+    let personal_home = service.0.path().join("agy-personal");
+    let business_home = service.0.path().join("agy-business");
     fs::write(
         service.0.path().join("config.json"),
-        json!({"providers":{"work":{"extends":"antigravity","env":{"GEMINI_HOME":folder}}}}).to_string(),
+        json!({"providers":{
+            "personal":{"extends":"antigravity","env":{"GEMINI_HOME":personal_home},"authMethod":"oauth-personal"},
+            "enterprise":{"extends":"antigravity","env":{"GEMINI_HOME":business_home},"authMethod":"oauth-business","gcp":{"project":"p","location":"us-central1"}}
+        }}).to_string(),
     )
     .unwrap();
-    service.cli("start");
+    service.cli_with_env("start", &[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-0")]);
     let mut socket = service.connect(true).await;
 
-    // The link, as its output says it: Google's, coming back here.
-    let started = ask(&mut socket, json!({"type":"provider.login.start.request","provider":"work"})).await;
+    // 1. Personal Google account: runs `agy acp --login` (SSH_CONNECTION set,
+    // DISPLAY unset), returns the code-login link, accepts the pasted code,
+    // verifies via ACP, caches models, and supports native `logout`.
+    let started = ask(&mut socket, json!({"type":"provider.login.start.request","provider":"personal"})).await;
+    assert_eq!(started["type"], "provider.login.start.response", "{started}");
+    let link = started["payload"]["authUrl"].as_str().unwrap().to_owned();
+    assert!(link.starts_with("https://accounts.google.com/o/oauth2/auth?"), "{started}");
+    assert_eq!(started["payload"]["pasteReply"], true);
+    assert_eq!(started["payload"]["codeLogin"], true);
+    // An invalid code is refused without ending the flow.
+    let bad = ask(&mut socket, json!({"type":"provider.login.callback.request","provider":"personal",
+        "url":"https://evil.example/?state=code-s1&code=abc"})).await;
+    assert_eq!(bad["type"], "rpc_error", "{bad}");
+    // Pasting the code completes `--login`, verifies via ACP, and caches models.
+    let submitted = ask(&mut socket, json!({"type":"provider.login.callback.request","provider":"personal",
+        "url":" 4/0Ab-code_1 "})).await;
+    assert_eq!(submitted["type"], "provider.login.callback.response", "{submitted}");
+    let ended = ask(&mut socket, json!({"type":"provider.login.wait.request","provider":"personal"})).await;
+    assert_eq!((&ended["payload"]["success"], &ended["payload"]["error"]), (&json!(true), &Value::Null), "{ended}");
+    assert_eq!(fs::read_to_string(service.0.path().join("code.txt")).unwrap(), "4/0Ab-code_1");
+    let login_log = fs::read_to_string(service.0.path().join("agy-login.log")).unwrap();
+    assert!(login_log.contains("DISPLAY=none UPD=true"), "{login_log}");
+    assert!(!login_log.contains("SSH=none"), "{login_log}");
+    let diagnostic = ask(&mut socket, json!({"type":"provider_diagnostic_request","provider":"personal"})).await;
+    assert!(diagnostic["payload"]["diagnostic"].as_str().unwrap().contains(r#""loggedIn":true"#), "{diagnostic}");
+    let models: Value =
+        serde_json::from_slice(&fs::read(personal_home.join("antigravity-acp/sophon-models.json")).unwrap()).unwrap();
+    assert_eq!(models[1]["id"], "claude-sonnet");
+
+    // Native sign-out clears the token and cached models.
+    let out = ask(&mut socket, json!({"type":"provider.logout.request","provider":"personal"})).await;
+    assert_eq!(out["type"], "provider.logout.response", "{out}");
+    let diagnostic = ask(&mut socket, json!({"type":"provider_diagnostic_request","provider":"personal"})).await;
+    assert!(diagnostic["payload"]["diagnostic"].as_str().unwrap().contains(r#""loggedIn":false"#), "{diagnostic}");
+    assert!(!personal_home.join("antigravity-acp/sophon-models.json").exists());
+
+    // 2. Gemini Enterprise (`oauth-business`): uses ACP loopback OAuth and
+    // accepts a pasted loopback redirect URL from another device.
+    let started = ask(&mut socket, json!({"type":"provider.login.start.request","provider":"enterprise"})).await;
     assert_eq!(started["type"], "provider.login.start.response", "{started}");
     let link = started["payload"]["authUrl"].as_str().unwrap().to_owned();
     assert!(link.starts_with("https://accounts.google.com/o/oauth2/v2/auth?"), "{started}");
     assert_eq!(started["payload"]["pasteReply"], true);
+    assert_eq!(started["payload"]["codeLogin"], false);
     // A reply of another sign-in is refused, and not handed on.
-    let wrong = ask(&mut socket, json!({"type":"provider.login.callback.request","provider":"work",
+    let wrong = ask(&mut socket, json!({"type":"provider.login.callback.request","provider":"enterprise",
         "url":format!("http://127.0.0.1:{port}/?state=other&code=c")})).await;
     assert_eq!(wrong["type"], "rpc_error", "{wrong}");
     assert!(!service.0.path().join("callback.txt").exists());
     // This one's, pasted from another device, reaches the CLI here.
-    let pasted = ask(&mut socket, json!({"type":"provider.login.callback.request","provider":"work",
+    let pasted = ask(&mut socket, json!({"type":"provider.login.callback.request","provider":"enterprise",
         "url":format!("http://127.0.0.1:{port}/?state=s1&code=4%2F0abc&scope=x")})).await;
     assert_eq!(pasted["type"], "provider.login.callback.response", "{pasted}");
-    let ended = ask(&mut socket, json!({"type":"provider.login.wait.request","provider":"work"})).await;
+    let ended = ask(&mut socket, json!({"type":"provider.login.wait.request","provider":"enterprise"})).await;
     assert_eq!((&ended["payload"]["success"], &ended["payload"]["error"]), (&json!(true), &Value::Null), "{ended}");
     let got = fs::read_to_string(service.0.path().join("callback.txt")).unwrap();
     assert!(got.starts_with("GET /?state=s1&code=4%2F0abc&scope=x HTTP/1.1"), "{got}");
-    // Signed in, and the models its account offers kept.
-    let diagnostic = ask(&mut socket, json!({"type":"provider_diagnostic_request","provider":"work"})).await;
-    assert!(diagnostic["payload"]["diagnostic"].as_str().unwrap().contains(r#""loggedIn":true"#), "{diagnostic}");
     let models: Value =
-        serde_json::from_slice(&fs::read(folder.join("antigravity-acp/sophon-models.json")).unwrap()).unwrap();
+        serde_json::from_slice(&fs::read(business_home.join("antigravity-acp/sophon-models.json")).unwrap()).unwrap();
     assert_eq!(models[1]["id"], "claude-sonnet");
 
     // Signed out again, the link given to the browser stand-in instead;
     // the sign-in ends when asked to.
-    fs::remove_file(folder.join("antigravity-acp/acp_token.json")).unwrap();
+    fs::remove_file(business_home.join("antigravity-acp/antigravity-oauth-token")).unwrap();
     fs::write(service.0.path().join("by-browser"), "").unwrap();
-    let started = ask(&mut socket, json!({"type":"provider.login.start.request","provider":"work"})).await;
+    let started = ask(&mut socket, json!({"type":"provider.login.start.request","provider":"enterprise"})).await;
     assert!(started["payload"]["authUrl"].as_str().unwrap().starts_with("https://accounts.google.com/"), "{started}");
-    ask(&mut socket, json!({"type":"provider.login.cancel.request","provider":"work"})).await;
-    let ended = ask(&mut socket, json!({"type":"provider.login.wait.request","provider":"work"})).await;
+    ask(&mut socket, json!({"type":"provider.login.cancel.request","provider":"enterprise"})).await;
+    let ended = ask(&mut socket, json!({"type":"provider.login.wait.request","provider":"enterprise"})).await;
     assert_eq!(ended["payload"]["error"], "Canceled", "{ended}");
     // Its loopback, still listening, is let go.
     let _ = std::net::TcpStream::connect(("127.0.0.1", port));
@@ -3864,9 +3918,9 @@ async fn antigravity_runs_as_t3_code_runs_it_and_asks_only_what_its_mode_does_no
     let calls = fs::read_to_string(service.0.path().join("agy-calls")).unwrap();
     assert!(!calls.contains("new"), "{calls}");
 
-    // Signed in (by its own `--login`, of which the file is all there is
-    // to see): a reading goes through, a command is asked.
-    fs::write(folder.join("antigravity-acp/acp_token.json"), "{}").unwrap();
+    // Signed in (by its own `--login`, which writes `antigravity-oauth-token`):
+    // a reading goes through, a command is asked.
+    fs::write(folder.join("antigravity-acp/antigravity-oauth-token"), "{}").unwrap();
     ask(&mut socket, json!({"type":"send_agent_message_request","agentId":agent["id"],"text":"go"})).await;
     let asked = until(&mut socket, "permission_requested").await;
     assert_eq!(asked["request"]["name"], "ls", "{asked}");
@@ -3887,10 +3941,10 @@ async fn antigravity_runs_as_t3_code_runs_it_and_asks_only_what_its_mode_does_no
         calls.contains(&format!("args acp --gemini-dir {home} --app-data-dir antigravity-acp\n")),
         "{calls}"
     );
-    // Told nothing of SSH (it would refuse a sign-in in the browser).
-    if std::env::var_os("SSH_CONNECTION").is_none() {
-        assert!(calls.contains("FS=1 SSH=none "), "{calls}");
-    }
+    // `oauth-personal` sets `SSH_CONNECTION` so agy 1.5 keeps its sign-in in
+    // this profile instead of the shared OS keyring, and disables auto-update.
+    assert!(calls.contains("FS=1 UPD=true "), "{calls}");
+    assert!(!calls.contains("SSH=none "), "{calls}");
     assert!(calls.contains(&format!("KEY=none HOME={home} BROWSER={home}/browser TMP={home}/runs/")), "{calls}");
     assert!(calls.contains(r#""clientInfo":{"name":"sophon""#), "{calls}");
     assert!(calls.contains(r#""writeTextFile":false"#) && calls.contains(r#""terminal":false"#), "{calls}");

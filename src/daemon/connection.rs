@@ -172,9 +172,11 @@ pub enum Command {
     ProviderLogin { provider: String, device: bool },
     /// Ends the sign-in under way for a provider.
     ProviderLoginCancel(String),
-    /// The address a Google sign-in's page went to, pasted from another
-    /// device than the host: handed to the CLI waiting for it there.
+    /// The code or address a Google sign-in's page gave, handed to the CLI
+    /// waiting for it on the host.
     ProviderLoginReply { provider: String, url: String },
+    /// Signs an Antigravity provider out through its CLI's native logout.
+    ProviderLogout(String),
     RestartDaemon,
     /// The sessions to import: asked of each of `providers` apart (one
     /// list of all would be the newest of them together, and an agent
@@ -1272,9 +1274,12 @@ pub enum Stage {
 #[derive(Clone, Debug, PartialEq)]
 pub enum LoginStep {
     /// Under way: the page to open (`url`), with the code to type there
-    /// for a sign-in by code; `paste`: the address the page goes to can be
-    /// pasted back from another device.
-    Started { url: String, code: Option<String>, paste: bool },
+    /// for a device-code sign-in; `paste`: a reply can be pasted back;
+    /// `code_login`: the user pastes the code (or page URL) shown on
+    /// `antigravity.google/oauth-callback`.
+    Started { url: String, code: Option<String>, paste: bool, code_login: bool },
+    /// The code or callback has been accepted; waiting for verification.
+    Verifying,
     /// Over: signed in, or why not.
     Ended(Result<(), String>),
 }
@@ -1374,6 +1379,8 @@ pub enum Event {
     /// A provider's sign-in ([`Command::ProviderLogin`]): where to go, then
     /// how it went.
     ProviderLogin { provider: String, step: LoginStep },
+    /// A provider signed out ([`Command::ProviderLogout`]).
+    ProviderLoggedOut(String),
     Usage(Vec<ProviderUsage>),
     /// The host's reset credits; `Err` when it cannot say (no plugin).
     ResetCredits(Result<Vec<ResetCredits>, String>),
@@ -2885,6 +2892,11 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
             Pending::Optional,
             json!({ "type": "provider.login.cancel.request", "provider": provider }),
         )],
+        Command::ProviderLogout(provider) => vec![request(
+            pending,
+            Pending::Other("sign out"),
+            json!({ "type": "provider.logout.request", "provider": provider }),
+        )],
         Command::RestartDaemon => vec![request(
             pending,
             Pending::Other("restart the daemon"),
@@ -3909,14 +3921,15 @@ fn handle(
             let s = |k: &str| payload.get(k).and_then(Value::as_str).filter(|v| !v.is_empty()).map(str::to_owned);
             let Some(provider) = s("provider") else { return vec![] };
             let paste = payload.get("pasteReply").and_then(Value::as_bool) == Some(true);
+            let code_login = payload.get("codeLogin").and_then(Value::as_bool) == Some(true);
             let step = match (s("authUrl"), s("verificationUrl"), s("userCode")) {
-                (Some(url), _, _) => LoginStep::Started { url, code: None, paste },
-                (None, Some(url), code) => LoginStep::Started { url, code, paste },
-                // Signed in already: nothing to open, its end is waited on.
-                _ if paste || payload.get("authUrl").is_some() => LoginStep::Started { url: String::new(), code: None, paste },
-                _ => LoginStep::Ended(Err("Codex gave no page to sign in on".into())),
+                (Some(url), _, _) => LoginStep::Started { url, code: None, paste, code_login },
+                (None, Some(url), code) => LoginStep::Started { url, code, paste, code_login },
+                // Signed in already or key-based verification: nothing to open, wait for completion.
+                _ if paste || payload.get("authUrl").and_then(Value::as_str).is_some() => LoginStep::Verifying,
+                _ => LoginStep::Ended(Err("No sign-in page was returned".into())),
             };
-            if matches!(step, LoginStep::Started { .. }) {
+            if matches!(step, LoginStep::Started { .. } | LoginStep::Verifying) {
                 follow_ups.push(request(
                     pending,
                     Pending::ProviderLogin(provider.clone()),
@@ -3924,6 +3937,11 @@ fn handle(
                 ));
             }
             vec![Event::ProviderLogin { provider, step }]
+        }
+        "provider.login.callback.response" => {
+            request_id.and_then(|id| pending.remove(id));
+            let Some(provider) = payload.get("provider").and_then(Value::as_str).map(str::to_owned) else { return vec![] };
+            vec![Event::ProviderLogin { provider, step: LoginStep::Verifying }]
         }
         "provider.login.wait.response" => {
             request_id.and_then(|id| pending.remove(id));
@@ -3934,6 +3952,12 @@ fn handle(
                 Err(payload.get("error").and_then(Value::as_str).unwrap_or("The sign-in did not finish").to_owned())
             };
             vec![Event::ProviderLogin { provider, step: LoginStep::Ended(ended) }]
+        }
+        "provider.logout.response" => {
+            request_id.and_then(|id| pending.remove(id));
+            let Some(provider) = payload.get("provider").and_then(Value::as_str).map(str::to_owned) else { return vec![] };
+            follow_ups.push(refresh_providers(pending));
+            vec![Event::ProviderLoggedOut(provider)]
         }
         "provider_diagnostic_response" => {
             request_id.and_then(|id| pending.remove(id));
@@ -4779,7 +4803,7 @@ mod tests {
             None,
             &mut follow_ups,
         );
-        assert!(matches!(&events[..], [Event::ProviderLogin { provider, step: LoginStep::Started { url, code: None, paste: false } }]
+        assert!(matches!(&events[..], [Event::ProviderLogin { provider, step: LoginStep::Started { url, code: None, paste: false, code_login: false } }]
             if provider == "work" && url == "https://auth.openai.com/x"));
         let wait = &follow_ups.pop().unwrap()["message"];
         assert_eq!(wait["type"], "provider.login.wait.request");
@@ -4804,6 +4828,31 @@ mod tests {
         let id = sent[0]["message"]["requestId"].as_str().unwrap().to_owned();
         let events = handle("rpc_error", &json!({ "requestId": id, "error": "claude does not sign in from here" }), &mut pending, None, &mut vec![]);
         assert!(matches!(&events[..], [Event::ProviderLogin { provider, step: LoginStep::Ended(Err(e)) }] if provider == "claude" && e.contains("does not sign in")));
+
+        // Antigravity code login: codeLogin=true, callback accepted -> Verifying, logout refreshes providers.
+        let sent = command_messages(Command::ProviderLogin { provider: "antigravity".into(), device: false }, &mut pending);
+        let id = sent[0]["message"]["requestId"].as_str().unwrap().to_owned();
+        let mut follow_ups = vec![];
+        let events = handle(
+            "provider.login.start.response",
+            &json!({ "requestId": id, "provider": "antigravity", "authUrl": "https://accounts.google.com/o/oauth2/auth?state=s1", "pasteReply": true, "codeLogin": true }),
+            &mut pending,
+            None,
+            &mut follow_ups,
+        );
+        assert!(matches!(&events[..], [Event::ProviderLogin { provider, step: LoginStep::Started { paste: true, code_login: true, .. } }] if provider == "antigravity"));
+        let sent = command_messages(Command::ProviderLoginReply { provider: "antigravity".into(), url: "4/0code".into() }, &mut pending);
+        let cb_id = sent[0]["message"]["requestId"].as_str().unwrap().to_owned();
+        let events = handle("provider.login.callback.response", &json!({ "requestId": cb_id, "provider": "antigravity" }), &mut pending, None, &mut vec![]);
+        assert!(matches!(&events[..], [Event::ProviderLogin { provider, step: LoginStep::Verifying }] if provider == "antigravity"));
+
+        let sent = command_messages(Command::ProviderLogout("antigravity".into()), &mut pending);
+        assert_eq!(sent[0]["message"]["type"], "provider.logout.request");
+        let lo_id = sent[0]["message"]["requestId"].as_str().unwrap().to_owned();
+        let mut follow_ups = vec![];
+        let events = handle("provider.logout.response", &json!({ "requestId": lo_id, "provider": "antigravity" }), &mut pending, None, &mut follow_ups);
+        assert!(matches!(&events[..], [Event::ProviderLoggedOut(provider)] if provider == "antigravity"));
+        assert!(!follow_ups.is_empty());
     }
 
     /// A providers patch is saved, then the providers are asked again and

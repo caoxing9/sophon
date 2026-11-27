@@ -5,12 +5,13 @@
 //! what it asks. Nothing here reads its credentials or calls Google.
 //!
 //! Each provider (each account) has a folder of its own, the CLI's
-//! `--gemini-dir`: its sign-in, settings and conversations. The CLI is
-//! told to keep its sign-in there as a file rather than in the system's
-//! keyring (shared by every folder otherwise), not to update itself, and
-//! never to open a browser: a session that needs a sign-in says so, and
-//! the sign-in is the CLI's own `agy acp --login`, run by the person
-//! (the Agents settings give the command).
+//! `--gemini-dir` (under `~/.sophon/providers/antigravity/` by default): its
+//! sign-in, settings and conversations, with global rules and skills linked
+//! from `~/.gemini`. Auto-update is disabled (`AGY_CLI_DISABLE_AUTO_UPDATE=true`),
+//! and personal Google accounts (`oauth-personal`) set `SSH_CONNECTION` so
+//! `agy` 1.5.x keeps credentials per-profile instead of in one shared OS
+//! keyring entry, signing in through `agy acp --login` (paste-code flow)
+//! and signing out through ACP's native `logout` RPC.
 
 use super::{Command, Emit, Event, IDLE, Outcome, Process, Start, gemini::row};
 use serde_json::{Value, json};
@@ -20,17 +21,26 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 /// The CLI's program name (`antigravity` may be its editor's).
 pub(crate) const PROGRAM: &str = "agy";
 /// The variable naming a provider's folder, as T3 Code sets it.
 pub(crate) const HOME_VAR: &str = "GEMINI_HOME";
-/// The folder of the provider that names none, under the home folder.
-pub(crate) const DEFAULT_HOME: &str = ".sophon-antigravity";
+/// The folder of the built-in Antigravity provider, under the home folder.
+pub(crate) const DEFAULT_HOME: &str = ".sophon/providers/antigravity/default";
+/// Earlier releases kept the built-in provider at `~/.sophon-antigravity`.
+const LEGACY_HOME: &str = ".sophon-antigravity";
 /// Where in its folder the ACP server keeps its own (a relative path: the
 /// CLI puts it under `--gemini-dir` whatever it is given).
 const APP_DATA: &str = "antigravity-acp";
+/// The token files Antigravity CLI may keep in `antigravity-acp`.
+const TOKEN_FILES: [&str; 2] = ["antigravity-oauth-token", "acp_token.json"];
+/// Sophon's own non-secret marker recording the last verified auth state
+/// (`authenticated` / `unauthenticated`) for the active `authMethod`,
+/// because `agy` 1.5.x may keep credentials in the OS keyring or internal
+/// cache rather than a fixed token file.
+const AUTH_STATE_FILE: &str = "sophon-auth.json";
 /// What the service's environment may hold that would sign the CLI in
 /// otherwise than its folder says, or change how it runs: left out, as
 /// T3 Code leaves them out (`antigravityAuthSupport.ts`).
@@ -48,15 +58,44 @@ const REMOVED: &[&str] = &[
     "AGY_ACP_ENABLE_OAUTH",
     "GEMINI_HOME",
     "AGY_ACP_FORCE_FILE_STORAGE",
+    "AGY_CLI_DISABLE_AUTO_UPDATE",
     "ANTIGRAVITY_HARNESS_PATH",
     "BROWSER",
     "PYTHONUNBUFFERED",
     "ELECTRON_RUN_AS_NODE",
     "CHROME_CRASHPAD_PIPE_NAME",
 ];
+/// Variables removed during `agy acp --login` so it prints the Google link
+/// instead of opening a browser on the host.
+const REMOVED_CODE_LOGIN: &[&str] = &[
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_CLOUD_LOCATION",
+    "GOOGLE_CLOUD_QUOTA_PROJECT",
+    "GOOGLE_GENAI_USE_VERTEXAI",
+    "GCLOUD_PROJECT",
+    "CLOUDSDK_CORE_PROJECT",
+    "AGY_ACP_CCPA_PROJECT",
+    "AGY_ACP_ENABLE_OAUTH",
+    "GEMINI_HOME",
+    "AGY_ACP_FORCE_FILE_STORAGE",
+    "AGY_CLI_DISABLE_AUTO_UPDATE",
+    "ANTIGRAVITY_HARNESS_PATH",
+    "BROWSER",
+    "PYTHONUNBUFFERED",
+    "ELECTRON_RUN_AS_NODE",
+    "CHROME_CRASHPAD_PIPE_NAME",
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+];
 /// What the browser stand-in writes before a sign-in link: a session
 /// that meets one is not signed in (the link is never opened or shown).
 const LINK_MARK: &str = "__SOPHON_ANTIGRAVITY_SIGN_IN__";
+/// Where `agy acp --login` sends Google; the page displays a code the user
+/// pastes back.
+const CODE_REDIRECT_URI: &str = "https://antigravity.google/oauth-callback";
 /// How long a stop waits for the turn to end before the CLI is ended.
 const STOP_WAIT: Duration = Duration::from_secs(15);
 /// The sign-ins the CLI offers, as `authenticate` names them.
@@ -67,14 +106,56 @@ const METHODS: [&str; 4] = [
     "agent-platform",
 ];
 
-/// The provider's folder: the one its settings name, else the default.
+fn has_token(home: &Path) -> bool {
+    TOKEN_FILES
+        .iter()
+        .any(|name| home.join(APP_DATA).join(name).is_file())
+}
+
+fn read_auth_state(home: &Path, expected_method: &str) -> Option<String> {
+    let bytes = std::fs::read(home.join(APP_DATA).join(AUTH_STATE_FILE)).ok()?;
+    let value: Value = serde_json::from_slice(&bytes).ok()?;
+    if value["authMethod"].as_str() != Some(expected_method) {
+        return None;
+    }
+    value["status"].as_str().map(str::to_owned)
+}
+
+fn save_auth_state(home: &Path, method: &str, status: &str) {
+    let dir = home.join(APP_DATA);
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(
+        dir.join(AUTH_STATE_FILE),
+        format!("{}\n", json!({"status": status, "authMethod": method})),
+    );
+}
+
+fn has_profile_data(home: &Path) -> bool {
+    let app = home.join(APP_DATA);
+    has_token(home)
+        || app.join(AUTH_STATE_FILE).is_file()
+        || app.join("sophon-models.json").is_file()
+}
+
+/// The provider's folder: the one its settings name, else the default
+/// (`~/.sophon/providers/antigravity/default`, keeping an earlier
+/// `~/.sophon-antigravity` login if one already lives there).
 pub(crate) fn home(settings: &Value) -> Option<PathBuf> {
-    settings
+    if let Some(dir) = settings
         .pointer("/env/GEMINI_HOME")
         .and_then(Value::as_str)
         .filter(|dir| !dir.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(DEFAULT_HOME)))
+    {
+        return Some(PathBuf::from(dir));
+    }
+    let user = PathBuf::from(std::env::var_os("HOME")?);
+    let preferred = user.join(DEFAULT_HOME);
+    let legacy = user.join(LEGACY_HOME);
+    if !has_profile_data(&preferred) && has_profile_data(&legacy) {
+        Some(legacy)
+    } else {
+        Some(preferred)
+    }
 }
 
 /// How the provider signs in: as its settings name it, else by the key
@@ -89,7 +170,7 @@ pub(crate) fn method(settings: &Value) -> &'static str {
     let has = |name: &str| {
         settings["env"][name]
             .as_str()
-            .is_some_and(|value| !value.is_empty())
+            .is_some_and(|value| !value.trim().is_empty())
     };
     if has("GEMINI_API_KEY") {
         "gemini-api-key"
@@ -100,23 +181,58 @@ pub(crate) fn method(settings: &Value) -> &'static str {
     }
 }
 
-/// Whether the provider is signed in, as the Agents settings read it
-/// (`claude auth status --json`'s shape): by its key, or its credentials
-/// file being there (it is never read).
+/// Whether the provider is authenticated, unauthenticated, or unchecked:
+/// - `authenticated`: verified by `login()` or a live ACP session (recorded
+///   in `sophon-auth.json`), or has a profile token file / cached models.
+/// - `unauthenticated`: explicitly signed out, rejected by ACP, or missing
+///   required API key / GCP project for key-based methods.
+/// - `unknown`: CLI is installed (and credentials configured if key-based),
+///   but access has not been checked yet.
 pub(crate) fn auth_status(settings: &Value) -> Value {
     let method = method(settings);
-    let signed = match method {
-        "gemini-api-key" => settings["env"]["GEMINI_API_KEY"].is_string(),
-        // A key, or the project of the host's own Google Cloud sign-in.
+    let dir = home(settings);
+    let non_empty = |v: &Value| v.as_str().is_some_and(|s| !s.trim().is_empty());
+    let recorded = dir.as_deref().and_then(|h| read_auth_state(h, method));
+    let has_models = !models(settings).is_empty();
+    let token_file = dir.as_deref().is_some_and(has_token);
+    let status = match method {
+        "gemini-api-key" => {
+            if !non_empty(&settings["env"]["GEMINI_API_KEY"]) {
+                "unauthenticated"
+            } else if recorded.as_deref() == Some("unauthenticated") {
+                "unauthenticated"
+            } else if recorded.as_deref() == Some("authenticated") || has_models {
+                "authenticated"
+            } else {
+                "unknown"
+            }
+        }
         "agent-platform" => {
-            settings["env"]["GOOGLE_API_KEY"].is_string() || settings["gcp"]["project"].is_string()
+            if !non_empty(&settings["env"]["GOOGLE_API_KEY"])
+                && !non_empty(&settings["gcp"]["project"])
+            {
+                "unauthenticated"
+            } else if recorded.as_deref() == Some("unauthenticated") {
+                "unauthenticated"
+            } else if recorded.as_deref() == Some("authenticated") || has_models {
+                "authenticated"
+            } else {
+                "unknown"
+            }
         }
         _ => {
-            home(settings).is_some_and(|home| home.join(APP_DATA).join("acp_token.json").is_file())
+            if recorded.as_deref() == Some("unauthenticated") {
+                "unauthenticated"
+            } else if recorded.as_deref() == Some("authenticated") || token_file || has_models {
+                "authenticated"
+            } else {
+                "unknown"
+            }
         }
     };
-    json!({"loggedIn":signed,"authMethod":method,
-        "configDirectory":home(settings).map(|home| home.display().to_string())})
+    let signed = status == "authenticated";
+    json!({"loggedIn":signed,"authStatus":status,"authMethod":method,
+        "configDirectory":dir.map(|home| home.display().to_string())})
 }
 
 /// What the CLI's settings in the provider's folder say: how it signs in
@@ -124,18 +240,126 @@ pub(crate) fn auth_status(settings: &Value) -> Value {
 /// and location the provider's settings give. Never a credential.
 fn profile_settings(settings: &Value, method: &str) -> Value {
     let mut said = json!({"auth":{"type":method}});
-    if let (Some(project), Some(location)) = (
-        settings["gcp"]["project"].as_str(),
-        settings["gcp"]["location"].as_str(),
-    ) {
-        said["gcp"] = json!({"project":project,"location":location});
+    let project = settings["gcp"]["project"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let location = settings["gcp"]["location"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if project.is_some() || location.is_some() {
+        let mut gcp = serde_json::Map::new();
+        if let Some(project) = project {
+            gcp.insert("project".to_owned(), json!(project));
+        }
+        if let Some(location) = location {
+            gcp.insert("location".to_owned(), json!(location));
+        }
+        said["gcp"] = Value::Object(gcp);
     }
     said
 }
 
+/// Keeps only the credential matching `method` in `settings["env"]`, and
+/// strips managed keys so stale keys from another method never leak.
+fn sanitized_settings(settings: &Value, method: &str) -> Value {
+    let mut clean = settings.clone();
+    if let Some(env) = clean.get_mut("env").and_then(Value::as_object_mut) {
+        env.retain(|key, value| {
+            let upper = key.to_ascii_uppercase();
+            match upper.as_str() {
+                "GEMINI_API_KEY" => {
+                    method == "gemini-api-key"
+                        && value.as_str().is_some_and(|v| !v.trim().is_empty())
+                }
+                "GOOGLE_API_KEY" => {
+                    method == "agent-platform"
+                        && value.as_str().is_some_and(|v| !v.trim().is_empty())
+                }
+                _ => !REMOVED.iter().any(|r| *r == upper.as_str()),
+            }
+        });
+    }
+    clean
+}
+
+/// Global user rules and skills linked from `~/.gemini` into an isolated
+/// Antigravity profile, keeping credentials, hooks and MCP isolated.
+const USER_CONFIG_LINKS: [&str; 5] = [
+    "AGENTS.md",
+    "GEMINI.md",
+    "config/skills",
+    "antigravity-cli/skills",
+    "config/skills.json",
+];
+
+#[cfg(unix)]
+fn link_user_config(profile: &Path, user_gemini: &Path) {
+    if profile == user_gemini {
+        return;
+    }
+    if let (Ok(a), Ok(b)) = (std::fs::canonicalize(profile), std::fs::canonicalize(user_gemini))
+        && a == b
+    {
+        return;
+    }
+    for rel in USER_CONFIG_LINKS {
+        let target = user_gemini.join(rel);
+        let link = profile.join(rel);
+        if !target.exists() {
+            // Remove dangling symlinks: the harness creates these folders and
+            // fails if a dangling link sits in the way.
+            if link
+                .symlink_metadata()
+                .is_ok_and(|meta| meta.file_type().is_symlink())
+            {
+                let _ = std::fs::remove_file(&link);
+            }
+            continue;
+        }
+        match link.symlink_metadata() {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                if std::fs::read_link(&link).ok().as_deref() == Some(target.as_path()) {
+                    continue;
+                }
+                let _ = std::fs::remove_file(&link);
+            }
+            Ok(meta) if meta.is_dir() => {
+                // An empty directory is the harness's placeholder; `remove_dir`
+                // refuses non-empty directories, keeping profile-owned content safe.
+                if std::fs::remove_dir(&link).is_err() {
+                    continue;
+                }
+            }
+            Ok(_) => continue, // Profile-owned regular file: never replace.
+            Err(_) => {}
+        }
+        if let Some(parent) = link.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::os::unix::fs::symlink(&target, &link);
+    }
+}
+
+#[cfg(not(unix))]
+fn link_user_config(_profile: &Path, _user_gemini: &Path) {}
+
+/// Removes a per-run unpack directory when dropped (even on cancellation).
+struct RunDir(Option<PathBuf>);
+
+impl Drop for RunDir {
+    fn drop(&mut self) {
+        if let Some(dir) = self.0.take() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+
 /// Makes the provider's folders (its own, the ACP server's and the one
-/// its runs unpack into) as only this user's, writes its settings, and
-/// makes the browser stand-in: what it gives the CLI as `BROWSER`.
+/// its runs unpack into) as only this user's, writes its settings, links
+/// global rules/skills from `~/.gemini`, and makes the browser stand-in:
+/// what it gives the CLI as `BROWSER`.
 fn prepare(home: &Path, settings: &Value, method: &str) -> io::Result<PathBuf> {
     for dir in [home.to_path_buf(), home.join(APP_DATA), home.join("runs")] {
         std::fs::create_dir_all(&dir)?;
@@ -143,8 +367,11 @@ fn prepare(home: &Path, settings: &Value, method: &str) -> io::Result<PathBuf> {
     }
     std::fs::write(
         home.join(APP_DATA).join("settings.json"),
-        profile_settings(settings, method).to_string(),
+        format!("{}\n", profile_settings(settings, method)),
     )?;
+    if let Some(user_home) = std::env::var_os("HOME").map(PathBuf::from) {
+        link_user_config(home, &user_home.join(".gemini"));
+    }
     // Runs left by a host that ended first, a day old: each unpacks about
     // a gigabyte.
     for entry in std::fs::read_dir(home.join("runs"))?.flatten() {
@@ -180,17 +407,27 @@ fn private(_path: &Path, _mode: u32) -> io::Result<()> {
 }
 
 /// What the CLI's environment has over the service's (from which
-/// [`REMOVED`] is left out), as T3 Code gives it.
-fn environment(home: &Path, run: &Path, browser: &Path) -> Vec<(String, String)> {
-    // As T3 Code's `antigravityEnvironment`: the sign-in kept as a file in
-    // the folder, not the keyring all folders share. Nothing tells the CLI
-    // it runs over SSH, which would refuse a sign-in in the browser.
+/// [`REMOVED`] is left out).
+fn environment(home: &Path, run: &Path, browser: &Path, method: &str) -> Vec<(String, String)> {
+    // The 1.5 CLI ignores `AGY_ACP_FORCE_FILE_STORAGE` and keeps Google
+    // sign-ins in one shared OS keyring entry for every profile unless it
+    // believes it runs over SSH; `oauth-personal` therefore sets
+    // `SSH_CONNECTION` and signs in via `agy acp --login`. Other methods
+    // (including Gemini Enterprise, which has no `--login`) leave it unset.
     let mut env = vec![
         (HOME_VAR.to_owned(), home.display().to_string()),
         ("AGY_ACP_FORCE_FILE_STORAGE".to_owned(), "1".to_owned()),
+        ("AGY_CLI_DISABLE_AUTO_UPDATE".to_owned(), "true".to_owned()),
         ("PYTHONUNBUFFERED".to_owned(), "1".to_owned()),
         ("TMPDIR".to_owned(), run.display().to_string()),
     ];
+    if method == "oauth-personal" {
+        let ssh = std::env::var("SSH_CONNECTION")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| "127.0.0.1 0 127.0.0.1 0".to_owned());
+        env.push(("SSH_CONNECTION".to_owned(), ssh));
+    }
     // Python splits `BROWSER` at the path separator.
     let browser = browser.display().to_string();
     if !browser.contains(':') {
@@ -218,7 +455,7 @@ fn supported(version: &str) -> bool {
 
 /// Whether an error the CLI answered means it is not signed in.
 fn needs_sign_in(code: i64, said: &str) -> bool {
-    code == -32000 || (code == -32603 && said.starts_with("No browser is available here"))
+    code == -32000 || (code == -32603 && said.contains("No browser is available here"))
 }
 
 const NOT_SIGNED_IN: &str =
@@ -228,12 +465,14 @@ const NOT_SIGNED_IN: &str =
 /// signing it in (as T3 Code reads it).
 const LINK_LINE: &str = "Open the following link to authenticate the ACP server: ";
 
-/// A Google sign-in under way: where it comes back to the CLI on this
-/// host's loopback (`redirect_uri`), and the `state` the reply carries.
+/// A Google sign-in under way: either `agy acp --login` (`Code`, where
+/// Google redirects to `https://antigravity.google/oauth-callback` and the
+/// person pastes the code or page URL back) or ACP `authenticate`
+/// (`Loopback`, where Google redirects to this host's `127.0.0.1:<port>/`).
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Pending {
-    pub(crate) redirect: String,
-    pub(crate) state: String,
+pub(crate) enum Pending {
+    Code { redirect: String, state: String },
+    Loopback { redirect: String, state: String },
 }
 
 /// The query of `url` (after `?`), its names and values decoded.
@@ -282,15 +521,22 @@ fn only<'a>(pairs: &'a [(String, String)], name: &str) -> Option<&'a str> {
     found.next().is_none().then_some(first)
 }
 
+fn has_userinfo(url: &str) -> bool {
+    let Some((_, rest)) = url.split_once("://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    authority.contains('@')
+}
+
 /// Whether `url` is a Google sign-in link coming back to this host's
-/// loopback, as T3 Code checks it (`parseAntigravityAuthorizationUrl`):
-/// what it comes back to and with.
+/// loopback: what it comes back to and with.
 fn sign_in_link(url: &str) -> Option<Pending> {
-    if url.len() > 16_384 || url.contains(char::is_whitespace) {
+    if url.len() > 16_384 || url.contains(char::is_whitespace) || url.contains('#') || has_userinfo(url) {
         return None;
     }
     let path = url.split(['?', '#']).next()?;
-    if path != "https://accounts.google.com/o/oauth2/v2/auth" || url.contains('#') {
+    if path != "https://accounts.google.com/o/oauth2/v2/auth" {
         return None;
     }
     let pairs = query(url);
@@ -301,35 +547,94 @@ fn sign_in_link(url: &str) -> Option<Pending> {
     let redirect = only(&pairs, "redirect_uri")?;
     let port = redirect.strip_prefix("http://127.0.0.1:")?.strip_suffix('/')?;
     port.parse::<u16>().ok().filter(|p| *p >= 1024 && !port.starts_with('0'))?;
-    Some(Pending { redirect: redirect.to_owned(), state: state.to_owned() })
+    Some(Pending::Loopback { redirect: redirect.to_owned(), state: state.to_owned() })
 }
 
-/// The reply of a Google sign-in pasted from another device (the address
-/// its page went to), checked as T3 Code checks it: to this sign-in's
-/// loopback, with its state, and one code or one error.
+/// Whether `url` is `agy acp --login`'s Google sign-in link: Google's
+/// `/o/oauth2/auth` coming back to `https://antigravity.google/oauth-callback`.
+fn code_sign_in_link(url: &str) -> Option<Pending> {
+    if url.len() > 16_384 || url.contains(char::is_whitespace) || url.contains('#') || has_userinfo(url) {
+        return None;
+    }
+    let path = url.split(['?', '#']).next()?;
+    if path != "https://accounts.google.com/o/oauth2/auth" {
+        return None;
+    }
+    let pairs = query(url);
+    if only(&pairs, "response_type")? != "code" {
+        return None;
+    }
+    let state = only(&pairs, "state").filter(|s| !s.is_empty() && s.len() <= 512 && !s.contains(char::is_whitespace))?;
+    if only(&pairs, "redirect_uri")? != CODE_REDIRECT_URI {
+        return None;
+    }
+    Some(Pending::Code { redirect: CODE_REDIRECT_URI.to_owned(), state: state.to_owned() })
+}
+
+/// Validates the reply pasted by the user:
+/// - `Pending::Code`: either the code shown by the Antigravity page
+///   (`^[\w./~-]{1,2048}$`) or that page's full URL matching this sign-in's
+///   `state` and carrying one `code`.
+/// - `Pending::Loopback`: to this sign-in's loopback, with its state, and
+///   one code or one error.
 pub(crate) fn reply_for(pending: &Pending, pasted: &str) -> Result<String, String> {
     let pasted = pasted.trim();
-    let wrong = || "This address does not belong to this sign-in".to_owned();
-    if pasted.len() > 16_384 || pasted.contains('#') {
-        return Err(wrong());
+    match pending {
+        Pending::Code { redirect, state } => {
+            let bad = || "Paste the code from the Antigravity page, or that page's full URL".to_owned();
+            if !pasted.is_empty()
+                && pasted.len() <= 2048
+                && pasted
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'/' | b'~' | b'-'))
+            {
+                return Ok(pasted.to_owned());
+            }
+            if pasted.len() > 16_384 || pasted.contains(char::is_whitespace) || pasted.contains('#') || has_userinfo(pasted) {
+                return Err(bad());
+            }
+            let path = pasted.split('?').next().unwrap_or_default();
+            if path != redirect {
+                return Err(bad());
+            }
+            let pairs = query(pasted);
+            if only(&pairs, "state") != Some(state.as_str()) {
+                return Err(bad());
+            }
+            if only(&pairs, "code").is_none_or(str::is_empty) {
+                return Err(bad());
+            }
+            Ok(pasted.to_owned())
+        }
+        Pending::Loopback { redirect, state } => {
+            let wrong = || "This address does not belong to this sign-in".to_owned();
+            if pasted.len() > 16_384 || pasted.contains(char::is_whitespace) || pasted.contains('#') || has_userinfo(pasted) {
+                return Err(wrong());
+            }
+            let path = pasted.split('?').next().unwrap_or_default();
+            if path != redirect {
+                return Err(wrong());
+            }
+            let pairs = query(pasted);
+            if only(&pairs, "state") != Some(state.as_str()) {
+                return Err(wrong());
+            }
+            let codes = pairs.iter().filter(|(n, v)| n == "code" && !v.is_empty()).count();
+            let errors = pairs.iter().filter(|(n, v)| n == "error" && !v.is_empty()).count();
+            if (codes, errors) != (1, 0) && (codes, errors) != (0, 1) {
+                return Err("The address has no Google sign-in reply".to_owned());
+            }
+            let issuers: Vec<&str> = pairs
+                .iter()
+                .filter(|(n, _)| n == "iss")
+                .map(|(_, v)| v.as_str())
+                .collect();
+            if issuers.len() > 1 || issuers.iter().any(|v| *v != "https://accounts.google.com") {
+                return Err(wrong());
+            }
+            Ok(pasted.to_owned())
+        }
     }
-    let path = pasted.split('?').next().unwrap_or_default();
-    if path != pending.redirect {
-        return Err(wrong());
-    }
-    let pairs = query(pasted);
-    if only(&pairs, "state") != Some(pending.state.as_str()) {
-        return Err(wrong());
-    }
-    let codes = pairs.iter().filter(|(n, v)| n == "code" && !v.is_empty()).count();
-    let errors = pairs.iter().filter(|(n, v)| n == "error" && !v.is_empty()).count();
-    if (codes, errors) != (1, 0) && (codes, errors) != (0, 1) {
-        return Err("The address has no Google sign-in reply".to_owned());
-    }
-    if pairs.iter().filter(|(n, _)| n == "iss").any(|(_, v)| v != "https://accounts.google.com") {
-        return Err(wrong());
-    }
-    Ok(pasted.to_owned())
 }
 
 /// Hands `reply` (an address on this host's loopback) to the CLI waiting
@@ -360,85 +665,321 @@ pub(crate) async fn forward(reply: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Signs the provider in to Google by Antigravity's own sign-in, as T3
-/// Code does: the CLI started on the provider's folder is asked to
-/// `authenticate`, and gives the link of Google's page (printed, or to
-/// the browser stand-in). The answer has the link and where its reply
-/// comes back (a person on another device pastes it, [`forward`]); the
-/// sign-in goes on in the future, which ends with the CLI signed in and
-/// a session opened (its models kept), or why not. Dropped, the CLI ends
-/// and the sign-in with it.
+/// Reads ACP responses until request `id` is answered; a sign-in link seen
+/// along the way is recorded in `link`.
+async fn acp_answer(
+    process: &mut Option<Process>,
+    id: u64,
+    link: &mut Option<String>,
+) -> io::Result<Result<Value, (i64, String)>> {
+    loop {
+        let tick = tokio::time::sleep(Duration::from_millis(250));
+        tokio::select! {
+            line = super::line(process) => {
+                let Some(line) = line else {
+                    let why = match process.take() {
+                        Some(p) => p.ended().await,
+                        None => String::new(),
+                    };
+                    return Err(io::Error::other(format!("Antigravity stopped ({why})")));
+                };
+                let Ok(message) = serde_json::from_str::<Value>(&line) else {
+                    if let Some(url) = line.trim().strip_prefix(LINK_LINE.trim_end()) {
+                        link.get_or_insert_with(|| url.trim().to_owned());
+                    }
+                    continue;
+                };
+                if message["id"].as_u64() == Some(id) && message["method"].is_null() {
+                    return Ok(match message.get("error") {
+                        Some(error) if !error.is_null() => Err((
+                            error["code"].as_i64().unwrap_or_default(),
+                            error["message"].as_str().unwrap_or("failed").to_owned(),
+                        )),
+                        _ => Ok(message["result"].clone()),
+                    });
+                }
+                // A request of the CLI's meanwhile: none is answered here.
+                if !message["method"].is_null() && !message["id"].is_null() {
+                    let refused = json!({"jsonrpc":"2.0","id":message["id"],"error":{"code":-32601,"message":"Not supported while signing in"}});
+                    if let Some(p) = process.as_mut() {
+                        p.send(&refused).await?;
+                    }
+                }
+            }
+            _ = tick => {}
+        }
+        // The browser stand-in's line, on the error stream.
+        if link.is_none()
+            && let Some(p) = process.as_ref()
+        {
+            let said = p.errors.borrow().iter().find_map(|line| {
+                line.strip_prefix(LINK_MARK)
+                    .map(|url| url.trim().to_owned())
+                    .filter(|url| !url.is_empty())
+            });
+            *link = said;
+        }
+    }
+}
+
+fn auth_error(code: i64, said: String, method: &str) -> String {
+    if said.contains("SUBSCRIPTION_REQUIRED") {
+        "Google requires an eligible Antigravity subscription for this account".to_owned()
+    } else if said.to_ascii_lowercase().contains("access_denied")
+        || said.to_ascii_lowercase().contains("denied access")
+    {
+        "Google sign-in was not approved. Start sign-in again.".to_owned()
+    } else if code == -32602 && !method.starts_with("oauth") {
+        "Antigravity refused the key or project in this provider's settings".to_owned()
+    } else {
+        said
+    }
+}
+
+/// Runs ACP `initialize` -> `authenticate` -> `session/new` to verify access
+/// and cache the models offered by the account into `sophon-models.json`.
+async fn verify_and_cache_models(
+    settings: &Value,
+    home: &Path,
+    browser: &Path,
+    method: &str,
+) -> Result<(), String> {
+    let run = home.join("runs").join(crate::state::id());
+    std::fs::create_dir_all(&run).map_err(|e| e.to_string())?;
+    private(&run, 0o700).map_err(|e| e.to_string())?;
+    let _guard = RunDir(Some(run.clone()));
+    let given = environment(home, &run, browser, method);
+    let env: Vec<(&str, &str)> = given.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
+    let args: Vec<String> = [
+        "acp",
+        "--gemini-dir",
+        &home.display().to_string(),
+        "--app-data-dir",
+        APP_DATA,
+    ]
+    .map(str::to_owned)
+    .into();
+    let clean = sanitized_settings(settings, method);
+    let cwd = std::env::temp_dir().display().to_string();
+    let mut process = Some(
+        Process::spawn_without("antigravity", &clean, &cwd, &args, &env, REMOVED)
+            .map_err(|e| e.to_string())?,
+    );
+    if let Some(p) = process.as_mut() {
+        p.send(&json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,
+            "clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false},
+            "clientInfo":{"name":"sophon","title":"Sophon","version":env!("CARGO_PKG_VERSION")}}}))
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    let started = tokio::time::timeout(Duration::from_secs(120), acp_answer(&mut process, 1, &mut None))
+        .await
+        .map_err(|_| "Antigravity did not start in time".to_owned())?
+        .map_err(|e| e.to_string())?
+        .map_err(|(_, said)| said)?;
+    let version = started["agentInfo"]["version"].as_str().unwrap_or_default();
+    if !supported(version) {
+        return Err(format!(
+            "Antigravity CLI {version} is not one Sophon runs: update it to 1.5.1 or later (brew upgrade --cask antigravity-cli, or agy update)"
+        ));
+    }
+    if let Some(p) = process.as_mut() {
+        p.send(&json!({"jsonrpc":"2.0","id":2,"method":"authenticate","params":{"methodId":method}}))
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    tokio::time::timeout(Duration::from_secs(60), acp_answer(&mut process, 2, &mut None))
+        .await
+        .map_err(|_| "Antigravity timed out while verifying sign-in".to_owned())?
+        .map_err(|e| e.to_string())?
+        .map_err(|(code, said)| auth_error(code, said, method))?;
+    if let Some(p) = process.as_mut() {
+        p.send(&json!({"jsonrpc":"2.0","id":3,"method":"session/new","params":{"cwd":cwd,"mcpServers":[]}}))
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    let opened = tokio::time::timeout(Duration::from_secs(60), acp_answer(&mut process, 3, &mut None))
+        .await
+        .map_err(|_| "Antigravity timed out while loading models".to_owned())?
+        .map_err(|e| e.to_string())?
+        .map_err(|_| "Antigravity signed in, but could not open a session or list its models".to_owned())?;
+    let models = offered_models(&opened);
+    if !models.is_empty() {
+        let _ = std::fs::write(
+            home.join(APP_DATA).join("sophon-models.json"),
+            serde_json::to_vec(&models).unwrap_or_default(),
+        );
+    }
+    save_auth_state(home, method, "authenticated");
+    drop(process);
+    Ok(())
+}
+
+/// Signs the provider in to Google through Antigravity's own sign-in flow:
+///
+/// - For `oauth-personal` (Google account): runs `agy acp --login` in the
+///   provider's folder with `SSH_CONNECTION` set and `DISPLAY` unset, so
+///   the CLI prints the Google sign-in link without opening a browser and
+///   stores the token in the profile instead of the shared OS keyring. The
+///   user pastes the code (or page URL) from `antigravity.google/oauth-callback`,
+///   which is written to stdin; once `--login` succeeds, a fresh ACP
+///   process verifies access and caches the offered models.
+/// - For `oauth-business` (Gemini Enterprise) and key/ADC methods: runs ACP
+///   `initialize` -> `authenticate` -> `session/new` directly (capturing a
+///   loopback link when the method uses browser sign-in).
 pub async fn login(
     settings: &Value,
-) -> io::Result<(Value, Option<Pending>, impl std::future::Future<Output = Result<(), String>> + use<>)> {
+) -> io::Result<(
+    Value,
+    Option<Pending>,
+    Option<UnboundedSender<String>>,
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>>>>,
+)> {
     let settings = settings.clone();
     let home = home(&settings).ok_or_else(|| io::Error::other("No folder for Antigravity"))?;
     let method = method(&settings);
     let browser = prepare(&home, &settings, method)?;
-    let run = home.join("runs").join(crate::state::id());
-    std::fs::create_dir_all(&run)?;
-    private(&run, 0o700)?;
-    let given = environment(&home, &run, &browser);
-    let env: Vec<(&str, &str)> = given.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
-    let args: Vec<String> = ["acp", "--gemini-dir", &home.display().to_string(), "--app-data-dir", APP_DATA]
+
+    if method == "oauth-personal" {
+        let run = home.join("runs").join(crate::state::id());
+        std::fs::create_dir_all(&run)?;
+        private(&run, 0o700)?;
+        let mut run_guard = RunDir(Some(run.clone()));
+        let given = environment(&home, &run, &browser, method);
+        let env: Vec<(&str, &str)> = given.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
+        let args: Vec<String> = [
+            "acp",
+            "--gemini-dir",
+            &home.display().to_string(),
+            "--app-data-dir",
+            APP_DATA,
+            "--login",
+        ]
         .map(str::to_owned)
         .into();
-    let cwd = std::env::temp_dir().display().to_string();
-    let mut process = Some(Process::spawn_without("antigravity", &settings, &cwd, &args, &env, REMOVED)?);
-    // What the CLI says, until the answer of request `id`; a link met on
-    // the way is given to `link`.
-    async fn answer(
-        process: &mut Option<Process>,
-        id: u64,
-        link: &mut Option<String>,
-    ) -> io::Result<Result<Value, (i64, String)>> {
-        loop {
-            let tick = tokio::time::sleep(Duration::from_millis(250));
-            tokio::select! {
-                line = super::line(process) => {
-                    let Some(line) = line else {
-                        let why = match process.take() {
-                            Some(p) => p.ended().await,
-                            None => String::new(),
-                        };
-                        return Err(io::Error::other(format!("Antigravity stopped ({why})")));
+        let clean = sanitized_settings(&settings, method);
+        let cwd = std::env::temp_dir().display().to_string();
+        let mut process = Some(Process::spawn_without(
+            "antigravity",
+            &clean,
+            &cwd,
+            &args,
+            &env,
+            REMOVED_CODE_LOGIN,
+        )?);
+        let url = tokio::time::timeout(Duration::from_secs(90), async {
+            loop {
+                let Some(line) = super::line(&mut process).await else {
+                    let why = match process.take() {
+                        Some(p) => p.ended().await,
+                        None => String::new(),
                     };
-                    let Ok(message) = serde_json::from_str::<Value>(&line) else {
-                        if let Some(url) = line.trim().strip_prefix(LINK_LINE.trim_end()) {
-                            link.get_or_insert_with(|| url.trim().to_owned());
+                    return Err(io::Error::other(format!("Antigravity stopped ({why})")));
+                };
+                let trimmed = line.trim();
+                let candidate = trimmed
+                    .strip_prefix(LINK_LINE.trim_end())
+                    .map(str::trim)
+                    .unwrap_or(trimmed);
+                if candidate.starts_with("https://accounts.google.com/") {
+                    return Ok(candidate.to_owned());
+                }
+            }
+        })
+        .await
+        .map_err(|_| io::Error::other("Antigravity did not start sign-in in time"))??;
+        let pending = code_sign_in_link(&url)
+            .ok_or_else(|| io::Error::other("Antigravity gave a sign-in link that is not Google's"))?;
+        let (submit_tx, mut submit_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let reply = json!({"authUrl": url, "codeLogin": true});
+        let done_guard = RunDir(run_guard.0.take());
+        let done = Box::pin(async move {
+            let login_run = done_guard;
+            let code = loop {
+                tokio::select! {
+                    received = submit_rx.recv() => {
+                        match received {
+                            Some(code) => break code,
+                            None => return Err("Canceled".to_owned()),
                         }
-                        continue;
-                    };
-                    if message["id"].as_u64() == Some(id) && message["method"].is_null() {
-                        return Ok(match message.get("error") {
-                            Some(error) if !error.is_null() => Err((
-                                error["code"].as_i64().unwrap_or_default(),
-                                error["message"].as_str().unwrap_or("failed").to_owned(),
-                            )),
-                            _ => Ok(message["result"].clone()),
-                        });
                     }
-                    // A request of the CLI's meanwhile: none is answered here.
-                    if !message["method"].is_null() && !message["id"].is_null() {
-                        let refused = json!({"jsonrpc":"2.0","id":message["id"],"error":{"code":-32601,"message":"Not supported while signing in"}});
-                        if let Some(p) = process.as_mut() {
-                            p.send(&refused).await?;
+                    line = super::line(&mut process) => {
+                        if line.is_none() {
+                            let why = match process.take() {
+                                Some(p) => p.ended().await,
+                                None => String::new(),
+                            };
+                            return Err(format!("Antigravity sign-in stopped unexpectedly ({why})"));
                         }
                     }
                 }
-                _ = tick => {}
+            };
+            if let Some(p) = process.as_mut() {
+                use tokio::io::AsyncWriteExt;
+                p.input
+                    .write_all(format!("{code}\n").as_bytes())
+                    .await
+                    .map_err(|e| e.to_string())?;
+                p.input.flush().await.map_err(|e| e.to_string())?;
+                let _ = p.input.shutdown().await;
             }
-            // The browser stand-in's line, on the error stream.
-            if link.is_none()
-                && let Some(p) = process.as_ref()
-            {
-                let said = p.errors.borrow().iter().find_map(|line| {
-                    line.strip_prefix(LINK_MARK).map(|url| url.trim().to_owned()).filter(|url| !url.is_empty())
+            // Drain stdout until `--login` finishes storing the token and exits.
+            tokio::time::timeout(Duration::from_secs(60), async {
+                while super::line(&mut process).await.is_some() {}
+            })
+            .await
+            .map_err(|_| "Antigravity timed out while finishing Google sign-in".to_owned())?;
+            let Some(mut p) = process.take() else {
+                return Err("Antigravity sign-in stopped unexpectedly".to_owned());
+            };
+            let status = tokio::time::timeout(Duration::from_secs(10), p.child.wait())
+                .await
+                .map_err(|_| "Antigravity sign-in did not exit in time".to_owned())?
+                .map_err(|e| e.to_string())?;
+            tokio::task::yield_now().await;
+            if !status.success() {
+                let said = p.errors.borrow().iter().cloned().collect::<Vec<_>>().join("\n");
+                return Err(if said.contains("SUBSCRIPTION_REQUIRED") {
+                    "Google requires an eligible Antigravity subscription for this account".to_owned()
+                } else if said.is_empty() {
+                    "Antigravity could not finish Google sign-in. Start sign-in again.".to_owned()
+                } else {
+                    format!("Antigravity could not finish Google sign-in ({said})")
                 });
-                *link = said;
             }
-        }
+            drop(login_run);
+            verify_and_cache_models(&settings, &home, &browser, method).await
+        });
+        return Ok((reply, Some(pending), Some(submit_tx), done));
     }
+
+    // Non-personal methods (`oauth-business`, `gemini-api-key`, `agent-platform`):
+    // drive ACP `initialize` -> `authenticate` -> `session/new` directly.
+    let run = home.join("runs").join(crate::state::id());
+    std::fs::create_dir_all(&run)?;
+    private(&run, 0o700)?;
+    let mut run_guard = RunDir(Some(run.clone()));
+    let given = environment(&home, &run, &browser, method);
+    let env: Vec<(&str, &str)> = given.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
+    let args: Vec<String> = [
+        "acp",
+        "--gemini-dir",
+        &home.display().to_string(),
+        "--app-data-dir",
+        APP_DATA,
+    ]
+    .map(str::to_owned)
+    .into();
+    let clean = sanitized_settings(&settings, method);
+    let cwd = std::env::temp_dir().display().to_string();
+    let mut process = Some(Process::spawn_without(
+        "antigravity",
+        &clean,
+        &cwd,
+        &args,
+        &env,
+        REMOVED,
+    )?);
     let mut link = None;
     if let Some(p) = process.as_mut() {
         p.send(&json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,
@@ -446,7 +987,7 @@ pub async fn login(
             "clientInfo":{"name":"sophon","title":"Sophon","version":env!("CARGO_PKG_VERSION")}}}))
             .await?;
     }
-    let started = tokio::time::timeout(Duration::from_secs(120), answer(&mut process, 1, &mut link))
+    let started = tokio::time::timeout(Duration::from_secs(120), acp_answer(&mut process, 1, &mut link))
         .await
         .map_err(|_| io::Error::other("Antigravity did not start in time"))??
         .map_err(|(_, said)| io::Error::other(said))?;
@@ -457,9 +998,10 @@ pub async fn login(
         )));
     }
     if let Some(p) = process.as_mut() {
-        p.send(&json!({"jsonrpc":"2.0","id":2,"method":"authenticate","params":{"methodId":method}})).await?;
+        p.send(&json!({"jsonrpc":"2.0","id":2,"method":"authenticate","params":{"methodId":method}}))
+            .await?;
     }
-    // Until the link comes (or it is signed in already, the answer first).
+    // Until the link comes (or it is signed in already / uses API key, the answer first).
     let mut early = None;
     let waited = tokio::time::timeout(Duration::from_secs(60), async {
         loop {
@@ -489,7 +1031,9 @@ pub async fn login(
                 && let Some(p) = process.as_ref()
             {
                 link = p.errors.borrow().iter().find_map(|line| {
-                    line.strip_prefix(LINK_MARK).map(|url| url.trim().to_owned()).filter(|url| !url.is_empty())
+                    line.strip_prefix(LINK_MARK)
+                        .map(|url| url.trim().to_owned())
+                        .filter(|url| !url.is_empty())
                 });
             }
             if link.is_some() {
@@ -498,24 +1042,24 @@ pub async fn login(
         }
     })
     .await
-    .map_err(|_| io::Error::other("Antigravity could not reach Google: check this computer's network, then try again"))?;
+    .map_err(|_| {
+        io::Error::other(
+            "Antigravity could not reach Google: check this computer's network, then try again",
+        )
+    })?;
     waited?;
-    let failed = |code: i64, said: String| {
-        if said.contains("SUBSCRIPTION_REQUIRED") {
-            "Google requires an eligible Antigravity subscription for this account".to_owned()
-        } else if code == -32602 && !method.starts_with("oauth") {
-            "Antigravity refused the key or project in this provider's settings".to_owned()
-        } else {
-            said
-        }
-    };
     let pending = match &link {
-        Some(url) => Some(sign_in_link(url).ok_or_else(|| io::Error::other("Antigravity gave a sign-in link that is not Google's"))?),
+        Some(url) => Some(
+            sign_in_link(url)
+                .ok_or_else(|| io::Error::other("Antigravity gave a sign-in link that is not Google's"))?,
+        ),
         None => None,
     };
-    let reply = json!({"authUrl":link});
+    let reply = json!({"authUrl": link.as_deref().unwrap_or(""), "codeLogin": false});
     let models_home = home.clone();
-    let done = async move {
+    let done_guard = RunDir(run_guard.0.take());
+    let done = Box::pin(async move {
+        let _run_guard = done_guard;
         let authenticated = match early {
             Some(message) => match message.get("error") {
                 Some(error) if !error.is_null() => Err((
@@ -524,19 +1068,23 @@ pub async fn login(
                 )),
                 _ => Ok(message["result"].clone()),
             },
-            None => answer(&mut process, 2, &mut None).await.map_err(|e| e.to_string())?,
+            None => acp_answer(&mut process, 2, &mut None)
+                .await
+                .map_err(|e| e.to_string())?,
         };
-        authenticated.map_err(|(code, said)| failed(code, said))?;
+        authenticated.map_err(|(code, said)| auth_error(code, said, method))?;
         // Checked as T3 Code checks it: a session opens, its models kept.
         if let Some(p) = process.as_mut() {
-            p.send(&json!({"jsonrpc":"2.0","id":3,"method":"session/new","params":{"cwd":std::env::temp_dir(),"mcpServers":[]}}))
+            p.send(&json!({"jsonrpc":"2.0","id":3,"method":"session/new","params":{"cwd":cwd,"mcpServers":[]}}))
                 .await
                 .map_err(|e| e.to_string())?;
         }
-        let opened = answer(&mut process, 3, &mut None)
+        let opened = acp_answer(&mut process, 3, &mut None)
             .await
             .map_err(|e| e.to_string())?
-            .map_err(|_| "Antigravity signed in, but could not open a session or list its models".to_owned())?;
+            .map_err(|_| {
+                "Antigravity signed in, but could not open a session or list its models".to_owned()
+            })?;
         let models = offered_models(&opened);
         if !models.is_empty() {
             let _ = std::fs::write(
@@ -544,11 +1092,71 @@ pub async fn login(
                 serde_json::to_vec(&models).unwrap_or_default(),
             );
         }
+        save_auth_state(&models_home, method, "authenticated");
         drop(process);
-        let _ = std::fs::remove_dir_all(&run);
         Ok(())
-    };
-    Ok((reply, pending, done))
+    });
+    Ok((reply, pending, None, done))
+}
+
+/// Signs the provider out through Antigravity's native ACP `logout` RPC
+/// and clears its cached model list.
+pub async fn logout(settings: &Value) -> Result<(), String> {
+    let home = home(settings).ok_or("No folder for Antigravity")?;
+    let method = method(settings);
+    let browser = prepare(&home, settings, method).map_err(|e| e.to_string())?;
+    let run = home.join("runs").join(crate::state::id());
+    std::fs::create_dir_all(&run).map_err(|e| e.to_string())?;
+    private(&run, 0o700).map_err(|e| e.to_string())?;
+    let _guard = RunDir(Some(run.clone()));
+    let given = environment(&home, &run, &browser, method);
+    let env: Vec<(&str, &str)> = given.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
+    let args: Vec<String> = [
+        "acp",
+        "--gemini-dir",
+        &home.display().to_string(),
+        "--app-data-dir",
+        APP_DATA,
+    ]
+    .map(str::to_owned)
+    .into();
+    let clean = sanitized_settings(settings, method);
+    let cwd = std::env::temp_dir().display().to_string();
+    let mut process = Some(
+        Process::spawn_without("antigravity", &clean, &cwd, &args, &env, REMOVED)
+            .map_err(|e| e.to_string())?,
+    );
+    if let Some(p) = process.as_mut() {
+        p.send(&json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,
+            "clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false},
+            "clientInfo":{"name":"sophon","title":"Sophon","version":env!("CARGO_PKG_VERSION")}}}))
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    let started = tokio::time::timeout(Duration::from_secs(90), acp_answer(&mut process, 1, &mut None))
+        .await
+        .map_err(|_| "Antigravity sign-out timed out".to_owned())?
+        .map_err(|e| e.to_string())?
+        .map_err(|(_, said)| said)?;
+    let can_logout = !started["agentCapabilities"]["auth"]["logout"].is_null()
+        && started["agentCapabilities"]["auth"]["logout"] != false;
+    if !can_logout {
+        return Err("This Antigravity version does not support sign-out. Update it first.".to_owned());
+    }
+    if let Some(p) = process.as_mut() {
+        p.send(&json!({"jsonrpc":"2.0","id":2,"method":"logout","params":{}}))
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    tokio::time::timeout(Duration::from_secs(30), acp_answer(&mut process, 2, &mut None))
+        .await
+        .map_err(|_| "Antigravity sign-out timed out".to_owned())?
+        .map_err(|e| e.to_string())?
+        .map_err(|(_, said)| said)?;
+    let _ = std::fs::remove_file(home.join(APP_DATA).join("sophon-models.json"));
+    save_auth_state(&home, method, "unauthenticated");
+    drop(process);
+    Ok(())
 }
 
 /// What a request of ours was, for when its answer comes.
@@ -567,22 +1175,27 @@ struct Choice {
 }
 
 impl Choice {
-    /// The session's option of `category` (or with that id).
+    /// The session's option of `category` (or with that id), flattening
+    /// both direct options and grouped option lists.
     fn of(opened: &Value, category: &str) -> Option<Choice> {
         let option = opened["configOptions"]
             .as_array()?
             .iter()
             .find(|option| option["category"] == category || option["id"] == category)?;
-        let values = option["options"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|choice| {
-                let value = choice["value"].as_str()?.to_owned();
-                let name = choice["name"].as_str().unwrap_or(&value).to_owned();
-                Some((value, name))
-            })
-            .collect();
+        let mut values = Vec::new();
+        for entry in option["options"].as_array().into_iter().flatten() {
+            if let Some(value) = entry["value"].as_str() {
+                let name = entry["name"].as_str().unwrap_or(value).to_owned();
+                values.push((value.to_owned(), name));
+            } else if let Some(group) = entry["options"].as_array() {
+                for choice in group {
+                    if let Some(value) = choice["value"].as_str() {
+                        let name = choice["name"].as_str().unwrap_or(value).to_owned();
+                        values.push((value.to_owned(), name));
+                    }
+                }
+            }
+        }
         Some(Choice {
             id: option["id"].as_str()?.to_owned(),
             current: option["currentValue"]
@@ -879,7 +1492,7 @@ impl Antigravity {
         let run = home.join("runs").join(crate::state::id());
         std::fs::create_dir_all(&run)?;
         private(&run, 0o700)?;
-        let given = environment(&home, &run, &browser);
+        let given = environment(&home, &run, &browser, method);
         let env: Vec<(&str, &str)> = given
             .iter()
             .chain(self.start.env.iter())
@@ -894,9 +1507,10 @@ impl Antigravity {
         ]
         .map(str::to_owned)
         .into();
+        let clean = sanitized_settings(&settings, method);
         self.process = Some(Process::spawn_without(
             "antigravity",
-            &settings,
+            &clean,
             &self.start.cwd,
             &args,
             &env,
@@ -928,6 +1542,8 @@ impl Antigravity {
                 .await?
             {
                 return Err(io::Error::other(if needs_sign_in(code, &said) {
+                    let _ = std::fs::remove_file(home.join(APP_DATA).join("sophon-models.json"));
+                    save_auth_state(&home, method, "unauthenticated");
                     NOT_SIGNED_IN.to_owned()
                 } else {
                     said
@@ -968,6 +1584,8 @@ impl Antigravity {
             };
             opened.map_err(|(code, said)| {
                 io::Error::other(if needs_sign_in(code, &said) {
+                    let _ = std::fs::remove_file(home.join(APP_DATA).join("sophon-models.json"));
+                    save_auth_state(&home, method, "unauthenticated");
                     NOT_SIGNED_IN.to_owned()
                 } else {
                     said
@@ -1011,6 +1629,7 @@ impl Antigravity {
                 serde_json::to_vec(&models).unwrap_or_default(),
             );
         }
+        save_auth_state(&home, method, "authenticated");
         self.choose().await
     }
 
@@ -1461,9 +2080,13 @@ mod tests {
         assert_eq!(sign_in_link(link), None, "a state with a space");
         let link = link.replace("s%201x", "s1");
         let pending = sign_in_link(&link).unwrap();
-        assert_eq!(pending, Pending { redirect: "http://127.0.0.1:47123/".into(), state: "s1".into() });
+        assert_eq!(
+            pending,
+            Pending::Loopback { redirect: "http://127.0.0.1:47123/".into(), state: "s1".into() }
+        );
         for wrong in [
             link.replace("accounts.google.com", "accounts.example.com"),
+            link.replace("accounts.google.com", "u@accounts.google.com"),
             link.replace("response_type=code", "response_type=token"),
             link.replace("127.0.0.1%3A47123", "evil.example%3A47123"),
             link.replace("47123", "80"),
@@ -1475,8 +2098,47 @@ mod tests {
     }
 
     #[test]
+    fn a_code_sign_in_link_matches_agy_login_and_accepts_code_or_url() {
+        let link = "https://accounts.google.com/o/oauth2/auth?access_type=offline&code_challenge_method=S256&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&state=login-state";
+        let pending = code_sign_in_link(link).unwrap();
+        assert_eq!(
+            pending,
+            Pending::Code {
+                redirect: "https://antigravity.google/oauth-callback".into(),
+                state: "login-state".into(),
+            }
+        );
+        assert_eq!(sign_in_link(link), None, "code link is not loopback");
+        for wrong in [
+            link.replace("antigravity.google", "antigravity.google.example.invalid"),
+            link.replace("/o/oauth2/auth", "/o/oauth2/v2/auth"),
+            link.replace("accounts.google.com", "user@accounts.google.com"),
+            format!("{link}#frag"),
+        ] {
+            assert_eq!(code_sign_in_link(&wrong), None, "{wrong}");
+        }
+        let page = "https://antigravity.google/oauth-callback?state=login-state&code=4%2F0Ab-c";
+        assert_eq!(
+            reply_for(&pending, " 4/0Ab-code_1.x~ "),
+            Ok("4/0Ab-code_1.x~".to_owned())
+        );
+        assert_eq!(reply_for(&pending, page), Ok(page.to_owned()));
+        for invalid in [
+            "",
+            "4/0Ab code",
+            "4/0Ab\nsecond line",
+            &page.replace("login-state", "other-state"),
+            &page.replace("antigravity.google", "evil.example"),
+            &page.replace("&code=4%2F0Ab-c", ""),
+            &format!("{page}&code=again"),
+        ] {
+            assert!(reply_for(&pending, invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
     fn a_pasted_reply_is_this_sign_in_s() {
-        let pending = Pending { redirect: "http://127.0.0.1:47123/".into(), state: "s1".into() };
+        let pending = Pending::Loopback { redirect: "http://127.0.0.1:47123/".into(), state: "s1".into() };
         let reply = "http://127.0.0.1:47123/?state=s1&code=4%2F0abc&scope=x&iss=https%3A%2F%2Faccounts.google.com";
         assert_eq!(reply_for(&pending, &format!(" {reply} ")), Ok(reply.to_owned()));
         assert!(reply_for(&pending, "http://127.0.0.1:47123/?state=s1&error=access_denied").is_ok());
@@ -1487,6 +2149,7 @@ mod tests {
             "http://127.0.0.1:47123/?state=s1",
             "http://127.0.0.1:47123/?state=s1&code=c&error=e",
             "http://127.0.0.1:47123/?state=s1&code=c&iss=https%3A%2F%2Fevil.example",
+            "http://127.0.0.1:47123/?state=s1&code=c&iss=https%3A%2F%2Faccounts.google.com&iss=https%3A%2F%2Faccounts.google.com",
             "https://example.com/?state=s1&code=c",
         ] {
             assert!(reply_for(&pending, wrong).is_err(), "{wrong}");
@@ -1535,15 +2198,123 @@ mod tests {
     }
 
     #[test]
-    fn a_sign_in_is_kept_in_its_folder_and_the_cli_is_not_told_it_runs_over_ssh() {
-        let env = environment(Path::new("/h"), Path::new("/h/runs/1"), Path::new("/h/browser"));
-        let get = |name: &str| env.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str());
-        assert_eq!(get("GEMINI_HOME"), Some("/h"));
-        assert_eq!(get("AGY_ACP_FORCE_FILE_STORAGE"), Some("1"));
-        assert_eq!(get("TMPDIR"), Some("/h/runs/1"));
-        assert_eq!(get("BROWSER"), Some("/h/browser"));
-        // SSH_CONNECTION made it refuse a sign-in in the browser.
-        assert_eq!(get("SSH_CONNECTION"), None);
+    fn oauth_personal_sets_ssh_connection_and_disables_auto_update() {
+        let personal = environment(
+            Path::new("/h"),
+            Path::new("/h/runs/1"),
+            Path::new("/h/browser"),
+            "oauth-personal",
+        );
+        fn get<'a>(env: &'a [(String, String)], name: &str) -> Option<&'a str> {
+            env.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str())
+        }
+        assert_eq!(get(&personal, "GEMINI_HOME"), Some("/h"));
+        assert_eq!(get(&personal, "AGY_ACP_FORCE_FILE_STORAGE"), Some("1"));
+        assert_eq!(get(&personal, "AGY_CLI_DISABLE_AUTO_UPDATE"), Some("true"));
+        assert_eq!(get(&personal, "TMPDIR"), Some("/h/runs/1"));
+        assert_eq!(get(&personal, "BROWSER"), Some("/h/browser"));
+        assert!(get(&personal, "SSH_CONNECTION").is_some());
+
+        // Only `oauth-personal` has `--login` and isolates via `SSH_CONNECTION`.
+        for other in ["oauth-business", "gemini-api-key", "agent-platform"] {
+            let env = environment(
+                Path::new("/h"),
+                Path::new("/h/runs/1"),
+                Path::new("/h/browser"),
+                other,
+            );
+            assert_eq!(get(&env, "SSH_CONNECTION"), None, "{other}");
+            assert_eq!(get(&env, "AGY_CLI_DISABLE_AUTO_UPDATE"), Some("true"), "{other}");
+        }
+    }
+
+    #[test]
+    fn sanitized_settings_keeps_only_the_active_methods_credential() {
+        let raw = json!({
+            "env": {
+                "GEMINI_HOME": "/h",
+                "GEMINI_API_KEY": "g-key",
+                "GOOGLE_API_KEY": "v-key",
+                "CUSTOM": "keep"
+            }
+        });
+        assert_eq!(
+            sanitized_settings(&raw, "oauth-personal")["env"],
+            json!({"CUSTOM": "keep"})
+        );
+        assert_eq!(
+            sanitized_settings(&raw, "gemini-api-key")["env"],
+            json!({"GEMINI_API_KEY": "g-key", "CUSTOM": "keep"})
+        );
+        assert_eq!(
+            sanitized_settings(&raw, "agent-platform")["env"],
+            json!({"GOOGLE_API_KEY": "v-key", "CUSTOM": "keep"})
+        );
+    }
+
+    #[test]
+    fn auth_status_tracks_verified_unchecked_and_signed_out_per_method() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = json!({"env":{"GEMINI_HOME":dir.path()}});
+        let initial = auth_status(&settings);
+        assert_eq!((&initial["loggedIn"], &initial["authStatus"]), (&json!(false), &json!("unknown")));
+        let app = dir.path().join(APP_DATA);
+        std::fs::create_dir_all(&app).unwrap();
+        // Token files (both 1.5 and legacy) count as authenticated.
+        std::fs::write(app.join("antigravity-oauth-token"), "{}").unwrap();
+        assert_eq!(auth_status(&settings)["authStatus"], "authenticated");
+        std::fs::remove_file(app.join("antigravity-oauth-token")).unwrap();
+        std::fs::write(app.join("acp_token.json"), "{}").unwrap();
+        assert_eq!(auth_status(&settings)["authStatus"], "authenticated");
+        std::fs::remove_file(app.join("acp_token.json")).unwrap();
+        // Verified marker (e.g. macOS Keychain storage with no token file) counts as authenticated.
+        save_auth_state(dir.path(), "oauth-personal", "authenticated");
+        assert_eq!((&auth_status(&settings)["loggedIn"], &auth_status(&settings)["authStatus"]), (&json!(true), &json!("authenticated")));
+        // Explicit sign-out wins until re-authenticated.
+        save_auth_state(dir.path(), "oauth-personal", "unauthenticated");
+        assert_eq!((&auth_status(&settings)["loggedIn"], &auth_status(&settings)["authStatus"]), (&json!(false), &json!("unauthenticated")));
+        // Switching authMethod ignores another method's marker.
+        let key_missing = json!({"authMethod":"gemini-api-key","env":{"GEMINI_HOME":dir.path()}});
+        assert_eq!(auth_status(&key_missing)["authStatus"], "unauthenticated");
+        let key_present = json!({"authMethod":"gemini-api-key","env":{"GEMINI_HOME":dir.path(),"GEMINI_API_KEY":"k"}});
+        assert_eq!(auth_status(&key_present)["authStatus"], "unknown");
+        save_auth_state(dir.path(), "gemini-api-key", "authenticated");
+        assert_eq!(auth_status(&key_present)["authStatus"], "authenticated");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn global_gemini_rules_and_skills_link_into_profile_without_replacing_own() {
+        let root = tempfile::tempdir().unwrap();
+        let user_gemini = root.path().join("home/.gemini");
+        let profile = root.path().join("profile");
+        std::fs::create_dir_all(user_gemini.join("config/skills/review")).unwrap();
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(user_gemini.join("AGENTS.md"), "global").unwrap();
+        std::fs::write(user_gemini.join("GEMINI.md"), "global-g").unwrap();
+        std::fs::write(user_gemini.join("config/skills.json"), "{}").unwrap();
+        // Profile owns its own GEMINI.md; empty skills placeholder is replaced.
+        std::fs::write(profile.join("GEMINI.md"), "own").unwrap();
+        std::fs::create_dir_all(profile.join("config/skills")).unwrap();
+
+        link_user_config(&profile, &user_gemini);
+        assert_eq!(
+            std::fs::read_link(profile.join("AGENTS.md")).unwrap(),
+            user_gemini.join("AGENTS.md")
+        );
+        assert_eq!(std::fs::read_to_string(profile.join("GEMINI.md")).unwrap(), "own");
+        assert_eq!(
+            std::fs::read_link(profile.join("config/skills")).unwrap(),
+            user_gemini.join("config/skills")
+        );
+        assert_eq!(
+            std::fs::read_link(profile.join("config/skills.json")).unwrap(),
+            user_gemini.join("config/skills.json")
+        );
+        // Removing target cleans up the dangling symlink on next prepare.
+        std::fs::remove_file(user_gemini.join("AGENTS.md")).unwrap();
+        link_user_config(&profile, &user_gemini);
+        assert!(profile.join("AGENTS.md").symlink_metadata().is_err());
     }
 
     #[test]
