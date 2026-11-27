@@ -390,7 +390,7 @@ pub(crate) fn param_fields(plugin_id: &str, params: &[crate::daemon::connection:
 
 /// A step of a plugin's card: its number (a check once done), what the
 /// step is, how it stands, and what there is to press.
-fn step(number: &'static str, done: bool, title: &'static str, status: impl IntoElement, action: Option<nsh_base::ButtonElement>) -> View {
+fn step(number: &'static str, done: bool, title: &'static str, status: impl IntoElement, action: Option<nsh_shadcn::ButtonElement>) -> View {
     let mark = if done {
         view().w(px(20.0)).h(px(20.0)).rounded(px(R_FULL)).bg(tint(SUCCESS, 0.14)).items_center().justify_center().child(icon(Icon::Check, 12.0).text_color(SUCCESS))
     } else {

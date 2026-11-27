@@ -2224,9 +2224,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "nsh-ui"
+name = "nsh-shadcn"
 version = "0.1.0"
+source = "git+https://github.com/caoxing9/nsh-shadcn?rev=ca53819c78cc09f266d77e1484b91012f422fafb#ca53819c78cc09f266d77e1484b91012f422fafb"
 dependencies = [
+ "chrono",
  "nsh-base",
  "nsh-core",
 ]
@@ -3276,7 +3278,7 @@ dependencies = [
  "nsh-platform-linux",
  "nsh-platform-macos",
  "nsh-platform-windows",
- "nsh-ui",
+ "nsh-shadcn",
  "nsh-updater",
  "objc2",
  "objc2-app-kit",
