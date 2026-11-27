@@ -128,6 +128,11 @@ fn open(path: &str, reveal: bool) {
     }
 }
 
+/// Opens the file at `path` (absolute, or `~/…`), as a link to it would.
+pub(crate) fn open_path(path: &str) {
+    open(path, false);
+}
+
 /// The file a link of a reply points to, when it is a path: absolute
 /// (`/a/b`, `~/a`), percent-escapes read, a line after it (`:12`, `#L12`)
 /// kept as a chip's is. Codex writes the files it names so:

@@ -29,6 +29,10 @@ enum RowKind {
     Tool,
     /// A run of tool calls, summed up.
     Group,
+    /// A turn's work: a live box, or one line once done.
+    Work,
+    /// The files a finished turn changed.
+    Changes,
     Todo,
     Error,
     Notice,
@@ -249,10 +253,24 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
         Some(Row::Group(g)) => Some(g),
         _ => None,
     });
+    let work = computed(move || match shown.get() {
+        Some(Row::Work(g)) => Some(g),
+        _ => None,
+    });
+    let changed = computed(move || match shown.get() {
+        Some(Row::Changes { start, end, .. }) => Some((start, end)),
+        _ => None,
+    });
     let item = computed(move || index.get().and_then(store::item_at));
     let kind = computed(move || {
         if group.with(Option::is_some) {
             return Some(RowKind::Group);
+        }
+        if work.with(Option::is_some) {
+            return Some(RowKind::Work);
+        }
+        if changed.with(Option::is_some) {
+            return Some(RowKind::Changes);
         }
         item.with(|i| i.as_ref().map(RowKind::of))
     });
@@ -551,6 +569,8 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                 // summary, past the summary's chevron.
                 RowKind::Tool => view().pl(move || px(if grouped.get() { S4 } else { 0.0 })).child(tool_row(item)).into_element(),
                 RowKind::Group => group_row(group).into_element(),
+                RowKind::Work => work_row(work).into_element(),
+                RowKind::Changes => changes_card(changed).into_element(),
                 RowKind::Todo => todo_card(item).into_element(),
                 // A line where the reply would be, not a red block: the mark
                 // says it failed, the words say why, quietly.
@@ -1441,6 +1461,242 @@ fn group_row(group: Memo<Option<Group>>) -> impl IntoElement {
                 end.into_element()
             }))
         }))
+}
+
+/// How many steps a turn's live box shows at once, and a step's height.
+const STEPS_SHOWN: usize = 4;
+const STEP_H: f32 = 22.0;
+
+/// A turn's work (`ToolDisplay::Stream`): while the agent is at it, a small
+/// box its steps run through; done, one line.
+fn work_row(work: Memo<Option<Group>>) -> impl IntoElement {
+    let live = computed(move || work.with(|w| w.as_ref().is_some_and(|w| w.live)));
+    view().child(dynamic(move || {
+        let live = live.get();
+        Some(untracked(move || if live { work_box(work).into_element() } else { work_line(work).into_element() }))
+    }))
+}
+
+/// The live box: its last few steps, the newest at its foot; each new one
+/// slides the rest up (a spring, quick), the older fading as they rise.
+fn work_box(work: Memo<Option<Group>>) -> impl IntoElement {
+    let steps = computed(move || work.get().map(|g| store::work_steps(g.start, g.end, STEPS_SHOWN + 1)).unwrap_or_default());
+    let slide = animated_value(0.0);
+    let seen = std::cell::Cell::new(None::<usize>);
+    effect(move || {
+        let total = steps.with(|(n, _)| *n);
+        let before = seen.replace(Some(total));
+        if before.is_some_and(|b| total > b) && !reduce_motion() {
+            // From where the steps were, one lower, up into place.
+            slide.set(STEP_H);
+            let _ = slide.spring(0.0, Spring { stiffness: 420.0, damping: 36.0, ..Spring::default() });
+        }
+    });
+    let count = move || {
+        let n = steps.with(|(n, _)| *n);
+        if n == 1 { t("1 step").to_owned() } else { tf("{} steps", &[&n.to_string()]) }
+    };
+    view()
+        .my(px(2.0))
+        .rounded(px(R_LG))
+        .border_1()
+        .border_color(BORDER())
+        .bg(tint(FG(), 0.025))
+        .px(sp(S3))
+        .pt(sp(S2))
+        .pb(px(6.0))
+        .gap(px(2.0))
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap(sp(S2))
+                .h(px(20.0))
+                .child(spark(12.0))
+                .child(text(t("Working")).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG_MUTED()))
+                .child(text(count).text_size(tx(TEXT_XS)).text_color(FG_FAINT())),
+        )
+        .child(
+            view().h(px(STEP_H * STEPS_SHOWN as f32)).overflow_hidden().justify_end().child(view().bind_translate_y(&slide).child(dynamic(move || {
+                let (_, list) = steps.get();
+                Some(untracked(move || {
+                    let n = list.len();
+                    let mut column = view();
+                    for (i, step) in list.into_iter().enumerate() {
+                        // The newest whole, the older fainter as they rise.
+                        let age = n - 1 - i;
+                        column = column.child(step_line(step).opacity([1.0_f32, 0.7, 0.45, 0.28, 0.14][age.min(4)]));
+                    }
+                    column.into_element()
+                }))
+            }))),
+        )
+}
+
+/// A step in the live box: its icon, what it is, its words.
+fn step_line(step: crate::fold::Step) -> View {
+    let glyph = match step.kind.as_str() {
+        "thinking" => Icon::Brain,
+        "said" => Icon::MessageSquare,
+        "plan" => Icon::ListTodo,
+        kind => tool_icon(kind, &step.name),
+    };
+    let mut line = view().flex_row().items_center().gap(sp(S2)).h(px(STEP_H)).child(icon(glyph, 13.0).text_color(FG_MUTED()));
+    if !step.name.is_empty() {
+        line = line.child(text(step.name).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG()).flex_shrink_0());
+    }
+    let words = text(step.words).text_size(tx(if step.kind == "said" { TEXT_SM } else { TEXT_CODE })).text_color(FG_MUTED()).number_of_lines(1).flex_1();
+    line = line.child(if step.kind == "said" || step.kind == "thinking" { words } else { words.font_family(mono_font) });
+    if step.running {
+        line = line.child(status_dot(|| Status::Running));
+    } else if step.failed {
+        line = line.child(icon(Icon::X, 13.0).text_color(DANGER));
+    }
+    line
+}
+
+/// A done turn's work, one line: "Done · 5 tool calls · 1 message · 23s";
+/// pressed, its steps show under it.
+fn work_line(work: Memo<Option<Group>>) -> impl IntoElement {
+    let tally = computed(move || work.get().map(|g| store::work_tally(g.start, g.end)).unwrap_or_default());
+    let open = computed(move || work.with(|g| g.as_ref().is_some_and(|g| g.open)));
+    let words = move || {
+        tally.with(|(tl, took)| {
+            let mut parts = vec![if tl.stopped { t("Stopped") } else { t("Completed") }.to_owned()];
+            parts.push(if tl.calls == 1 { t("1 tool call").to_owned() } else { tf("{} tool calls", &[&tl.calls.to_string()]) });
+            if tl.messages > 0 {
+                parts.push(if tl.messages == 1 { t("1 message").to_owned() } else { tf("{} messages", &[&tl.messages.to_string()]) });
+            }
+            if tl.failed > 0 {
+                parts.push(tf("{} failed", &[&tl.failed.to_string()]));
+            }
+            if let Some(secs) = took {
+                parts.push(short_time(*secs));
+            }
+            parts.join(" · ")
+        })
+    };
+    let failed = computed(move || tally.with(|(tl, _)| tl.failed > 0));
+    nsh_base::button()
+        .on_press(move || {
+            if let Some(g) = work.get_untracked() {
+                store::set_group_open(&g.id, !g.open);
+            }
+        })
+        .flex_row()
+        .items_center()
+        .gap(sp(S2))
+        .px(sp(S2))
+        .ml(px(-S2))
+        .h(px(28.0))
+        .rounded(px(R_LG))
+        .group()
+        .hover(|s| s.bg(highlight()))
+        .child(dynamic(move || {
+            let bad = failed.get();
+            Some(untracked(move || {
+                icon(if bad { Icon::CircleAlert } else { Icon::CircleCheck }, 14.0).text_color(if bad { DANGER_MUTED } else { FG_FAINT() }).into_element()
+            }))
+        }))
+        .child(text(words).text_size(tx(TEXT_SM)).text_color(FG_MUTED()).number_of_lines(1).flex_shrink(1.0).group_hover(|s| s.text_color(FG())))
+        .child(view().flex_1())
+        .child(
+            icon(Icon::ChevronDown, 13.0)
+                .text_color(FG_FAINT())
+                .rotate(move || Radians(if open.get() { std::f32::consts::PI } else { 0.0 }))
+                .transition_transform(),
+        )
+}
+
+/// How many files a turn's card lists before "N more".
+const CHANGES_SHOWN: usize = 5;
+
+/// What a finished turn changed, under its reply: each file with the lines
+/// it gained and lost; on the desktop, the changes a press away.
+fn changes_card(range: Memo<Option<(usize, usize)>>) -> impl IntoElement {
+    let files = computed(move || range.get().map(|(s, e)| store::turn_changes(s, e)).unwrap_or_default());
+    let counts = |added: usize, removed: usize| {
+        let mut row = view().flex_row().items_center().gap(px(6.0)).flex_shrink_0();
+        if added > 0 {
+            row = row.child(text(format!("+{added}")).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(SUCCESS));
+        }
+        if removed > 0 {
+            row = row.child(text(format!("-{removed}")).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(DANGER));
+        }
+        row
+    };
+    view().mb(sp(S1)).child(dynamic(move || {
+        let list = files.get();
+        Some(untracked(move || {
+            let (added, removed) = list.iter().fold((0, 0), |(a, r), f| (a + f.added, r + f.removed));
+            let title = if list.len() == 1 { t("Changed 1 file").to_owned() } else { tf("Changed {} files", &[&list.len().to_string()]) };
+            let mut card = view()
+                .rounded(px(R_LG))
+                .border_1()
+                .border_color(BORDER())
+                .bg(SURFACE0())
+                .px(sp(S3))
+                .py(sp(S2))
+                .gap(px(2.0))
+                .child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap(sp(S2))
+                        .h(px(28.0))
+                        .child(icon(Icon::FileDiff, 15.0).text_color(FG_MUTED()))
+                        .child(text(title).text_size(tx(TEXT_SM)).font_weight(FontWeight(600)).text_color(FG()))
+                        .child(view().flex_1())
+                        .child(counts(added, removed)),
+                );
+            for f in list.iter().take(CHANGES_SHOWN) {
+                let (dir, name) = match f.path.rsplit_once('/') {
+                    Some((d, n)) => (d.rsplit('/').take(2).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("/"), n.to_owned()),
+                    None => (String::new(), f.path.clone()),
+                };
+                let path = f.path.clone();
+                let pressable = !MOBILE && (path.starts_with('/') || path.starts_with("~/"));
+                card = card.child(
+                    nsh_base::button()
+                        .on_press(move || {
+                            if pressable {
+                                super::file_links::open_path(&path);
+                            }
+                        })
+                        .flex_row()
+                        .items_center()
+                        .gap(sp(S2))
+                        .h(px(26.0))
+                        .px(sp(S1))
+                        .mx(px(-4.0))
+                        .rounded(px(R_MD))
+                        .when(pressable, |b| b.hover(|s| s.bg(highlight())))
+                        .child(icon(Icon::FileText, 14.0).text_color(FG_FAINT()))
+                        .child(text(name).text_size(tx(TEXT_SM)).text_color(FG()).number_of_lines(1).flex_shrink(1.0))
+                        .child(text(dir).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(FG_FAINT()).number_of_lines(1).flex_1())
+                        .child(counts(f.added, f.removed)),
+                );
+            }
+            if list.len() > CHANGES_SHOWN {
+                card = card.child(text(tf("{} more", &[&(list.len() - CHANGES_SHOWN).to_string()])).text_size(tx(TEXT_XS)).text_color(FG_FAINT()).px(sp(S1)).h(px(22.0)));
+            }
+            if !MOBILE {
+                card = card.child(
+                    nsh_base::button()
+                        .on_press(store::show_changes)
+                        .flex_row()
+                        .items_center()
+                        .gap(px(4.0))
+                        .h(px(28.0))
+                        .self_start()
+                        .group()
+                        .child(text(t("View changes")).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(ACCENT()))
+                        .child(icon(Icon::ChevronRight, 13.0).text_color(ACCENT())),
+                );
+            }
+            card.into_element()
+        }))
+    }))
 }
 
 /// A kind of call on a folded row: its icon and how many there were.

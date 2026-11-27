@@ -2229,6 +2229,33 @@ pub(crate) fn group_summary(start: usize, end: usize) -> crate::fold::Summary {
     global::<Timeline>().with(|t| crate::fold::summarize(t.items.get(start..end).unwrap_or_default()))
 }
 
+/// A live turn's work (`start..end`): how many steps, and its last `n`.
+pub(crate) fn work_steps(start: usize, end: usize, n: usize) -> (usize, Vec<crate::fold::Step>) {
+    global::<Timeline>().with(|t| crate::fold::steps(t.items.get(start..end).unwrap_or_default(), n))
+}
+
+/// A done turn's work (`start..end`) for its line, with how long the turn
+/// took: from the user's message to its reply.
+pub(crate) fn work_tally(start: usize, end: usize) -> (crate::fold::Tally, Option<u64>) {
+    global::<Timeline>().with(|t| {
+        let tally = crate::fold::tally(t.items.get(start..end).unwrap_or_default());
+        let at = |i: Option<usize>| match i.and_then(|i| t.items.get(i)) {
+            Some(Item::User { at, .. } | Item::Assistant { at, .. }) => at.as_deref().and_then(crate::usage::parse::rfc3339),
+            _ => None,
+        };
+        let took = match (at(start.checked_sub(1)), at(Some(end))) {
+            (Some(from), Some(to)) if to >= from => Some((to - from) as u64),
+            _ => None,
+        };
+        (tally, took)
+    })
+}
+
+/// The files a turn (`start..end`) changed.
+pub(crate) fn turn_changes(start: usize, end: usize) -> Vec<crate::fold::FileChange> {
+    global::<Timeline>().with(|t| crate::fold::changes(t.items.get(start..end).unwrap_or_default()))
+}
+
 /// Opens or folds a group of tool calls.
 /// The conversation's list scrolled: its offset from the top, the
 /// content's height and its own. Keeps how far it is from its end, and
@@ -2370,7 +2397,7 @@ pub(crate) fn set_group_open(id: &str, open: bool) {
         // the top once they are laid out, where it folds them again.
         let id = id.to_owned();
         set_timeout(std::time::Duration::from_millis(60), move || {
-            let row = untracked(display_rows).iter().position(|r| matches!(r, crate::fold::Row::Group(g) if g.id == id));
+            let row = untracked(display_rows).iter().position(|r| matches!(r, crate::fold::Row::Group(g) | crate::fold::Row::Work(g) if g.id == id));
             if let Some(row) = row {
                 TIMELINE_LIST.with_borrow(|l| {
                     if let Some(list) = l {
