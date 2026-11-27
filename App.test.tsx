@@ -154,7 +154,7 @@ test("settings lists the agents and opens the steps that add a provider", async 
 });
 
 test("Return with no project chosen says to choose one", async () => {
-  const app = await open(".", { width: 1100, height: 760 });
+  const app = await open(".", { width: 1100, height: 760, platform: "macos" });
   await newWorkspace(app);
   await app.type("id:composer", "hi");
   await app.keyboard.press("enter");
