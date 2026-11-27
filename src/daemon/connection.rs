@@ -1652,10 +1652,12 @@ fn p2p_id(link: &super::relay::PairingLink) -> Option<(String, Option<String>)> 
         let id = v.get("id")?.as_str()?.to_owned();
         Some((id, v.get("relay").and_then(Value::as_str).map(str::to_owned)))
     });
+    // Not said where: Sophon's own relay, where every bridge is found.
+    let own = |(id, relay): (String, Option<String>)| (id, relay.or_else(|| Some(super::relay::DEFAULT_P2P_RELAY.to_owned())));
     match (told, &link.p2p) {
-        (Some(told), Some(id)) if told.0 == *id => Some(told),
-        (_, Some(id)) => Some((id.clone(), link.p2p_relay.clone())),
-        (told, None) => told,
+        (Some(told), Some(id)) if told.0 == *id => Some(own(told)),
+        (_, Some(id)) => Some(own((id.clone(), link.p2p_relay.clone()))),
+        (told, None) => told.map(own),
     }
 }
 
@@ -4649,7 +4651,11 @@ mod tests {
         assert!(endpoint_for(&both, 0, None, false).is_lan(), "the LAN first");
         let away = endpoint_for(&both, usize::MAX, None, false);
         assert_eq!(away.via(), Via::P2p);
-        assert_eq!(away.url, format!("iroh://{id}"));
+        assert_eq!(
+            super::super::p2p::parse_url(&away.url),
+            Some((id.to_owned(), Some(super::super::relay::DEFAULT_P2P_RELAY.to_owned()))),
+            "no relay named: Sophon's own"
+        );
         assert_eq!(away.relay.as_ref().map(|o| o.daemon_key), Some(key), "the bridge's handshake");
         assert_eq!(away.bridge_token.as_deref(), Some("tok"));
         assert_eq!(away.lan_probe, vec!["10.0.0.2:1".to_owned()], "moves to the LAN when it answers");

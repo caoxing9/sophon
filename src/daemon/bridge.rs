@@ -261,9 +261,9 @@ pub fn info_for(space: Option<&str>) -> Option<BridgeInfo> {
                 }
             },
         };
-        (s.port, s.public, token, super::p2p::id_of(&s.p2p), s.p2p_relay.clone())
+        (s.port, s.public, token, super::p2p::id_of(&s.p2p), p2p_relay_of(s))
     })
-    .and_then(|(port, key, token, p2p, p2p_relay)| Some(BridgeInfo { addr: addrs(port)?, key, token, p2p: Some(p2p), p2p_relay }))
+    .and_then(|(port, key, token, p2p, p2p_relay)| Some(BridgeInfo { addr: addrs(port)?, key, token, p2p: Some(p2p), p2p_relay: Some(p2p_relay) }))
 }
 
 /// The devices paired through the LAN.
@@ -554,6 +554,14 @@ async fn relay_loop() {
     }
 }
 
+/// The relay the bridge is found through peer to peer: the relay server's
+/// as it last said, else Sophon's own.
+fn p2p_relay_of(s: &State) -> String {
+    s.p2p_relay.clone().unwrap_or_else(|| DEFAULT_P2P_RELAY.to_owned())
+}
+
+use relay::DEFAULT_P2P_RELAY;
+
 /// Holds the bridge's peer to peer endpoint: each session a device opens
 /// over it is served as a LAN device's is (the same handshake and token).
 /// Its home is the relay server's own relay for peer to peer when it has
@@ -573,7 +581,7 @@ async fn p2p_loop() {
                 }
             });
         }
-        let relay = with(|s| s.p2p_relay.clone()).flatten();
+        let relay = with(|s| p2p_relay_of(s));
         let serving = super::p2p::host(secret, relay.as_deref(), |stream| async move {
             let served = match tokio_tungstenite::accept_async(stream).await {
                 Ok(ws) => serve(ws, false, true).await,
@@ -610,14 +618,22 @@ async fn p2p_loop() {
 }
 
 /// The relay for peer to peer the relay server Sophon uses hosts
-/// (`sophon-relay`'s `/p2p`): `Ok(None)` when none is set or it hosts none
-/// (an older one), `Err` when it does not answer now.
+/// (`sophon-relay`'s `/p2p`), else Sophon's own (`DEFAULT_P2P_RELAY`: none
+/// set, or one that hosts none); `Err` when it does not answer now.
 async fn own_p2p_relay() -> Result<Option<String>, ()> {
+    hosted_p2p_relay().await.map(|r| Some(r.unwrap_or_else(|| DEFAULT_P2P_RELAY.to_owned())))
+}
+
+/// What the relay server set says at `/p2p`: `Ok(None)`, none set or none
+/// hosted there.
+async fn hosted_p2p_relay() -> Result<Option<String>, ()> {
     let Some((endpoint, tls)) = relay_target() else { return Ok(None) };
     let url = format!("{}://{endpoint}/p2p", if tls { "wss" } else { "ws" });
-    let Ok(Ok((mut ws, _))) = tokio::time::timeout(Duration::from_secs(8), tokio_tungstenite::connect_async(url.as_str())).await else {
+    let mut ws = match tokio::time::timeout(Duration::from_secs(8), tokio_tungstenite::connect_async(url.as_str())).await {
+        Ok(Ok((ws, _))) => ws,
         // Refused at the upgrade: a relay that has no `/p2p` (older).
-        return Err(());
+        Ok(Err(tokio_tungstenite::tungstenite::Error::Http(_))) => return Ok(None),
+        _ => return Err(()),
     };
     let first = tokio::time::timeout(Duration::from_secs(5), ws.next()).await.map_err(|_| ())?;
     let _ = ws.close(None).await;
@@ -738,7 +754,7 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(phone: WebSocketStream<S>, rel
     // told (sealed, before the service's frames), it keeps them with its
     // link. Devices that do not ask hear nothing new.
     if first.get("p2p").and_then(Value::as_bool) == Some(true)
-        && let Some((id, relay)) = with(|s| (super::p2p::id_of(&s.p2p), s.p2p_relay.clone()))
+        && let Some((id, relay)) = with(|s| (super::p2p::id_of(&s.p2p), p2p_relay_of(s)))
     {
         let sealed = seal.seal(Message::Text(json!({ "type": "sophon_bridge_p2p", "id": id, "relay": relay }).to_string()))?;
         ptx.send(to_ws(sealed)).await.map_err(|e| e.to_string())?;
@@ -808,11 +824,11 @@ async fn pair<S: AsyncRead + AsyncWrite + Unpin>(device: &str, seal: &relay::Sen
         };
         s.devices.push(d.clone());
         save(s);
-        (d, s.port, s.public, super::p2p::id_of(&s.p2p), s.p2p_relay.clone())
+        (d, s.port, s.public, super::p2p::id_of(&s.p2p), p2p_relay_of(s))
     });
     let Some((d, port, public, p2p, p2p_relay)) = made else { return refused };
     let Some(lan) = addrs(port) else { return refused };
-    let link = relay::PairingLink::format_named(Some((&lan, &public, &d.token)), relay_link.as_deref(), name.as_deref(), Some((&p2p, p2p_relay.as_deref())));
+    let link = relay::PairingLink::format_named(Some((&lan, &public, &d.token)), relay_link.as_deref(), name.as_deref(), Some((&p2p, Some(&p2p_relay))));
     json!({ "type": "sophon_pair_ok", "link": link })
 }
 

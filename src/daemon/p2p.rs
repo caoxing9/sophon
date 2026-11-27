@@ -254,6 +254,38 @@ mod tests {
         assert_eq!(back.as_str(), "echo hi");
     }
 
+    /// Through a deployed relay server's relay (`SOPHON_P2P_RELAY`, e.g.
+    /// `https://47.119.154.134:3443`), as Sophon sets it up: its
+    /// certificate checked, nothing else asked, the computer found by its
+    /// id there.
+    #[tokio::test]
+    #[ignore]
+    async fn sessions_go_through_the_deployed_relay_live() {
+        let relay = std::env::var("SOPHON_P2P_RELAY").expect("SOPHON_P2P_RELAY");
+        let secret = new_secret();
+        let started = std::time::Instant::now();
+        let computer = builder(Some(&relay)).unwrap().secret_key(SecretKey::from_bytes(&secret)).alpns(vec![ALPN.to_vec()]).bind().await.unwrap();
+        computer.online().await;
+        println!("computer on the relay in {} ms", started.elapsed().as_millis());
+        let serving = computer.clone();
+        tokio::spawn(async move {
+            serve_on(&serving, |stream| async move {
+                let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+                while let Some(Ok(Message::Text(t))) = ws.next().await {
+                    ws.send(Message::Text(format!("echo {t}").into())).await.unwrap();
+                }
+            })
+            .await
+        });
+        let started = std::time::Instant::now();
+        let stream = tokio::time::timeout(std::time::Duration::from_secs(15), connect(&id_of(&secret), Some(&relay))).await.expect("in time").unwrap();
+        let (mut ws, _) = tokio_tungstenite::client_async("ws://sophon.p2p/ws", stream).await.unwrap();
+        ws.send(Message::Text("hi".into())).await.unwrap();
+        let Some(Ok(Message::Text(back))) = ws.next().await else { panic!("no answer") };
+        assert_eq!(back.as_str(), "echo hi");
+        println!("device reached it, a round trip done, in {} ms", started.elapsed().as_millis());
+    }
+
     #[test]
     fn a_peer_to_peer_url_carries_its_relay() {
         let id = id_of(&new_secret());

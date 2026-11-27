@@ -565,6 +565,11 @@ pub fn generate_key() -> ([u8; 32], [u8; 32]) {
     (kp.private.try_into().expect("32"), kp.public.try_into().expect("32"))
 }
 
+/// The relay for peer to peer when the relay server set has none (none
+/// set, or one too old to host it): Sophon's own, in China, so every
+/// Sophon gets there fast with nothing to set up.
+pub const DEFAULT_P2P_RELAY: &str = "https://47.119.154.134:3443";
+
 /// A Sophon pairing link: the LAN bridge (address, key, token) and the
 /// daemon's relay offer, so a phone tries the LAN first and the relay after.
 #[derive(Debug, Clone, PartialEq)]
