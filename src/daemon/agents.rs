@@ -29,6 +29,8 @@ pub struct Diagnostic {
     pub version: Option<String>,
     /// The binary the daemon runs.
     pub path: Option<String>,
+    /// The folder the CLI keeps its files in (its login among them).
+    pub files: Option<String>,
     pub login: Option<Login>,
     /// The diagnostic itself failed.
     pub error: Option<String>,
@@ -68,7 +70,12 @@ pub fn parse_diagnostic(text: &str) -> Diagnostic {
     let first_line = |v: &str| v.lines().next().unwrap_or("").trim().to_owned();
     Diagnostic {
         version: get("Version").map(first_line).filter(|v| !v.is_empty() && v != "unknown").map(|v| clean_version(&v)),
-        path: get("Resolved path").map(first_line).filter(|p| p.starts_with('/') || p.contains(":\\")),
+        // Paseo's `Resolved path`, Sophon's service's `Binary`.
+        path: get("Resolved path")
+            .or_else(|| get("Binary"))
+            .map(first_line)
+            .filter(|p| p.starts_with('/') || p.contains(":\\")),
+        files: get("Files").map(first_line).filter(|p| p.starts_with('/') || p.contains(":\\")),
         login: get("Auth").and_then(parse_login),
         error: get("Error").map(|e| e.trim().to_owned()).filter(|e| !e.is_empty()),
     }
@@ -473,6 +480,18 @@ mod tests {
         assert_eq!(l.expires.as_deref(), Some("2026-11-29"));
         assert_eq!(home_from_config_dir(&l.config_dir.unwrap()).as_deref(), Some("/Users/me"));
         assert_eq!(d.error, None);
+    }
+
+    #[test]
+    fn reads_the_service_s_codex_diagnostic() {
+        let text = "Codex\n  Binary: /opt/homebrew/bin/codex\n  Version: codex-cli 0.169.1\n  Files: /Users/me/.codex-work\n  Models listed: 19\n  Starts on: GPT (default effort)\n  Endpoint: its own\n  Auth: {\"authMethod\":\"chatgpt\",\"email\":\"me@example.com\",\"loggedIn\":true,\"planTier\":\"ChatGPT Plus\"}";
+        let d = parse_diagnostic(text);
+        assert_eq!(d.path.as_deref(), Some("/opt/homebrew/bin/codex"));
+        assert_eq!(d.files.as_deref(), Some("/Users/me/.codex-work"));
+        assert_eq!(d.version.as_deref(), Some("0.169.1"));
+        let l = d.login.unwrap();
+        assert!(l.signed_in);
+        assert_eq!((l.method.as_deref(), l.email.as_deref(), l.plan.as_deref()), (Some("chatgpt"), Some("me@example.com"), Some("ChatGPT Plus")));
     }
 
     #[test]

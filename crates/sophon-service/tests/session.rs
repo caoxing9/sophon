@@ -3555,6 +3555,130 @@ while IFS= read -r line; do
 done
 "#;
 
+/// A `codex` app server that only knows its account: signed in once a
+/// sign-in it started has ended (`signed-in` in its folder), as a Plus
+/// subscriber; a sign-in ends a moment after it starts, unless `hold` is
+/// in its folder. What it was asked goes to `codex-asked`.
+const CODEX_ACCOUNT: &str = r#"#!/bin/sh
+case " $* " in *" app-server "*) ;; *) exit 2 ;; esac
+say() { printf '%s\n' "$1"; }
+while IFS= read -r line; do
+    id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+    case "$line" in
+        *'"method":"initialize"'*) say "{\"id\":$id,\"result\":{}}" ;;
+        *'"method":"account/read"'*)
+            if [ -f "$CODEX_HOME/signed-in" ]; then
+                say "{\"id\":$id,\"result\":{\"account\":{\"type\":\"chatgpt\",\"email\":\"me@example.com\",\"planType\":\"plus\"},\"requiresOpenaiAuth\":true}}"
+            else
+                say "{\"id\":$id,\"result\":{\"account\":null,\"requiresOpenaiAuth\":true}}"
+            fi ;;
+        *'"method":"account/login/start"'*)
+            printf '%s\n' "$line" >> "$CODEX_HOME/../codex-asked"
+            say "{\"id\":$id,\"result\":{\"type\":\"chatgpt\",\"loginId\":\"l-1\",\"authUrl\":\"https://auth.openai.com/oauth/authorize?x=1\"}}"
+            if [ ! -f "$CODEX_HOME/hold" ]; then
+                sleep 1
+                touch "$CODEX_HOME/signed-in"
+                say '{"method":"account/login/completed","params":{"loginId":"l-1","success":true}}'
+            fi ;;
+    esac
+done
+"#;
+
+#[tokio::test]
+async fn codex_signs_in_by_its_own_and_says_with_which_account() {
+    let service = Service(tempfile::tempdir().unwrap());
+    install(service.0.path(), "codex", CODEX_ACCOUNT);
+    let folder = service.0.path().join("codex-work");
+    fs::write(
+        service.0.path().join("config.json"),
+        json!({"providers":{"work":{"extends":"codex","env":{"CODEX_HOME":folder}}}}).to_string(),
+    )
+    .unwrap();
+    service.cli("start");
+    let mut socket = service.connect(true).await;
+    let diagnostic = |reply: &Value| reply["payload"]["diagnostic"].as_str().unwrap().to_owned();
+    let before = ask(
+        &mut socket,
+        json!({"type":"provider_diagnostic_request","provider":"work"}),
+    )
+    .await;
+    assert!(
+        diagnostic(&before).contains(r#"Auth: {"loggedIn":false}"#),
+        "{before}"
+    );
+    // The folder Codex refuses when it is not there is made.
+    assert!(folder.is_dir());
+
+    let started = ask(
+        &mut socket,
+        json!({"type":"provider.login.start.request","provider":"work"}),
+    )
+    .await;
+    assert_eq!(
+        started["type"], "provider.login.start.response",
+        "{started}"
+    );
+    assert_eq!(
+        started["payload"]["authUrl"],
+        "https://auth.openai.com/oauth/authorize?x=1"
+    );
+    let asked = fs::read_to_string(service.0.path().join("codex-asked")).unwrap();
+    assert!(asked.contains(r#""type":"chatgpt""#), "{asked}");
+    let ended = ask(
+        &mut socket,
+        json!({"type":"provider.login.wait.request","provider":"work"}),
+    )
+    .await;
+    assert_eq!(
+        (&ended["payload"]["success"], &ended["payload"]["error"]),
+        (&json!(true), &Value::Null),
+        "{ended}"
+    );
+
+    let after = ask(
+        &mut socket,
+        json!({"type":"provider_diagnostic_request","provider":"work"}),
+    )
+    .await;
+    assert!(
+        diagnostic(&after).contains(r#"Auth: {"authMethod":"chatgpt","email":"me@example.com","loggedIn":true,"planTier":"ChatGPT Plus"}"#),
+        "{after}"
+    );
+
+    // One the person gives up on ends when asked to; a device code is
+    // asked for as such.
+    fs::write(folder.join("hold"), "").unwrap();
+    ask(
+        &mut socket,
+        json!({"type":"provider.login.start.request","provider":"work","device":true}),
+    )
+    .await;
+    let asked = fs::read_to_string(service.0.path().join("codex-asked")).unwrap();
+    assert!(asked.contains(r#""type":"chatgptDeviceCode""#), "{asked}");
+    ask(
+        &mut socket,
+        json!({"type":"provider.login.cancel.request","provider":"work"}),
+    )
+    .await;
+    let ended = ask(
+        &mut socket,
+        json!({"type":"provider.login.wait.request","provider":"work"}),
+    )
+    .await;
+    assert_eq!(
+        (&ended["payload"]["success"], &ended["payload"]["error"]),
+        (&json!(false), &json!("Canceled")),
+        "{ended}"
+    );
+    // Only Codex signs in from here.
+    let refused = ask(
+        &mut socket,
+        json!({"type":"provider.login.start.request","provider":"claude"}),
+    )
+    .await;
+    assert_eq!(refused["type"], "rpc_error", "{refused}");
+}
+
 /// Reads until the turn underway fails, and gives why.
 async fn failed(socket: &mut Socket, agent: &Value) -> String {
     loop {

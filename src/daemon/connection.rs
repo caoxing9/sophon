@@ -165,6 +165,11 @@ pub enum Command {
     RefreshProviders,
     /// What the provider's binary, version and login are.
     ProviderDiagnostic(String),
+    /// Signs a Codex provider in to ChatGPT by Codex's own: in a browser on
+    /// the host, or with a code typed on any device (`device`).
+    ProviderLogin { provider: String, device: bool },
+    /// Ends the sign-in under way for a provider.
+    ProviderLoginCancel(String),
     RestartDaemon,
     /// The sessions to import: asked of each of `providers` apart (one
     /// list of all would be the newest of them together, and an agent
@@ -1236,6 +1241,16 @@ pub enum Stage {
     Greeting(Via),
 }
 
+/// Where a sign-in is ([`Event::ProviderLogin`]).
+#[derive(Clone, Debug, PartialEq)]
+pub enum LoginStep {
+    /// Under way: the page to open (`url`), with the code to type there
+    /// for a sign-in by code.
+    Started { url: String, code: Option<String> },
+    /// Over: signed in, or why not.
+    Ended(Result<(), String>),
+}
+
 #[derive(Debug, Clone)]
 pub enum Event {
     Connecting { url: String },
@@ -1326,6 +1341,9 @@ pub enum Event {
     DaemonConfig(Value),
     /// A provider's diagnostic text.
     Diagnostic { provider: String, text: String },
+    /// A provider's sign-in ([`Command::ProviderLogin`]): where to go, then
+    /// how it went.
+    ProviderLogin { provider: String, step: LoginStep },
     Usage(Vec<ProviderUsage>),
     /// The host's reset credits; `Err` when it cannot say (no plugin).
     ResetCredits(Result<Vec<ResetCredits>, String>),
@@ -1810,6 +1828,8 @@ enum Pending {
     Pairing,
     /// A feature an older daemon may not have: failures stay quiet.
     Optional,
+    /// A provider's sign-in, started or waited on: a failure ends it.
+    ProviderLogin(String),
     /// The sessions to import, asked with this number.
     Recent(u64),
     /// A providers config patch: the list is refreshed once it is saved.
@@ -2716,6 +2736,16 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
             Pending::Optional,
             json!({ "type": "provider_diagnostic_request", "provider": provider }),
         )],
+        Command::ProviderLogin { provider, device } => vec![request(
+            pending,
+            Pending::ProviderLogin(provider.clone()),
+            json!({ "type": "provider.login.start.request", "provider": provider, "device": device }),
+        )],
+        Command::ProviderLoginCancel(provider) => vec![request(
+            pending,
+            Pending::Optional,
+            json!({ "type": "provider.login.cancel.request", "provider": provider }),
+        )],
         Command::RestartDaemon => vec![request(
             pending,
             Pending::Other("restart the daemon"),
@@ -3189,6 +3219,10 @@ fn handle(
                     return vec![];
                 }
                 Some(Pending::Optional) => return vec![],
+                Some(Pending::ProviderLogin(provider)) => {
+                    let error = payload.get("error").and_then(Value::as_str).unwrap_or("request failed").to_owned();
+                    return vec![Event::ProviderLogin { provider, step: LoginStep::Ended(Err(error)) }];
+                }
                 Some(Pending::Reload(agent, since)) => {
                     let error = payload.get("error").and_then(Value::as_str).unwrap_or("request failed");
                     log::warn!("conversation {agent}: reading it again failed after {} ms: {error}", since.elapsed().as_millis());
@@ -3277,6 +3311,7 @@ fn handle(
                 Some(Pending::Projects | Pending::Workspaces) => "load projects",
                 Some(Pending::Providers) => "load providers",
                 Some(Pending::ProviderConfig) => "save agent settings",
+                Some(Pending::ProviderLogin(_)) => "sign in",
                 Some(Pending::ResetCredits | Pending::UseReset(_)) => "use resets",
                 None => "request",
             };
@@ -3722,6 +3757,35 @@ fn handle(
             request_id.and_then(|id| pending.remove(id));
             follow_ups.push(request(pending, Pending::Providers, json!({ "type": "get_providers_snapshot_request" })));
             vec![]
+        }
+        // Where to sign in; then the sign-in is waited on.
+        "provider.login.start.response" => {
+            request_id.and_then(|id| pending.remove(id));
+            let s = |k: &str| payload.get(k).and_then(Value::as_str).filter(|v| !v.is_empty()).map(str::to_owned);
+            let Some(provider) = s("provider") else { return vec![] };
+            let step = match (s("authUrl"), s("verificationUrl"), s("userCode")) {
+                (Some(url), _, _) => LoginStep::Started { url, code: None },
+                (None, Some(url), code) => LoginStep::Started { url, code },
+                _ => LoginStep::Ended(Err("Codex gave no page to sign in on".into())),
+            };
+            if matches!(step, LoginStep::Started { .. }) {
+                follow_ups.push(request(
+                    pending,
+                    Pending::ProviderLogin(provider.clone()),
+                    json!({ "type": "provider.login.wait.request", "provider": provider }),
+                ));
+            }
+            vec![Event::ProviderLogin { provider, step }]
+        }
+        "provider.login.wait.response" => {
+            request_id.and_then(|id| pending.remove(id));
+            let Some(provider) = payload.get("provider").and_then(Value::as_str).map(str::to_owned) else { return vec![] };
+            let ended = if payload.get("success").and_then(Value::as_bool) == Some(true) {
+                Ok(())
+            } else {
+                Err(payload.get("error").and_then(Value::as_str).unwrap_or("The sign-in did not finish").to_owned())
+            };
+            vec![Event::ProviderLogin { provider, step: LoginStep::Ended(ended) }]
         }
         "provider_diagnostic_response" => {
             request_id.and_then(|id| pending.remove(id));
@@ -4464,6 +4528,50 @@ mod tests {
         assert!(rest.iter().all(|f| download_frame(f, &mut downloads).is_none()));
         assert_eq!(download_frame(last, &mut downloads), Some(("d1".to_owned(), Ok(bytes))));
         assert!(downloads.is_empty());
+    }
+
+    /// A sign-in is started, then waited on: where to go, then how it went;
+    /// a refused one ends with why.
+    #[test]
+    fn a_sign_in_says_where_to_go_then_how_it_went() {
+        let mut pending = HashMap::new();
+        let sent = command_messages(Command::ProviderLogin { provider: "work".into(), device: false }, &mut pending);
+        let msg = &sent[0]["message"];
+        assert_eq!((msg["type"].as_str(), msg["provider"].as_str(), msg["device"].as_bool()), (Some("provider.login.start.request"), Some("work"), Some(false)));
+        let id = msg["requestId"].as_str().unwrap();
+        let mut follow_ups = vec![];
+        let events = handle(
+            "provider.login.start.response",
+            &json!({ "requestId": id, "provider": "work", "authUrl": "https://auth.openai.com/x" }),
+            &mut pending,
+            None,
+            &mut follow_ups,
+        );
+        assert!(matches!(&events[..], [Event::ProviderLogin { provider, step: LoginStep::Started { url, code: None } }]
+            if provider == "work" && url == "https://auth.openai.com/x"));
+        let wait = &follow_ups.pop().unwrap()["message"];
+        assert_eq!(wait["type"], "provider.login.wait.request");
+        let id = wait["requestId"].as_str().unwrap().to_owned();
+        let events = handle("provider.login.wait.response", &json!({ "requestId": id, "provider": "work", "success": true }), &mut pending, None, &mut vec![]);
+        assert!(matches!(&events[..], [Event::ProviderLogin { step: LoginStep::Ended(Ok(())), .. }]));
+
+        // By code: the page and the code.
+        let sent = command_messages(Command::ProviderLogin { provider: "work".into(), device: true }, &mut pending);
+        let id = sent[0]["message"]["requestId"].as_str().unwrap().to_owned();
+        let events = handle(
+            "provider.login.start.response",
+            &json!({ "requestId": id, "provider": "work", "verificationUrl": "https://auth.openai.com/device", "userCode": "AB-12" }),
+            &mut pending,
+            None,
+            &mut vec![],
+        );
+        assert!(matches!(&events[..], [Event::ProviderLogin { step: LoginStep::Started { code: Some(code), .. }, .. }] if code == "AB-12"));
+
+        // Refused: ended, with why, not a notice.
+        let sent = command_messages(Command::ProviderLogin { provider: "claude".into(), device: false }, &mut pending);
+        let id = sent[0]["message"]["requestId"].as_str().unwrap().to_owned();
+        let events = handle("rpc_error", &json!({ "requestId": id, "error": "claude does not sign in from here" }), &mut pending, None, &mut vec![]);
+        assert!(matches!(&events[..], [Event::ProviderLogin { provider, step: LoginStep::Ended(Err(e)) }] if provider == "claude" && e.contains("does not sign in")));
     }
 
     /// A providers patch is saved, then the providers are asked again and

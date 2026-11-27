@@ -928,6 +928,33 @@ pub async fn commands(shared: &Shared, request: &Value) -> Result<Value, String>
     }
 }
 
+/// A sign-in under way, by provider ([`slow`]'s `provider.login.*`).
+struct Login {
+    /// How it went, once it has.
+    outcome: tokio::sync::watch::Receiver<Option<Result<(), String>>>,
+    /// Ends it.
+    cancel: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+thread_local! {
+    static LOGINS: RefCell<HashMap<String, Login>> = RefCell::new(HashMap::new());
+}
+
+/// How long a sign-in waits for the person.
+const LOGIN_WAIT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+/// Ends the sign-in under way for `provider`, if one is.
+fn cancel_login(provider: &str) {
+    LOGINS.with_borrow_mut(|logins| {
+        if let Some(cancel) = logins
+            .get_mut(provider)
+            .and_then(|login| login.cancel.take())
+        {
+            let _ = cancel.send(());
+        }
+    });
+}
+
 /// Answers a request that waits on something outside the service (a
 /// CLI asked its version, records read from disk), with
 /// nothing of the host held while it waits. `None` for any other.
@@ -945,6 +972,56 @@ pub async fn slow(shared: &Shared, request: &Value) -> Option<Result<Value, Stri
         Ok((settings, family))
     };
     Some(match kind {
+        // A sign-in to ChatGPT by Codex's own, for a Codex provider: where
+        // to go, then (`.wait`) how it went. One at a time per provider;
+        // a new one ends the one before.
+        "provider.login.start.request" => async {
+            let name = text(request, "provider")?;
+            let (settings, family) = provider_of(name)?;
+            if family != Some("codex") {
+                return Err(format!("{name} does not sign in from here"));
+            }
+            cancel_login(name);
+            let device = request["device"].as_bool().unwrap_or(false);
+            let (started, signing) = provider::codex::login(&settings, device)
+                .await
+                .map_err(|error| error.to_string())?;
+            let (done, outcome) = tokio::sync::watch::channel(None);
+            let (cancel, canceled) = tokio::sync::oneshot::channel::<()>();
+            LOGINS.with_borrow_mut(|logins| {
+                logins.insert(name.to_owned(), Login { outcome, cancel: Some(cancel) })
+            });
+            tokio::task::spawn_local(async move {
+                let ended = tokio::select! {
+                    ended = signing => ended,
+                    _ = canceled => Err("Canceled".to_owned()),
+                    _ = tokio::time::sleep(LOGIN_WAIT) => Err("The sign-in took too long".to_owned()),
+                };
+                let _ = done.send(Some(ended));
+            });
+            Ok(reply(json!({"provider":name,"authUrl":started["authUrl"],
+                "verificationUrl":started["verificationUrl"],"userCode":started["userCode"]})))
+        }
+        .await,
+        "provider.login.wait.request" => async {
+            let name = text(request, "provider")?;
+            let mut outcome = LOGINS
+                .with_borrow(|logins| logins.get(name).map(|login| login.outcome.clone()))
+                .ok_or("No sign-in under way")?;
+            let ended = outcome
+                .wait_for(Option::is_some)
+                .await
+                .map(|ended| ended.clone().unwrap_or(Err("Ended".into())))
+                .unwrap_or(Err("Ended".into()));
+            Ok(reply(json!({"provider":name,"success":ended.is_ok(),"error":ended.err()})))
+        }
+        .await,
+        "provider.login.cancel.request" => async {
+            let name = text(request, "provider")?;
+            cancel_login(name);
+            Ok(reply(json!({"provider":name})))
+        }
+        .await,
         "provider_diagnostic_request" => async {
             let name = text(request, "provider")?;
             let (settings, _) = provider_of(name)?;
