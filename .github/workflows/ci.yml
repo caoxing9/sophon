@@ -40,7 +40,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/sophon-nsh
-          key: nsh-cli-${{ runner.os }}-${{ steps.nsh.outputs.rev }}
+          key: nsh-bin-${{ runner.os }}-${{ steps.nsh.outputs.rev }}
       - uses: dtolnay/rust-toolchain@stable
         if: steps.cache.outputs.cache-hit != 'true'
       - name: Build nsh

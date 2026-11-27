@@ -1,5 +1,5 @@
-//! Notices over the main surface, with an undo for archiving: a toast at
-//! its top right, under the title bar, clear of the composer.
+//! Notices over the main surface, with an undo for archiving: a toast
+//! centered at its top, under the title row, clear of the composer.
 
 use crate::i18n::t;
 use nsh_core::prelude::*;
@@ -31,15 +31,17 @@ pub(crate) fn notice_bar(top: Memo<Length>) -> impl IntoElement {
         .child(dynamic(move || {
         let (m, action) = message.get()?;
         Some(untracked(move || {
-            // A toast as shadcn's (Sonner): a card at the surface's top
-            // right, clear of the page's title row and of the composer.
+            // A toast as shadcn's (Sonner): a card centered at the surface's
+            // top, clear of the page's title row and of the composer.
             view()
                 .absolute()
                 // Under a page's title row, whose right end has the
                 // page's actions (Save, Create, Refresh).
                 .top(move || top.get())
                 .mt(px(64.0))
-                .right(sp(S4))
+                .left(px(0.0))
+                .right(px(0.0))
+                .items_center()
                 .pointer_events(PointerEvents::BoxNone)
                 .child(
                     view()

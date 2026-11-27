@@ -307,10 +307,10 @@ fn footer() -> impl IntoElement {
         .child(update_button())
 }
 
-/// The way to a newer version, at the foot's right end: a round arrow, in
-/// the accent with a dot while one is a press away (its words under the
-/// pointer: "Update to 0.2.45", "Downloading 40%"); quiet otherwise, where
-/// it opens the same dialog to check.
+/// The way to a newer version, at the foot's right end: a round arrow in
+/// the accent with a dot (its words under the pointer: "Update to 0.2.45",
+/// "Downloading 40%"), there only while there is one. Always there, quiet,
+/// it read as an update waiting; checking is in Settings (Updates).
 fn update_button() -> impl IntoElement {
     use crate::update::{self, Phase};
     let st = computed(update::state);
@@ -338,7 +338,8 @@ fn update_button() -> impl IntoElement {
         })
     };
     let busy = computed(move || st.with(|s| matches!(s.phase, Phase::Downloading(_) | Phase::Installing)));
-    view().tooltip(dynamic(move || {
+    let shown = computed(move || offered.get() || busy.get());
+    when(shown, move || view().tooltip(dynamic(move || {
         let words = label();
         Some(untracked(move || tooltip_text(words)))
     }).into_element()).child(
@@ -359,5 +360,5 @@ fn update_button() -> impl IntoElement {
             .active(|s| s.opacity(0.7))
             .child(icon(Icon::CircleArrowUp, 16.0).text_color(move || if offered.get() { ACCENT() } else { FG_MUTED() }))
             .child(when(move || offered.get() && !busy.get(), || view().absolute().top(px(5.0)).right(px(5.0)).w(px(6.0)).h(px(6.0)).rounded(px(R_FULL)).bg(DANGER))),
-    )
+    ))
 }

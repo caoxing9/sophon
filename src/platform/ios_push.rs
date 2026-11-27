@@ -326,9 +326,13 @@ fn word(en: &'static str, zh: &'static str) -> &'static str {
 /// Listens for the launch (before `main`) and, when the app already runs,
 /// takes the delegate now. Safe to call again.
 pub(crate) fn install() {
-    // Keeps the initializer below in the binary: it is in this function's
-    // object file.
-    std::hint::black_box(&INIT);
+    // Keeps the initializer below in the binary: `init` is in this
+    // function's object file, and `INIT` (kept by `#[used]`) beside it.
+    // Not `&INIT` itself: the linker rewrites `__mod_init_func` into
+    // `__init_offsets` (chained fixups), so the static has no address to
+    // load and the device build failed to link ("ADRP out of range" in
+    // `install`, from 0.2.84, Xcode's newer ld).
+    std::hint::black_box(init as extern "C" fn());
     if INSTALLED.swap(true, Ordering::SeqCst) {
         return;
     }
