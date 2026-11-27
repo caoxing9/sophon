@@ -617,7 +617,7 @@ fn row(live: bool, open: Signal<bool>, r: Row, selected: bool, show_agent: bool,
 
 /// A tooltip's bubble.
 fn tip(label: String) -> View {
-    glass_strong(view()).px(sp(S2)).py(sp(S1)).rounded(px(R_LG)).child(text(label).text_size(tx(TEXT_XS)))
+    tooltip_text(label)
 }
 
 /// A shortcut's keycap (T3's `Kbd`).

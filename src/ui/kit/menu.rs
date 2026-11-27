@@ -1,12 +1,11 @@
-//! Dropdown menus on `nsh/base`'s `Menu`: a popover surface with a hairline
-//! border and no shadow, rows with an optional icon, a description and
-//! a check for the current choice.
+//! Dropdown menus: nsh-shadcn's `DropdownMenu`, its items holding
+//! Sophon's own icons, a description and a check for the current choice.
 
 #![allow(dead_code)]
 
-use nsh_base::{MenuElement, MenuItemElement, menu, menu_item, menu_separator};
+use nsh_shadcn::{DropdownMenuElement, DropdownMenuItemElement, DropdownMenuLabelElement};
 use nsh_core::{
-    element::{FontWeight, StyleRefinement, View},
+    element::{FontWeight, View},
     prelude::*,
 };
 use super::controls::text;
@@ -16,24 +15,11 @@ use super::{
     tokens::*,
 };
 
-fn popup(s: StyleRefinement) -> StyleRefinement {
-    // Near opaque: what is under a menu must not read through its rows.
-    s.bg({ let p = POPOVER(); AdaptiveColor::new(p.light.opacity(0.985), p.dark.opacity(0.985)) })
-        .backdrop_blur(px(GLASS_BLUR))
-        .backdrop_saturate(1.7)
-        .rounded(px(14.0))
-        .border_1()
-        .border_color(glass_edge())
-        .p(sp(S1))
-        .min_w(px(220.0))
-        .max_w(px(360.0))
-}
-
-/// A menu that opens under `trigger`.
-pub(crate) fn dropdown(trigger: impl IntoElement) -> MenuElement {
-    // A menu over the keyboard is half hidden: it goes first.
-    menu().offset(px(6.0)).popup_style(popup).trigger(trigger).on_open(|| {
-        if MOBILE {
+/// A menu that opens under `trigger`: nsh-shadcn's `DropdownMenu`.
+pub(crate) fn dropdown(trigger: impl IntoElement) -> DropdownMenuElement {
+    nsh_shadcn::dropdown_menu().trigger(trigger).on_open_change(|open: &bool| {
+        // A menu over the keyboard is half hidden: it goes first.
+        if *open && MOBILE {
             dismiss_keyboard();
         }
     })
@@ -41,17 +27,16 @@ pub(crate) fn dropdown(trigger: impl IntoElement) -> MenuElement {
 
 /// A menu that opens under `trigger` as wide as `width` (a sidebar's
 /// header: the menu lines up with the rows under it, edge to edge).
-pub(crate) fn dropdown_wide(trigger: impl IntoElement, width: f32) -> MenuElement {
+pub(crate) fn dropdown_wide(trigger: impl IntoElement, width: f32) -> DropdownMenuElement {
     dropdown(trigger)
         .align(nsh_core::overlay::Align::Start)
-        .offset(px(4.0))
-        .popup_style(move |s: StyleRefinement| popup(s).w(px(width)).min_w(px(width)).max_w(px(width)))
+        .content_class(Some(SharedString::from(format!("w-[{width}px] min-w-[{width}px] max-w-[{width}px]"))))
 }
 
 /// A menu that opens above `trigger` (pickers in the composer, which sits
 /// at the foot of the window).
-pub(crate) fn dropup(trigger: impl IntoElement) -> MenuElement {
-    dropdown(trigger).placement(nsh_core::overlay::Placement::Top)
+pub(crate) fn dropup(trigger: impl IntoElement) -> DropdownMenuElement {
+    dropdown(trigger).side(nsh_core::overlay::Placement::Top)
 }
 
 /// A long list inside a menu, scrolling past `max` points.
@@ -59,75 +44,49 @@ pub(crate) fn menu_scroll(max: f32, content: impl IntoElement) -> impl IntoEleme
     scroll().max_h(px(max)).child(content)
 }
 
-/// A row of a menu.
+/// A row of a menu: nsh-shadcn's `DropdownMenuItem`, holding Sophon's own
+/// icon, a description under the label and a check for the current
+/// choice.
 pub(crate) fn menu_row(
     label: impl Into<SharedString>,
     lead: Option<Icon>,
     detail: Option<SharedString>,
     checked: bool,
     on_select: impl Fn() + 'static,
-) -> MenuItemElement {
+) -> DropdownMenuItemElement {
     let label: SharedString = label.into();
-    let mut body = view().flex_1().gap(px(1.0)).child(
-        text(label).text_size(tx(TEXT_BASE)).text_color(FG()).number_of_lines(1),
+    let mut body = view().flex_1().min_w(px(0.0)).gap(px(1.0)).child(
+        text(label).text_size(tx(TEXT_SM)).text_color(FG()).number_of_lines(1),
     );
     if let Some(detail) = detail.filter(|d| !d.is_empty()) {
-        body = body.child(text(detail).text_size(tx(TEXT_SM)).text_color(FG_MUTED()).number_of_lines(1));
+        body = body.child(text(detail).text_size(tx(TEXT_XS)).text_color(FG_MUTED()).number_of_lines(1));
     }
-    let mut row = menu_item()
-        .on_select(on_select)
-        .flex_row()
-        .items_center()
-        .gap(sp(S2))
-        .min_h(sp(CONTROL_MD))
-        // A hairline between rows that fill under the pointer.
-        .my(px(1.0))
-        .px(sp(S2))
-        .py(px(5.0))
-        .rounded(px(R_LG))
-        .hover(|s| s.bg(highlight()))
-        .active(|s| s.bg(highlight()))
-        .disabled_style(|s| s.opacity(0.4));
+    let mut item = nsh_shadcn::dropdown_menu_item("").label(None::<SharedString>).on_select(on_select);
     if let Some(lead) = lead {
-        row = row.child(icon(lead, 16.0).text_color(FG_MUTED()));
+        item = item.child(icon(lead, 16.0).text_color(FG_MUTED()));
     }
-    row = row.child(body);
-    row.child(
-        view().w(px(16.0)).child(if checked {
-            icon(Icon::Check, 16.0).text_color(ACCENT()).into_element()
-        } else {
-            view().into_element()
-        }),
-    )
+    item = item.child(body);
+    if checked {
+        item = item.child(icon(Icon::Check, 16.0).text_color(FG()));
+    }
+    item
 }
 
 /// A destructive row (archive, remove).
-pub(crate) fn menu_row_danger(label: &'static str, lead: Icon, on_select: impl Fn() + 'static) -> MenuItemElement {
-    menu_item()
-        .on_select(on_select)
-        .flex_row()
-        .items_center()
-        .gap(sp(S2))
-        .min_h(sp(CONTROL_MD))
-        // A hairline between rows that fill under the pointer.
-        .my(px(1.0))
-        .px(sp(S2))
-        .rounded(px(R_LG))
-        .hover(|s| s.bg(tint(DESTRUCTIVE, 0.1)))
+pub(crate) fn menu_row_danger(label: &'static str, lead: Icon, on_select: impl Fn() + 'static) -> DropdownMenuItemElement {
+    nsh_shadcn::dropdown_menu_item(label)
+        .destructive()
         .child(icon(lead, 16.0).text_color(DESTRUCTIVE))
-        .child(text(label).text_size(tx(TEXT_BASE)).text_color(DESTRUCTIVE))
+        .on_select(on_select)
 }
 
 /// A heading inside a menu.
-pub(crate) fn menu_heading(label: impl Into<SharedString>) -> View {
-    let label: SharedString = label.into();
-    view().px(sp(S2)).pt(sp(S2)).pb(sp(S1)).child(
-        text(label).text_size(tx(TEXT_XS)).font_weight(FontWeight(500)).text_color(FG_FAINT()),
-    )
+pub(crate) fn menu_heading(label: impl Into<SharedString>) -> DropdownMenuLabelElement {
+    nsh_shadcn::dropdown_menu_label(label)
 }
 
 pub(crate) fn menu_divider() -> impl IntoElement {
-    menu_separator().h(px(1.0)).my(sp(S1)).mx(sp(S1)).bg(BORDER())
+    nsh_shadcn::dropdown_menu_separator()
 }
 
 /// A pill trigger for a picker in a toolbar: icon, label, chevron.

@@ -119,17 +119,13 @@ fn scope_word(project: bool, label: &'static str) -> impl IntoElement {
 /// "All N", then each kind there is with its count; the one shown tinted.
 fn kind_chips(list: &[Artifact], now: Option<String>) -> View {
     let mut row = view().flex_row().flex_wrap().gap(sp(S1)).px(sp(S3)).pb(sp(S2));
+    // nsh-shadcn's Toggle: on for the kind shown.
     let chip = |label: String, on: bool, pick: Option<String>| {
-        nsh_base::button()
-            .on_press(move || store::set_artifacts_kind(pick.clone()))
-            .h(px(22.0))
-            .px(sp(S2))
-            .rounded(px(R_MD))
-            .items_center()
-            .justify_center()
-            .bg(if on { tint(FG(), 0.08) } else { tint(FG(), 0.0) })
-            .hover(|s| s.bg(tint(FG(), 0.05)))
-            .child(text(label).text_size(tx(TEXT_XS)).font_weight(FontWeight(500)).text_color(if on { FG() } else { FG_MUTED() }))
+        nsh_shadcn::toggle()
+            .size(nsh_shadcn::ToggleSize::Sm)
+            .pressed(Some(on))
+            .label(Some(SharedString::from(label)))
+            .on_pressed_change(move |_: &bool| store::set_artifacts_kind(pick.clone()))
     };
     row = row.child(chip(tf("All {}", &[&list.len().to_string()]), now.is_none(), None));
     for (kind, word) in KINDS {

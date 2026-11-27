@@ -21,15 +21,9 @@ fn ago(at: &str) -> String {
     crate::ui::mobile::time::ago(at)
 }
 
-fn chip(word: impl Into<SharedString>, tone: AdaptiveColor) -> View {
-    view()
-        .px(sp(S2))
-        .h(px(22.0))
-        .rounded(px(R_FULL))
-        .bg(tint(tone, 0.12))
-        .items_center()
-        .justify_center()
-        .child(text(word.into()).text_size(tx(TEXT_XS)).font_weight(FontWeight(500)).text_color(tone))
+fn chip(word: impl Into<SharedString>, tone: AdaptiveColor) -> nsh_shadcn::BadgeElement {
+    let word: SharedString = word.into();
+    badge(word, tone)
 }
 
 fn message(words: impl Into<SharedString>) -> View {

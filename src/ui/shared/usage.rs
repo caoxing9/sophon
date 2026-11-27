@@ -181,7 +181,7 @@ fn days_chart(stats: &Stats, last_day: i64) -> View {
                 .flex_1()
                 .h_full()
                 .justify_end()
-                .tooltip(glass_strong(view()).px(sp(S2)).py(sp(S1)).rounded(px(R_LG)).child(text(format!("{} · {label}", usage::day_label(last_day - n + 1 + i as i64))).text_size(tx(TEXT_XS))))
+                .tooltip(tooltip_text(format!("{} · {label}", usage::day_label(last_day - n + 1 + i as i64))))
                 .child(
                     view()
                         .w_full()

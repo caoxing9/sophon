@@ -194,15 +194,7 @@ pub(crate) fn chip(node: &nsh_base::text_view::CustomNode) -> AnyElement {
             .child(text(label).text_size(px(9.0)).font_weight(FontWeight(700)).text_color(color))
             .into_element()
     };
-    let tip = text(format!("{}  ·  {}", folder_of(&file), t("⌘-click to show in Finder")))
-        .text_size(tx(TEXT_XS))
-        .px(sp(S2))
-        .py(px(3.0))
-        .rounded(px(R_MD))
-        .bg(SURFACE0())
-        .border_1()
-        .border_color(BORDER())
-        .into_element();
+    let tip = tooltip_text(format!("{}  ·  {}", folder_of(&file), t("⌘-click to show in Finder"))).into_element();
     // An inline element sits on the baseline: moved down (drawing only)
     // so its middle meets the middle of the line's letters, ~0.36 em up
     // (CJK and capitals alike), as nsh centres inline images.

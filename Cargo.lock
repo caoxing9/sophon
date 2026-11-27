@@ -2226,7 +2226,7 @@ dependencies = [
 [[package]]
 name = "nsh-shadcn"
 version = "0.1.0"
-source = "git+https://github.com/caoxing9/nsh-shadcn?rev=ca53819c78cc09f266d77e1484b91012f422fafb#ca53819c78cc09f266d77e1484b91012f422fafb"
+source = "git+https://github.com/caoxing9/nsh-shadcn?rev=7499089c6a03f8a58d939ca93255cd1f16b8521b#7499089c6a03f8a58d939ca93255cd1f16b8521b"
 dependencies = [
  "chrono",
  "nsh-base",
