@@ -123,6 +123,28 @@ pub(crate) fn icon_btn(glyph: Icon, size: Sz, label: &'static str, on_press: imp
         .on_press(on_press)
 }
 
+/// An icon button inside a list row (the sidebar's +, pin, archive, …):
+/// 24 points, so it fits a 28-point row, rounded as the row is, its glyph
+/// faint until the pointer is on it. `icon_btn`'s smallest (32) stood out
+/// of the rows as a square.
+pub(crate) fn row_btn(glyph: Icon, label: &'static str, on_press: impl Fn() + 'static) -> nsh_base::ButtonElement {
+    nsh_base::button()
+        .on_press(on_press)
+        .accessibility_label(label)
+        .w(px(ROW_BTN))
+        .h(px(ROW_BTN))
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .rounded(px(R_MD))
+        .group()
+        .hover(|s| s.bg(highlight()))
+        .child(icon(glyph, 14.0).text_color(FG_FAINT()).group_hover(|s| s.text_color(FG())))
+}
+
+/// A row button's side ([`row_btn`]), and the "…" menus' beside them.
+pub(crate) const ROW_BTN: f32 = 24.0;
+
 /// A single-line text field: nsh-shadcn's Input look on a field of
 /// Sophon's own (its fonts, its events). Its width is the caller's: a
 /// class wins over the field's own `w(..)`, so shadcn's `w-full` (a field
