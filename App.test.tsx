@@ -183,12 +183,11 @@ test("an Antigravity account asks how it signs in", async () => {
   await app.waitFor("text:Google Cloud project");
 });
 
-test("import shows the projects it found, or that it is looking", async () => {
+test("import brings in projects from Claude Code's and Codex's history", async () => {
   const app = await open(".", { width: 1100, height: 900 });
   await app.press("text:Import projects");
-  // Looking, then what it found: here, nothing.
-  await app.waitFor("text:Nothing to import: every conversation of Claude Code and Codex here is in Sophon");
-  expect(app.texts()).toContain("Import projects");
+  // What it is for; the projects come from the service (CI runs none).
+  await app.waitFor("text:The folders your Claude Code and Codex conversations ran in, as projects, with their conversations");
 });
 
 test("Return with no project chosen says to choose one", async () => {
