@@ -484,11 +484,34 @@ mod tests {
     #[test]
     fn a_pairing_link_names_its_computer() {
         let key = [5u8; 32];
-        let link = PairingLink::format_named(Some(("10.0.0.2:61034", &key, "tok")), None, Some("MacBook Pro · 林"));
+        let link = PairingLink::format_named(Some(("10.0.0.2:61034", &key, "tok")), None, Some("MacBook Pro · 林"), None);
         let parsed = PairingLink::parse(&link).unwrap();
         assert_eq!(parsed.name.as_deref(), Some("MacBook Pro · 林"));
         assert_eq!(parsed.lan, Some(("10.0.0.2:61034".into(), key, "tok".into())));
         assert_eq!(PairingLink::parse(&PairingLink::format(Some(("a:1", &key, "t")), None)).unwrap().name, None);
+    }
+
+    #[test]
+    fn a_pairing_link_carries_its_peer_to_peer_id() {
+        let key = [5u8; 32];
+        let id = "ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6";
+        let offer = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(json!({ "v": 2, "serverId": "srv_1", "daemonPublicKeyB64": B64.encode(key), "relay": { "endpoint": "r:1", "useTls": false } }).to_string());
+        let relay = format!("sophon://relay/#offer={offer}");
+        let link = PairingLink::format_named(Some(("10.0.0.2:1", &key, "tok")), Some(&relay), Some("Mac"), Some(id));
+        let parsed = PairingLink::parse(&link).unwrap();
+        assert_eq!(parsed.p2p.as_deref(), Some(id));
+        assert_eq!(parsed.name.as_deref(), Some("Mac"));
+        assert!(parsed.relay.is_some());
+
+        // A device paired before: given the id, all else as it was.
+        let before = PairingLink::format_named(Some(("10.0.0.2:1", &key, "tok")), Some(&relay), Some("Mac"), None);
+        assert_eq!(PairingLink::parse(&before).unwrap().p2p, None);
+        let after = PairingLink::with_p2p(&before, id).unwrap();
+        assert_eq!(PairingLink::parse(&after).unwrap(), parsed);
+        assert_eq!(PairingLink::with_p2p(&after, id), None, "already there");
+        // No LAN part: nothing to reach peer to peer with.
+        assert_eq!(PairingLink::with_p2p(&relay, id), None);
     }
 
     #[test]
@@ -555,6 +578,10 @@ pub struct PairingLink {
     /// What the paired computer is called here (a space's
     /// `MacBook Pro · Lin`), when the link names it.
     pub name: Option<String>,
+    /// The bridge's iroh endpoint id (`p2p=`): it is reached peer to peer
+    /// away from its LAN, before the relay. The LAN's key and token go with
+    /// it.
+    pub p2p: Option<String>,
 }
 
 impl PairingLink {
@@ -574,16 +601,18 @@ impl PairingLink {
         };
         let lan = (|| Some((param("lan")?, key(&param("lanKey")?)?, param("token")?)))();
         let name = param("name").filter(|n| !n.trim().is_empty());
-        (lan.is_some() || relay.is_some()).then_some(Self { lan, relay, name })
+        let p2p = param("p2p").filter(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric()));
+        (lan.is_some() || relay.is_some()).then_some(Self { lan, relay, name, p2p })
     }
 
     pub fn format(lan: Option<(&str, &[u8; 32], &str)>, relay_link: Option<&str>) -> String {
-        Self::format_named(lan, relay_link, None)
+        Self::format_named(lan, relay_link, None, None)
     }
 
     /// [`Self::format`] naming the computer (`name=`), as the device that
-    /// pairs saves it.
-    pub fn format_named(lan: Option<(&str, &[u8; 32], &str)>, relay_link: Option<&str>, name: Option<&str>) -> String {
+    /// pairs saves it, and its bridge's peer to peer id (`p2p=`, with the
+    /// LAN's part only).
+    pub fn format_named(lan: Option<(&str, &[u8; 32], &str)>, relay_link: Option<&str>, name: Option<&str>, p2p: Option<&str>) -> String {
         let enc = |v: &str| {
             v.bytes()
                 .map(|b| match b {
@@ -596,6 +625,9 @@ impl PairingLink {
         let mut params: Vec<String> = Vec::new();
         if let Some((addr, key, token)) = lan {
             params.push(format!("lan={addr}&lanKey={}&token={token}", enc(&B64.encode(key))));
+            if let Some(id) = p2p.filter(|id| !id.is_empty()) {
+                params.push(format!("p2p={}", enc(id)));
+            }
         }
         if let Some(name) = name.filter(|n| !n.trim().is_empty()) {
             params.push(format!("name={}", enc(name)));
@@ -608,5 +640,18 @@ impl PairingLink {
             s.push_str(fragment);
         }
         s
+    }
+
+    /// `link` (a saved one) with its bridge's peer to peer id: as the
+    /// bridge tells a device paired before it had one. `None`: not a link
+    /// with a LAN part, or it has that id already.
+    pub fn with_p2p(link: &str, id: &str) -> Option<String> {
+        let l = Self::parse(link)?;
+        if l.p2p.as_deref() == Some(id) {
+            return None;
+        }
+        let (addr, key, token) = l.lan.as_ref()?;
+        let fragment = link.find("#offer=").map(|i| &link[i..]);
+        Some(Self::format_named(Some((addr, key, token)), fragment, l.name.as_deref(), Some(id)))
     }
 }

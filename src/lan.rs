@@ -56,8 +56,10 @@ pub(crate) struct Connected {
     pub(crate) device_id: Option<String>,
     /// The space it reaches, by name; `None`: the first.
     pub(crate) space: Option<String>,
-    /// Through the relay, else over the LAN.
+    /// Through the relay, else over the LAN (or peer to peer).
     pub(crate) relayed: bool,
+    /// Peer to peer.
+    pub(crate) p2p: bool,
 }
 
 /// A device paired through the LAN.
@@ -104,7 +106,7 @@ fn refresh() {
         };
         let connected = bridge::connections()
             .into_iter()
-            .map(|c| Connected { conn: c.conn, device: shown(c.device), device_id: c.device_id, space: name_of(c.space), relayed: c.relayed })
+            .map(|c| Connected { conn: c.conn, device: shown(c.device), device_id: c.device_id, space: name_of(c.space), relayed: c.relayed, p2p: c.p2p })
             .collect();
         let paired = bridge::devices().into_iter().map(|d| Paired { id: d.id, name: d.name, space: name_of(d.space), folder: d.folder }).collect();
         global::<Devices>().set(Devices { connected, paired });

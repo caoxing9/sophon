@@ -200,7 +200,13 @@ fn devices_card() -> impl IntoElement {
                 // Its pairing of its own, if it has one: its folder is set there.
                 let own = d.device_id.as_ref().and_then(|id| paired.iter().find(|p| p.id == *id)).cloned();
                 let mut hint = {
-                    let how = if d.relayed { t("Connected now, through the relay") } else { t("Connected now, over the LAN") };
+                    let how = if d.relayed {
+                        t("Connected now, through the relay")
+                    } else if d.p2p {
+                        t("Connected now, peer to peer")
+                    } else {
+                        t("Connected now, over the LAN")
+                    };
                     match &d.space {
                         Some(space) => format!("{how} · {space}"),
                         None => how.to_owned(),

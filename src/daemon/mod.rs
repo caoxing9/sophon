@@ -40,6 +40,8 @@ pub mod agents;
 pub mod cache;
 pub mod connection;
 pub mod model;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod p2p;
 pub mod push;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod push_gateway;

@@ -43,6 +43,8 @@ pub struct BridgeInfo {
     pub addr: String,
     pub key: [u8; 32],
     pub token: String,
+    /// Its iroh endpoint id: reached peer to peer away from the LAN.
+    pub p2p: Option<String>,
 }
 
 fn state_path() -> PathBuf {
@@ -95,8 +97,10 @@ pub struct Connection {
     pub device_id: Option<String>,
     /// The space it reaches; `None`: the first.
     pub space: Option<String>,
-    /// It came through the relay (else over the LAN).
+    /// It came through the relay (else over the LAN, or peer to peer).
     pub relayed: bool,
+    /// It came peer to peer (iroh).
+    pub p2p: bool,
 }
 
 struct State {
@@ -108,6 +112,9 @@ struct State {
     space_tokens: Vec<(String, String)>,
     /// The bridge's id at the relay (`serverId`), its key the LAN's.
     relay_id: String,
+    /// The key of its peer to peer endpoint (iroh): its id is the same
+    /// across restarts, as pairing links name it.
+    p2p: [u8; 32],
     port: u16,
     devices: Vec<Device>,
     conns: HashMap<u64, (Connection, Arc<Notify>)>,
@@ -129,7 +136,7 @@ fn load_or_create() -> State {
     let fresh = || {
         let (private, public) = relay::generate_key();
         let token = uuid::Uuid::new_v4().simple().to_string();
-        State { private, public, token, space_tokens: vec![], relay_id: new_relay_id(), port: 0, devices: vec![], conns: HashMap::new(), next: 1, asking: false, events: None }
+        State { private, public, token, space_tokens: vec![], relay_id: new_relay_id(), p2p: super::p2p::new_secret(), port: 0, devices: vec![], conns: HashMap::new(), next: 1, asking: false, events: None }
     };
     let Ok(text) = std::fs::read_to_string(state_path()) else { return fresh() };
     let Ok(v) = serde_json::from_str::<Value>(&text) else { return fresh() };
@@ -160,6 +167,7 @@ fn load_or_create() -> State {
         token: token.to_owned(),
         space_tokens,
         relay_id: v.get("relayId").and_then(Value::as_str).map(str::to_owned).unwrap_or_else(new_relay_id),
+        p2p: k("p2p").unwrap_or_else(super::p2p::new_secret),
         port: v.get("port").and_then(Value::as_u64).unwrap_or(0) as u16,
         devices,
         conns: HashMap::new(),
@@ -182,6 +190,7 @@ fn save(s: &State) {
         "devices": devices,
         "spaceTokens": space_tokens,
         "relayId": s.relay_id,
+        "p2p": B64.encode(s.p2p),
     });
     if std::fs::write(&path, json.to_string()).is_ok() {
         #[cfg(unix)]
@@ -245,9 +254,9 @@ pub fn info_for(space: Option<&str>) -> Option<BridgeInfo> {
                 }
             },
         };
-        (s.port, s.public, token)
+        (s.port, s.public, token, super::p2p::id_of(&s.p2p))
     })
-    .and_then(|(port, key, token)| Some(BridgeInfo { addr: addrs(port)?, key, token }))
+    .and_then(|(port, key, token, p2p)| Some(BridgeInfo { addr: addrs(port)?, key, token, p2p: Some(p2p) }))
 }
 
 /// The devices paired through the LAN.
@@ -409,6 +418,7 @@ pub fn start() -> Option<(BridgeInfo, mpsc::UnboundedReceiver<BridgeEvent>)> {
                 let Ok(listener) = TcpListener::from_std(std_listener) else { return };
                 log::info!("LAN bridge listening on port {port}");
                 tokio::spawn(relay_loop());
+                tokio::spawn(p2p_loop());
                 tokio::spawn(super::push_gateway::computer_loop(|| with(|s| s.private), good_tokens, |token, act| match act {
                     super::push::Act::Forget { device } => {
                         forgotten_by(token, &device);
@@ -420,7 +430,7 @@ pub fn start() -> Option<(BridgeInfo, mpsc::UnboundedReceiver<BridgeEvent>)> {
                     let Ok((stream, peer)) = listener.accept().await else { continue };
                     tokio::spawn(async move {
                         let served = match tokio_tungstenite::accept_async(stream).await {
-                            Ok(ws) => serve(ws, false).await,
+                            Ok(ws) => serve(ws, false, false).await,
                             Err(e) => Err(e.to_string()),
                         };
                         if let Err(e) = served {
@@ -537,6 +547,31 @@ async fn relay_loop() {
     }
 }
 
+/// Holds the bridge's peer to peer endpoint: each session a device opens
+/// over it is served as a LAN device's is (the same handshake and token).
+/// Bound again, waiting longer each time, if it cannot be.
+async fn p2p_loop() {
+    let Some(secret) = with(|s| s.p2p) else { return };
+    let mut wait = Duration::from_secs(5);
+    loop {
+        let hosted = super::p2p::host(secret, |stream| async move {
+            let served = match tokio_tungstenite::accept_async(stream).await {
+                Ok(ws) => serve(ws, false, true).await,
+                Err(e) => Err(e.to_string()),
+            };
+            if let Err(e) = served {
+                log::info!("peer to peer client: {e}");
+            }
+        })
+        .await;
+        if let Err(e) = hosted {
+            log::info!("peer to peer: {e}");
+        }
+        tokio::time::sleep(wait).await;
+        wait = (wait * 2).min(Duration::from_secs(300));
+    }
+}
+
 /// The relay's control socket, until it closes or goes silent: each device
 /// it names gets a data socket of its own.
 async fn relay_control<S: AsyncRead + AsyncWrite + Unpin>(control: WebSocketStream<S>, base: &str) {
@@ -572,7 +607,7 @@ async fn relay_control<S: AsyncRead + AsyncWrite + Unpin>(control: WebSocketStre
                     let (url, open) = (format!("{base}&connectionId={conn}"), open.clone());
                     tokio::spawn(async move {
                         let served = match tokio_tungstenite::connect_async(url.as_str()).await {
-                            Ok((ws, _)) => serve(ws, true).await,
+                            Ok((ws, _)) => serve(ws, true, false).await,
                             Err(e) => Err(e.to_string()),
                         };
                         if let Err(e) = served {
@@ -588,9 +623,10 @@ async fn relay_control<S: AsyncRead + AsyncWrite + Unpin>(control: WebSocketStre
     }
 }
 
-/// A device's socket, from the LAN or the relay (`relayed`): the handshake,
-/// its token or a request to pair, then its space's service.
-async fn serve<S: AsyncRead + AsyncWrite + Unpin>(phone: WebSocketStream<S>, relayed: bool) -> Result<(), String> {
+/// A device's socket, from the LAN, the relay (`relayed`) or peer to peer
+/// (`p2p`): the handshake, its token or a request to pair, then its
+/// space's service.
+async fn serve<S: AsyncRead + AsyncWrite + Unpin>(phone: WebSocketStream<S>, relayed: bool, p2p: bool) -> Result<(), String> {
     let private = with(|s| s.private).ok_or("no bridge")?;
     let (mut ptx, mut prx) = phone.split();
 
@@ -636,6 +672,15 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(phone: WebSocketStream<S>, rel
         }
         _ => return Err("no pairing token".into()),
     };
+    // A device paired before the bridge was reached peer to peer asks how:
+    // told (sealed, before the service's frames), it keeps the id with its
+    // link. Devices that do not ask hear nothing new.
+    if first.get("p2p").and_then(Value::as_bool) == Some(true)
+        && let Some(id) = with(|s| super::p2p::id_of(&s.p2p))
+    {
+        let sealed = seal.seal(Message::Text(json!({ "type": "sophon_bridge_p2p", "id": id }).to_string()))?;
+        ptx.send(to_ws(sealed)).await.map_err(|e| e.to_string())?;
+    }
 
     // A device kept to a folder: as it is now (a change cuts it off, and it
     // connects again under the new one).
@@ -645,7 +690,7 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(phone: WebSocketStream<S>, rel
     let conn = with(|s| {
         let conn = s.next;
         s.next += 1;
-        s.conns.insert(conn, (Connection { conn, device: device.clone(), device_id, space: space.clone(), relayed }, cut.clone()));
+        s.conns.insert(conn, (Connection { conn, device: device.clone(), device_id, space: space.clone(), relayed, p2p }, cut.clone()));
         conn
     })
     .ok_or("no bridge")?;
@@ -701,11 +746,11 @@ async fn pair<S: AsyncRead + AsyncWrite + Unpin>(device: &str, seal: &relay::Sen
         };
         s.devices.push(d.clone());
         save(s);
-        (d, s.port, s.public)
+        (d, s.port, s.public, super::p2p::id_of(&s.p2p))
     });
-    let Some((d, port, public)) = made else { return refused };
+    let Some((d, port, public, p2p)) = made else { return refused };
     let Some(lan) = addrs(port) else { return refused };
-    let link = relay::PairingLink::format_named(Some((&lan, &public, &d.token)), relay_link.as_deref(), name.as_deref());
+    let link = relay::PairingLink::format_named(Some((&lan, &public, &d.token)), relay_link.as_deref(), name.as_deref(), Some(&p2p));
     json!({ "type": "sophon_pair_ok", "link": link })
 }
 
