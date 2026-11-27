@@ -9,80 +9,175 @@ use crate::ui::kit::*;
 use crate::ui::kit::text;
 use crate::ui::shared::settings::*;
 
+/// The settings' sections, as T3 Code's: a list down the left, the one
+/// chosen beside it. One long page of fourteen groups was hard to find
+/// anything in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Tab {
+    #[default]
+    General,
+    Appearance,
+    Agents,
+    Connections,
+    Service,
+    Maintenance,
+}
+
+impl Tab {
+    const ALL: [Tab; 6] = [Tab::General, Tab::Appearance, Tab::Agents, Tab::Connections, Tab::Service, Tab::Maintenance];
+
+    fn label(self) -> &'static str {
+        match self {
+            Tab::General => t("General"),
+            Tab::Appearance => t("Appearance"),
+            Tab::Agents => t("Agents & models"),
+            Tab::Connections => t("Connections"),
+            Tab::Service => t("Service"),
+            Tab::Maintenance => t("Maintenance"),
+        }
+    }
+
+    fn icon(self) -> Icon {
+        match self {
+            Tab::General => Icon::Settings2,
+            Tab::Appearance => Icon::Eye,
+            Tab::Agents => Icon::Bot,
+            Tab::Connections => Icon::Server,
+            Tab::Service => Icon::Cpu,
+            Tab::Maintenance => Icon::Wrench,
+        }
+    }
+}
+
+/// The section shown, kept while the app runs: settings open where they
+/// were left.
+#[derive(Clone, Copy, Default, PartialEq)]
+struct Shown(Tab);
+
 pub(crate) fn settings(compact: bool) -> impl IntoElement {
-    view()
-        .flex_1()
-        .child(when(move || compact, || {
-            view().px(sp(S4)).pt(sp(S2)).child(icon_btn(Icon::ArrowLeft, Sz::Sm, t("Back"), store::go_home))
-        }))
-        .child(page(
-            compact,
-            view()
-                .child(section(t("Appearance"), appearance_card()))
-                .child(section(t("Sending"), sending_card()))
-                .child(section(t("Notifications"), notifications_card()))
-                .child(section(t("Keyboard"), shortcuts_card()))
-                .when(cfg!(target_os = "macos"), |v| v.child(section(t("Dictation"), dictation_card())))
-                .child(section(t("Storage"), storage_card()))
-                .child(section(t("Power"), keep_awake_card()))
-                .child(when(crate::update::can_check, || section(t("Updates"), updates_card())))
-                .child(section(
-                    t("Host"),
-                    host_card()
-                        .child(row(
-                            t("Pair a device"),
-                            t("Reach this host from your phone through the encrypted relay"),
-                            btn(t("Pair…"), Variant::Outline, Sz::Sm, Some(Icon::Link2), store::open_pairing),
+    let tab = computed(|| global::<Shown>().get().0);
+    let content = view().flex_1().child(dynamic(move || {
+        let tab = tab.get();
+        Some(untracked(move || page(compact, tab.label(), sections(tab)).into_element()))
+    }));
+    if compact {
+        // A narrow window: the sections a row of buttons over the page.
+        let mut row = view().flex_row().flex_wrap().gap(px(4.0)).px(sp(S4)).pt(sp(S2));
+        row = row.child(icon_btn(Icon::ArrowLeft, Sz::Sm, t("Back"), store::go_home));
+        for t in Tab::ALL {
+            row = row.child(nav_item(t, tab, true));
+        }
+        return view().flex_1().child(row).child(content);
+    }
+    let mut nav = view()
+        .w(px(220.0))
+        .flex_shrink_0()
+        .border_r_1()
+        .border_color(BORDER())
+        .px(sp(S2))
+        .pt(sp(S6))
+        .gap(px(2.0))
+        .child(text(t("Settings")).text_size(tx(TEXT_LG)).font_weight(nsh_core::element::FontWeight(500)).px(sp(S2)).pb(sp(S3)));
+    for t in Tab::ALL {
+        nav = nav.child(nav_item(t, tab, false));
+    }
+    view().flex_1().flex_row().child(nav).child(content)
+}
+
+/// A section's entry in the list (a button of the row, on a narrow window).
+fn nav_item(tab: Tab, shown: Memo<Tab>, compact: bool) -> impl IntoElement {
+    let on = computed(move || shown.get() == tab);
+    nsh_base::button()
+        .on_press(move || global::<Shown>().set(Shown(tab)))
+        .accessibility_label(tab.label())
+        .flex_row()
+        .items_center()
+        .gap(sp(S2))
+        .h(px(if compact { 28.0 } else { 32.0 }))
+        .px(sp(S2))
+        .rounded(px(R_MD))
+        .bg(move || if on.get() { highlight() } else { tint(FG(), 0.0) })
+        .hover(|s| s.bg(highlight()))
+        .child(icon(tab.icon(), 15.0).text_color(move || if on.get() { FG() } else { FG_MUTED() }))
+        .child(
+            text(tab.label())
+                .text_size(tx(TEXT_SM))
+                .text_color(move || if on.get() { FG() } else { FG_MUTED() }),
+        )
+}
+
+/// What a section holds.
+fn sections(tab: Tab) -> View {
+    match tab {
+        Tab::General => view()
+            .child(section(t("Sending"), sending_card()))
+            .child(section(t("Notifications"), notifications_card()))
+            .child(section(t("Keyboard"), shortcuts_card()))
+            .when(cfg!(target_os = "macos"), |v| v.child(section(t("Dictation"), dictation_card())))
+            .child(section(t("Power"), keep_awake_card()))
+            .child(when(crate::update::can_check, || section(t("Updates"), updates_card()))),
+        Tab::Appearance => view().child(section(t("Appearance"), appearance_card())),
+        Tab::Agents => view()
+            .child(section(t("Coding agents"), crate::ui::shared::agents::agents_card(true)))
+            .child(section(t("New conversations"), crate::ui::shared::settings::default_model_card()))
+            .child(section(t("Text generation"), text_generation_card())),
+        Tab::Connections => view()
+            .child(section(
+                t("Host"),
+                host_card()
+                    .child(row(
+                        t("Pair a device"),
+                        t("Reach this host from your phone through the encrypted relay"),
+                        btn(t("Pair…"), Variant::Outline, Sz::Sm, Some(Icon::Link2), store::open_pairing),
+                        false,
+                    ))
+                    .child(relay_row())
+                    // Inside Sophon, the service updates with Sophon ("Updates").
+                    .when(!store::service_in_sophon(), |v| v.child(if store::service_bundled() {
+                        // The desktop app updates its own service.
+                        row(
+                            t("Update service"),
+                            t("The service comes with the desktop daemon app and updates with it"),
+                            view(),
                             false,
-                        ))
-                        .child(relay_row())
-                        // Inside Sophon, the service updates with Sophon ("Updates").
-                        .when(!store::service_in_sophon(), |v| v.child(if store::service_bundled() {
-                            // The desktop app updates its own service.
-                            row(
-                                t("Update service"),
-                                t("The service comes with the desktop daemon app and updates with it"),
-                                view(),
-                                false,
-                            )
-                        } else {
-                            row(
-                                t("Update service"),
-                                t("Installs the latest service release; Sophon reconnects on its own"),
-                                btn(t("Update"), Variant::Outline, Sz::Sm, Some(Icon::ArrowDown), store::update_daemon),
-                                false,
-                            )
-                        })),
-                ))
-                .child(section(t("This Mac"), card().child(row(
-                    t("Run agents on this Mac"),
-                    t("Off: this Mac only connects to other computers, and starts no service of its own"),
-                    switch(store::local_service, store::set_local_service).accessibility_label(t("Run agents on this Mac")),
-                    true,
-                ))))
-                .child(when(store::local_service, || section(t("Spaces"), spaces_card())))
-                .child(section(t("Devices"), devices_card()))
-                .child(section(t("Host behavior"), behavior_card()))
-                .child(section(t("Coding agents"), crate::ui::shared::agents::agents_card(true)))
-                .child(section(t("New conversations"), crate::ui::shared::settings::default_model_card()))
-                .child(section(t("Text generation"), text_generation_card()))
-                .child(section(
-                    t("Diagnostics"),
-                    card()
-                        .child(row(
-                            t("Copy diagnostics"),
-                            t("Versions, when the service started and stopped and why, and the end of Sophon's logs, to paste into a report. Nothing is sent"),
-                            btn(t("Copy"), Variant::Outline, Sz::Sm, Some(Icon::Copy), store::copy_diagnostics),
-                            true,
-                        ))
-                        .child(row(
-                            t("Logs"),
-                            t("sophon.log and connection.log, in Sophon's folder"),
-                            btn(t("Show in Finder"), Variant::Outline, Sz::Sm, Some(Icon::FolderOpen), store::open_logs),
+                        )
+                    } else {
+                        row(
+                            t("Update service"),
+                            t("Installs the latest service release; Sophon reconnects on its own"),
+                            btn(t("Update"), Variant::Outline, Sz::Sm, Some(Icon::ArrowDown), store::update_daemon),
                             false,
-                        )),
-                )),
-        ))
+                        )
+                    })),
+            ))
+            .child(section(t("This Mac"), card().child(row(
+                t("Run agents on this Mac"),
+                t("Off: this Mac only connects to other computers, and starts no service of its own"),
+                switch(store::local_service, store::set_local_service).accessibility_label(t("Run agents on this Mac")),
+                true,
+            ))))
+            .child(when(store::local_service, || section(t("Spaces"), spaces_card())))
+            .child(section(t("Devices"), devices_card())),
+        Tab::Service => view().child(section(t("Host behavior"), behavior_card())),
+        Tab::Maintenance => view()
+            .child(section(t("Storage"), storage_card()))
+            .child(section(
+                t("Diagnostics"),
+                card()
+                    .child(row(
+                        t("Copy diagnostics"),
+                        t("Versions, when the service started and stopped and why, and the end of Sophon's logs, to paste into a report. Nothing is sent"),
+                        btn(t("Copy"), Variant::Outline, Sz::Sm, Some(Icon::Copy), store::copy_diagnostics),
+                        true,
+                    ))
+                    .child(row(
+                        t("Logs"),
+                        t("sophon.log and connection.log, in Sophon's folder"),
+                        btn(t("Show in Finder"), Variant::Outline, Sz::Sm, Some(Icon::FolderOpen), store::open_logs),
+                        false,
+                    )),
+            )),
+    }
 }
 
 /// The spaces on this Mac: each one's name, folder, port and whether its

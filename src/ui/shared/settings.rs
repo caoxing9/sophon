@@ -434,8 +434,9 @@ pub(crate) fn storage_card() -> View {
         ))
 }
 
-/// The settings page frame: a centered column under the title.
-pub(crate) fn page(compact: bool, sections: View) -> impl IntoElement {
+/// The settings page frame: a centered column under the title (the
+/// section of the settings shown, on the desktop).
+pub(crate) fn page(compact: bool, title: &'static str, sections: View) -> impl IntoElement {
     scroll().flex_1().child(
         page_column(compact)
             .gap(px(if compact { S6 } else { S8 }))
@@ -444,7 +445,7 @@ pub(crate) fn page(compact: bool, sections: View) -> impl IntoElement {
                     .flex_row()
                     .items_center()
                     .gap(sp(S2))
-                    .child(page_title(t("Settings"))),
+                    .child(page_title(title)),
             )
             .child(sections.gap(px(if compact { S6 } else { S8 }))),
     )

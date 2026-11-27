@@ -141,6 +141,8 @@ test("a press on the composer's card is a press on its text", async () => {
 test("settings lists the agents and adds a provider in steps", async () => {
   const app = await open(".", { width: 1100, height: 900 });
   await app.press("label:Settings >> nth=0");
+  // Settings come in sections, a list down the left.
+  await app.press("label:Agents & models");
   await app.waitFor("text:Coding agents");
   expect(app.texts()).toContain("Coding agents");
   // What it is: an account of a CLI, or an endpoint on a key.
@@ -166,6 +168,8 @@ test("settings lists the agents and adds a provider in steps", async () => {
 test("an Antigravity account asks how it signs in", async () => {
   const app = await open(".", { width: 1100, height: 900 });
   await app.press("label:Settings >> nth=0");
+  // Settings come in sections, a list down the left.
+  await app.press("label:Agents & models");
   await app.waitFor("text:Coding agents");
   await app.press("text:Add provider");
   await app.waitFor("text:API endpoints");
@@ -224,6 +228,8 @@ test("a Mac that runs no agents of its own connects to others", async () => {
   const app = await open(".", { width: 1100, height: 900 });
   const elsewhere = "text:Connect to the computer your agents run on";
   await app.press("label:Settings >> nth=0");
+  // Settings come in sections, a list down the left.
+  await app.press("label:Connections");
   await app.waitFor("label:Run agents on this Mac");
   // From its default, whatever an earlier run left.
   if (app.shows(elsewhere)) {
@@ -239,6 +245,8 @@ test("a Mac that runs no agents of its own connects to others", async () => {
 test("settings manage the spaces on this Mac", async () => {
   const app = await open(".", { width: 1100, height: 900 });
   await app.press("label:Settings >> nth=0");
+  // Settings come in sections, a list down the left.
+  await app.press("label:Connections");
   // The page may come a frame after the press.
   await app.waitFor("text:Spaces");
   expect(app.texts()).toContain("Spaces");
