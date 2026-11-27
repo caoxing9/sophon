@@ -1785,6 +1785,15 @@ pub(crate) fn providers() -> Vec<Provider> {
     global::<Providers>().with(|p| p.0.clone())
 }
 
+/// What a provider is called where it is named (`Claude`, not `claude`):
+/// its label, else its id with a capital.
+pub(crate) fn provider_name(id: &str) -> String {
+    provider(id).map(|p| p.label).filter(|l| !l.is_empty()).unwrap_or_else(|| {
+        let mut c = id.chars();
+        c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+    })
+}
+
 pub(crate) fn provider(id: &str) -> Option<Provider> {
     global::<Providers>().with(|p| p.0.iter().find(|p| p.id == id).cloned())
 }
@@ -7846,7 +7855,7 @@ pub(crate) fn apply(event: Event) {
                 }
             });
         }
-        Event::Notice(message) => notify(crate::i18n::tr(&message)),
+        Event::Notice(message) => notify(crate::i18n::tr_notice(&message)),
     }
 }
 

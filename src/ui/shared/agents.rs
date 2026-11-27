@@ -145,7 +145,9 @@ fn agent_row(
         .items_center()
         .gap(sp(S2))
         .child(text(p.label.clone()).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)));
-    if let Some(v) = &d.version {
+    // The version alone (`2.1.3`): what the CLI said when asked may be a
+    // failure ("did not answer"), not a version to show beside its name.
+    if let Some(v) = &installed {
         title = title.child(text(v.clone()).font_family(mono_font).text_size(tx(TEXT_SM)).text_color(FG_MUTED()));
     }
     if let (Some(latest), Some(path)) = (&newer, &d.path)

@@ -298,7 +298,7 @@ pub(crate) fn notifications_card() -> View {
                     NotifyWhen::Away => t("Only when unfocused"),
                     NotifyWhen::Always => t("Always"),
                 };
-                dropdown(picker_trigger(None, move || SharedString::from(name(store::settings().notify_finished))))
+                dropdown(select_trigger(None, move || SharedString::from(name(store::settings().notify_finished))))
                     .align(nsh_core::overlay::Align::End)
                     .child(dynamic(move || {
                         let current = store::settings().notify_finished;
@@ -529,7 +529,7 @@ pub(crate) fn default_model_card() -> View {
         .child(row(
             t("Default model"),
             t("What a new conversation starts with. It can still be changed in the conversation"),
-            dropdown(picker_trigger(Some(Icon::Cpu), move || label.get()))
+            dropdown(select_trigger(Some(Icon::Cpu), move || label.get()))
                 .align(nsh_core::overlay::Align::End)
                 .child(dynamic(move || {
                     let current = store::default_model();
@@ -572,7 +572,7 @@ pub(crate) fn default_model_card() -> View {
             Some(untracked(move || {
                 let now = d.thinking.clone().filter(|t| model.levels.iter().any(|(id, _)| id == t)).or(model.default_level.clone());
                 let shown = model.levels.iter().find(|(id, _)| Some(id) == now.as_ref()).map(|(_, l)| l.clone()).unwrap_or_default();
-                let mut menu = dropdown(picker_trigger(Some(Icon::Brain), shown)).align(nsh_core::overlay::Align::End);
+                let mut menu = dropdown(select_trigger(Some(Icon::Brain), shown)).align(nsh_core::overlay::Align::End);
                 for (id, level) in &model.levels {
                     let (on, pick) = (Some(id) == now.as_ref(), DefaultModel { thinking: Some(id.clone()), ..d.clone() });
                     menu = menu.child(menu_row(level.clone(), None, None, on, move || store::set_default_model(Some(pick.clone()))));
@@ -600,7 +600,7 @@ pub(crate) fn text_generation_card() -> View {
                 return Some(untracked(|| spinner(20.0).into_element()));
             }
             Some(untracked(move || {
-                dropdown(picker_trigger(Some(Icon::Cpu), move || label.get()))
+                dropdown(select_trigger(Some(Icon::Cpu), move || label.get()))
                     .align(nsh_core::overlay::Align::End)
                     .child(dynamic(move || {
                         let current = store::text_generation_model();

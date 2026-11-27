@@ -93,7 +93,7 @@ fn session_row(agent: Memo<Option<Agent>>) -> impl IntoElement {
                     .child(
                         text(label(|a| {
                             let date = a.updated_at.get(..10).unwrap_or_default();
-                            format!("{} · {} · {date}", a.provider, crate::daemon::model::folder_name(&a.cwd))
+                            format!("{} · {} · {date}", store::provider_name(&a.provider), crate::daemon::model::folder_name(&a.cwd))
                         }))
                         .text_size(tx(TEXT_SM))
                         .text_color(FG_MUTED())
