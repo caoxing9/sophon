@@ -170,6 +170,9 @@ pub enum Command {
     ProviderLogin { provider: String, device: bool },
     /// Ends the sign-in under way for a provider.
     ProviderLoginCancel(String),
+    /// The address a Google sign-in's page went to, pasted from another
+    /// device than the host: handed to the CLI waiting for it there.
+    ProviderLoginReply { provider: String, url: String },
     RestartDaemon,
     /// The sessions to import: asked of each of `providers` apart (one
     /// list of all would be the newest of them together, and an agent
@@ -1245,8 +1248,9 @@ pub enum Stage {
 #[derive(Clone, Debug, PartialEq)]
 pub enum LoginStep {
     /// Under way: the page to open (`url`), with the code to type there
-    /// for a sign-in by code.
-    Started { url: String, code: Option<String> },
+    /// for a sign-in by code; `paste`: the address the page goes to can be
+    /// pasted back from another device.
+    Started { url: String, code: Option<String>, paste: bool },
     /// Over: signed in, or why not.
     Ended(Result<(), String>),
 }
@@ -2741,6 +2745,11 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
             Pending::ProviderLogin(provider.clone()),
             json!({ "type": "provider.login.start.request", "provider": provider, "device": device }),
         )],
+        Command::ProviderLoginReply { provider, url } => vec![request(
+            pending,
+            Pending::Other("hand on the sign-in"),
+            json!({ "type": "provider.login.callback.request", "provider": provider, "url": url }),
+        )],
         Command::ProviderLoginCancel(provider) => vec![request(
             pending,
             Pending::Optional,
@@ -3763,9 +3772,12 @@ fn handle(
             request_id.and_then(|id| pending.remove(id));
             let s = |k: &str| payload.get(k).and_then(Value::as_str).filter(|v| !v.is_empty()).map(str::to_owned);
             let Some(provider) = s("provider") else { return vec![] };
+            let paste = payload.get("pasteReply").and_then(Value::as_bool) == Some(true);
             let step = match (s("authUrl"), s("verificationUrl"), s("userCode")) {
-                (Some(url), _, _) => LoginStep::Started { url, code: None },
-                (None, Some(url), code) => LoginStep::Started { url, code },
+                (Some(url), _, _) => LoginStep::Started { url, code: None, paste },
+                (None, Some(url), code) => LoginStep::Started { url, code, paste },
+                // Signed in already: nothing to open, its end is waited on.
+                _ if paste || payload.get("authUrl").is_some() => LoginStep::Started { url: String::new(), code: None, paste },
                 _ => LoginStep::Ended(Err("Codex gave no page to sign in on".into())),
             };
             if matches!(step, LoginStep::Started { .. }) {
@@ -4547,7 +4559,7 @@ mod tests {
             None,
             &mut follow_ups,
         );
-        assert!(matches!(&events[..], [Event::ProviderLogin { provider, step: LoginStep::Started { url, code: None } }]
+        assert!(matches!(&events[..], [Event::ProviderLogin { provider, step: LoginStep::Started { url, code: None, paste: false } }]
             if provider == "work" && url == "https://auth.openai.com/x"));
         let wait = &follow_ups.pop().unwrap()["message"];
         assert_eq!(wait["type"], "provider.login.wait.request");

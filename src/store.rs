@@ -5350,8 +5350,9 @@ pub(crate) enum SignIn {
     /// Asked for; no page yet.
     Starting,
     /// Waiting for the person on the page `url`, with the `code` to type
-    /// there for a sign-in by code.
-    Waiting { url: String, code: Option<String> },
+    /// there for a sign-in by code; `paste`: the address the page goes to
+    /// can be pasted back from another device.
+    Waiting { url: String, code: Option<String>, paste: bool },
     /// Signed in.
     Done,
     Failed(String),
@@ -5374,6 +5375,12 @@ pub(crate) fn sign_in(provider: &str, device: bool) {
         s.0.insert(provider.to_owned(), SignIn::Starting);
     });
     send(Command::ProviderLogin { provider: provider.to_owned(), device });
+}
+
+/// Hands the address a Google sign-in's page went to (pasted, from a
+/// device other than the host) to the CLI waiting for it on the host.
+pub(crate) fn sign_in_reply(provider: &str, url: &str) {
+    send(Command::ProviderLoginReply { provider: provider.to_owned(), url: url.trim().to_owned() });
 }
 
 /// Ends the sign-in under way for `provider`.
@@ -7627,12 +7634,12 @@ pub(crate) fn apply(event: Event) {
                 return;
             }
             let state = match step {
-                crate::daemon::LoginStep::Started { url, code } => {
-                    // The page Codex waits for on the host opens here.
-                    if code.is_none() && on_this_mac() {
+                crate::daemon::LoginStep::Started { url, code, paste } => {
+                    // The page the CLI waits for on the host opens here.
+                    if code.is_none() && !url.is_empty() && on_this_mac() {
                         drop(open_url(url.clone()));
                     }
-                    SignIn::Waiting { url, code }
+                    SignIn::Waiting { url, code, paste }
                 }
                 crate::daemon::LoginStep::Ended(Ok(())) => SignIn::Done,
                 crate::daemon::LoginStep::Ended(Err(error)) => SignIn::Failed(error),
