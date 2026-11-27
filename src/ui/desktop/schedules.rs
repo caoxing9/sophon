@@ -394,12 +394,7 @@ fn list_row(s: Schedule, plugins: &[Plugin], pane: Signal<Pane>, opened: Signal<
 fn gallery(pane: Signal<Pane>, opened: Signal<bool>, compact: bool) -> impl IntoElement {
     let kind = signal(Kind::All);
     scroll().flex_1().child(
-        view()
-            .w_full()
-            .max_w(px(860.0))
-            .self_center()
-            .px(sp(S6))
-            .py(sp(S8))
+        page_column(compact)
             .gap(sp(S4))
             .child(
                 view()
@@ -407,7 +402,7 @@ fn gallery(pane: Signal<Pane>, opened: Signal<bool>, compact: bool) -> impl Into
                     .items_center()
                     .gap(sp(S2))
                     .when(compact, |v| v.child(icon_btn(Icon::ArrowLeft, Sz::Sm, t("Back"), move || opened.set(false))))
-                    .child(text(t("New automation")).text_size(tx(TEXT_2XL)).font_weight(FontWeight(500))),
+                    .child(page_title(t("New automation"))),
             )
             .child(text(t("Begin from one of these, or from nothing. All of it can be changed")).text_size(tx(TEXT_BASE)).text_color(FG_MUTED()))
             .child(view().flex_row().child(segmented(
@@ -665,12 +660,10 @@ fn editor(existing: Option<Schedule>, template: Template, pane: Signal<Pane>, op
     // ------------------------------------------------------------ the head
     // Its name as the page's title, and beside it what is done with it.
     let mut head = view().flex_row().items_center().gap(sp(S2)).when(compact, |v| v.child(icon_btn(Icon::ArrowLeft, Sz::Sm, t("Back"), move || opened.set(false)))).child(
-        field()
+        bare_field()
             .flex_1()
             .h(px(44.0))
             .px(px(0.0))
-            .bg(tint(FG(), 0.0))
-            .border_color(tint(FG(), 0.0))
             .text_size(tx(TEXT_2XL))
             .font_weight(FontWeight(600))
             .value(move || name.get())

@@ -4,7 +4,7 @@
 use crate::i18n::t;
 use nsh_base::button;
 use nsh_core::{
-    element::{FontWeight, Position},
+    element::Position,
     prelude::*,
 };
 use crate::ui::kit::text;
@@ -18,12 +18,7 @@ pub(crate) fn history(compact: bool) -> impl IntoElement {
     view()
         .flex_1()
         .child(
-            view()
-                .w_full()
-                .max_w(px(820.0))
-                .self_center()
-                .px(sp(S6))
-                .pt(sp(S8))
+            page_column(compact)
                 .pb(sp(S4))
                 .gap(sp(S4))
                 .child(
@@ -32,7 +27,7 @@ pub(crate) fn history(compact: bool) -> impl IntoElement {
                         .items_center()
                         .gap(sp(S2))
                         .when(compact, |v| v.child(icon_btn(Icon::ArrowLeft, Sz::Sm, t("Back"), store::go_home)))
-                        .child(text(t("History")).text_size(tx(TEXT_2XL)).font_weight(FontWeight(500))),
+                        .child(page_title(t("History"))),
                 )
                 .child(
                     field()

@@ -1481,9 +1481,11 @@ fn import_list(
         )
         .child(btn(
             move || -> SharedString { if reviewing.get() { t("Hide").into() } else { tf("Review all {}", &[&total.to_string()]).into() } },
-            Variant::Ghost,
+            // A control, not a line of text: outlined, with the chevron a
+            // list that opens has.
+            Variant::Outline,
             Sz::Sm,
-            None,
+            Some(Icon::ChevronDown),
             move || reviewing.update(|r| *r = !*r),
         ));
     let all_select = all.clone();

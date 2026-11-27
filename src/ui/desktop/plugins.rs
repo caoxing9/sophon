@@ -31,12 +31,7 @@ pub(crate) fn plugins(compact: bool, kind: PluginKind) -> impl IntoElement {
         source.set(String::new());
     };
     scroll().flex_1().child(
-        view()
-            .w_full()
-            .max_w(px(820.0))
-            .self_center()
-            .px(sp(S6))
-            .py(sp(S8))
+        page_column(compact)
             .gap(sp(S6))
             .child(
                 view()
@@ -47,7 +42,7 @@ pub(crate) fn plugins(compact: bool, kind: PluginKind) -> impl IntoElement {
                             .items_center()
                             .gap(sp(S2))
                             .when(compact, |v| v.child(icon_btn(Icon::ArrowLeft, Sz::Sm, t("Back"), store::go_home)))
-                            .child(text(if of_plugins { t("Plugins") } else { t("Integrations") }).text_size(tx(TEXT_2XL)).font_weight(FontWeight(500)).flex_1())
+                            .child(page_title(if of_plugins { t("Plugins") } else { t("Integrations") }).flex_1())
                             .child(icon_btn(Icon::RotateCw, Sz::Sm, t("Refresh"), store::load_plugins)),
                     )
                     .child(
