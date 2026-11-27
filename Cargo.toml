@@ -50,6 +50,12 @@ iana-time-zone = "0.1.65"
 
 # TLS is the system's, except on Android, which has none to link: there it
 # is the rustls NSH already builds tokio-tungstenite with.
+# Tests of peer to peer through a relay of one's own: iroh's test relay,
+# whose certificate the test endpoints are told not to check.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+iroh = { version = "1.5", features = ["test-utils"] }
+iroh-relay = { version = "1.5", features = ["test-utils"] }
+
 [target.'cfg(not(any(target_arch = "wasm32", target_os = "android")))'.dependencies]
 tokio-tungstenite = { version = "0.28", features = ["native-tls"] }
 

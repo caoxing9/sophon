@@ -2966,11 +2966,11 @@ pub(crate) fn pairing_link(daemon_relay: Option<&str>) -> Option<String> {
         crate::daemon::bridge::info_for(home.as_deref())
     };
     #[cfg(not(target_arch = "wasm32"))]
-    let p2p = lan.as_ref().and_then(|b| b.p2p.clone());
+    let p2p = lan.as_ref().and_then(|b| b.p2p.clone().map(|id| (id, b.p2p_relay.clone())));
     #[cfg(not(target_arch = "wasm32"))]
     let lan = lan.map(|b| (b.addr, b.key, b.token));
     #[cfg(target_arch = "wasm32")]
-    let (lan, p2p): (Option<(String, [u8; 32], String)>, Option<String>) = (None, None);
+    let (lan, p2p): (Option<(String, [u8; 32], String)>, Option<(String, Option<String>)>) = (None, None);
     if lan.is_none() && relay_link.is_none() {
         return None;
     }
@@ -2979,7 +2979,7 @@ pub(crate) fn pairing_link(daemon_relay: Option<&str>) -> Option<String> {
         lan.as_ref().map(|(a, k, t)| (a.as_str(), k, t.as_str())),
         relay_link,
         name.as_deref(),
-        p2p.as_deref(),
+        p2p.as_ref().map(|(id, relay)| (id.as_str(), relay.as_deref())),
     ))
 }
 

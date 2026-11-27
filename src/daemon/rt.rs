@@ -98,8 +98,8 @@ mod native {
     /// A WebSocket to `url`; `iroh://<endpoint id>` is a paired computer
     /// reached peer to peer.
     pub async fn connect(url: &str) -> Result<(WsTx, WsRx), String> {
-        if let Some(id) = url.strip_prefix("iroh://") {
-            let stream = super::super::p2p::connect(id).await?;
+        if let Some((id, relay)) = super::super::p2p::parse_url(url) {
+            let stream = super::super::p2p::connect(&id, relay.as_deref()).await?;
             let (ws, _) = tokio_tungstenite::client_async("ws://sophon.p2p/ws", stream).await.map_err(|e| e.to_string())?;
             let (tx, rx) = ws.split();
             return Ok((WsTx::P2p(tx), WsRx::P2p(rx)));

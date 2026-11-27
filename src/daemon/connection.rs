@@ -1469,8 +1469,8 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
                 }
                 let p2p_skip = p2p_failed.is_some_and(|at| at.elapsed() < P2P_REST);
                 #[cfg(not(target_arch = "wasm32"))]
-                if super::relay::PairingLink::parse(&r.url).as_ref().and_then(p2p_id).is_some() {
-                    super::p2p::warm();
+                if let Some((_, relay)) = super::relay::PairingLink::parse(&r.url).as_ref().and_then(p2p_id) {
+                    super::p2p::warm(relay.as_deref());
                 }
                 let away = lan_index == 0 && has_away(r, p2p_skip) && skip_lan(on_wifi, last_route(), std::mem::take(&mut lan_answered));
                 let found = if lan_index == 0 && !away && has_lan(r) {
@@ -1640,13 +1640,23 @@ pub async fn run(events: UnboundedSender<Event>, mut commands: UnboundedReceiver
 /// directly.
 const P2P_REST: Duration = Duration::from_secs(10 * 60);
 
-/// The peer to peer id of a saved host's bridge: its link's, else the one
-/// it told this device (paired before it had one), kept with its lists.
-fn p2p_id(link: &super::relay::PairingLink) -> Option<String> {
+/// How a saved host's bridge is reached peer to peer: its id and the relay
+/// it is found through (`None`: n0's). What it told this device last, kept
+/// with its lists (its relay may have changed since pairing, or it was
+/// paired before it had an id), else its link's.
+fn p2p_id(link: &super::relay::PairingLink) -> Option<(String, Option<String>)> {
     if cfg!(target_arch = "wasm32") || link.lan.is_none() {
         return None;
     }
-    link.p2p.clone().or_else(|| super::cache::load("p2p")?.get("id")?.as_str().map(str::to_owned))
+    let told = super::cache::load("p2p").and_then(|v| {
+        let id = v.get("id")?.as_str()?.to_owned();
+        Some((id, v.get("relay").and_then(Value::as_str).map(str::to_owned)))
+    });
+    match (told, &link.p2p) {
+        (Some(told), Some(id)) if told.0 == *id => Some(told),
+        (_, Some(id)) => Some((id.clone(), link.p2p_relay.clone())),
+        (told, None) => told,
+    }
 }
 
 /// Where a saved host's session goes: its LAN bridge, its bridge peer to
@@ -1658,8 +1668,9 @@ fn endpoint_for(r: &RemoteHost, lan_index: usize, found: Option<String>, p2p_ski
     }
     if let Some(link) = super::relay::PairingLink::parse(&r.url) {
         let p2p = p2p_id(&link);
-        // Paired before its bridge had a peer to peer id: asked for one.
-        let ask_p2p = !cfg!(target_arch = "wasm32") && link.lan.is_some() && p2p.is_none();
+        // Its bridge is asked how it is reached peer to peer each time: an
+        // id it did not have at pairing, a relay that changed since.
+        let ask_p2p = !cfg!(target_arch = "wasm32") && link.lan.is_some();
         let lan_probe: Vec<String> =
             link.lan.as_ref().map(|(addrs, ..)| addrs.split(',').filter(|a| !a.is_empty()).map(str::to_owned).collect()).unwrap_or_default();
         let lan_key = link.lan.as_ref().map(|(_, key, _)| B64.encode(key));
@@ -1693,8 +1704,8 @@ fn endpoint_for(r: &RemoteHost, lan_index: usize, found: Option<String>, p2p_ski
         // Away from its LAN: peer to peer, the bridge's own handshake and
         // token over it; the relay after. The session moves to the LAN
         // when it answers, as from the relay.
-        if let (Some(id), Some((_, key, token)), false) = (&p2p, &link.lan, p2p_skip) {
-            let url = format!("iroh://{id}");
+        if let (Some((id, relay)), Some((_, key, token)), false) = (&p2p, &link.lan, p2p_skip) {
+            let url = super::p2p::url(id, relay.as_deref());
             return Endpoint {
                 url: url.clone(),
                 local_credential: None,
@@ -1703,7 +1714,7 @@ fn endpoint_for(r: &RemoteHost, lan_index: usize, found: Option<String>, p2p_ski
                 bridge_token: Some(token.clone()),
                 lan_probe,
                 lan_key,
-                ask_p2p: false,
+                ask_p2p,
             };
         }
         if let Some(offer) = link.relay {
@@ -2327,7 +2338,8 @@ async fn session(
                     // host's lists, tried when away from its LAN next.
                     Some("sophon_bridge_p2p") => {
                         if let Some(id) = msg.get("id").and_then(Value::as_str).filter(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric())) {
-                            super::cache::save("p2p", &json!({ "id": id }));
+                            let relay = msg.get("relay").and_then(Value::as_str).filter(|r| r.starts_with("https://"));
+                            super::cache::save("p2p", &json!({ "id": id, "relay": relay }));
                         }
                         continue;
                     }
@@ -4631,7 +4643,7 @@ mod tests {
         let offer = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(json!({ "v": 2, "serverId": "srv_x", "daemonPublicKeyB64": B64.encode(key), "relay": { "endpoint": "r:1", "useTls": false } }).to_string());
         let relay = format!("sophon://relay/#offer={offer}");
-        let host = |p2p: Option<&str>, relay: Option<&str>| RemoteHost { url: PairingLink::format_named(Some(("10.0.0.2:1", &key, "tok")), relay, None, p2p), password: None };
+        let host = |p2p: Option<&str>, relay: Option<&str>| RemoteHost { url: PairingLink::format_named(Some(("10.0.0.2:1", &key, "tok")), relay, None, p2p.map(|id| (id, None))), password: None };
 
         let both = host(Some(id), Some(&relay));
         assert!(endpoint_for(&both, 0, None, false).is_lan(), "the LAN first");
@@ -4641,10 +4653,16 @@ mod tests {
         assert_eq!(away.relay.as_ref().map(|o| o.daemon_key), Some(key), "the bridge's handshake");
         assert_eq!(away.bridge_token.as_deref(), Some("tok"));
         assert_eq!(away.lan_probe, vec!["10.0.0.2:1".to_owned()], "moves to the LAN when it answers");
-        assert!(!away.ask_p2p);
+        assert!(away.ask_p2p, "asked again each time: its relay may have changed");
         let relayed = endpoint_for(&both, usize::MAX, None, true);
         assert_eq!(relayed.via(), Via::Relay, "peer to peer did not connect");
-        assert!(!relayed.ask_p2p, "known already");
+
+        // Found through the relay server's own relay, as its link names it.
+        let own = "https://47.119.154.134:3443";
+        let through = RemoteHost { url: PairingLink::format_named(Some(("10.0.0.2:1", &key, "tok")), Some(&relay), None, Some((id, Some(own)))), password: None };
+        let away = endpoint_for(&through, usize::MAX, None, false);
+        assert_eq!(away.via(), Via::P2p);
+        assert_eq!(super::super::p2p::parse_url(&away.url), Some((id.to_owned(), Some(own.to_owned()))));
 
         let p2p_only = host(Some(id), None);
         assert!(has_away(&p2p_only, false));

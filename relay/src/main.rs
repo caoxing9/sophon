@@ -32,6 +32,7 @@
 //! Usage: `sophon-relay [ADDR]` (default `0.0.0.0:8443`; `RELAY_ADDR` too).
 
 mod feedback;
+mod p2p;
 mod push;
 
 use std::{
@@ -135,12 +136,18 @@ enum Route {
     Relay(Wanted),
     Push(push::Wanted),
     Feedback,
+    /// The relay for peer to peer: its address, or none (`p2p`).
+    P2p,
 }
+
+/// The address of this server's relay for peer to peer, once started.
+static P2P_URL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 fn route(uri: &str) -> Result<Route, &'static str> {
     match uri.split_once('?').map_or(uri, |(path, _)| path) {
         "/push" => push::parse(uri).map(Route::Push),
         "/feedback" => Ok(Route::Feedback),
+        "/p2p" => Ok(Route::P2p),
         _ => parse(uri).map(Route::Relay),
     }
 }
@@ -202,6 +209,12 @@ async fn serve(stream: TcpStream, state: Shared, gateway: Arc<push::Gateway>, de
         Ok(Route::Relay(wanted)) => wanted,
         Ok(Route::Push(wanted)) => return push::serve(ws, wanted, gateway).await,
         Ok(Route::Feedback) => return feedback::serve(ws, peer.map(|p| p.ip()), desk).await,
+        Ok(Route::P2p) => {
+            let (mut sink, _) = ws.split();
+            let _ = sink.send(Message::Text(p2p::answer(P2P_URL.get().map(String::as_str)).into())).await;
+            let _ = sink.close().await;
+            return;
+        }
         Err(_) => return,
     };
     log::info!("{role:?} of {server_id} connected from {peer:?}");
@@ -390,6 +403,24 @@ async fn main() {
     log::info!("sophon-relay listening on {addr}");
     let gateway = Arc::new(push::Gateway::from_env());
     let desk = Arc::new(feedback::Desk::from_env());
+    // Peer to peer's relay, beside: kept while the process runs.
+    let _p2p = match p2p::Settings::from_env(|k| std::env::var(k).ok()) {
+        None => {
+            log::info!("p2p relay off: no P2P_TLS_CERT, P2P_TLS_KEY and P2P_RELAY_URL");
+            None
+        }
+        Some(settings) => match p2p::start(&settings).await {
+            Ok(server) => {
+                log::info!("p2p relay at {} (https {}, quic {})", settings.url, settings.https, settings.quic);
+                let _ = P2P_URL.set(settings.url.clone());
+                Some(server)
+            }
+            Err(e) => {
+                log::error!("p2p relay could not start: {e}");
+                None
+            }
+        },
+    };
     tokio::select! {
         _ = listen(listener, Shared::default(), gateway, desk) => {}
         _ = tokio::signal::ctrl_c() => {}
