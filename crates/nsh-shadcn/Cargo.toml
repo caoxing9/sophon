@@ -12,7 +12,6 @@ categories = ["gui"]
 # The crate is the library: the gallery, tools, renders and screenshots stay in the repository.
 include = ["/src/**/*.rs", "/Cargo.toml", "/README.md", "/LICENSE", "/DESIGN.md"]
 
-[workspace]
 
 [lib]
 name = "nsh_shadcn"
