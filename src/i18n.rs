@@ -1576,6 +1576,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Command copied", "命令已复制"),
     ("Custom", "自定义"),
     ("Give it a name", "给它起个名字"),
+    ("“{}” already uses this folder: it would be the same account twice", "「{}」已经在用这个文件夹，再加一次就是同一个账号的重复"),
     ("Its config folder on that computer: {}", "它在那台电脑上的配置文件夹：{}"),
     ("List at least one model", "至少列出一个模型"),
     ("Model ids, the default first, e.g. model-a, model-b", "模型 ID，默认的放第一个，如 model-a, model-b"),
