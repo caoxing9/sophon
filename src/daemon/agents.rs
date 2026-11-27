@@ -14,7 +14,7 @@ use super::model::Provider;
 pub const SOPHON_MARK: &str = "Added by Sophon";
 
 /// Providers the daemon has built in: their entries are never removed.
-const BUILTIN: &[&str] = &["claude", "codex", "copilot", "opencode", "pi", "omp"];
+const BUILTIN: &[&str] = &["claude", "codex", "antigravity", "copilot", "opencode", "pi", "omp"];
 
 /// Families whose own model ids are `provider/model`: such an id says
 /// nothing about a gateway there.
@@ -36,11 +36,13 @@ pub struct Diagnostic {
     pub error: Option<String>,
 }
 
-/// The account a provider is signed in with (Claude Code reports it).
+/// The account a provider is signed in with (Claude Code, Codex, Antigravity).
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Login {
     pub signed_in: bool,
-    /// `claude.ai`, `api_key`, … as the CLI says it.
+    /// `authenticated`, `unauthenticated`, or `unknown` (when reported).
+    pub status: Option<String>,
+    /// `claude.ai`, `api_key`, `oauth-personal`, `oauth-business`, … as the CLI says it.
     pub method: Option<String>,
     pub email: Option<String>,
     /// Readable already: `Max 20x`.
@@ -112,6 +114,7 @@ fn parse_login(value: &str) -> Option<Login> {
     let signed_in = json.get("loggedIn").and_then(Value::as_bool)?;
     Some(Login {
         signed_in,
+        status: s("authStatus"),
         method: s("authMethod"),
         email: s("email").filter(|e| e.contains('@')),
         plan: s("planTier").or_else(|| s("subscriptionType")).map(|p| readable_plan(&p)),
@@ -216,6 +219,8 @@ pub enum Base {
     Codex,
     /// Antigravity CLI (`agy`), on a Google account.
     Antigravity,
+    /// Gemini CLI (`gemini`), hidden under "Show more" in Add provider.
+    Gemini,
 }
 
 impl Base {
@@ -224,6 +229,7 @@ impl Base {
             Base::Claude => "claude",
             Base::Codex => "codex",
             Base::Antigravity => "antigravity",
+            Base::Gemini => "gemini",
         }
     }
 
@@ -233,15 +239,18 @@ impl Base {
             Base::Claude => "CLAUDE_CONFIG_DIR",
             Base::Codex => "CODEX_HOME",
             Base::Antigravity => "GEMINI_HOME",
+            Base::Gemini => "GEMINI_CLI_HOME",
         }
     }
 
-    /// The suggested folder for another account: `~/.claude-work`.
+    /// The suggested folder for another account: `~/.claude-work` or
+    /// `~/.sophon/providers/antigravity/work`.
     pub fn default_dir(self, slug: &str) -> String {
         match self {
             Base::Claude => format!("~/.claude-{slug}"),
             Base::Codex => format!("~/.codex-{slug}"),
-            Base::Antigravity => format!("~/.sophon-antigravity-{slug}"),
+            Base::Antigravity => format!("~/.sophon/providers/antigravity/{slug}"),
+            Base::Gemini => format!("~/.sophon/providers/gemini/{slug}"),
         }
     }
 }
@@ -355,6 +364,45 @@ pub fn absolute_dir(dir: &str, home: Option<&str>) -> Option<String> {
     (!rest.is_empty() && !home.is_empty()).then(|| format!("{home}/{rest}"))
 }
 
+/// The deduplicated provider id and suggested config folder (`~/…`) for a new
+/// account of `base`, guaranteed not to collide with built-in names, existing
+/// provider ids, reserved `"default"`, or any directory already configured in
+/// `config`.
+pub fn account_id_and_dir(
+    base: Base,
+    name: &str,
+    taken_ids: &[String],
+    config: Option<&Value>,
+    home: Option<&str>,
+) -> (String, String) {
+    let id = new_id(name, base.id(), taken_ids);
+    let used: Vec<String> = config
+        .and_then(|c| c.get("providers")?.as_object())
+        .into_iter()
+        .flatten()
+        .filter_map(|(_, entry)| entry.pointer(&format!("/env/{}", base.home_var())).and_then(Value::as_str))
+        .map(|d| d.trim().trim_end_matches('/').to_owned())
+        .filter(|d| !d.is_empty())
+        .collect();
+    let dir_taken = |candidate: &str| {
+        let norm = candidate.trim_end_matches('/');
+        let abs = absolute_dir(norm, home);
+        used.iter().any(|u| u == norm || abs.as_deref() == Some(u.as_str()))
+    };
+    let reserved = |slug: &str| base == Base::Antigravity && slug == "default";
+    if !reserved(&id) {
+        let dir = base.default_dir(&id);
+        if !dir_taken(&dir) {
+            return (id, dir);
+        }
+    }
+    let dir = (2..)
+        .map(|n| base.default_dir(&format!("{id}-{n}")))
+        .find(|dir| !dir_taken(dir))
+        .unwrap_or_else(|| base.default_dir(&id));
+    (id, dir)
+}
+
 /// Another account of a CLI: its own config folder, so its login is its own.
 pub fn account_patch(id: &str, base: Base, label: &str, dir: &str) -> Value {
     json!({ "providers": { id: {
@@ -386,6 +434,7 @@ pub fn login_command(base: Base, dir: &str) -> String {
                  agy acp --gemini-dir {dir} --app-data-dir antigravity-acp --login"
             )
         }
+        Base::Gemini => format!("mkdir -p {dir} && GEMINI_CLI_HOME={dir} gemini"),
     }
 }
 
@@ -492,8 +541,8 @@ pub fn key_instance_patch(id: &str, k: &KeyInstance) -> Value {
             env.insert("OPENAI_BASE_URL".into(), k.base_url.trim().into());
             env.insert("OPENAI_API_KEY".into(), k.key.trim().into());
         }
-        // Not offered for an endpoint: it runs on Google's only.
-        Base::Antigravity => {}
+        // Not offered for an endpoint: they run on Google's only.
+        Base::Antigravity | Base::Gemini => {}
     }
     for (name, value) in &k.extra_env {
         env.insert(name.clone(), value.clone().into());
@@ -690,11 +739,12 @@ mod tests {
 
     #[test]
     fn an_antigravity_account_says_how_it_signs_in_and_with_what() {
-        let google = agy_patch("work", " Work ", "/h/.sophon-antigravity-work", AgyAuth::Google, "", "", "");
+        assert_eq!(Base::Antigravity.default_dir("work"), "~/.sophon/providers/antigravity/work");
+        let google = agy_patch("work", " Work ", "/h/.sophon/providers/antigravity/work", AgyAuth::Google, "", "", "");
         assert_eq!(
             google["providers"]["work"],
             json!({"extends":"antigravity","label":"Work","description":SOPHON_MARK,
-                "env":{"GEMINI_HOME":"/h/.sophon-antigravity-work"},"authMethod":"oauth-personal"})
+                "env":{"GEMINI_HOME":"/h/.sophon/providers/antigravity/work"},"authMethod":"oauth-personal"})
         );
         let key = agy_patch("k", "K", "/d", AgyAuth::ApiKey, " sk ", "p", "l");
         assert_eq!(key["providers"]["k"]["env"]["GEMINI_API_KEY"], "sk");
@@ -724,10 +774,39 @@ mod tests {
         assert_eq!(account_patch("cx", Base::Codex, "Cx", "/h/.codex-cx")["providers"]["cx"]["env"], json!({ "CODEX_HOME": "/h/.codex-cx" }));
         assert_eq!(login_command(Base::Claude, "/Users/me/.claude-work"), "CLAUDE_CONFIG_DIR=/Users/me/.claude-work claude auth login");
         assert_eq!(login_command(Base::Codex, "/a b"), "mkdir -p '/a b' && CODEX_HOME='/a b' codex login");
-        let agy = login_command(Base::Antigravity, "/h/.sophon-antigravity-w");
-        assert!(agy.starts_with("mkdir -p /h/.sophon-antigravity-w/antigravity-acp && printf '%s' '{\"auth\":{\"type\":\"oauth-personal\"}}' > /h/.sophon-antigravity-w/antigravity-acp/settings.json && env -u GEMINI_API_KEY"), "{agy}");
-        assert!(agy.contains(" GEMINI_HOME=/h/.sophon-antigravity-w AGY_ACP_FORCE_FILE_STORAGE=1 AGY_CLI_DISABLE_AUTO_UPDATE=true SSH_CONNECTION='127.0.0.1 0 127.0.0.1 0' "), "{agy}");
-        assert!(agy.ends_with("agy acp --gemini-dir /h/.sophon-antigravity-w --app-data-dir antigravity-acp --login"), "{agy}");
+        let agy = login_command(Base::Antigravity, "/h/.sophon/providers/antigravity/w");
+        assert!(agy.starts_with("mkdir -p /h/.sophon/providers/antigravity/w/antigravity-acp && printf '%s' '{\"auth\":{\"type\":\"oauth-personal\"}}' > /h/.sophon/providers/antigravity/w/antigravity-acp/settings.json && env -u GEMINI_API_KEY"), "{agy}");
+        assert!(agy.contains(" GEMINI_HOME=/h/.sophon/providers/antigravity/w AGY_ACP_FORCE_FILE_STORAGE=1 AGY_CLI_DISABLE_AUTO_UPDATE=true SSH_CONNECTION='127.0.0.1 0 127.0.0.1 0' "), "{agy}");
+        assert!(agy.ends_with("agy acp --gemini-dir /h/.sophon/providers/antigravity/w --app-data-dir antigravity-acp --login"), "{agy}");
+        assert_eq!(Base::Gemini.default_dir("work"), "~/.sophon/providers/gemini/work");
+        assert_eq!(login_command(Base::Gemini, "/h/g"), "mkdir -p /h/g && GEMINI_CLI_HOME=/h/g gemini");
+
+        // Chinese / duplicate names and reserved "default" never collide on folders.
+        let taken = vec!["antigravity".to_owned(), "work".to_owned()];
+        let cfg = json!({"providers":{
+            "work": {"extends":"antigravity","env":{"GEMINI_HOME":"/h/.sophon/providers/antigravity/work"}},
+            "custom": {"extends":"antigravity","env":{"GEMINI_HOME":"/h/.sophon/providers/antigravity/team"}}
+        }});
+        assert_eq!(
+            account_id_and_dir(Base::Antigravity, "Work", &taken, Some(&cfg), Some("/h")),
+            ("work-2".into(), "~/.sophon/providers/antigravity/work-2".into())
+        );
+        assert_eq!(
+            account_id_and_dir(Base::Antigravity, "工作", &taken, Some(&cfg), Some("/h")),
+            ("antigravity-2".into(), "~/.sophon/providers/antigravity/antigravity-2".into())
+        );
+        assert_eq!(
+            account_id_and_dir(Base::Antigravity, "个人", &[taken.as_slice(), &["antigravity-2".to_owned()]].concat(), Some(&cfg), Some("/h")),
+            ("antigravity-3".into(), "~/.sophon/providers/antigravity/antigravity-3".into())
+        );
+        assert_eq!(
+            account_id_and_dir(Base::Antigravity, "Default", &taken, Some(&cfg), Some("/h")),
+            ("default".into(), "~/.sophon/providers/antigravity/default-2".into())
+        );
+        assert_eq!(
+            account_id_and_dir(Base::Antigravity, "Team", &taken, Some(&cfg), Some("/h")),
+            ("team".into(), "~/.sophon/providers/antigravity/team-2".into())
+        );
     }
 
     #[test]

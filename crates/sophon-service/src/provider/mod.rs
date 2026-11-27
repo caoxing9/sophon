@@ -256,10 +256,16 @@ pub async fn diagnostic(provider: &str, settings: &Value) -> String {
     } else {
         String::new()
     };
+    let files = if family == "antigravity" {
+        antigravity::home(settings)
+            .unwrap_or_else(|| crate::models::kept(settings, variable, usual))
+    } else {
+        crate::models::kept(settings, variable, usual)
+    };
     format!(
         "{name}\n  Binary: {}\n  Version: {version}\n  Files: {}\n  Models listed: {}\n  Starts on: {starts}\n  Endpoint: {endpoint}{auth}",
         program.display(),
-        crate::models::kept(settings, variable, usual).display(),
+        files.display(),
         models.len()
     )
 }
@@ -419,7 +425,7 @@ pub fn mode(family: &str, wanted: Option<&str>) -> String {
 
 pub fn snapshot(config: &Value) -> Value {
     let mut providers =
-        std::collections::BTreeSet::from(["codex", "claude", "gemini", "antigravity"]);
+        std::collections::BTreeSet::from(["codex", "claude", "antigravity"]);
     if let Some(settings) = config["providers"].as_object() {
         providers.extend(settings.keys().map(String::as_str));
     }
@@ -616,6 +622,13 @@ mod tests {
     #[test]
     fn a_new_conversation_is_offered_auto_mode_first() {
         let snapshot = snapshot(&json!({}));
+        let names: Vec<&str> = snapshot["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|entry| entry["provider"].as_str())
+            .collect();
+        assert!(!names.contains(&"gemini"), "gemini is hidden from default list: {names:?}");
         for entry in snapshot["entries"].as_array().unwrap() {
             let offered = entry["defaultModeId"].as_str().unwrap();
             // Gemini CLI has no auto mode: it is offered the one that asks.

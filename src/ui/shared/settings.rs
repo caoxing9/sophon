@@ -544,10 +544,13 @@ pub(crate) fn default_model_card() -> View {
                             || store::set_default_model(None),
                         ));
                         for p in &providers {
-                            let models = store::offered_models(p);
+                            let mut models = store::offered_models(p);
                             if models.is_empty() {
                                 continue;
                             }
+                            let favs = store::favorite_models();
+                            let order = store::model_order(&p.id);
+                            store::sort_provider_models(&mut models, |m| &m.id, |id| favs.contains(&format!("{}:{id}", p.id)), &order, true);
                             list = list.child(menu_divider()).child(menu_heading(p.label.clone()));
                             for m in models {
                                 let (pid, mid) = (p.id.clone(), m.id.clone());

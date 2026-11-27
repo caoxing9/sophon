@@ -20,10 +20,11 @@ target/debug/sophon-service daemon stop
 - **Codex**：`codex app-server` 的 JSON-RPC。一个线程对应一个会话，一条消息对应一个回合；命令执行、文件修改和提问的审批同样变成审批卡。默认模式沿用 `~/.codex/config.toml` 里的审批与沙箱设置，`read-only` 和 `full-access` 模式会覆盖它。
 - **Antigravity**：Google 的 Antigravity CLI（`agy acp`，取代个人账号已停用的 Gemini CLI），走 Agent Client Protocol，启动和授权方式照 T3 Code 的做法：
   - 要求 CLI 版本至少 1.5.1、低于 2。
-  - 每个提供商有自己的目录（`GEMINI_HOME`，默认 `~/.sophon-antigravity`），用 `--gemini-dir` 交给 CLI。
-  - 登录凭据以文件形式存在这个目录里（`AGY_ACP_FORCE_FILE_STORAGE=1`），不进所有目录共用的钥匙串。
-  - 服务环境里的 `GEMINI_API_KEY`、`GOOGLE_*` 等变量不会传给它。
-  - CLI 要打开浏览器时只记一个标记，不打开，也不显示链接。没登录的会话会提示去“设置 › Agents”登录；登录用 CLI 自己的 `agy acp --login`。
+  - 每个提供商有自己的目录（`GEMINI_HOME`，默认 `~/.sophon/providers/antigravity/default`，新增账号默认 `~/.sophon/providers/antigravity/<名字>`；如果旧版 `~/.sophon-antigravity` 已有登录则自动沿用），用 `--gemini-dir` 交给 CLI，并把全局 `~/.gemini` 里的 `AGENTS.md`、`GEMINI.md`、`config/skills`、`antigravity-cli/skills`、`config/skills.json` 软链进该目录（不覆盖目录里已有的文件）。
+  - 禁用 CLI 自更新（`AGY_CLI_DISABLE_AUTO_UPDATE=true`），清掉宿主环境里的 `GEMINI_API_KEY`、`GOOGLE_*` 等变量。
+  - **Google 个人账号（`oauth-personal`）**：设置 `SSH_CONNECTION` 和 `AGY_ACP_FORCE_FILE_STORAGE=1`，让 `agy` 1.5.x 把登录凭据存进各自目录的 `antigravity-acp/antigravity-oauth-token` 而非全局共用的系统钥匙串；在 Sophon 里点击登录时，服务端启动 `agy acp --login`（清掉 `DISPLAY`/`WAYLAND_DISPLAY`），捕获 Google 授权链接并在浏览器打开，用户把 `antigravity.google/oauth-callback` 页面显示的授权码（或完整地址）粘贴回 Sophon，随后用 ACP `authenticate` + `session/new` 验证并缓存可用模型列表。
+  - **Gemini Enterprise（`oauth-business`）**与密钥/ADC（`gemini-api-key`、`agent-platform`）：不设 `SSH_CONNECTION`，直接走 ACP `authenticate`（Enterprise 走本地回环 OAuth，远程设备支持粘贴回调地址转发）。
+  - 支持在设置页退出登录（`provider.logout.request`，调用 ACP 原生 `logout` RPC 并清掉缓存的模型列表）。
   - 服务不读凭据，也不直接调 Google 的接口。
   - 模型和思考强度取自会话的 `configOptions`。
   - 读取、搜索直接放行，其余按所选模式决定是否弹审批卡。
@@ -40,7 +41,7 @@ Codex 的登录状态由服务向 `codex app-server` 询问（`account/read`）�
 - 在运行服务的这台 Mac 上，登录页在浏览器里打开，Codex 在本机等待回调；
 - 在别的设备上，改用验证码登录：在任意设备上打开登录页，输入显示的验证码。
 
-服务端对应三个请求：`provider.login.start.request` 开始登录，返回登录页地址或验证码；`provider.login.wait.request` 等到登录结束，返回是否成功；`provider.login.cancel.request` 取消登录。同一个提供方同时只进行一次登录，等待超过 15 分钟自动结束。服务不读取凭据，凭据由 Codex 写进该账号的 `CODEX_HOME`。Claude Code 和 Antigravity 仍然用各自 CLI 的登录命令，在这台 Mac 上可以一键在终端里运行。
+服务端对应五个请求：`provider.login.start.request` 开始登录，返回登录页地址、验证码或 `codeLogin` 标记；`provider.login.callback.request` 提交 Antigravity 的授权码或远程回调地址；`provider.login.wait.request` 等到登录结束，返回是否成功；`provider.login.cancel.request` 取消登录；`provider.logout.request` 通过 CLI 原生 `logout` 退出登录。同一个提供方同时只进行一次登录，等待超过 15 分钟自动结束。服务不读取凭据，凭据由 Codex 写进该账号的 `CODEX_HOME`，由 Antigravity 写进该账号的 `GEMINI_HOME`。Claude Code 仍然用各自 CLI 的登录命令，在这台 Mac 上可以一键在终端里运行。
 
 服务和桌面应用启动时都会清掉自身环境里的 `ANTHROPIC_*`、`CLAUDE_CODE_*`、`CLAUDE_AGENT_*`、`CODEX_*`，以及 `CLAUDECODE`、`CLAUDE_EFFORT`、`CLAUDE_PID`。这些变量通常来自拉起服务的那个 Agent 会话（比如在某个 Agent 的终端里启动了应用），留着会让新 Agent 走那个会话的网关和令牌。`CLAUDE_CONFIG_DIR` 和 `CODEX_HOME` 会保留。
 
