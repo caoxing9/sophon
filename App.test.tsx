@@ -193,7 +193,7 @@ test("Return with no project chosen says to choose one", async () => {
   const app = await open(".", { width: 1100, height: 760 });
   await newWorkspace(app);
   await app.type("id:composer", "hi");
-  await app.keyboard.press("Enter");
+  await app.keyboard.press("enter");
   await app.waitFor("text:Choose a project first: the conversation runs in its folder");
 });
 
