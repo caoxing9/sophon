@@ -7,7 +7,7 @@ import { expect, open, test } from "nsh/test";
 // after the press that opens it, and a slow machine (CI) shows that.
 async function newWorkspace(app: Awaited<ReturnType<typeof open>>) {
   await app.press("New workspace >> nth=0");
-  await app.waitFor("text:Import sessions");
+  await app.waitFor("text:Import projects");
 }
 
 test("shows the sidebar and its entry points", async () => {
@@ -24,7 +24,7 @@ test("shows the sidebar and its entry points", async () => {
 test("opens the new workspace screen", async () => {
   const app = await open(".", { width: 1100, height: 760 });
   await newWorkspace(app);
-  expect(app.texts()).toContain("Import sessions");
+  expect(app.texts()).toContain("Import projects");
 });
 
 test("attaches a pasted screenshot as a chip in the text", async () => {
@@ -159,6 +159,14 @@ test("settings lists the agents and adds a provider in steps", async () => {
   expect(app.texts()).toContain("“Codex (Work)” is added. Sign it in: it uses this account until you remove it");
   await app.press("text:Done");
   await app.waitFor("text:Codex (Work)");
+});
+
+test("import shows the projects it found, or that it is looking", async () => {
+  const app = await open(".", { width: 1100, height: 900 });
+  await app.press("text:Import projects");
+  // Looking, then what it found: here, nothing.
+  await app.waitFor("text:Nothing to import: every conversation of Claude Code and Codex here is in Sophon");
+  expect(app.texts()).toContain("Import projects");
 });
 
 test("opens the usage page from the sidebar", async () => {

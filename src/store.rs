@@ -6784,26 +6784,64 @@ pub(crate) fn archive_agent(id: &str) {
     send(Command::Archive(id.to_owned()));
 }
 
-/// The sessions to import: the answers to the search numbered `seq`, as
-/// they come (one from each agent), newest first; `None` until the first.
+/// The scan for projects to bring in: none yet (looking), or what it found.
 #[derive(Clone, Default)]
-struct Recent {
-    seq: u64,
-    list: Option<Vec<crate::daemon::connection::RecentSession>>,
+struct ImportScan(Option<Result<Vec<crate::daemon::connection::ImportProject>, String>>);
+
+/// What the scan for projects to bring in found, once it has.
+pub(crate) fn import_projects() -> Option<Result<Vec<crate::daemon::connection::ImportProject>, String>> {
+    global::<ImportScan>().with(|s| s.0.clone())
 }
 
-pub(crate) fn recent_sessions() -> Option<Vec<crate::daemon::connection::RecentSession>> {
-    global::<Recent>().with(|r| r.list.clone())
+/// Looks again for projects to bring in from Claude Code's and Codex's
+/// history (as T3 Code does).
+pub(crate) fn scan_import_projects() {
+    global::<ImportScan>().set(ImportScan(None));
+    send(Command::ImportProjects);
 }
 
-/// Looks for sessions to import, each agent's apart: the service's one
-/// list is the newest of all agents together, where the agent used less
-/// (Codex beside a busy Claude Code) had no place.
-pub(crate) fn search_sessions(query: &str) {
-    let seq = global::<Recent>().with_untracked(|r| r.seq) + 1;
-    global::<Recent>().set(Recent { seq, list: None });
-    let providers = providers().into_iter().filter(|p| p.status != "unavailable").map(|p| p.id).collect();
-    send(Command::RecentSessions { query: query.to_owned(), providers, seq });
+/// The projects to bring in, as T3 Code groups them: by repository (every
+/// clone and worktree of one `origin` together; a working tree without
+/// one by itself), each group's label its repository's name, else its
+/// folder's; then the folders that are no repository. Indexes into
+/// `projects`, in their order (the newest first).
+pub(crate) fn import_groups(projects: &[crate::daemon::connection::ImportProject]) -> (Vec<(String, Vec<usize>)>, Vec<usize>) {
+    let mut groups: Vec<(String, String, Vec<usize>)> = Vec::new();
+    let mut other = Vec::new();
+    for (i, p) in projects.iter().enumerate() {
+        if !p.git {
+            other.push(i);
+            continue;
+        }
+        let key = p.remote_key.clone().unwrap_or_else(|| format!("path:{}", p.path));
+        match groups.iter_mut().find(|(k, _, _)| *k == key) {
+            Some((_, _, of)) => of.push(i),
+            None => groups.push((key, p.repository.clone().unwrap_or_else(|| p.title.clone()), vec![i])),
+        }
+    }
+    (groups.into_iter().map(|(_, label, of)| (label, of)).collect(), other)
+}
+
+/// The projects picked to begin with, as T3 Code picks them: those Sophon
+/// does not have (`known` folders) active in the last two weeks; else all
+/// it does not have; else all.
+pub(crate) fn import_defaults(
+    projects: &[crate::daemon::connection::ImportProject],
+    known: &[String],
+    now: i64,
+) -> std::collections::HashSet<String> {
+    let fresh: Vec<&crate::daemon::connection::ImportProject> = projects.iter().filter(|p| !known.contains(&p.path)).collect();
+    let recent: Vec<&&crate::daemon::connection::ImportProject> = fresh
+        .iter()
+        .filter(|p| crate::ui::mobile::time::epoch_of(&p.last_activity).is_some_and(|at| now - at < 14 * 86_400))
+        .collect();
+    if !recent.is_empty() {
+        recent.iter().map(|p| p.path.clone()).collect()
+    } else if !fresh.is_empty() {
+        fresh.iter().map(|p| p.path.clone()).collect()
+    } else {
+        projects.iter().map(|p| p.path.clone()).collect()
+    }
 }
 
 /// The sessions being imported together, one after another (each import
@@ -7654,19 +7692,9 @@ pub(crate) fn apply(event: Event) {
                 x.map.insert(provider, d);
             });
         }
-        Event::RecentSessions { seq, list } => global::<Recent>().update(|r| {
-            // An answer to an earlier search (the query has changed since).
-            if seq != r.seq {
-                return;
-            }
-            let all = r.list.get_or_insert_with(Vec::new);
-            for s in list {
-                if !all.iter().any(|x| x.provider == s.provider && x.handle == s.handle) {
-                    all.push(s);
-                }
-            }
-            all.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
-        }),
+        Event::ImportProjects(found) => global::<ImportScan>().set(ImportScan(Some(found))),
+        // The sessions of one search: the import scans for projects now.
+        Event::RecentSessions { .. } => {}
         Event::Rewound { agent, error } => match error {
             Some(e) => notify(tf("Rewind failed: {}", &[&e])),
             None => {
@@ -8085,5 +8113,52 @@ mod conversation_name_tests {
         assert!(recently_active("2026-11-14T10:00:00Z", at + LAST_SAID_FOR - 1));
         assert!(!recently_active("2026-11-14T10:00:00Z", at + LAST_SAID_FOR));
         assert!(recently_active("", at), "an unknown time keeps the last message");
+    }
+}
+
+#[cfg(test)]
+mod import_tests {
+    use super::{import_defaults, import_groups};
+    use crate::daemon::connection::ImportProject;
+    use std::collections::HashSet;
+
+    fn project(path: &str, git: bool, remote: Option<&str>, at: &str) -> ImportProject {
+        ImportProject {
+            path: path.into(),
+            title: path.rsplit('/').next().unwrap().into(),
+            git,
+            remote_key: remote.map(Into::into),
+            repository: remote.map(|r| r.split_once('/').unwrap().1.into()),
+            last_activity: at.into(),
+            sources: vec!["claude".into()],
+            sessions: vec![],
+        }
+    }
+
+    #[test]
+    fn projects_to_import_group_by_repository_then_other_folders() {
+        let list = [
+            project("/w/app", true, Some("github.com/me/app"), "2026-11-20T00:00:00Z"),
+            project("/tmp/notes", false, None, "2026-11-19T00:00:00Z"),
+            project("/w/app-wt", true, Some("github.com/me/app"), "2026-11-18T00:00:00Z"),
+            project("/w/solo", true, None, "2026-11-17T00:00:00Z"),
+        ];
+        let (groups, other) = import_groups(&list);
+        assert_eq!(groups, [("me/app".to_owned(), vec![0, 2]), ("solo".to_owned(), vec![3])]);
+        assert_eq!(other, [1]);
+    }
+
+    #[test]
+    fn projects_picked_first_are_the_new_recent_ones() {
+        let now = crate::ui::mobile::time::epoch_of("2026-11-27T00:00:00Z").unwrap();
+        let list = [
+            project("/w/new-recent", true, None, "2026-11-25T00:00:00Z"),
+            project("/w/new-old", true, None, "2026-10-01T00:00:00Z"),
+            project("/w/known", true, None, "2026-11-26T00:00:00Z"),
+        ];
+        let known = vec!["/w/known".to_owned()];
+        assert_eq!(import_defaults(&list, &known, now), HashSet::from(["/w/new-recent".to_owned()]));
+        assert_eq!(import_defaults(&list[1..], &known, now), HashSet::from(["/w/new-old".to_owned()]));
+        assert_eq!(import_defaults(&list[2..], &known, now), HashSet::from(["/w/known".to_owned()]));
     }
 }

@@ -940,6 +940,10 @@ thread_local! {
     static LOGINS: RefCell<HashMap<String, Login>> = RefCell::new(HashMap::new());
 }
 
+/// How many of an agent's sessions, the newest, a scan for projects to
+/// bring in reads.
+const IMPORT_SCAN: usize = 1000;
+
 /// How long a sign-in waits for the person.
 const LOGIN_WAIT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
@@ -1060,6 +1064,38 @@ pub async fn slow(shared: &Shared, request: &Value) -> Option<Result<Value, Stri
             .await
         }
         // Sessions the CLIs have that are not conversations here yet.
+        // The projects to bring in from Claude Code's and Codex's own
+        // history, with their sessions Sophon does not have yet.
+        "import.projects.request" => {
+            async {
+                let known: HashSet<String> = shared
+                    .borrow()
+                    .state
+                    .agents
+                    .values()
+                    .filter_map(|agent| agent.pointer("/persistence/sessionId")?.as_str().map(str::to_owned))
+                    .collect();
+                let mut sessions = Vec::new();
+                for name in ["claude", "codex"] {
+                    let (settings, Some(family)) = provider_of(name)? else {
+                        continue;
+                    };
+                    let found = tokio::task::spawn_blocking(move || {
+                        crate::history::recent(name, family, &settings, IMPORT_SCAN, "")
+                    })
+                    .await
+                    .map_err(|error| error.to_string())?;
+                    sessions.extend(found.into_iter().filter(|session| {
+                        session["providerHandleId"].as_str().is_some_and(|id| !known.contains(id))
+                    }));
+                }
+                let projects = tokio::task::spawn_blocking(move || crate::history::projects(sessions))
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(reply(json!({"projects":projects})))
+            }
+            .await
+        }
         "fetch_recent_provider_sessions_request" => {
             async {
                 let limit = request["limit"].as_u64().unwrap_or(50).clamp(1, 200) as usize;

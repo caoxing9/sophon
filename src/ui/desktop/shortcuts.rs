@@ -259,7 +259,7 @@ fn items() -> Vec<CommandItem> {
         CommandItem::new("history", t("History")).group(t("Actions")).keywords(["sessions", "archive"]),
         CommandItem::new("schedules", t("Automations")).group(t("Actions")).keywords(["cron", "automation"]),
         CommandItem::new("usage", t("Usage")).group(t("Actions")).keywords(["limits", "quota", "cost"]),
-        CommandItem::new("import", t("Import a session")).group(t("Actions")).keywords(["claude", "codex", "resume"]),
+        CommandItem::new("import", t("Import projects")).group(t("Actions")).keywords(["claude", "codex", "resume"]),
         CommandItem::new("toggle-sidebar", t("Toggle sidebar")).group(t("Actions")).shortcut("mod+b"),
         CommandItem::new("dictate", t("Dictate")).group(t("Actions")).keywords(["voice", "speech", "mic"]),
     ];
@@ -317,10 +317,7 @@ fn run(id: &str) {
         "history" => store::open_history(),
         "schedules" => store::open_schedules(),
         "usage" => store::open_usage(),
-        "import" => {
-            store::search_sessions("");
-            store::open_modal(Modal::ImportSession);
-        }
+        "import" => store::open_modal(Modal::ImportSession),
         "toggle-sidebar" => store::toggle_sidebar(),
         "dictate" => crate::ui::shared::composer::toggle_dictation(),
         "copy-prompt-link" => store::copy_prompt_link(),
