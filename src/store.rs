@@ -4547,22 +4547,60 @@ pub(crate) fn steer_queued(agent_id: &str, index: usize) {
 /// with pictures or files stays where it is: those stand as chips in
 /// the composer's text, which only the composer that made them has.
 pub(crate) fn edit_queued(agent_id: &str, index: usize) {
+    use crate::ui::shared::composer_doc::{self, Chip, Kind, Part, Segment};
     let mut taken = None;
     global::<Queues>().update(|q| {
         if let Some(list) = q.0.get_mut(agent_id)
-            && list.get(index).is_some_and(|m| m.images.is_empty() && m.attachments.is_empty())
+            && index < list.len()
         {
             taken = Some(list.remove(index));
         }
     });
     let Some(message) = taken else { return };
-    let mut text = message.text;
-    let writing = draft(agent_id);
-    if !writing.trim().is_empty() {
-        text.push('\n');
-        text.push_str(&writing);
+    // Its attachments wait in the composer again (a file is on the host
+    // already: not sent again), each with a chip.
+    let mut chips: Vec<Chip> = Vec::new();
+    for image in message.images {
+        let id = uuid::Uuid::new_v4().to_string();
+        chips.push(Chip { id: id.clone(), kind: Kind::Image, name: image.name.clone(), mime: image.mime.clone() });
+        global::<PendingImages>().update(|p| p.0.entry(agent_id.to_owned()).or_default().push(PendingImage { id, image, detached: false }));
     }
-    set_draft(agent_id, &text);
+    for attachment in message.attachments {
+        let field = |k: &str| attachment.get(k).and_then(serde_json::Value::as_str).unwrap_or_default().to_owned();
+        let (name, mime) = (field("fileName"), field("mimeType"));
+        let size = attachment.get("size").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize;
+        let id = uuid::Uuid::new_v4().to_string();
+        chips.push(Chip { id: id.clone(), kind: Kind::File, name: name.clone(), mime: mime.clone() });
+        let file = PendingFile { id, name, mime, size, attachment: Some(attachment), detached: false };
+        global::<PendingFiles>().update(|p| p.0.entry(agent_id.to_owned()).or_default().push(file));
+    }
+    // Its words, each chip where its `[name]` stood; any not named, after.
+    let mut parts: Vec<Part> = Vec::new();
+    for segment in composer_doc::segments(&message.text) {
+        match segment {
+            Segment::Text(t) => parts.push(Part::Text(t)),
+            Segment::Chip(name) => match chips.iter().position(|c| c.name.replace(['[', ']', '\n'], " ").trim() == name) {
+                Some(i) => parts.push(Part::Chip(chips.remove(i))),
+                None => parts.push(Part::Text(format!("[{name}]"))),
+            },
+        }
+    }
+    parts.extend(chips.into_iter().map(Part::Chip));
+    match composer_doc::existing(&format!("agent:{agent_id}")) {
+        Some(session) => {
+            composer_doc::prepend_parts(&session, &parts);
+            // The draft as the composer now holds it: the composer keeps
+            // its document (chips and all) when they agree.
+            let text = composer_doc::outgoing(session.state().doc()).text;
+            set_draft(agent_id, &text);
+        }
+        // No composer made yet: its words alone, as before.
+        None => {
+            let words: String = parts.iter().filter_map(|p| if let Part::Text(t) = p { Some(t.as_str()) } else { None }).collect();
+            let writing = draft(agent_id);
+            set_draft(agent_id, &if writing.trim().is_empty() { words } else { format!("{words}\n{writing}") });
+        }
+    }
 }
 
 pub(crate) fn unqueue(agent_id: &str, index: usize) {

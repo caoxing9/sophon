@@ -935,7 +935,7 @@ fn user_text(item: Memo<Option<Item>>, selectable: bool) -> impl IntoElement {
 
 /// An attachment's chip in a sent message, as the composer's: its
 /// thumbnail (a file's glyph) and its name.
-fn sent_chip(name: String, thumb: Option<String>) -> View {
+pub(crate) fn sent_chip(name: String, thumb: Option<String>) -> View {
     let chip = view()
         .flex_row()
         .items_center()
