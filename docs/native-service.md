@@ -35,6 +35,14 @@ target/debug/sophon-service daemon stop
 
 Agent 用的账号和接口由 CLI 自己决定，也就是它的登录状态和配置文件，与在终端里直接运行 `claude` 或 `codex` 一致。
 
+"设置 › 编程 Agent"可以添加提供方：另一个账号（Claude Code、Codex、Antigravity），或一个 API 接口。每个账号是一个独立的提供方，有自己的配置目录和登录，Sophon 不会在账号之间自动切换。
+
+Codex 的登录状态由服务向 `codex app-server` 询问（`account/read`），诊断信息里的 `Auth` 会写明是哪个 ChatGPT 账号和套餐。Codex 账号可以在 Sophon 里直接登录，用的是 Codex 自己的登录流程（`account/login/start`，和 T3 Code 一样）：
+- 在运行服务的这台 Mac 上，登录页在浏览器里打开，Codex 在本机等待回调；
+- 在别的设备上，改用验证码登录：在任意设备上打开登录页，输入显示的验证码。
+
+服务端对应三个请求：`provider.login.start.request` 开始登录，返回登录页地址或验证码；`provider.login.wait.request` 等到登录结束，返回是否成功；`provider.login.cancel.request` 取消登录。同一个提供方同时只进行一次登录，等待超过 15 分钟自动结束。服务不读取凭据，凭据由 Codex 写进该账号的 `CODEX_HOME`。Claude Code 和 Antigravity 仍然用各自 CLI 的登录命令，在这台 Mac 上可以一键在终端里运行。
+
 服务和桌面应用启动时都会清掉自身环境里的 `ANTHROPIC_*`、`CLAUDE_CODE_*`、`CLAUDE_AGENT_*`、`CODEX_*`，以及 `CLAUDECODE`、`CLAUDE_EFFORT`、`CLAUDE_PID`。这些变量通常来自拉起服务的那个 Agent 会话（比如在某个 Agent 的终端里启动了应用），留着会让新 Agent 走那个会话的网关和令牌。`CLAUDE_CONFIG_DIR` 和 `CODEX_HOME` 会保留。
 
 要让某个提供商走别的接口，在服务配置里给它写 `env`，例如 `{"providers":{"gateway":{"extends":"claude","env":{"ANTHROPIC_BASE_URL":"…","ANTHROPIC_AUTH_TOKEN":"…"}}}}`。在无界面主机上用 API key 时也是这样配置。

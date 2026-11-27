@@ -12,7 +12,7 @@
 
 pub(crate) mod antigravity;
 pub(crate) mod claude;
-mod codex;
+pub(crate) mod codex;
 mod gemini;
 
 use serde_json::{Value, json};
@@ -244,8 +244,15 @@ pub async fn diagnostic(provider: &str, settings: &Value) -> String {
     // Whether it is signed in, as a client reads it: Antigravity's sign-in
     // is its own folder's (its key in its settings, or its credentials
     // file, of which only the being there is looked at).
+    // Codex's, as its app server says it (not through an endpoint of the
+    // provider's own, which needs no sign-in).
     let auth = if family == "antigravity" {
         format!("\n  Auth: {}", antigravity::auth_status(settings))
+    } else if family == "codex" && settings["env"]["OPENAI_BASE_URL"].is_null() {
+        codex::account(settings)
+            .await
+            .map(|auth| format!("\n  Auth: {auth}"))
+            .unwrap_or_default()
     } else {
         String::new()
     };

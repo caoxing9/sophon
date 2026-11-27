@@ -46,7 +46,7 @@ pub mod push_gateway;
 pub mod relay;
 pub mod rt;
 
-pub use connection::{Command, Event};
+pub use connection::{Command, Event, LoginStep};
 pub use model::{Agent, Item, Permission, Project, Provider, Workspace};
 
 /// Reads one of Sophon's files (`settings.json`, `hosts.json`, …): from

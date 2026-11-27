@@ -251,6 +251,132 @@ pub async fn commands(settings: &Value, cwd: &str) -> io::Result<Value> {
     Ok(json!(list))
 }
 
+/// An app server for a question about the provider's account, started
+/// in its own folder (`CODEX_HOME`, made if it is not there: Codex refuses
+/// one that is not) and said hello to.
+async fn about_account(settings: &Value) -> io::Result<Codex> {
+    if let Some(home) = settings["env"]["CODEX_HOME"]
+        .as_str()
+        .filter(|home| !home.is_empty())
+    {
+        std::fs::create_dir_all(home)?;
+    }
+    let cwd = std::env::temp_dir().display().to_string();
+    let mut codex = Codex::asking(settings, &cwd)?;
+    codex
+        .call(
+            "initialize",
+            json!({"clientInfo":{"name":"sophon","title":"Sophon","version":env!("CARGO_PKG_VERSION")},
+                "capabilities":null}),
+        )
+        .await?;
+    codex.send(json!({"method":"initialized"})).await?;
+    Ok(codex)
+}
+
+/// What Codex says of the account it is signed in with (`account/read`,
+/// as T3 Code reads it), in the shape the Agents settings read a sign-in
+/// in (`claude auth status --json`'s): signed in or not, how, and with
+/// which ChatGPT account and plan. `None` when it does not say.
+pub async fn account(settings: &Value) -> Option<Value> {
+    let asking = async {
+        let mut codex = about_account(settings).await?;
+        codex
+            .call("account/read", json!({"refreshToken":false}))
+            .await
+    };
+    let read = tokio::time::timeout(Duration::from_secs(15), asking)
+        .await
+        .ok()?
+        .ok()?;
+    Some(account_status(&read))
+}
+
+/// [`account`]'s answer, from `account/read`'s.
+fn account_status(read: &Value) -> Value {
+    let account = &read["account"];
+    match account["type"].as_str() {
+        Some("chatgpt") => json!({"loggedIn":true,"authMethod":"chatgpt",
+            "email":account["email"],"planTier":plan(account["planType"].as_str())}),
+        Some("apiKey") => json!({"loggedIn":true,"authMethod":"api_key"}),
+        Some(other) => json!({"loggedIn":true,"authMethod":other}),
+        None => json!({"loggedIn":false}),
+    }
+}
+
+/// A ChatGPT plan's name, as T3 Code names it (`codexPlanLabel`).
+fn plan(kind: Option<&str>) -> Option<&'static str> {
+    Some(match kind? {
+        "free" => "ChatGPT Free",
+        "go" => "ChatGPT Go",
+        "plus" => "ChatGPT Plus",
+        "pro" => "ChatGPT Pro 200",
+        "prolite" => "ChatGPT Pro 100",
+        "promax" => "ChatGPT Pro 500",
+        "self_serve_business_prolite" => "ChatGPT Business Premium",
+        "team" | "self_serve_business_usage_based" | "business" => "ChatGPT Business",
+        "ent26" | "enterprise_cbp_automation" | "enterprise_cbp_usage_based" | "enterprise" => {
+            "ChatGPT Enterprise"
+        }
+        "edu" | "edu_plus" | "edu_pro" => "ChatGPT Edu",
+        _ => "ChatGPT",
+    })
+}
+
+/// Starts a sign-in to ChatGPT by Codex's own (`account/login/start`, as
+/// T3 Code starts it): in a browser on the host (`device` false: Codex
+/// waits for it on the host's localhost), or with a code typed on any
+/// device (`device`). The answer says where to go (`authUrl`, or
+/// `verificationUrl` and `userCode`); the sign-in ends with the future,
+/// which keeps Codex running until it says how it went (dropped, Codex
+/// ends and the sign-in with it).
+pub async fn login(
+    settings: &Value,
+    device: bool,
+) -> io::Result<(
+    Value,
+    impl std::future::Future<Output = Result<(), String>> + use<>,
+)> {
+    let mut codex = about_account(settings).await?;
+    let kind = if device {
+        "chatgptDeviceCode"
+    } else {
+        "chatgpt"
+    };
+    let started = tokio::time::timeout(
+        Duration::from_secs(30),
+        codex.call("account/login/start", json!({"type":kind})),
+    )
+    .await
+    .map_err(|_| io::Error::other("Codex did not start the sign-in"))??;
+    let login = started["loginId"].as_str().unwrap_or_default().to_owned();
+    let done = async move {
+        loop {
+            let Some(line) = super::line(&mut codex.process).await else {
+                return Err("Codex stopped before the sign-in ended".to_owned());
+            };
+            let Ok(message) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            let params = &message["params"];
+            let ours = params["loginId"]
+                .as_str()
+                .is_none_or(|id| login.is_empty() || id == login);
+            if message["method"] == "account/login/completed" && ours {
+                return if params["success"] == true {
+                    Ok(())
+                } else {
+                    Err(params["error"]
+                        .as_str()
+                        .unwrap_or("The sign-in did not finish")
+                        .to_owned())
+                };
+            }
+        }
+    };
+    Ok((started, done))
+}
+
 impl Codex {
     /// An app server in `cwd` for a question, with no conversation.
     fn asking(settings: &Value, cwd: &str) -> io::Result<Self> {
@@ -1005,6 +1131,31 @@ impl Codex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_account_reads_as_the_agents_settings_read_a_sign_in() {
+        let chatgpt =
+            json!({"account":{"type":"chatgpt","email":"me@example.com","planType":"pro"}});
+        assert_eq!(
+            account_status(&chatgpt),
+            json!({"loggedIn":true,"authMethod":"chatgpt","email":"me@example.com","planTier":"ChatGPT Pro 200"})
+        );
+        assert_eq!(
+            account_status(&json!({"account":{"type":"apiKey"}})),
+            json!({"loggedIn":true,"authMethod":"api_key"})
+        );
+        assert_eq!(
+            account_status(&json!({"account":null,"requiresOpenaiAuth":true})),
+            json!({"loggedIn":false})
+        );
+        // A plan it does not know is still ChatGPT's.
+        assert_eq!(
+            account_status(
+                &json!({"account":{"type":"chatgpt","email":null,"planType":"new-plan"}})
+            )["planTier"],
+            "ChatGPT"
+        );
+    }
 
     #[test]
     fn an_item_is_rows_by_what_it_did() {

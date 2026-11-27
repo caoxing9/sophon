@@ -138,13 +138,19 @@ test("a press on the composer's card is a press on its text", async () => {
   expect(app.texts()).toContain("hi");
 });
 
-test("settings lists the agents with their add buttons", async () => {
+test("settings lists the agents and opens the steps that add a provider", async () => {
   const app = await open(".", { width: 1100, height: 900 });
   await app.press("label:Settings >> nth=0");
   await app.waitFor("text:Coding agents");
   expect(app.texts()).toContain("Coding agents");
-  expect(app.texts()).toContain("Add account…");
-  expect(app.texts()).toContain("Add API key…");
+  // What it is: an account of a CLI, or an endpoint on a key. (The
+  // headless runner presses nothing in a dialog: the steps after are
+  // driven on a real platform.)
+  await app.press("text:Add provider");
+  await app.waitFor("text:API endpoints");
+  for (const shown of ["Provider", "Details", "Sign in", "Claude account", "ChatGPT account", "Google account", "Custom endpoint", "Next"]) {
+    expect(app.texts()).toContain(shown);
+  }
 });
 
 test("opens the usage page from the sidebar", async () => {
