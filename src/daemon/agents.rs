@@ -197,6 +197,40 @@ pub fn enable_patch(id: &str, on: bool) -> Value {
     json!({ "providers": { id: { "enabled": on } } })
 }
 
+/// The colours an agent can be marked with, to tell two accounts of one
+/// CLI apart at a glance (T3 Code's accent colour): `#rrggbb`, and its name.
+pub const ACCENTS: [(&str, &str); 8] = [
+    ("#2563eb", "Blue"),
+    ("#0d9488", "Teal"),
+    ("#16a34a", "Green"),
+    ("#d97706", "Amber"),
+    ("#dc2626", "Red"),
+    ("#db2777", "Pink"),
+    ("#7c3aed", "Violet"),
+    ("#475569", "Slate"),
+];
+
+/// The colour a provider is marked with (its `accentColor`), as `0xrrggbb`.
+pub fn accent(config: Option<&Value>, id: &str) -> Option<u32> {
+    let hex = entry(config, id)?.get("accentColor")?.as_str()?.strip_prefix('#')?;
+    (hex.len() == 6).then(|| u32::from_str_radix(hex, 16).ok()).flatten()
+}
+
+/// Marks a provider with a colour, or with none.
+pub fn accent_patch(id: &str, color: Option<&str>) -> Value {
+    json!({ "providers": { id: { "accentColor": color } } })
+}
+
+/// Whether text on the colour reads better dark than white.
+pub fn dark_on(rgb: u32) -> bool {
+    let channel = |shift: u32| {
+        let c = f64::from((rgb >> shift) & 0xff) / 255.0;
+        if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    };
+    let luminance = 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0);
+    (luminance + 0.05) / 0.05 > 1.05 / (luminance + 0.05)
+}
+
 pub fn remove_patch(id: &str) -> Value {
     json!({ "removeProviders": [id] })
 }
@@ -690,6 +724,13 @@ mod tests {
     fn enable_and_remove_patch_only_their_keys() {
         assert_eq!(enable_patch("copilot", false), json!({ "providers": { "copilot": { "enabled": false } } }));
         assert_eq!(remove_patch("work"), json!({ "removeProviders": ["work"] }));
+        let marked = json!({"providers":{"work":{"accentColor":"#2563eb"},"bad":{"accentColor":"blue"}}});
+        assert_eq!(accent(Some(&marked), "work"), Some(0x2563eb));
+        assert_eq!(accent(Some(&marked), "bad"), None, "not a colour");
+        assert_eq!(accent(Some(&marked), "claude"), None);
+        assert_eq!(accent_patch("work", None), json!({"providers":{"work":{"accentColor":null}}}));
+        assert!(!dark_on(0x2563eb), "white on blue");
+        assert!(dark_on(0xfde047), "dark on yellow");
         let agy = json!({"providers":{"work":{"extends":"antigravity","label":"Antigravity (work)","env":{"GEMINI_HOME":"/h/.sophon-antigravity-work"}}}});
         assert_eq!(same_folder(Some(&agy), Base::Antigravity, "/h/.sophon-antigravity-work/").as_deref(), Some("Antigravity (work)"), "the same account again");
         assert_eq!(same_folder(Some(&agy), Base::Antigravity, "/h/.sophon-antigravity-home"), None);

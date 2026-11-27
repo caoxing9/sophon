@@ -303,13 +303,13 @@ fn search(query: Signal<String>) -> impl IntoElement {
 /// An agent's initials, on its mark when another instance of the same CLI
 /// is on too (two Claude accounts): `Claude Work` is `CW`.
 fn initials(label: &str) -> String {
-    label.split_whitespace().filter_map(|w| w.chars().next()).take(2).collect::<String>().to_uppercase()
+    label.split_whitespace().filter_map(|w| w.chars().find(|c| c.is_alphanumeric())).take(2).collect::<String>().to_uppercase()
 }
 
 /// The rail: the stars, a hairline, then each agent; the one shown marked by
 /// an accent bar at its edge, one unavailable faded.
 fn rail(providers: Memo<Vec<Provider>>, tab: Signal<Tab>) -> impl IntoElement {
-    let button = move |target: Tab, body: AnyElement, label: String, faded: bool, badge: Option<String>| {
+    let button = move |target: Tab, body: AnyElement, label: String, faded: bool, badge: Option<(String, Option<u32>)>| {
         let t2 = target.clone();
         let tooltip = tip(label.clone());
         let b = nsh_base::button()
@@ -322,7 +322,15 @@ fn rail(providers: Memo<Vec<Provider>>, tab: Signal<Tab>) -> impl IntoElement {
             .justify_center()
             .opacity(if faded { 0.5 } else { 1.0 })
             .hover(|s| s.bg(tint(FG(), 0.10)))
-            .child(view().w(px(24.0)).h(px(24.0)).items_center().justify_center().child(body).when_some(badge, |v, b| {
+            .child(view().w(px(24.0)).h(px(24.0)).items_center().justify_center().child(body).when_some(badge, |v, (b, accent)| {
+                // Its colour, when it has one (T3 Code's accent); else plain.
+                let (fill, ink, edge) = match accent {
+                    Some(rgb) => {
+                        let ink = if crate::daemon::agents::dark_on(rgb) { pair(0x111111, 0x111111) } else { pair(0xffffff, 0xffffff) };
+                        (pair(rgb, rgb), ink, POPOVER())
+                    }
+                    None => (POPOVER(), FG_MUTED(), tint(FG(), 0.15)),
+                };
                 v.child(
                     view()
                         .absolute()
@@ -334,10 +342,10 @@ fn rail(providers: Memo<Vec<Provider>>, tab: Signal<Tab>) -> impl IntoElement {
                         .rounded(px(R_FULL))
                         .items_center()
                         .justify_center()
-                        .bg(POPOVER())
+                        .bg(fill)
                         .border_1()
-                        .border_color(tint(FG(), 0.15))
-                        .child(text(b).text_size(px(7.0)).font_weight(FontWeight(600)).text_color(FG_MUTED())),
+                        .border_color(edge)
+                        .child(text(b).text_size(px(7.0)).font_weight(FontWeight(600)).text_color(ink)),
                 )
             }))
             .child(
@@ -365,7 +373,8 @@ fn rail(providers: Memo<Vec<Provider>>, tab: Signal<Tab>) -> impl IntoElement {
                 .child(view().h(px(1.0)).bg(divider()));
             for p in &list {
                 let shared = list.iter().filter(|q| family(q) == family(p)).count() > 1;
-                let badge = shared.then(|| initials(&p.label));
+                let accent = crate::daemon::agents::accent(cfg.as_ref(), &p.id);
+                let badge = (shared || accent.is_some()).then(|| (initials(&p.label), accent));
                 col = col.child(button(Tab::Agent(p.id.clone()), mark(&family(p), 20.0).into_element(), p.label.clone(), !p.available(), badge));
             }
             scroll().flex_1().child(col).into_element()
@@ -945,4 +954,15 @@ fn note(title: String, detail: String) -> AnyElement {
         .child(text(title).text_size(tx(TEXT_SM)).text_color(FG_MUTED()))
         .when(!detail.is_empty(), |v| v.child(text(detail).text_size(tx(TEXT_XS)).text_color(FG_FAINT())))
         .into_element()
+}
+
+#[cfg(test)]
+mod tests {
+    /// The badge's letters: each word's first, its brackets left out.
+    #[test]
+    fn initials_skip_brackets() {
+        assert_eq!(super::initials("Claude (Work)"), "CW");
+        assert_eq!(super::initials("Claude Work"), "CW");
+        assert_eq!(super::initials("Codex"), "C");
+    }
 }
