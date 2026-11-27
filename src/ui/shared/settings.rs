@@ -223,6 +223,7 @@ pub(crate) fn sending_card() -> View {
                 (ToolDisplay::Auto, t("Expanded").into()),
                 (ToolDisplay::Folded, t("Folded").into()),
                 (ToolDisplay::Quiet, t("Quiet").into()),
+                (ToolDisplay::Stream, t("Live").into()),
                 (ToolDisplay::Hidden, t("Hidden").into()),
             ],
             store::tool_display,
