@@ -107,7 +107,10 @@ pub(crate) fn auth_status(settings: &Value) -> Value {
     let method = method(settings);
     let signed = match method {
         "gemini-api-key" => settings["env"]["GEMINI_API_KEY"].is_string(),
-        "agent-platform" => settings["env"]["GOOGLE_API_KEY"].is_string(),
+        // A key, or the project of the host's own Google Cloud sign-in.
+        "agent-platform" => {
+            settings["env"]["GOOGLE_API_KEY"].is_string() || settings["gcp"]["project"].is_string()
+        }
         _ => {
             home(settings).is_some_and(|home| home.join(APP_DATA).join("acp_token.json").is_file())
         }
@@ -159,7 +162,7 @@ fn prepare(home: &Path, settings: &Value, method: &str) -> io::Result<PathBuf> {
     let browser = home.join("browser");
     std::fs::write(
         &browser,
-        format!("#!/bin/sh\nprintf '%s\\n' '{LINK_MARK}' >&2\nexit 0\n"),
+        format!("#!/bin/sh\nprintf '%s %s\\n' '{LINK_MARK}' \"$1\" >&2\nexit 0\n"),
     )?;
     private(&browser, 0o700)?;
     Ok(browser)
@@ -229,6 +232,324 @@ fn needs_sign_in(code: i64, said: &str) -> bool {
 
 const NOT_SIGNED_IN: &str =
     "Antigravity is not signed in: sign it in under Settings › Agents, then send this again";
+
+/// What the CLI says before the Google sign-in link it gives a client
+/// signing it in (as T3 Code reads it).
+const LINK_LINE: &str = "Open the following link to authenticate the ACP server: ";
+
+/// A Google sign-in under way: where it comes back to the CLI on this
+/// host's loopback (`redirect_uri`), and the `state` the reply carries.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Pending {
+    pub(crate) redirect: String,
+    pub(crate) state: String,
+}
+
+/// The query of `url` (after `?`), its names and values decoded.
+fn query(url: &str) -> Vec<(String, String)> {
+    let Some((_, query)) = url.split_once('?') else {
+        return Vec::new();
+    };
+    query
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| {
+            let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+            (decode(name), decode(value))
+        })
+        .collect()
+}
+
+/// `%xx` and `+` decoded.
+fn decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    let hex = |b: u8| (b as char).to_digit(16);
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' if i + 2 < bytes.len() => match (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                (Some(high), Some(low)) => {
+                    out.push((high * 16 + low) as u8);
+                    i += 3;
+                    continue;
+                }
+                _ => out.push(b'%'),
+            },
+            b'+' => out.push(b' '),
+            byte => out.push(byte),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The one value of `name` in `pairs`, if it has exactly one.
+fn only<'a>(pairs: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    let mut found = pairs.iter().filter(|(n, _)| n == name).map(|(_, v)| v.as_str());
+    let first = found.next()?;
+    found.next().is_none().then_some(first)
+}
+
+/// Whether `url` is a Google sign-in link coming back to this host's
+/// loopback, as T3 Code checks it (`parseAntigravityAuthorizationUrl`):
+/// what it comes back to and with.
+fn sign_in_link(url: &str) -> Option<Pending> {
+    if url.len() > 16_384 || url.contains(char::is_whitespace) {
+        return None;
+    }
+    let path = url.split(['?', '#']).next()?;
+    if path != "https://accounts.google.com/o/oauth2/v2/auth" || url.contains('#') {
+        return None;
+    }
+    let pairs = query(url);
+    if only(&pairs, "response_type")? != "code" {
+        return None;
+    }
+    let state = only(&pairs, "state").filter(|s| !s.is_empty() && s.len() <= 512 && !s.contains(char::is_whitespace))?;
+    let redirect = only(&pairs, "redirect_uri")?;
+    let port = redirect.strip_prefix("http://127.0.0.1:")?.strip_suffix('/')?;
+    port.parse::<u16>().ok().filter(|p| *p >= 1024 && !port.starts_with('0'))?;
+    Some(Pending { redirect: redirect.to_owned(), state: state.to_owned() })
+}
+
+/// The reply of a Google sign-in pasted from another device (the address
+/// its page went to), checked as T3 Code checks it: to this sign-in's
+/// loopback, with its state, and one code or one error.
+pub(crate) fn reply_for(pending: &Pending, pasted: &str) -> Result<String, String> {
+    let pasted = pasted.trim();
+    let wrong = || "This address does not belong to this sign-in".to_owned();
+    if pasted.len() > 16_384 || pasted.contains('#') {
+        return Err(wrong());
+    }
+    let path = pasted.split('?').next().unwrap_or_default();
+    if path != pending.redirect {
+        return Err(wrong());
+    }
+    let pairs = query(pasted);
+    if only(&pairs, "state") != Some(pending.state.as_str()) {
+        return Err(wrong());
+    }
+    let codes = pairs.iter().filter(|(n, v)| n == "code" && !v.is_empty()).count();
+    let errors = pairs.iter().filter(|(n, v)| n == "error" && !v.is_empty()).count();
+    if (codes, errors) != (1, 0) && (codes, errors) != (0, 1) {
+        return Err("The address has no Google sign-in reply".to_owned());
+    }
+    if pairs.iter().filter(|(n, _)| n == "iss").any(|(_, v)| v != "https://accounts.google.com") {
+        return Err(wrong());
+    }
+    Ok(pasted.to_owned())
+}
+
+/// Hands `reply` (an address on this host's loopback) to the CLI waiting
+/// for it there, as the browser would.
+pub(crate) async fn forward(reply: &str) -> Result<(), String> {
+    let rest = reply.strip_prefix("http://127.0.0.1:").ok_or("Not a loopback address")?;
+    let (port, target) = rest.split_once('/').ok_or("Not a loopback address")?;
+    let port: u16 = port.parse().map_err(|_| "Not a loopback address")?;
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .map_err(|_| "Antigravity is no longer waiting for this sign-in".to_owned())?;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let request = format!("GET /{target} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+    stream.write_all(request.as_bytes()).await.map_err(|e| e.to_string())?;
+    // Nothing more to send: a server that reads to the end answers.
+    let _ = stream.shutdown().await;
+    let mut answer = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(10), stream.read_to_end(&mut answer)).await;
+    Ok(())
+}
+
+/// Signs the provider in to Google by Antigravity's own sign-in, as T3
+/// Code does: the CLI started on the provider's folder is asked to
+/// `authenticate`, and gives the link of Google's page (printed, or to
+/// the browser stand-in). The answer has the link and where its reply
+/// comes back (a person on another device pastes it, [`forward`]); the
+/// sign-in goes on in the future, which ends with the CLI signed in and
+/// a session opened (its models kept), or why not. Dropped, the CLI ends
+/// and the sign-in with it.
+pub async fn login(
+    settings: &Value,
+) -> io::Result<(Value, Option<Pending>, impl std::future::Future<Output = Result<(), String>> + use<>)> {
+    let settings = settings.clone();
+    let home = home(&settings).ok_or_else(|| io::Error::other("No folder for Antigravity"))?;
+    let method = method(&settings);
+    let browser = prepare(&home, &settings, method)?;
+    let run = home.join("runs").join(crate::state::id());
+    std::fs::create_dir_all(&run)?;
+    private(&run, 0o700)?;
+    let given = environment(&home, &run, &browser, method);
+    let env: Vec<(&str, &str)> = given.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
+    let args: Vec<String> = ["acp", "--gemini-dir", &home.display().to_string(), "--app-data-dir", APP_DATA]
+        .map(str::to_owned)
+        .into();
+    let cwd = std::env::temp_dir().display().to_string();
+    let mut process = Some(Process::spawn_without("antigravity", &settings, &cwd, &args, &env, REMOVED)?);
+    // What the CLI says, until the answer of request `id`; a link met on
+    // the way is given to `link`.
+    async fn answer(
+        process: &mut Option<Process>,
+        id: u64,
+        link: &mut Option<String>,
+    ) -> io::Result<Result<Value, (i64, String)>> {
+        loop {
+            let tick = tokio::time::sleep(Duration::from_millis(250));
+            tokio::select! {
+                line = super::line(process) => {
+                    let Some(line) = line else {
+                        let why = match process.take() {
+                            Some(p) => p.ended().await,
+                            None => String::new(),
+                        };
+                        return Err(io::Error::other(format!("Antigravity stopped ({why})")));
+                    };
+                    let Ok(message) = serde_json::from_str::<Value>(&line) else {
+                        if let Some(url) = line.trim().strip_prefix(LINK_LINE.trim_end()) {
+                            link.get_or_insert_with(|| url.trim().to_owned());
+                        }
+                        continue;
+                    };
+                    if message["id"].as_u64() == Some(id) && message["method"].is_null() {
+                        return Ok(match message.get("error") {
+                            Some(error) if !error.is_null() => Err((
+                                error["code"].as_i64().unwrap_or_default(),
+                                error["message"].as_str().unwrap_or("failed").to_owned(),
+                            )),
+                            _ => Ok(message["result"].clone()),
+                        });
+                    }
+                    // A request of the CLI's meanwhile: none is answered here.
+                    if !message["method"].is_null() && !message["id"].is_null() {
+                        let refused = json!({"jsonrpc":"2.0","id":message["id"],"error":{"code":-32601,"message":"Not supported while signing in"}});
+                        if let Some(p) = process.as_mut() {
+                            p.send(&refused).await?;
+                        }
+                    }
+                }
+                _ = tick => {}
+            }
+            // The browser stand-in's line, on the error stream.
+            if link.is_none()
+                && let Some(p) = process.as_ref()
+            {
+                let said = p.errors.borrow().iter().find_map(|line| {
+                    line.strip_prefix(LINK_MARK).map(|url| url.trim().to_owned()).filter(|url| !url.is_empty())
+                });
+                *link = said;
+            }
+        }
+    }
+    let mut link = None;
+    if let Some(p) = process.as_mut() {
+        p.send(&json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,
+            "clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false},
+            "clientInfo":{"name":"sophon","title":"Sophon","version":env!("CARGO_PKG_VERSION")}}}))
+            .await?;
+    }
+    let started = tokio::time::timeout(Duration::from_secs(120), answer(&mut process, 1, &mut link))
+        .await
+        .map_err(|_| io::Error::other("Antigravity did not start in time"))??
+        .map_err(|(_, said)| io::Error::other(said))?;
+    let version = started["agentInfo"]["version"].as_str().unwrap_or_default();
+    if !supported(version) {
+        return Err(io::Error::other(format!(
+            "Antigravity CLI {version} is not one Sophon runs: update it to 1.5.1 or later (brew upgrade --cask antigravity-cli, or agy update)"
+        )));
+    }
+    if let Some(p) = process.as_mut() {
+        p.send(&json!({"jsonrpc":"2.0","id":2,"method":"authenticate","params":{"methodId":method}})).await?;
+    }
+    // Until the link comes (or it is signed in already, the answer first).
+    let mut early = None;
+    let waited = tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            let tick = tokio::time::sleep(Duration::from_millis(250));
+            tokio::select! {
+                line = super::line(&mut process) => {
+                    let Some(line) = line else {
+                        let why = match process.take() { Some(p) => p.ended().await, None => String::new() };
+                        return Err(io::Error::other(format!("Antigravity stopped ({why})")));
+                    };
+                    match serde_json::from_str::<Value>(&line) {
+                        Ok(message) if message["id"] == 2 && message["method"].is_null() => {
+                            early = Some(message);
+                            return Ok(());
+                        }
+                        Ok(_) => {}
+                        Err(_) => {
+                            if let Some(url) = line.trim().strip_prefix(LINK_LINE.trim_end()) {
+                                link.get_or_insert_with(|| url.trim().to_owned());
+                            }
+                        }
+                    }
+                }
+                _ = tick => {}
+            }
+            if link.is_none()
+                && let Some(p) = process.as_ref()
+            {
+                link = p.errors.borrow().iter().find_map(|line| {
+                    line.strip_prefix(LINK_MARK).map(|url| url.trim().to_owned()).filter(|url| !url.is_empty())
+                });
+            }
+            if link.is_some() {
+                return Ok(());
+            }
+        }
+    })
+    .await
+    .map_err(|_| io::Error::other("Antigravity could not reach Google: check this computer's network, then try again"))?;
+    waited?;
+    let failed = |code: i64, said: String| {
+        if said.contains("SUBSCRIPTION_REQUIRED") {
+            "Google requires an eligible Antigravity subscription for this account".to_owned()
+        } else if code == -32602 && !method.starts_with("oauth") {
+            "Antigravity refused the key or project in this provider's settings".to_owned()
+        } else {
+            said
+        }
+    };
+    let pending = match &link {
+        Some(url) => Some(sign_in_link(url).ok_or_else(|| io::Error::other("Antigravity gave a sign-in link that is not Google's"))?),
+        None => None,
+    };
+    let reply = json!({"authUrl":link});
+    let models_home = home.clone();
+    let done = async move {
+        let authenticated = match early {
+            Some(message) => match message.get("error") {
+                Some(error) if !error.is_null() => Err((
+                    error["code"].as_i64().unwrap_or_default(),
+                    error["message"].as_str().unwrap_or("failed").to_owned(),
+                )),
+                _ => Ok(message["result"].clone()),
+            },
+            None => answer(&mut process, 2, &mut None).await.map_err(|e| e.to_string())?,
+        };
+        authenticated.map_err(|(code, said)| failed(code, said))?;
+        // Checked as T3 Code checks it: a session opens, its models kept.
+        if let Some(p) = process.as_mut() {
+            p.send(&json!({"jsonrpc":"2.0","id":3,"method":"session/new","params":{"cwd":std::env::temp_dir(),"mcpServers":[]}}))
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        let opened = answer(&mut process, 3, &mut None)
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|_| "Antigravity signed in, but could not open a session or list its models".to_owned())?;
+        let models = offered_models(&opened);
+        if !models.is_empty() {
+            let _ = std::fs::write(
+                models_home.join(APP_DATA).join("sophon-models.json"),
+                serde_json::to_vec(&models).unwrap_or_default(),
+            );
+        }
+        drop(process);
+        let _ = std::fs::remove_dir_all(&run);
+        Ok(())
+    };
+    Ok((reply, pending, done))
+}
 
 /// What a request of ours was, for when its answer comes.
 enum Sent {
@@ -1133,6 +1454,44 @@ impl Antigravity {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sign_in_link_is_google_s_coming_back_to_this_host() {
+        let link = "https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id=x&state=s%201x&redirect_uri=http%3A%2F%2F127.0.0.1%3A47123%2F&scope=a+b";
+        assert_eq!(sign_in_link(link), None, "a state with a space");
+        let link = link.replace("s%201x", "s1");
+        let pending = sign_in_link(&link).unwrap();
+        assert_eq!(pending, Pending { redirect: "http://127.0.0.1:47123/".into(), state: "s1".into() });
+        for wrong in [
+            link.replace("accounts.google.com", "accounts.example.com"),
+            link.replace("response_type=code", "response_type=token"),
+            link.replace("127.0.0.1%3A47123", "evil.example%3A47123"),
+            link.replace("47123", "80"),
+            format!("{link}&state=s2"),
+            format!("{link}#x"),
+        ] {
+            assert_eq!(sign_in_link(&wrong), None, "{wrong}");
+        }
+    }
+
+    #[test]
+    fn a_pasted_reply_is_this_sign_in_s() {
+        let pending = Pending { redirect: "http://127.0.0.1:47123/".into(), state: "s1".into() };
+        let reply = "http://127.0.0.1:47123/?state=s1&code=4%2F0abc&scope=x&iss=https%3A%2F%2Faccounts.google.com";
+        assert_eq!(reply_for(&pending, &format!(" {reply} ")), Ok(reply.to_owned()));
+        assert!(reply_for(&pending, "http://127.0.0.1:47123/?state=s1&error=access_denied").is_ok());
+        for wrong in [
+            "http://127.0.0.1:47123/?state=s2&code=c",
+            "http://127.0.0.1:47124/?state=s1&code=c",
+            "http://127.0.0.1:47123/x?state=s1&code=c",
+            "http://127.0.0.1:47123/?state=s1",
+            "http://127.0.0.1:47123/?state=s1&code=c&error=e",
+            "http://127.0.0.1:47123/?state=s1&code=c&iss=https%3A%2F%2Fevil.example",
+            "https://example.com/?state=s1&code=c",
+        ] {
+            assert!(reply_for(&pending, wrong).is_err(), "{wrong}");
+        }
+    }
 
     #[test]
     fn only_versions_from_1_5_1_below_2_are_driven() {

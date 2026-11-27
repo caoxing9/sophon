@@ -934,6 +934,8 @@ struct Login {
     outcome: tokio::sync::watch::Receiver<Option<Result<(), String>>>,
     /// Ends it.
     cancel: Option<tokio::sync::oneshot::Sender<()>>,
+    /// Antigravity's: where Google's reply goes back to the CLI.
+    pending: Option<provider::antigravity::Pending>,
 }
 
 thread_local! {
@@ -978,18 +980,30 @@ pub async fn slow(shared: &Shared, request: &Value) -> Option<Result<Value, Stri
         "provider.login.start.request" => async {
             let name = text(request, "provider")?;
             let (settings, family) = provider_of(name)?;
-            if family != Some("codex") {
-                return Err(format!("{name} does not sign in from here"));
-            }
             cancel_login(name);
             let device = request["device"].as_bool().unwrap_or(false);
-            let (started, signing) = provider::codex::login(&settings, device)
-                .await
-                .map_err(|error| error.to_string())?;
+            // Codex's sign-in to ChatGPT, or Antigravity's to Google (whose
+            // reply, from another device, is pasted: `.callback`).
+            let (started, pending, signing): (Value, _, std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>>>>) = match family {
+                Some("codex") => {
+                    let (started, signing) = provider::codex::login(&settings, device)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    (started, None, Box::pin(signing))
+                }
+                Some("antigravity") => {
+                    let (started, pending, signing) = provider::antigravity::login(&settings)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    (started, pending, Box::pin(signing))
+                }
+                _ => return Err(format!("{name} does not sign in from here")),
+            };
             let (done, outcome) = tokio::sync::watch::channel(None);
             let (cancel, canceled) = tokio::sync::oneshot::channel::<()>();
+            let pasted = pending.is_some();
             LOGINS.with_borrow_mut(|logins| {
-                logins.insert(name.to_owned(), Login { outcome, cancel: Some(cancel) })
+                logins.insert(name.to_owned(), Login { outcome, cancel: Some(cancel), pending })
             });
             tokio::task::spawn_local(async move {
                 let ended = tokio::select! {
@@ -1000,7 +1014,8 @@ pub async fn slow(shared: &Shared, request: &Value) -> Option<Result<Value, Stri
                 let _ = done.send(Some(ended));
             });
             Ok(reply(json!({"provider":name,"authUrl":started["authUrl"],
-                "verificationUrl":started["verificationUrl"],"userCode":started["userCode"]})))
+                "verificationUrl":started["verificationUrl"],"userCode":started["userCode"],
+                "pasteReply":pasted})))
         }
         .await,
         "provider.login.wait.request" => async {
@@ -1014,6 +1029,19 @@ pub async fn slow(shared: &Shared, request: &Value) -> Option<Result<Value, Stri
                 .map(|ended| ended.clone().unwrap_or(Err("Ended".into())))
                 .unwrap_or(Err("Ended".into()));
             Ok(reply(json!({"provider":name,"success":ended.is_ok(),"error":ended.err()})))
+        }
+        .await,
+        // The address a Google sign-in's page went to, pasted from another
+        // device than the host: handed to the CLI waiting for it there.
+        "provider.login.callback.request" => async {
+            let name = text(request, "provider")?;
+            let pasted = text(request, "url")?;
+            let pending = LOGINS
+                .with_borrow(|logins| logins.get(name).and_then(|login| login.pending.clone()))
+                .ok_or("No sign-in under way")?;
+            let answer = provider::antigravity::reply_for(&pending, pasted)?;
+            provider::antigravity::forward(&answer).await?;
+            Ok(reply(json!({"provider":name})))
         }
         .await,
         "provider.login.cancel.request" => async {

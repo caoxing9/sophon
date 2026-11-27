@@ -161,6 +161,26 @@ test("settings lists the agents and adds a provider in steps", async () => {
   await app.waitFor("text:Codex (Work)");
 });
 
+test("an Antigravity account asks how it signs in", async () => {
+  const app = await open(".", { width: 1100, height: 900 });
+  await app.press("label:Settings >> nth=0");
+  await app.waitFor("text:Coding agents");
+  await app.press("text:Add provider");
+  await app.waitFor("text:API endpoints");
+  await app.press("text:Antigravity >> nth=0");
+  await app.press("text:Next");
+  // As T3 Code asks: a Google account or Enterprise in the browser, or a key.
+  await app.waitFor("text:How it signs in");
+  for (const way of ["Google account", "Gemini Enterprise", "Gemini API key", "Agent Platform (Vertex AI)"]) {
+    expect(app.texts()).toContain(way);
+  }
+  expect(app.texts()).not.toContain("Google Cloud project");
+  await app.press("text:Gemini API key");
+  await app.waitFor("text:A Gemini or Vertex AI express key, kept on that computer");
+  await app.press("text:Agent Platform (Vertex AI)");
+  await app.waitFor("text:Google Cloud project");
+});
+
 test("opens the usage page from the sidebar", async () => {
   const app = await open(".", { width: 1100, height: 760 });
   // An icon of the foot's row, beside Settings and History.

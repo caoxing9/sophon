@@ -235,6 +235,81 @@ impl Base {
     }
 }
 
+/// How an Antigravity account signs in (its `authenticate` method), as
+/// T3 Code offers them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AgyAuth {
+    /// A personal Google account, in the browser: its subscription.
+    Google,
+    /// A Gemini Enterprise (Workspace) account, in the browser.
+    Enterprise,
+    /// A Gemini API key, billed by use.
+    ApiKey,
+    /// Google Cloud's Agent Platform (Vertex AI): a key, or a project.
+    AgentPlatform,
+}
+
+impl AgyAuth {
+    pub const ALL: [AgyAuth; 4] = [AgyAuth::Google, AgyAuth::Enterprise, AgyAuth::ApiKey, AgyAuth::AgentPlatform];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            AgyAuth::Google => "oauth-personal",
+            AgyAuth::Enterprise => "oauth-business",
+            AgyAuth::ApiKey => "gemini-api-key",
+            AgyAuth::AgentPlatform => "agent-platform",
+        }
+    }
+
+    /// Signed in in the browser (else by what the settings give).
+    pub fn browser(self) -> bool {
+        matches!(self, AgyAuth::Google | AgyAuth::Enterprise)
+    }
+}
+
+/// Why an Antigravity account cannot be added yet, if so.
+pub fn agy_problem(auth: AgyAuth, key: &str, project: &str) -> Option<&'static str> {
+    match auth {
+        AgyAuth::ApiKey if key.trim().is_empty() => Some("Paste the API key"),
+        AgyAuth::Enterprise if project.trim().is_empty() => Some("Gemini Enterprise needs its Google Cloud project"),
+        AgyAuth::AgentPlatform if key.trim().is_empty() && project.trim().is_empty() => {
+            Some("Give an API key or a Google Cloud project")
+        }
+        _ => None,
+    }
+}
+
+/// Another Antigravity account: its own folder, how it signs in, its key
+/// (kept in its environment as the CLI takes it) and its Google Cloud
+/// project and location, written to the CLI's settings by the service.
+pub fn agy_patch(id: &str, label: &str, dir: &str, auth: AgyAuth, key: &str, project: &str, location: &str) -> Value {
+    let mut env = Map::new();
+    env.insert("GEMINI_HOME".into(), dir.into());
+    let key = key.trim();
+    match auth {
+        AgyAuth::ApiKey if !key.is_empty() => {
+            env.insert("GEMINI_API_KEY".into(), key.into());
+        }
+        AgyAuth::AgentPlatform if !key.is_empty() => {
+            env.insert("GOOGLE_API_KEY".into(), key.into());
+        }
+        _ => {}
+    }
+    let mut provider = json!({
+        "extends": "antigravity",
+        "label": label.trim(),
+        "description": SOPHON_MARK,
+        "env": env,
+        "authMethod": auth.id(),
+    });
+    let project = project.trim();
+    if !project.is_empty() && matches!(auth, AgyAuth::Enterprise | AgyAuth::AgentPlatform) {
+        let location = location.trim();
+        provider["gcp"] = json!({ "project": project, "location": if location.is_empty() { "us-central1" } else { location } });
+    }
+    json!({ "providers": { id: provider } })
+}
+
 /// A provider id from a name: lowercase letters, digits and hyphens, a
 /// letter first (`^[a-z][a-z0-9-]*$`), and not one in `taken`.
 pub fn new_id(name: &str, fallback: &str, taken: &[String]) -> String {
@@ -596,6 +671,30 @@ mod tests {
         assert_eq!(absolute_dir("~/.claude-work", None), None);
         assert_eq!(absolute_dir("relative", Some("/Users/me")), None);
         assert_eq!(absolute_dir("~/", Some("/Users/me")), None);
+    }
+
+    #[test]
+    fn an_antigravity_account_says_how_it_signs_in_and_with_what() {
+        let google = agy_patch("work", " Work ", "/h/.sophon-antigravity-work", AgyAuth::Google, "", "", "");
+        assert_eq!(
+            google["providers"]["work"],
+            json!({"extends":"antigravity","label":"Work","description":SOPHON_MARK,
+                "env":{"GEMINI_HOME":"/h/.sophon-antigravity-work"},"authMethod":"oauth-personal"})
+        );
+        let key = agy_patch("k", "K", "/d", AgyAuth::ApiKey, " sk ", "p", "l");
+        assert_eq!(key["providers"]["k"]["env"]["GEMINI_API_KEY"], "sk");
+        assert!(key["providers"]["k"].get("gcp").is_none(), "a Gemini key takes no project");
+        let vertex = agy_patch("v", "V", "/d", AgyAuth::AgentPlatform, "gk", "proj", "");
+        assert_eq!(vertex["providers"]["v"]["env"]["GOOGLE_API_KEY"], "gk");
+        assert_eq!(vertex["providers"]["v"]["gcp"], json!({"project":"proj","location":"us-central1"}));
+        let business = agy_patch("b", "B", "/d", AgyAuth::Enterprise, "", "proj", "europe-west4");
+        assert_eq!(business["providers"]["b"]["authMethod"], "oauth-business");
+        assert_eq!(business["providers"]["b"]["gcp"]["location"], "europe-west4");
+        assert_eq!(agy_problem(AgyAuth::Google, "", ""), None);
+        assert!(agy_problem(AgyAuth::ApiKey, " ", "").is_some());
+        assert!(agy_problem(AgyAuth::Enterprise, "", "").is_some());
+        assert!(agy_problem(AgyAuth::AgentPlatform, "", "").is_some());
+        assert_eq!(agy_problem(AgyAuth::AgentPlatform, "", "proj"), None);
     }
 
     #[test]
