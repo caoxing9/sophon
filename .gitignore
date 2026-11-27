@@ -1,0 +1,6 @@
+target/
+.nsh/
+*.png.tmp
+site/
+site-web/
+preview/

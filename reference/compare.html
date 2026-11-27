@@ -1,0 +1,16 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+body{margin:0;font:13px -apple-system,sans-serif;background:#888}
+.row{display:flex;gap:8px;padding:8px}.cell{display:flex;flex-direction:column;gap:4px;color:#fff}
+img{width:440px;height:320px;display:block}
+.diff{position:relative;width:440px;height:320px}.diff img{position:absolute;inset:0}.diff img+img{mix-blend-mode:difference}
+</style></head><body>
+<script>
+const name = new URLSearchParams(location.search).get('c') || 'button';
+for (const mode of ['light','dark']) {
+  const r = document.createElement('div'); r.className='row';
+  r.innerHTML = `<div class="cell">shadcn/ui (${mode})<img src="${name}-${mode}.png"></div>
+  <div class="cell">nsh-shadcn (${mode})<img src="../screenshots/${name}-${mode}.png"></div>
+  <div class="cell">difference (black = identical)<div class="diff"><img src="${name}-${mode}.png"><img src="../screenshots/${name}-${mode}.png"></div></div>`;
+  document.body.append(r);
+}
+</script></body></html>

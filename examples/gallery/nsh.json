@@ -1,0 +1,8 @@
+{
+  "name": "nsh-shadcn",
+  "id": "io.github.caoxing9.nsh-shadcn",
+  "version": "1.0.0",
+  "build": 1,
+  "rust": ".",
+  "root": "App"
+}
