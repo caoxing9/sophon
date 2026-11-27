@@ -943,7 +943,7 @@ fn sent_chip(name: String, thumb: Option<String>) -> View {
             chip.hover(|s| s.border_color(ACCENT()))
                 .on_press(move |_: &PressEvent| store::open_modal(store::Modal::Picture { name: open_name.clone(), uri: open_uri.clone() }))
                 .tooltip(
-                    glass_strong(view()).p(sp(S1)).rounded(px(R_LG)).child(
+                    popover_surface().p(sp(S1)).child(
                         image(SharedString::from(uri)).w(px(280.0)).h(px(280.0)).object_fit(nsh_core::ResizeMode::Contain).rounded(px(R_MD)),
                     ),
                 )
@@ -1418,14 +1418,7 @@ fn group_row(group: Memo<Option<Group>>) -> impl IntoElement {
                     row = row.child(count_chip(tool_icon(kind, ""), n, FG_MUTED()));
                 }
                 view()
-                    .tooltip(
-                        glass_strong(view())
-                            .px(sp(S2))
-                            .py(sp(S1))
-                            .rounded(px(R_LG))
-                            .child(text(tip).text_size(tx(TEXT_XS)))
-                            .into_element(),
-                    )
+                    .tooltip(tooltip_text(tip).into_element())
                     .child(row)
                     .into_element()
             }))

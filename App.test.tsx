@@ -138,19 +138,27 @@ test("a press on the composer's card is a press on its text", async () => {
   expect(app.texts()).toContain("hi");
 });
 
-test("settings lists the agents and opens the steps that add a provider", async () => {
+test("settings lists the agents and adds a provider in steps", async () => {
   const app = await open(".", { width: 1100, height: 900 });
   await app.press("label:Settings >> nth=0");
   await app.waitFor("text:Coding agents");
   expect(app.texts()).toContain("Coding agents");
-  // What it is: an account of a CLI, or an endpoint on a key. (The
-  // headless runner presses nothing in a dialog: the steps after are
-  // driven on a real platform.)
+  // What it is: an account of a CLI, or an endpoint on a key.
   await app.press("text:Add provider");
   await app.waitFor("text:API endpoints");
-  for (const shown of ["Provider", "Details", "Sign in", "Claude account", "ChatGPT account", "Google account", "Custom endpoint", "Next"]) {
+  for (const shown of ["Provider", "Details", "Sign in", "Claude account", "ChatGPT account", "Google account", "Custom endpoint"]) {
     expect(app.texts()).toContain(shown);
   }
+  await app.press("text:Codex >> nth=0");
+  await app.press("text:Next");
+  // Its details; added, it signs in by Codex's own sign-in.
+  await app.waitFor("text:Config folder");
+  await app.type("id:provider-name", "Work");
+  await app.press("text:Add and sign in");
+  await app.waitFor("text:Continue with ChatGPT");
+  expect(app.texts()).toContain("“Codex (Work)” is added. Sign it in: it uses this account until you remove it");
+  await app.press("text:Done");
+  await app.waitFor("text:Codex (Work)");
 });
 
 test("opens the usage page from the sidebar", async () => {

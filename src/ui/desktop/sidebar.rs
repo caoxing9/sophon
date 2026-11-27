@@ -250,7 +250,7 @@ fn service_status() -> impl IntoElement {
 /// shows which page is open, and pull requests a dot while one is unseen.
 fn footer() -> impl IntoElement {
     let tool = |glyph: Icon, label: &'static str, tip: &'static str, on: fn() -> bool, open: fn()| {
-        view().tooltip(text(tip).text_size(tx(TEXT_XS)).px(sp(S2)).py(px(3.0)).rounded(px(R_MD)).bg(SURFACE0()).border_1().border_color(BORDER()).into_element()).child(
+        view().tooltip(tooltip_text(tip).into_element()).child(
             button()
                 .on_press(open)
                 .accessibility_label(label)
@@ -282,7 +282,7 @@ fn footer() -> impl IntoElement {
                 || view().absolute().top(px(5.0)).right(px(5.0)).w(px(6.0)).h(px(6.0)).rounded(px(R_FULL)).bg(DOT_RUNNING),
             )),
     )
-    .placement(nsh_core::overlay::Placement::Top)
+    .side(nsh_core::overlay::Placement::Top)
     .align(nsh_core::overlay::Align::Start)
     .child(menu_row(t("Pull requests"), Some(Icon::GitPullRequest), None, false, store::open_inbox))
     .child(menu_divider())
@@ -340,7 +340,7 @@ fn update_button() -> impl IntoElement {
     let busy = computed(move || st.with(|s| matches!(s.phase, Phase::Downloading(_) | Phase::Installing)));
     view().tooltip(dynamic(move || {
         let words = label();
-        Some(untracked(move || text(words).text_size(tx(TEXT_XS)).px(sp(S2)).py(px(3.0)).rounded(px(R_MD)).bg(SURFACE0()).border_1().border_color(BORDER())))
+        Some(untracked(move || tooltip_text(words)))
     }).into_element()).child(
         button()
             .on_press(move || {

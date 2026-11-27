@@ -169,91 +169,116 @@ fn desktop_picture(uri: String) -> AnyElement {
         .into_element()
 }
 
-pub(crate) fn modal_layer() -> impl IntoElement {
-    let open = computed(|| store::modal().is_some());
-    when(open, || {
-        dialog()
-            .animation(ModalAnimation::Fade)
-            .on_cancel(store::close_modal)
-            .flex_1()
-            .child(
-                view()
-                    .flex_1()
-                    .child(
-                        // The backdrop: a press outside the card closes it.
-                        nsh_base::button()
-                            .on_press(store::close_modal)
-                            .absolute()
-                            .top(px(0.0))
-                            .bottom(px(0.0))
-                            .left(px(0.0))
-                            .right(px(0.0))
-                            .bg(AdaptiveColor::rgb(0x000000, 0x000000).opacity(0.32)),
-                    )
-                    .child(dynamic(|| {
-                        let m = store::modal()?;
-                        Some(untracked(move || {
-                            if let Modal::Picture { uri, .. } = &m {
-                                // A picture takes the whole window: itself,
-                                // and a small cross to put it away (a press
-                                // anywhere does too).
-                                view()
-                                    .flex_1()
-                                    .self_stretch()
-                                    .child(if MOBILE {
-                                        zooming_picture(uri.clone())
-                                    } else {
-                                        desktop_picture(uri.clone())
-                                    })
-                                    .child(
-                                        nsh_base::button()
-                                            .on_press(store::close_modal)
-                                            .accessibility_label(t("Close"))
-                                            .absolute()
-                                            .top(sp(S4))
-                                            .right(sp(S4))
-                                            .w(px(30.0))
-                                            .h(px(30.0))
-                                            .rounded(px(R_FULL))
-                                            .items_center()
-                                            .justify_center()
-                                            .bg(AdaptiveColor::rgb(0x000000, 0x000000).opacity(0.45))
-                                            .hover(|s| s.bg(AdaptiveColor::rgb(0x000000, 0x000000).opacity(0.7)))
-                                            .child(icon(Icon::X, 16.0).text_color(AdaptiveColor::rgb(0xffffff, 0xffffff))),
-                                    )
-                            } else if m == Modal::Palette {
-                                view().self_stretch().items_center().pt(relative(0.12)).flex_1().child(crate::ui::desktop::shortcuts::palette())
-                            } else if m == Modal::ChangedFiles {
-                                view().self_stretch().items_center().pt(relative(0.12)).flex_1().child(crate::ui::desktop::shortcuts::changed_files())
-                            } else if MOBILE && matches!(m, Modal::ToolDetail { .. }) {
-                                // The phone: a sheet at the foot, full width.
-                                view()
-                                    .flex_1()
-                                    .justify_end()
-                                    .pointer_events(nsh_core::PointerEvents::BoxNone)
-                                    .child(body(m.clone()))
-                            } else {
-                                view()
-                                    .flex_1()
-                                    .items_center()
-                                    .justify_center()
-                                    .pointer_events(nsh_core::PointerEvents::BoxNone)
-                                    .child(body(m.clone()))
-                            }
-                        }))
-                    })),
-            )
-    })
+/// Whether `m` is one of the modals that are no dialog: a picture over the
+/// whole window, the palettes, a tool's details on the phone.
+fn own_layer(m: &Modal) -> bool {
+    matches!(m, Modal::Picture { .. } | Modal::Palette | Modal::ChangedFiles) || (MOBILE && matches!(m, Modal::ToolDetail { .. }))
 }
 
+pub(crate) fn modal_layer() -> impl IntoElement {
+    let dialog_open = computed(|| store::modal().is_some_and(|m| !own_layer(&m)));
+    let layer_open = computed(|| store::modal().is_some_and(|m| own_layer(&m)));
+    view()
+        .absolute()
+        .inset(px(0.0))
+        .pointer_events(nsh_core::PointerEvents::BoxNone)
+        // The modals that are dialogs: nsh-shadcn's Dialog, as wide as
+        // each one's content says.
+        .child(
+            nsh_shadcn::dialog()
+                .open(move || Some(dialog_open.get()))
+                .on_open_change(|open: &bool| {
+                    if !*open {
+                        store::close_modal();
+                    }
+                })
+                .child(
+                    nsh_shadcn::dialog_content()
+                        .app_class(Some(SharedString::from("flex flex-col w-auto sm:max-w-none")))
+                        .child(dynamic(|| {
+                            let m = store::modal().filter(|m| !own_layer(m))?;
+                            Some(untracked(move || body(m).into_element()))
+                        })),
+                ),
+        )
+        .child(when(layer_open, || {
+            dialog()
+                .animation(ModalAnimation::Fade)
+                .on_cancel(store::close_modal)
+                .flex_1()
+                .child(
+                    view()
+                        .flex_1()
+                        .child(
+                            // The backdrop: a press outside closes it.
+                            nsh_base::button()
+                                .on_press(store::close_modal)
+                                .absolute()
+                                .top(px(0.0))
+                                .bottom(px(0.0))
+                                .left(px(0.0))
+                                .right(px(0.0))
+                                .bg(AdaptiveColor::rgb(0x000000, 0x000000).opacity(0.32)),
+                        )
+                        .child(dynamic(|| {
+                            let m = store::modal().filter(own_layer)?;
+                            Some(untracked(move || {
+                                if let Modal::Picture { uri, .. } = &m {
+                                    // A picture takes the whole window: itself,
+                                    // and a small cross to put it away (a press
+                                    // anywhere does too).
+                                    view()
+                                        .flex_1()
+                                        .self_stretch()
+                                        .child(if MOBILE {
+                                            zooming_picture(uri.clone())
+                                        } else {
+                                            desktop_picture(uri.clone())
+                                        })
+                                        .child(
+                                            nsh_base::button()
+                                                .on_press(store::close_modal)
+                                                .accessibility_label(t("Close"))
+                                                .absolute()
+                                                .top(sp(S4))
+                                                .right(sp(S4))
+                                                .w(px(30.0))
+                                                .h(px(30.0))
+                                                .rounded(px(R_FULL))
+                                                .items_center()
+                                                .justify_center()
+                                                .bg(AdaptiveColor::rgb(0x000000, 0x000000).opacity(0.45))
+                                                .hover(|s| s.bg(AdaptiveColor::rgb(0x000000, 0x000000).opacity(0.7)))
+                                                .child(icon(Icon::X, 16.0).text_color(AdaptiveColor::rgb(0xffffff, 0xffffff))),
+                                        )
+                                } else if m == Modal::Palette {
+                                    view().self_stretch().items_center().pt(relative(0.12)).flex_1().child(crate::ui::desktop::shortcuts::palette())
+                                } else if m == Modal::ChangedFiles {
+                                    view().self_stretch().items_center().pt(relative(0.12)).flex_1().child(crate::ui::desktop::shortcuts::changed_files())
+                                } else {
+                                    // The phone's tool details: a sheet at the
+                                    // foot, full width.
+                                    view()
+                                        .flex_1()
+                                        .justify_end()
+                                        .pointer_events(nsh_core::PointerEvents::BoxNone)
+                                        .child(body(m.clone()))
+                                }
+                            }))
+                        })),
+                )
+        }))
+}
+
+/// A dialog's body under its title: nsh-shadcn's DialogHeader and
+/// DialogTitle, in a column as wide as the dialog is to be (the
+/// DialogContent around it pads and frames it).
 pub(crate) fn sheet(title: &str) -> View {
-    glass_strong(view())
+    view()
         .w(px(420.0))
         .max_w(relative(0.92))
-        .p(sp(S6))
         .gap(sp(S4))
-        .rounded(px(22.0))
-        .child(text(title.to_owned()).text_size(tx(TEXT_LG)).font_weight(FontWeight(500)))
+        .child(nsh_shadcn::dialog_header().child(nsh_shadcn::dialog_title(title.to_owned())))
 }
 
 pub(crate) fn actions(primary: impl IntoElement) -> View {
@@ -1988,11 +2013,11 @@ fn update_dialog() -> View {
         Phase::Failed(e) => Some(e.clone()),
         _ => None,
     }));
-    glass_strong(view())
+    // Framed by the dialog around it.
+    view()
         .w(px(620.0))
         .max_w(relative(0.92))
         .max_h(relative(0.86))
-        .rounded(px(22.0))
         .overflow_hidden()
         .child(
             view()
