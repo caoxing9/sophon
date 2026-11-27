@@ -179,6 +179,8 @@ test("an Antigravity account asks how it signs in", async () => {
   await app.waitFor("text:A Gemini or Vertex AI express key, kept on that computer");
   await app.press("text:Agent Platform (Vertex AI)");
   await app.waitFor("text:Google Cloud project");
+});
+
 test("import shows the projects it found, or that it is looking", async () => {
   const app = await open(".", { width: 1100, height: 900 });
   await app.press("text:Import projects");
