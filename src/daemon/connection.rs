@@ -165,6 +165,8 @@ pub enum Command {
     RefreshProviders,
     /// What the provider's binary, version and login are.
     ProviderDiagnostic(String),
+    /// The projects to bring in from Claude Code's and Codex's history.
+    ImportProjects,
     /// Signs a Codex provider in to ChatGPT by Codex's own: in a browser on
     /// the host, or with a code typed on any device (`device`).
     ProviderLogin { provider: String, device: bool },
@@ -936,6 +938,25 @@ pub struct UsageWindow {
     pub resets_at: Option<String>,
 }
 
+/// A folder Claude Code's or Codex's sessions ran in, to bring in as a
+/// project with its sessions Sophon does not have (`import.projects`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImportProject {
+    pub path: String,
+    pub title: String,
+    /// A git working tree.
+    pub git: bool,
+    /// Its `origin`'s host and path: the same for every clone and worktree.
+    pub remote_key: Option<String>,
+    /// `me/app`.
+    pub repository: Option<String>,
+    pub last_activity: String,
+    /// The agents its sessions are of (`claude`, `codex`).
+    pub sources: Vec<String>,
+    /// Newest first.
+    pub sessions: Vec<RecentSession>,
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RecentSession {
     pub provider: String,
@@ -1342,6 +1363,8 @@ pub enum Event {
     Rewound { agent: String, error: Option<String> },
     /// Some of the sessions asked for with `seq` (one agent's).
     RecentSessions { seq: u64, list: Vec<RecentSession> },
+    /// The projects to bring in, or why they could not be looked for.
+    ImportProjects(Result<Vec<ImportProject>, String>),
     DaemonConfig(Value),
     /// A provider's diagnostic text.
     Diagnostic { provider: String, text: String },
@@ -1832,6 +1855,8 @@ enum Pending {
     Pairing,
     /// A feature an older daemon may not have: failures stay quiet.
     Optional,
+    /// The scan for projects to bring in: a failure is said where it shows.
+    ImportScan,
     /// A provider's sign-in, started or waited on: a failure ends it.
     ProviderLogin(String),
     /// The sessions to import, asked with this number.
@@ -2773,6 +2798,7 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
             };
             if providers.is_empty() { vec![ask(pending, None)] } else { providers.iter().map(|p| ask(pending, Some(p))).collect() }
         }
+        Command::ImportProjects => vec![request(pending, Pending::ImportScan, json!({ "type": "import.projects.request" }))],
         Command::ImportSession { provider, handle, cwd } => vec![request(
             pending,
             Pending::Import,
@@ -3228,6 +3254,10 @@ fn handle(
                     return vec![];
                 }
                 Some(Pending::Optional) => return vec![],
+                Some(Pending::ImportScan) => {
+                    let error = payload.get("error").and_then(Value::as_str).unwrap_or("request failed").to_owned();
+                    return vec![Event::ImportProjects(Err(error))];
+                }
                 Some(Pending::ProviderLogin(provider)) => {
                     let error = payload.get("error").and_then(Value::as_str).unwrap_or("request failed").to_owned();
                     return vec![Event::ProviderLogin { provider, step: LoginStep::Ended(Err(error)) }];
@@ -3320,6 +3350,7 @@ fn handle(
                 Some(Pending::Projects | Pending::Workspaces) => "load projects",
                 Some(Pending::Providers) => "load providers",
                 Some(Pending::ProviderConfig) => "save agent settings",
+                Some(Pending::ImportScan) => "look for projects",
                 Some(Pending::ProviderLogin(_)) => "sign in",
                 Some(Pending::ResetCredits | Pending::UseReset(_)) => "use resets",
                 None => "request",
@@ -3806,6 +3837,34 @@ fn handle(
                 (Some(provider), Some(text)) => vec![Event::Diagnostic { provider, text }],
                 _ => vec![],
             }
+        }
+        "import.projects.response" => {
+            request_id.and_then(|id| pending.remove(id));
+            let session = |e: &Value| {
+                let s = |k: &str| e.get(k).and_then(Value::as_str).map(str::to_owned);
+                Some(RecentSession {
+                    provider: s("providerId")?,
+                    provider_label: s("providerLabel").unwrap_or_default(),
+                    handle: s("providerHandleId")?,
+                    cwd: s("cwd").unwrap_or_default(),
+                    title: s("title").unwrap_or_else(|| "Untitled session".into()),
+                    last_activity: s("lastActivityAt").unwrap_or_default(),
+                })
+            };
+            let list = list_of(payload, "projects", |p| {
+                let s = |k: &str| p.get(k).and_then(Value::as_str).map(str::to_owned);
+                Some(ImportProject {
+                    path: s("path")?,
+                    title: s("title").unwrap_or_default(),
+                    git: p.get("git").and_then(Value::as_bool).unwrap_or(false),
+                    remote_key: s("remoteKey"),
+                    repository: s("repository"),
+                    last_activity: s("lastActivityAt").unwrap_or_default(),
+                    sources: p.get("sources").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect(),
+                    sessions: p.get("sessions").and_then(Value::as_array).into_iter().flatten().filter_map(session).collect(),
+                })
+            });
+            vec![Event::ImportProjects(Ok(list))]
         }
         "fetch_recent_provider_sessions_response" => {
             let seq = match request_id.and_then(|id| pending.remove(id)) {

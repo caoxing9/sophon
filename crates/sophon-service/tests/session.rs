@@ -2816,6 +2816,18 @@ async fn background_work_a_fork_and_going_back() {
         .map(|entry| entry["providerId"].clone())
         .collect();
     assert_eq!(given, [json!("claude")], "{everyone}");
+    // As a project to bring in: its folder, with the session Sophon does
+    // not have, not the one it has.
+    let scanned = ask(&mut socket, json!({"type":"import.projects.request"})).await;
+    let projects = scanned["payload"]["projects"].as_array().unwrap();
+    let here = projects
+        .iter()
+        .find(|project| project["path"] == json!(service.0.path()))
+        .unwrap_or_else(|| panic!("{scanned}"));
+    let handles: Vec<_> = here["sessions"].as_array().unwrap().iter().map(|s| s["providerHandleId"].clone()).collect();
+    assert!(handles.contains(&json!("other-9")) && !handles.contains(&json!(session)), "{scanned}");
+    assert_eq!(here["threads"], json!(handles.len()));
+    assert_eq!(here["sources"], json!(["claude"]));
     let taken = ask(&mut socket, json!({"type":"import_agent_request","providerId":"claude","providerHandleId":"other-9","cwd":service.0.path()})).await;
     assert_eq!(
         (

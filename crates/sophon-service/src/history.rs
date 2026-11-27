@@ -328,8 +328,127 @@ pub fn read(family: &str, settings: &Value, session: &str) -> Vec<Value> {
     }
 }
 
+/// Where a folder's repository is kept, from its `origin` (`git@github.com:
+/// me/app.git`, `https://github.com/me/app`): its host and path
+/// (`github.com/me/app`), the same for every clone and worktree of it, and
+/// its name (`me/app`).
+pub fn remote_key(url: &str) -> Option<(String, String)> {
+    let url = url.trim().trim_end_matches('/').trim_end_matches(".git");
+    let rest = match url.split_once("://") {
+        Some((_, rest)) => rest.split_once('@').map_or(rest, |(_, after)| after).to_owned(),
+        // scp-like: `git@host:path`.
+        None => {
+            let (host, path) = url.split_once(':')?;
+            let host = host.split_once('@').map_or(host, |(_, after)| after);
+            format!("{host}/{path}")
+        }
+    };
+    let mut parts = rest.splitn(2, '/');
+    let host = parts.next()?.split(':').next()?.to_lowercase();
+    let path = parts.next()?.trim_matches('/');
+    if host.is_empty() || path.is_empty() {
+        return None;
+    }
+    let name: Vec<&str> = path.rsplitn(3, '/').take(2).collect();
+    let repository = name.into_iter().rev().collect::<Vec<_>>().join("/");
+    Some((format!("{host}/{path}"), repository))
+}
+
+/// The folders Claude Code's and Codex's sessions ran in, as projects to
+/// bring in with their sessions (as T3 Code brings them in): each
+/// folder still there, its sessions newest first, how many, when last,
+/// from which agents, and its repository (`origin`'s, the same for every
+/// clone and worktree). `sessions` are what [`recent`] lists; the newest
+/// folder first.
+pub fn projects(sessions: Vec<Value>) -> Vec<Value> {
+    let mut folders: Vec<(String, Vec<Value>)> = Vec::new();
+    for session in sessions {
+        let Some(cwd) = session["cwd"].as_str().map(str::to_owned) else { continue };
+        match folders.iter_mut().find(|(path, _)| *path == cwd) {
+            Some((_, of)) => of.push(session),
+            None => folders.push((cwd, vec![session])),
+        }
+    }
+    let mut projects: Vec<Value> = folders
+        .into_iter()
+        .filter(|(path, _)| Path::new(path).is_dir())
+        .map(|(path, mut of)| {
+            of.sort_by(|a, b| b["lastActivityAt"].as_str().cmp(&a["lastActivityAt"].as_str()));
+            let mut sources: Vec<&str> = Vec::new();
+            for session in &of {
+                if let Some(provider) = session["providerId"].as_str()
+                    && !sources.contains(&provider)
+                {
+                    sources.push(provider);
+                }
+            }
+            let sources: Vec<String> = sources.into_iter().map(str::to_owned).collect();
+            let origin = std::process::Command::new("git")
+                .args(["-C", &path, "config", "--get", "remote.origin.url"])
+                .stdin(std::process::Stdio::null())
+                .output()
+                .ok()
+                .filter(|out| out.status.success())
+                .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned());
+            let git = std::process::Command::new("git")
+                .args(["-C", &path, "rev-parse", "--is-inside-work-tree"])
+                .stdin(std::process::Stdio::null())
+                .output()
+                .is_ok_and(|out| out.status.success());
+            let (remote, repository) = origin.as_deref().and_then(remote_key).unzip();
+            let title = path.trim_end_matches('/').rsplit('/').next().unwrap_or(&path).to_owned();
+            json!({"path":path,"title":title,"git":git,"remoteKey":remote,"repository":repository,
+                "threads":of.len(),"lastActivityAt":of[0]["lastActivityAt"],"sources":sources,"sessions":of})
+        })
+        .collect();
+    projects.sort_by(|a, b| b["lastActivityAt"].as_str().cmp(&a["lastActivityAt"].as_str()));
+    projects
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_repository_is_known_by_its_origin_however_written() {
+        for url in [
+            "git@github.com:me/app.git",
+            "https://github.com/me/app",
+            "https://user@github.com/me/app.git/",
+            "ssh://git@github.com:22/me/app.git",
+        ] {
+            assert_eq!(remote_key(url), Some(("github.com/me/app".into(), "me/app".into())), "{url}");
+        }
+        assert_eq!(
+            remote_key("https://gitlab.example.com/group/sub/app.git"),
+            Some(("gitlab.example.com/group/sub/app".into(), "sub/app".into()))
+        );
+        assert_eq!(remote_key("not a url"), None);
+    }
+
+    #[test]
+    fn sessions_become_the_projects_of_their_folders() {
+        let here = tempfile::tempdir().unwrap();
+        let (a, b) = (here.path().join("a"), here.path().join("b"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let session = |cwd: &Path, id: &str, at: &str, provider: &str| {
+            json!({"providerId":provider,"providerHandleId":id,"cwd":cwd,"lastActivityAt":at})
+        };
+        let gone = here.path().join("gone");
+        let found = projects(vec![
+            session(&a, "1", "2026-11-01T00:00:00Z", "claude"),
+            session(&b, "2", "2026-11-20T00:00:00Z", "codex"),
+            session(&a, "3", "2026-11-10T00:00:00Z", "codex"),
+            session(&gone, "4", "2026-11-25T00:00:00Z", "claude"),
+        ]);
+        let paths: Vec<_> = found.iter().map(|p| p["path"].clone()).collect();
+        assert_eq!(paths, [json!(b), json!(a)], "newest first, a folder no longer there left out");
+        assert_eq!(found[1]["threads"], 2);
+        assert_eq!(found[1]["lastActivityAt"], "2026-11-10T00:00:00Z");
+        assert_eq!(found[1]["sessions"][0]["providerHandleId"], "3");
+        assert_eq!(found[1]["sources"], json!(["codex", "claude"]));
+        assert_eq!(found[1]["git"], false);
+    }
+
     use super::*;
 
     #[test]

@@ -69,8 +69,7 @@ fn new_workspace_form(compact: bool, form: Memo<store::Form>, project_label: Mem
                             .items_center()
                             .pb(sp(S2))
                             .child(text(t("What should we work on?")).text_size(tx(TEXT_XL)).font_weight(FontWeight(450)).px(sp(S2)).flex_1())
-                            .child(btn(t("Import sessions"), Variant::Ghost, Sz::Sm, Some(Icon::Download), || {
-                                store::search_sessions("");
+                            .child(btn(t("Import projects"), Variant::Ghost, Sz::Sm, Some(Icon::Download), || {
                                 store::open_modal(store::Modal::ImportSession)
                             })),
                     )
