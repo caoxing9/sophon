@@ -165,11 +165,16 @@ pub enum Command {
     RefreshProviders,
     /// What the provider's binary, version and login are.
     ProviderDiagnostic(String),
+    /// The projects to bring in from Claude Code's and Codex's history.
+    ImportProjects,
     /// Signs a Codex provider in to ChatGPT by Codex's own: in a browser on
     /// the host, or with a code typed on any device (`device`).
     ProviderLogin { provider: String, device: bool },
     /// Ends the sign-in under way for a provider.
     ProviderLoginCancel(String),
+    /// The address a Google sign-in's page went to, pasted from another
+    /// device than the host: handed to the CLI waiting for it there.
+    ProviderLoginReply { provider: String, url: String },
     RestartDaemon,
     /// The sessions to import: asked of each of `providers` apart (one
     /// list of all would be the newest of them together, and an agent
@@ -933,6 +938,25 @@ pub struct UsageWindow {
     pub resets_at: Option<String>,
 }
 
+/// A folder Claude Code's or Codex's sessions ran in, to bring in as a
+/// project with its sessions Sophon does not have (`import.projects`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImportProject {
+    pub path: String,
+    pub title: String,
+    /// A git working tree.
+    pub git: bool,
+    /// Its `origin`'s host and path: the same for every clone and worktree.
+    pub remote_key: Option<String>,
+    /// `me/app`.
+    pub repository: Option<String>,
+    pub last_activity: String,
+    /// The agents its sessions are of (`claude`, `codex`).
+    pub sources: Vec<String>,
+    /// Newest first.
+    pub sessions: Vec<RecentSession>,
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RecentSession {
     pub provider: String,
@@ -1245,8 +1269,9 @@ pub enum Stage {
 #[derive(Clone, Debug, PartialEq)]
 pub enum LoginStep {
     /// Under way: the page to open (`url`), with the code to type there
-    /// for a sign-in by code.
-    Started { url: String, code: Option<String> },
+    /// for a sign-in by code; `paste`: the address the page goes to can be
+    /// pasted back from another device.
+    Started { url: String, code: Option<String>, paste: bool },
     /// Over: signed in, or why not.
     Ended(Result<(), String>),
 }
@@ -1338,6 +1363,8 @@ pub enum Event {
     Rewound { agent: String, error: Option<String> },
     /// Some of the sessions asked for with `seq` (one agent's).
     RecentSessions { seq: u64, list: Vec<RecentSession> },
+    /// The projects to bring in, or why they could not be looked for.
+    ImportProjects(Result<Vec<ImportProject>, String>),
     DaemonConfig(Value),
     /// A provider's diagnostic text.
     Diagnostic { provider: String, text: String },
@@ -1828,6 +1855,8 @@ enum Pending {
     Pairing,
     /// A feature an older daemon may not have: failures stay quiet.
     Optional,
+    /// The scan for projects to bring in: a failure is said where it shows.
+    ImportScan,
     /// A provider's sign-in, started or waited on: a failure ends it.
     ProviderLogin(String),
     /// The sessions to import, asked with this number.
@@ -2741,6 +2770,11 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
             Pending::ProviderLogin(provider.clone()),
             json!({ "type": "provider.login.start.request", "provider": provider, "device": device }),
         )],
+        Command::ProviderLoginReply { provider, url } => vec![request(
+            pending,
+            Pending::Other("hand on the sign-in"),
+            json!({ "type": "provider.login.callback.request", "provider": provider, "url": url }),
+        )],
         Command::ProviderLoginCancel(provider) => vec![request(
             pending,
             Pending::Optional,
@@ -2764,6 +2798,7 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
             };
             if providers.is_empty() { vec![ask(pending, None)] } else { providers.iter().map(|p| ask(pending, Some(p))).collect() }
         }
+        Command::ImportProjects => vec![request(pending, Pending::ImportScan, json!({ "type": "import.projects.request" }))],
         Command::ImportSession { provider, handle, cwd } => vec![request(
             pending,
             Pending::Import,
@@ -3219,6 +3254,10 @@ fn handle(
                     return vec![];
                 }
                 Some(Pending::Optional) => return vec![],
+                Some(Pending::ImportScan) => {
+                    let error = payload.get("error").and_then(Value::as_str).unwrap_or("request failed").to_owned();
+                    return vec![Event::ImportProjects(Err(error))];
+                }
                 Some(Pending::ProviderLogin(provider)) => {
                     let error = payload.get("error").and_then(Value::as_str).unwrap_or("request failed").to_owned();
                     return vec![Event::ProviderLogin { provider, step: LoginStep::Ended(Err(error)) }];
@@ -3311,6 +3350,7 @@ fn handle(
                 Some(Pending::Projects | Pending::Workspaces) => "load projects",
                 Some(Pending::Providers) => "load providers",
                 Some(Pending::ProviderConfig) => "save agent settings",
+                Some(Pending::ImportScan) => "look for projects",
                 Some(Pending::ProviderLogin(_)) => "sign in",
                 Some(Pending::ResetCredits | Pending::UseReset(_)) => "use resets",
                 None => "request",
@@ -3763,9 +3803,12 @@ fn handle(
             request_id.and_then(|id| pending.remove(id));
             let s = |k: &str| payload.get(k).and_then(Value::as_str).filter(|v| !v.is_empty()).map(str::to_owned);
             let Some(provider) = s("provider") else { return vec![] };
+            let paste = payload.get("pasteReply").and_then(Value::as_bool) == Some(true);
             let step = match (s("authUrl"), s("verificationUrl"), s("userCode")) {
-                (Some(url), _, _) => LoginStep::Started { url, code: None },
-                (None, Some(url), code) => LoginStep::Started { url, code },
+                (Some(url), _, _) => LoginStep::Started { url, code: None, paste },
+                (None, Some(url), code) => LoginStep::Started { url, code, paste },
+                // Signed in already: nothing to open, its end is waited on.
+                _ if paste || payload.get("authUrl").is_some() => LoginStep::Started { url: String::new(), code: None, paste },
                 _ => LoginStep::Ended(Err("Codex gave no page to sign in on".into())),
             };
             if matches!(step, LoginStep::Started { .. }) {
@@ -3794,6 +3837,34 @@ fn handle(
                 (Some(provider), Some(text)) => vec![Event::Diagnostic { provider, text }],
                 _ => vec![],
             }
+        }
+        "import.projects.response" => {
+            request_id.and_then(|id| pending.remove(id));
+            let session = |e: &Value| {
+                let s = |k: &str| e.get(k).and_then(Value::as_str).map(str::to_owned);
+                Some(RecentSession {
+                    provider: s("providerId")?,
+                    provider_label: s("providerLabel").unwrap_or_default(),
+                    handle: s("providerHandleId")?,
+                    cwd: s("cwd").unwrap_or_default(),
+                    title: s("title").unwrap_or_else(|| "Untitled session".into()),
+                    last_activity: s("lastActivityAt").unwrap_or_default(),
+                })
+            };
+            let list = list_of(payload, "projects", |p| {
+                let s = |k: &str| p.get(k).and_then(Value::as_str).map(str::to_owned);
+                Some(ImportProject {
+                    path: s("path")?,
+                    title: s("title").unwrap_or_default(),
+                    git: p.get("git").and_then(Value::as_bool).unwrap_or(false),
+                    remote_key: s("remoteKey"),
+                    repository: s("repository"),
+                    last_activity: s("lastActivityAt").unwrap_or_default(),
+                    sources: p.get("sources").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect(),
+                    sessions: p.get("sessions").and_then(Value::as_array).into_iter().flatten().filter_map(session).collect(),
+                })
+            });
+            vec![Event::ImportProjects(Ok(list))]
         }
         "fetch_recent_provider_sessions_response" => {
             let seq = match request_id.and_then(|id| pending.remove(id)) {
@@ -4547,7 +4618,7 @@ mod tests {
             None,
             &mut follow_ups,
         );
-        assert!(matches!(&events[..], [Event::ProviderLogin { provider, step: LoginStep::Started { url, code: None } }]
+        assert!(matches!(&events[..], [Event::ProviderLogin { provider, step: LoginStep::Started { url, code: None, paste: false } }]
             if provider == "work" && url == "https://auth.openai.com/x"));
         let wait = &follow_ups.pop().unwrap()["message"];
         assert_eq!(wait["type"], "provider.login.wait.request");

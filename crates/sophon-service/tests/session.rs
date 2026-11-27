@@ -2801,6 +2801,33 @@ async fn background_work_a_fork_and_going_back() {
         listed.contains(&json!("other-9")) && !listed.contains(&json!(session)),
         "{recent}"
     );
+    // Asked of every agent, as Sophon asks: only Claude Code gives it, not
+    // Antigravity or Gemini CLI under their names too.
+    let everyone = ask(
+        &mut socket,
+        json!({"type":"fetch_recent_provider_sessions_request","limit":50,"providers":["claude","antigravity","gemini"]}),
+    )
+    .await;
+    let given: Vec<_> = everyone["payload"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["providerHandleId"] == "other-9")
+        .map(|entry| entry["providerId"].clone())
+        .collect();
+    assert_eq!(given, [json!("claude")], "{everyone}");
+    // As a project to bring in: its folder, with the session Sophon does
+    // not have, not the one it has.
+    let scanned = ask(&mut socket, json!({"type":"import.projects.request"})).await;
+    let projects = scanned["payload"]["projects"].as_array().unwrap();
+    let here = projects
+        .iter()
+        .find(|project| project["path"] == json!(service.0.path()))
+        .unwrap_or_else(|| panic!("{scanned}"));
+    let handles: Vec<_> = here["sessions"].as_array().unwrap().iter().map(|s| s["providerHandleId"].clone()).collect();
+    assert!(handles.contains(&json!("other-9")) && !handles.contains(&json!(session)), "{scanned}");
+    assert_eq!(here["threads"], json!(handles.len()));
+    assert_eq!(here["sources"], json!(["claude"]));
     let taken = ask(&mut socket, json!({"type":"import_agent_request","providerId":"claude","providerHandleId":"other-9","cwd":service.0.path()})).await;
     assert_eq!(
         (
@@ -3503,7 +3530,7 @@ say() { printf '%s\n' "$1"; }
 note() { printf '%s\n' "$1" >> agy-calls; }
 update() { say "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"agy-1\",\"update\":$1}}"; }
 note "args $*"
-note "env FS=$AGY_ACP_FORCE_FILE_STORAGE UP=$AGY_CLI_DISABLE_AUTO_UPDATE SSH=${SSH_CONNECTION:-} KEY=${GEMINI_API_KEY:-none} HOME=$GEMINI_HOME BROWSER=${BROWSER:-} TMP=$TMPDIR"
+note "env FS=$AGY_ACP_FORCE_FILE_STORAGE SSH=${SSH_CONNECTION:-none} KEY=${GEMINI_API_KEY:-none} HOME=$GEMINI_HOME BROWSER=${BROWSER:-} TMP=$TMPDIR"
 version=$(cat agy-version 2>/dev/null || echo 1.5.14)
 opened='{"sessionId":"agy-1","modes":{"availableModes":[{"id":"default","name":"Default"},{"id":"plan","name":"Plan"}],"currentModeId":"default"},"configOptions":[{"id":"model","category":"model","type":"select","currentValue":"gemini-3-pro","options":[{"value":"gemini-3-pro","name":"Gemini 3 Pro"},{"value":"claude-sonnet","name":"Claude Sonnet"}]}]}'
 turns=0
@@ -3679,6 +3706,113 @@ async fn codex_signs_in_by_its_own_and_says_with_which_account() {
     assert_eq!(refused["type"], "rpc_error", "{refused}");
 }
 
+/// An `agy` that signs in as Antigravity does: `authenticate` without its
+/// credentials file starts Google's sign-in, its link said on its output
+/// (or given to `$BROWSER` when `by-browser` is beside its folder), and
+/// waits on this host's loopback (`agy-port`) for the page's reply; the
+/// reply kept (`callback.txt`), it is signed in. A session it opens offers
+/// two models.
+const AGY_SIGN_IN: &str = r#"#!/bin/sh
+say() { printf '%s\n' "$1"; }
+D="$GEMINI_HOME/.."
+while IFS= read -r line; do
+    id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+    case "$line" in
+        *'"method":"initialize"'*)
+            say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocolVersion\":1,\"agentInfo\":{\"name\":\"Antigravity ACP Server\",\"version\":\"1.5.14\"}}}" ;;
+        *'"method":"authenticate"'*)
+            if [ -f "$GEMINI_HOME/antigravity-acp/acp_token.json" ]; then
+                say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{}}"
+            else
+                PORT=$(cat "$D/agy-port")
+                URL="https://accounts.google.com/o/oauth2/v2/auth?response_type=code&state=s1&redirect_uri=http%3A%2F%2F127.0.0.1%3A$PORT%2F"
+                rm -f "$D/listening"
+                ( python3 "$D/loopback.py" "$PORT" "$D/callback.txt" "$D/listening" < /dev/null && echo '{}' > "$GEMINI_HOME/antigravity-acp/acp_token.json" \
+                    && say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{}}" ) &
+                # The link once the loopback listens, as the CLI gives it.
+                while [ ! -f "$D/listening" ]; do sleep 0.05; done
+                if [ -f "$D/by-browser" ]; then "$BROWSER" "$URL"; else say "Open the following link to authenticate the ACP server: $URL"; fi
+            fi ;;
+        *'"method":"session/new"'*)
+            say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"sessionId\":\"agy-1\",\"configOptions\":[{\"id\":\"model\",\"category\":\"model\",\"type\":\"select\",\"currentValue\":\"gemini-3-pro\",\"options\":[{\"value\":\"gemini-3-pro\",\"name\":\"Gemini 3 Pro\"},{\"value\":\"claude-sonnet\",\"name\":\"Claude Sonnet\"}]}]}}" ;;
+    esac
+done
+"#;
+
+/// One HTTP request on 127.0.0.1:`port`, kept in a file and answered.
+const LOOPBACK: &str = r#"import socket, sys
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", int(sys.argv[1])))
+s.listen(1)
+open(sys.argv[3], "w").close()
+c, _ = s.accept()
+data = b""
+while b"\r\n\r\n" not in data:
+    chunk = c.recv(4096)
+    if not chunk:
+        break
+    data += chunk
+open(sys.argv[2], "wb").write(data)
+c.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+c.close()
+"#;
+
+#[tokio::test]
+async fn antigravity_signs_in_to_google_by_its_own_and_takes_a_pasted_reply() {
+    let service = Service(tempfile::tempdir().unwrap());
+    install(service.0.path(), "agy", AGY_SIGN_IN);
+    fs::write(service.0.path().join("loopback.py"), LOOPBACK).unwrap();
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    fs::write(service.0.path().join("agy-port"), port.to_string()).unwrap();
+    let folder = service.0.path().join("agy-home");
+    fs::write(
+        service.0.path().join("config.json"),
+        json!({"providers":{"work":{"extends":"antigravity","env":{"GEMINI_HOME":folder}}}}).to_string(),
+    )
+    .unwrap();
+    service.cli("start");
+    let mut socket = service.connect(true).await;
+
+    // The link, as its output says it: Google's, coming back here.
+    let started = ask(&mut socket, json!({"type":"provider.login.start.request","provider":"work"})).await;
+    assert_eq!(started["type"], "provider.login.start.response", "{started}");
+    let link = started["payload"]["authUrl"].as_str().unwrap().to_owned();
+    assert!(link.starts_with("https://accounts.google.com/o/oauth2/v2/auth?"), "{started}");
+    assert_eq!(started["payload"]["pasteReply"], true);
+    // A reply of another sign-in is refused, and not handed on.
+    let wrong = ask(&mut socket, json!({"type":"provider.login.callback.request","provider":"work",
+        "url":format!("http://127.0.0.1:{port}/?state=other&code=c")})).await;
+    assert_eq!(wrong["type"], "rpc_error", "{wrong}");
+    assert!(!service.0.path().join("callback.txt").exists());
+    // This one's, pasted from another device, reaches the CLI here.
+    let pasted = ask(&mut socket, json!({"type":"provider.login.callback.request","provider":"work",
+        "url":format!("http://127.0.0.1:{port}/?state=s1&code=4%2F0abc&scope=x")})).await;
+    assert_eq!(pasted["type"], "provider.login.callback.response", "{pasted}");
+    let ended = ask(&mut socket, json!({"type":"provider.login.wait.request","provider":"work"})).await;
+    assert_eq!((&ended["payload"]["success"], &ended["payload"]["error"]), (&json!(true), &Value::Null), "{ended}");
+    let got = fs::read_to_string(service.0.path().join("callback.txt")).unwrap();
+    assert!(got.starts_with("GET /?state=s1&code=4%2F0abc&scope=x HTTP/1.1"), "{got}");
+    // Signed in, and the models its account offers kept.
+    let diagnostic = ask(&mut socket, json!({"type":"provider_diagnostic_request","provider":"work"})).await;
+    assert!(diagnostic["payload"]["diagnostic"].as_str().unwrap().contains(r#""loggedIn":true"#), "{diagnostic}");
+    let models: Value =
+        serde_json::from_slice(&fs::read(folder.join("antigravity-acp/sophon-models.json")).unwrap()).unwrap();
+    assert_eq!(models[1]["id"], "claude-sonnet");
+
+    // Signed out again, the link given to the browser stand-in instead;
+    // the sign-in ends when asked to.
+    fs::remove_file(folder.join("antigravity-acp/acp_token.json")).unwrap();
+    fs::write(service.0.path().join("by-browser"), "").unwrap();
+    let started = ask(&mut socket, json!({"type":"provider.login.start.request","provider":"work"})).await;
+    assert!(started["payload"]["authUrl"].as_str().unwrap().starts_with("https://accounts.google.com/"), "{started}");
+    ask(&mut socket, json!({"type":"provider.login.cancel.request","provider":"work"})).await;
+    let ended = ask(&mut socket, json!({"type":"provider.login.wait.request","provider":"work"})).await;
+    assert_eq!(ended["payload"]["error"], "Canceled", "{ended}");
+    // Its loopback, still listening, is let go.
+    let _ = std::net::TcpStream::connect(("127.0.0.1", port));
+}
+
 /// Reads until the turn underway fails, and gives why.
 async fn failed(socket: &mut Socket, agent: &Value) -> String {
     loop {
@@ -3753,7 +3887,10 @@ async fn antigravity_runs_as_t3_code_runs_it_and_asks_only_what_its_mode_does_no
         calls.contains(&format!("args acp --gemini-dir {home} --app-data-dir antigravity-acp\n")),
         "{calls}"
     );
-    assert!(calls.contains("FS=1 UP=true SSH=") && !calls.contains("SSH= "), "{calls}");
+    // Told nothing of SSH (it would refuse a sign-in in the browser).
+    if std::env::var_os("SSH_CONNECTION").is_none() {
+        assert!(calls.contains("FS=1 SSH=none "), "{calls}");
+    }
     assert!(calls.contains(&format!("KEY=none HOME={home} BROWSER={home}/browser TMP={home}/runs/")), "{calls}");
     assert!(calls.contains(r#""clientInfo":{"name":"sophon""#), "{calls}");
     assert!(calls.contains(r#""writeTextFile":false"#) && calls.contains(r#""terminal":false"#), "{calls}");

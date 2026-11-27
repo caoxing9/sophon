@@ -1,0 +1,27 @@
+[package]
+name = "nsh-shadcn"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "shadcn/ui for NSH (Native Shell): the same components and the same look, in Rust, for Rust and TSX apps"
+repository = "https://github.com/caoxing9/nsh-shadcn"
+homepage = "https://caoxing9.github.io/nsh-shadcn/"
+readme = "README.md"
+keywords = ["nsh", "shadcn", "ui", "components", "nshm"]
+categories = ["gui"]
+# The crate is the library: the gallery, tools, renders and screenshots stay in the repository.
+include = ["/src/**/*.rs", "/Cargo.toml", "/README.md", "/LICENSE", "/DESIGN.md"]
+
+
+[lib]
+name = "nsh_shadcn"
+
+[dependencies]
+nsh-core = "0.7.1"
+nsh-base = { version = "0.7.1", default-features = false, features = ["plot"] }
+# The dates Calendar takes (`nsh_base::Date` holds `chrono::NaiveDate`); the version nsh-base uses.
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+nsh-engine = { version = "0.7.1", default-features = false }
+nsh-testing = { version = "0.7.1", default-features = false }

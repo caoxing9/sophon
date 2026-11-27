@@ -385,11 +385,7 @@ fn conversation_row(agent: ReadSignal<crate::daemon::Agent>, actions: bool) -> i
             .child(icon(Icon::Ellipsis, 15.0).text_color(FG_FAINT())),
     )
     .align(nsh_core::overlay::Align::End)
-    .on_open_change(move |e: &nsh_base::MenuEvent| {
-        if let nsh_base::MenuEvent::OpenChange(open, _) = e {
-            menu_open.set(*open);
-        }
-    })
+    .on_open_change(move |open: &bool| menu_open.set(*open))
     .child(
         view()
             .child({
@@ -703,11 +699,7 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
             .child(icon(Icon::Ellipsis, 15.0).text_color(FG_FAINT())),
     )
     .align(nsh_core::overlay::Align::End)
-    .on_open_change(move |e: &nsh_base::MenuEvent| {
-        if let nsh_base::MenuEvent::OpenChange(open, _) = e {
-            menu_open.set(*open);
-        }
-    })
+    .on_open_change(move |open: &bool| menu_open.set(*open))
     .child(dynamic(move || {
         let w = ws.get()?;
         Some(untracked(move || {

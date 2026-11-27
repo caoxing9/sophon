@@ -934,11 +934,17 @@ struct Login {
     outcome: tokio::sync::watch::Receiver<Option<Result<(), String>>>,
     /// Ends it.
     cancel: Option<tokio::sync::oneshot::Sender<()>>,
+    /// Antigravity's: where Google's reply goes back to the CLI.
+    pending: Option<provider::antigravity::Pending>,
 }
 
 thread_local! {
     static LOGINS: RefCell<HashMap<String, Login>> = RefCell::new(HashMap::new());
 }
+
+/// How many of an agent's sessions, the newest, a scan for projects to
+/// bring in reads.
+const IMPORT_SCAN: usize = 1000;
 
 /// How long a sign-in waits for the person.
 const LOGIN_WAIT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
@@ -978,18 +984,30 @@ pub async fn slow(shared: &Shared, request: &Value) -> Option<Result<Value, Stri
         "provider.login.start.request" => async {
             let name = text(request, "provider")?;
             let (settings, family) = provider_of(name)?;
-            if family != Some("codex") {
-                return Err(format!("{name} does not sign in from here"));
-            }
             cancel_login(name);
             let device = request["device"].as_bool().unwrap_or(false);
-            let (started, signing) = provider::codex::login(&settings, device)
-                .await
-                .map_err(|error| error.to_string())?;
+            // Codex's sign-in to ChatGPT, or Antigravity's to Google (whose
+            // reply, from another device, is pasted: `.callback`).
+            let (started, pending, signing): (Value, _, std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>>>>) = match family {
+                Some("codex") => {
+                    let (started, signing) = provider::codex::login(&settings, device)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    (started, None, Box::pin(signing))
+                }
+                Some("antigravity") => {
+                    let (started, pending, signing) = provider::antigravity::login(&settings)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    (started, pending, Box::pin(signing))
+                }
+                _ => return Err(format!("{name} does not sign in from here")),
+            };
             let (done, outcome) = tokio::sync::watch::channel(None);
             let (cancel, canceled) = tokio::sync::oneshot::channel::<()>();
+            let pasted = pending.is_some();
             LOGINS.with_borrow_mut(|logins| {
-                logins.insert(name.to_owned(), Login { outcome, cancel: Some(cancel) })
+                logins.insert(name.to_owned(), Login { outcome, cancel: Some(cancel), pending })
             });
             tokio::task::spawn_local(async move {
                 let ended = tokio::select! {
@@ -1000,7 +1018,8 @@ pub async fn slow(shared: &Shared, request: &Value) -> Option<Result<Value, Stri
                 let _ = done.send(Some(ended));
             });
             Ok(reply(json!({"provider":name,"authUrl":started["authUrl"],
-                "verificationUrl":started["verificationUrl"],"userCode":started["userCode"]})))
+                "verificationUrl":started["verificationUrl"],"userCode":started["userCode"],
+                "pasteReply":pasted})))
         }
         .await,
         "provider.login.wait.request" => async {
@@ -1014,6 +1033,19 @@ pub async fn slow(shared: &Shared, request: &Value) -> Option<Result<Value, Stri
                 .map(|ended| ended.clone().unwrap_or(Err("Ended".into())))
                 .unwrap_or(Err("Ended".into()));
             Ok(reply(json!({"provider":name,"success":ended.is_ok(),"error":ended.err()})))
+        }
+        .await,
+        // The address a Google sign-in's page went to, pasted from another
+        // device than the host: handed to the CLI waiting for it there.
+        "provider.login.callback.request" => async {
+            let name = text(request, "provider")?;
+            let pasted = text(request, "url")?;
+            let pending = LOGINS
+                .with_borrow(|logins| logins.get(name).and_then(|login| login.pending.clone()))
+                .ok_or("No sign-in under way")?;
+            let answer = provider::antigravity::reply_for(&pending, pasted)?;
+            provider::antigravity::forward(&answer).await?;
+            Ok(reply(json!({"provider":name})))
         }
         .await,
         "provider.login.cancel.request" => async {
@@ -1060,6 +1092,38 @@ pub async fn slow(shared: &Shared, request: &Value) -> Option<Result<Value, Stri
             .await
         }
         // Sessions the CLIs have that are not conversations here yet.
+        // The projects to bring in from Claude Code's and Codex's own
+        // history, with their sessions Sophon does not have yet.
+        "import.projects.request" => {
+            async {
+                let known: HashSet<String> = shared
+                    .borrow()
+                    .state
+                    .agents
+                    .values()
+                    .filter_map(|agent| agent.pointer("/persistence/sessionId")?.as_str().map(str::to_owned))
+                    .collect();
+                let mut sessions = Vec::new();
+                for name in ["claude", "codex"] {
+                    let (settings, Some(family)) = provider_of(name)? else {
+                        continue;
+                    };
+                    let found = tokio::task::spawn_blocking(move || {
+                        crate::history::recent(name, family, &settings, IMPORT_SCAN, "")
+                    })
+                    .await
+                    .map_err(|error| error.to_string())?;
+                    sessions.extend(found.into_iter().filter(|session| {
+                        session["providerHandleId"].as_str().is_some_and(|id| !known.contains(id))
+                    }));
+                }
+                let projects = tokio::task::spawn_blocking(move || crate::history::projects(sessions))
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(reply(json!({"projects":projects})))
+            }
+            .await
+        }
         "fetch_recent_provider_sessions_request" => {
             async {
                 let limit = request["limit"].as_u64().unwrap_or(50).clamp(1, 200) as usize;

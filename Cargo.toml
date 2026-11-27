@@ -5,7 +5,9 @@ edition = "2024"
 publish = false
 
 [workspace]
-members = ["crates/nsh-ui", "crates/sophon-service"]
+members = ["crates/sophon-service", "crates/nsh-shadcn"]
+# Its gallery is an app of its own.
+exclude = ["crates/nsh-shadcn/examples"]
 
 [dependencies]
 # nsh: longbridge's own, at a commit of its main: the fixes Sophon needs
@@ -27,8 +29,10 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 snow = "0.9"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 crypto_box = { version = "0.9", features = ["std"] }
-# Sophon's shadcn-style components (`crates/nsh-ui`).
-nsh-ui = { path = "crates/nsh-ui" }
+# shadcn/ui for NSH: Sophon's components, kept here while they change
+# with Sophon (`crates/nsh-shadcn`, mirrored to caoxing9/nsh-shadcn: a
+# change merged here opens a pull request there, sync-nsh-shadcn.yml).
+nsh-shadcn = { path = "crates/nsh-shadcn" }
 
 # Natively the connection runs on a thread of its own with tokio; in a
 # browser on the page's WebSocket (`daemon::rt`).
@@ -77,9 +81,11 @@ block2 = "0.6.2"
 [target.'cfg(target_os = "windows")'.dependencies]
 nsh-platform-windows = { git = "https://github.com/longbridge/nsh", rev = "311fb08dee34ef6a110efa5f3062475169c75205", default-features = false }
 
-# `nsh-ui` asks for nsh as published (it is a library of its own); here it
-# builds with the nsh above (the same versions, from longbridge's main), so
-# all share one core.
+# nsh-shadcn asks for nsh as published (it is a library of its own, and
+# its tests for nsh-engine and nsh-testing); here it builds with the nsh
+# above (the same versions, from longbridge's main), so all share one core.
 [patch.crates-io]
 nsh-core = { git = "https://github.com/longbridge/nsh", rev = "311fb08dee34ef6a110efa5f3062475169c75205" }
 nsh-base = { git = "https://github.com/longbridge/nsh", rev = "311fb08dee34ef6a110efa5f3062475169c75205" }
+nsh-engine = { git = "https://github.com/longbridge/nsh", rev = "311fb08dee34ef6a110efa5f3062475169c75205" }
+nsh-testing = { git = "https://github.com/longbridge/nsh", rev = "311fb08dee34ef6a110efa5f3062475169c75205" }

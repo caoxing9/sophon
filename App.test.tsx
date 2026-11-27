@@ -7,7 +7,7 @@ import { expect, open, test } from "nsh/test";
 // after the press that opens it, and a slow machine (CI) shows that.
 async function newWorkspace(app: Awaited<ReturnType<typeof open>>) {
   await app.press("New workspace >> nth=0");
-  await app.waitFor("text:Import sessions");
+  await app.waitFor("text:Import projects");
 }
 
 test("shows the sidebar and its entry points", async () => {
@@ -24,7 +24,7 @@ test("shows the sidebar and its entry points", async () => {
 test("opens the new workspace screen", async () => {
   const app = await open(".", { width: 1100, height: 760 });
   await newWorkspace(app);
-  expect(app.texts()).toContain("Import sessions");
+  expect(app.texts()).toContain("Import projects");
 });
 
 test("attaches a pasted screenshot as a chip in the text", async () => {
@@ -138,19 +138,65 @@ test("a press on the composer's card is a press on its text", async () => {
   expect(app.texts()).toContain("hi");
 });
 
-test("settings lists the agents and opens the steps that add a provider", async () => {
+test("settings lists the agents and adds a provider in steps", async () => {
   const app = await open(".", { width: 1100, height: 900 });
   await app.press("label:Settings >> nth=0");
   await app.waitFor("text:Coding agents");
   expect(app.texts()).toContain("Coding agents");
-  // What it is: an account of a CLI, or an endpoint on a key. (The
-  // headless runner presses nothing in a dialog: the steps after are
-  // driven on a real platform.)
+  // What it is: an account of a CLI, or an endpoint on a key.
   await app.press("text:Add provider");
   await app.waitFor("text:API endpoints");
-  for (const shown of ["Provider", "Details", "Sign in", "Claude account", "ChatGPT account", "Google account", "Custom endpoint", "Next"]) {
+  for (const shown of ["Provider", "Details", "Sign in", "Claude account", "ChatGPT account", "Google account", "Custom endpoint"]) {
     expect(app.texts()).toContain(shown);
   }
+  await app.press("text:Codex >> nth=0");
+  await app.press("text:Next");
+  // Its details; added, it signs in by Codex's own sign-in.
+  await app.waitFor("text:Config folder");
+  await app.type("id:provider-name", "Work");
+  await app.press("text:Add and sign in");
+  await app.waitFor("text:Continue with ChatGPT");
+  expect(app.texts()).toContain("“Codex (Work)” is added. Sign it in: it uses this account until you remove it");
+  // (The list shows it once the service has its settings: CI runs no
+  // service.)
+  await app.press("text:Done");
+  await app.waitFor("text:Continue with ChatGPT", { state: "gone" });
+});
+
+test("an Antigravity account asks how it signs in", async () => {
+  const app = await open(".", { width: 1100, height: 900 });
+  await app.press("label:Settings >> nth=0");
+  await app.waitFor("text:Coding agents");
+  await app.press("text:Add provider");
+  await app.waitFor("text:API endpoints");
+  await app.press("text:Antigravity >> nth=0");
+  await app.press("text:Next");
+  // As T3 Code asks: a Google account or Enterprise in the browser, or a key.
+  await app.waitFor("text:How it signs in");
+  for (const way of ["Google account", "Gemini Enterprise", "Gemini API key", "Agent Platform (Vertex AI)"]) {
+    expect(app.texts()).toContain(way);
+  }
+  expect(app.texts()).not.toContain("Google Cloud project");
+  await app.press("text:Gemini API key");
+  await app.waitFor("text:A Gemini or Vertex AI express key, kept on that computer");
+  await app.press("text:Agent Platform (Vertex AI)");
+  await app.waitFor("text:Google Cloud project");
+});
+
+test("import brings in projects from Claude Code's and Codex's history", async () => {
+  const app = await open(".", { width: 1100, height: 900 });
+  await newWorkspace(app);
+  await app.press("text:Import projects");
+  // What it is for; the projects come from the service (CI runs none).
+  await app.waitFor("text:The folders your Claude Code and Codex conversations ran in, as projects, with their conversations");
+});
+
+test("Return with no project chosen says to choose one", async () => {
+  const app = await open(".", { width: 1100, height: 760, platform: "macos" });
+  await newWorkspace(app);
+  await app.type("id:composer", "hi");
+  await app.keyboard.press("enter");
+  await app.waitFor("text:Choose a project first: the conversation runs in its folder");
 });
 
 test("opens the usage page from the sidebar", async () => {

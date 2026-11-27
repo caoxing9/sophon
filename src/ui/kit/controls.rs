@@ -6,7 +6,9 @@
 #![allow(dead_code)]
 
 use crate::i18n::t;
-use nsh_base::{ButtonElement, button, input};
+use nsh_base::input;
+use nsh_base::theme;
+use nsh_shadcn::{ButtonElement as ShadcnButton, ButtonSize, ButtonVariant};
 use nsh_core::element::Input as InputElement;
 use nsh_core::{
     element::{AdaptiveColor, FontWeight, View},
@@ -46,149 +48,121 @@ pub(crate) enum Sz {
 }
 
 impl Sz {
-    /// nsh-ui's size: a phone keeps 32-point targets.
-    fn ui(self) -> nsh_ui::size::Size {
+    /// nsh-shadcn's size: a phone keeps the default 36-point targets.
+    fn ui(self) -> ButtonSize {
         match self {
-            Sz::Md => nsh_ui::size::Size::Medium,
-            Sz::Sm if MOBILE => nsh_ui::size::Size::Medium,
-            Sz::Sm => nsh_ui::size::Size::Small,
+            Sz::Md => ButtonSize::Default,
+            Sz::Sm if MOBILE => ButtonSize::Default,
+            Sz::Sm => ButtonSize::Sm,
+        }
+    }
+
+    /// The square of an icon-only button.
+    fn square(self) -> ButtonSize {
+        match self {
+            Sz::Md => ButtonSize::Icon,
+            Sz::Sm if MOBILE => ButtonSize::Icon,
+            Sz::Sm => ButtonSize::IconSm,
         }
     }
 }
 
 impl Variant {
-    fn ui(self) -> nsh_ui::button::ButtonVariant {
-        use nsh_ui::button::ButtonVariant as V;
+    fn ui(self) -> ButtonVariant {
         match self {
-            Variant::Primary => V::Primary,
-            Variant::Secondary => V::Secondary,
-            Variant::Outline => V::Outline,
-            Variant::Ghost => V::Ghost,
-            Variant::Destructive => V::Danger,
+            Variant::Primary => ButtonVariant::Default,
+            Variant::Secondary => ButtonVariant::Secondary,
+            Variant::Outline => ButtonVariant::Outline,
+            Variant::Ghost => ButtonVariant::Ghost,
+            Variant::Destructive => ButtonVariant::Destructive,
         }
     }
 }
 
-/// A labelled button, optionally with a leading icon: nsh-ui's `Button`.
+/// A labelled button, optionally with a leading icon of Sophon's own:
+/// nsh-shadcn's `Button`.
 pub(crate) fn btn(
     label: impl IntoReactive<SharedString>,
     variant: Variant,
     size: Sz,
     lead: Option<Icon>,
     on_press: impl Fn() + 'static,
-) -> ButtonElement {
-    let (v, sz) = (variant.ui(), size.ui());
-    let mut b = nsh_ui::button::Button::new().label(label).variant(v).size(sz).on_press(on_press);
+) -> ShadcnButton {
+    let label = label.into_reactive();
+    let mut b = nsh_shadcn::button("")
+        .label(move || Some(label.get()))
+        .variant(variant.ui())
+        .size(size.ui())
+        .on_press(on_press);
     if let Some(lead) = lead {
-        b = b.icon(icon(lead, sz.icon()).text_color(v.ink()));
+        b = b.leading(icon(lead, 16.0).text_color(move || current_color(variant)));
     }
-    b.build()
+    b
 }
 
-/// An icon-only button: nsh-ui's ghost `Button`, its glyph muted.
-pub(crate) fn icon_btn(glyph: Icon, size: Sz, label: &'static str, on_press: impl Fn() + 'static) -> ButtonElement {
-    let sz = size.ui();
-    nsh_ui::button::Button::new()
+/// The color an icon of a button of `variant` draws in: its text's.
+fn current_color(variant: Variant) -> AdaptiveColor {
+    let t = theme();
+    match variant {
+        Variant::Primary => t.primary_foreground,
+        // shadcn's `text-white`.
+        Variant::Destructive => AdaptiveColor::rgb(0xffffff, 0xffffff),
+        Variant::Secondary => t.secondary_foreground,
+        Variant::Outline | Variant::Ghost => t.foreground,
+    }
+}
+
+/// An icon-only button: nsh-shadcn's ghost `Button`, its glyph muted.
+pub(crate) fn icon_btn(glyph: Icon, size: Sz, label: &'static str, on_press: impl Fn() + 'static) -> ShadcnButton {
+    nsh_shadcn::button("")
+        .label(None::<SharedString>)
         .ghost()
-        .size(sz)
-        .icon(icon(glyph, sz.icon()).text_color(FG_MUTED()))
-        .accessibility_label(label)
+        .size(size.square())
+        .leading(icon(glyph, 16.0).text_color(FG_MUTED()))
+        .accessibility_label(Some(SharedString::from(label)))
         .on_press(on_press)
-        .build()
 }
 
-/// A single-line text field on the muted fill.
+/// A single-line text field: nsh-shadcn's Input look on a field of
+/// Sophon's own (its fonts, its events). Its width is the caller's: a
+/// class wins over the field's own `w(..)`, so shadcn's `w-full` (a field
+/// filling a form's column, which a column does anyway) is left out.
 pub(crate) fn field() -> InputElement {
-    input()
-        .h(sp(CONTROL_MD + 4.0))
-        .px(sp(S3))
-        .rounded(px(R_LG))
-        .bg(SURFACE2())
-        .border_1()
-        .border_color(BORDER())
-        .text_size(tx(TEXT_BASE))
-        .text_color(FG())
-        .caret_color(|| color(ACCENT()))
-        .selection_color(|| color(tint(ACCENT(), 0.3)))
+    thread_local! {
+        static CLASSES: SharedString = SharedString::from(
+            nsh_shadcn::input_classes().split_whitespace().filter(|c| *c != "w-full").collect::<Vec<_>>().join(" "),
+        );
+    }
+    input().app_class(Some(CLASSES.with(Clone::clone)))
 }
 
-/// A segmented control: the selected segment is a raised surface, not an
-/// inverted one.
+/// A segmented control: nsh-shadcn's Tabs list (a muted track, the
+/// picked segment raised), its tabs Sophon's `options`.
 pub(crate) fn segmented<T: Clone + PartialEq + 'static>(
     options: Vec<(T, SharedString)>,
     selected: impl Fn() -> T + 'static,
     on_select: impl Fn(T) + Clone + 'static,
-) -> View {
-    let selected = computed(selected);
-    let values: Vec<T> = options.iter().map(|(v, _)| v.clone()).collect();
-    // Where each option sits in the row (x, width), measured.
-    let frames = signal(vec![(0.0f32, 0.0f32); options.len()]);
-    let at = computed(move || {
-        let s = selected.get();
-        let i = values.iter().position(|v| *v == s).unwrap_or(0);
-        frames.with(|f| f.get(i).copied().unwrap_or_default())
-    });
-    // One thumb under the options that slides to the picked one, springing
-    // as iOS's segmented control does, rather than each option lighting up.
-    let thumb = view()
-        .absolute()
-        .top(px(3.0))
-        .bottom(px(3.0))
-        .left(move || Length::from(px(at.get().0)))
-        .w(move || Length::from(px(at.get().1)))
-        .opacity(move || if at.get().1 > 0.0 { 1.0_f32 } else { 0.0 })
-        .rounded(px(R_FULL))
-        .bg(SURFACE0())
-        .border_1()
-        .border_color(BORDER());
-    let mut row = view().flex_row().p(px(3.0)).gap(px(2.0)).rounded(px(R_FULL)).bg(SURFACE2()).self_start().child(thumb);
-    for (i, (value, label)) in options.into_iter().enumerate() {
-        let is_on = {
-            let value = value.clone();
-            computed(move || selected.get() == value)
-        };
-        let pick = on_select.clone();
-        row = row.child(view().on_layout(move |b: &Bounds<Points>| {
-            let frame = (b.origin.x.0, b.size.width.0);
-            if frames.with_untracked(|f| f.get(i) != Some(&frame)) {
-                frames.update(|f| f[i] = frame);
+) -> nsh_shadcn::TabsElement {
+    let values: std::rc::Rc<Vec<T>> = std::rc::Rc::new(options.iter().map(|(v, _)| v.clone()).collect());
+    let picked = {
+        let values = values.clone();
+        computed(move || {
+            let s = selected();
+            SharedString::from(values.iter().position(|v| *v == s).unwrap_or(0).to_string())
+        })
+    };
+    let mut list = nsh_shadcn::tabs_list();
+    for (i, (_, label)) in options.into_iter().enumerate() {
+        list = list.child(nsh_shadcn::tabs_trigger(i.to_string(), label));
+    }
+    nsh_shadcn::tabs("0")
+        .value(move || Some(picked.get()))
+        .on_value_change(move |value: &SharedString| {
+            if let Some(v) = value.parse::<usize>().ok().and_then(|i| values.get(i)) {
+                on_select(v.clone());
             }
-        }).child(
-            button()
-                .on_press(move || {
-                    animate_layout(nsh_core::LayoutAnimation {
-                        create: None,
-                        update: Some(nsh_core::LayoutTransition::new(nsh_core::LayoutCurve::FittedSpring { damping_ratio: 0.86 }, 320.0)),
-                        delete: None,
-                    });
-                    pick(value.clone())
-                })
-                .h(sp(CONTROL_SM - 2.0))
-                .px(sp(S3))
-                .items_center()
-                .justify_center()
-                .rounded(px(R_FULL))
-                .hover(|s| s.opacity(0.85))
-                .child(
-                    text(label)
-                        .text_size(tx(TEXT_SM))
-                        .font_weight(FontWeight(500))
-                        .text_color(move || if is_on.get() { FG() } else { FG_MUTED() })
-                        .transition_colors(),
-                ),
-        ));
-    }
-    row
-}
-
-trait ShadowIf {
-    fn shadow_sm_if(self, on: Memo<bool>) -> Self;
-}
-
-impl ShadowIf for ButtonElement {
-    fn shadow_sm_if(self, on: Memo<bool>) -> Self {
-        self.border_1().border_color(move || if on.get() { BORDER() } else { AdaptiveColor::rgb(0, 0).opacity(0.0) })
-    }
+        })
+        .child(list)
 }
 
 /// A selectable chip (provider, project, option lists).
@@ -197,26 +171,17 @@ pub(crate) fn chip(
     lead: Option<Icon>,
     selected: impl Fn() -> bool + 'static,
     on_press: impl Fn() + 'static,
-) -> ButtonElement {
-    let selected = computed(selected);
-    let mut b = button()
-        .on_press(on_press)
-        .flex_row()
-        .items_center()
-        .gap(px(6.0))
-        .h(sp(CONTROL_MD))
-        .px(sp(S3))
-        .rounded(px(R_FULL))
-        .border_1()
-        .border_color(move || if selected.get() { ACCENT() } else { BORDER() })
-        .bg(move || if selected.get() { tint(ACCENT(), 0.08) } else { SURFACE0() })
-        .hover(|s| s.bg(highlight()))
-        .active(|s| s.opacity(0.7))
-        .disabled_style(|s| s.opacity(0.4));
+) -> nsh_shadcn::ToggleElement {
+    let label = label.into_reactive();
+    let mut t = nsh_shadcn::toggle()
+        .variant(nsh_shadcn::ToggleVariant::Outline)
+        .pressed(move || Some(selected()))
+        .label(move || Some(label.get()))
+        .on_pressed_change(move |_: &bool| on_press());
     if let Some(lead) = lead {
-        b = b.child(icon(lead, 15.0).text_color(move || if selected.get() { ACCENT() } else { FG_MUTED() }));
+        t = t.child(icon(lead, 16.0));
     }
-    b.child(text(label).text_size(tx(TEXT_BASE)).text_color(FG()).number_of_lines(1))
+    t
 }
 
 /// The status of an agent or workspace, as one color family.
@@ -310,20 +275,42 @@ pub(crate) fn status_dot(status: impl Fn() -> Status + 'static) -> View {
 }
 
 /// A small pill with a tinted fill.
-pub(crate) fn badge(label: impl IntoReactive<SharedString>, color: AdaptiveColor) -> View {
-    view()
-        .flex_row()
-        .items_center()
-        .h(px(20.0))
-        .px(sp(S2))
-        .rounded(px(R_FULL))
-        .bg(tint(color, 0.12))
-        .child(text(label).text_size(tx(TEXT_XS)).font_weight(FontWeight(500)).text_color(color))
+pub(crate) fn badge(label: impl IntoReactive<SharedString>, color: AdaptiveColor) -> nsh_shadcn::BadgeElement {
+    // shadcn's variants for Sophon's tones: an error is destructive, a
+    // quiet word secondary, a warning outlined, the rest the primary.
+    use nsh_shadcn::BadgeVariant as V;
+    let variant = if color == DANGER {
+        V::Destructive
+    } else if color == FG_MUTED() || color == FG_FAINT() {
+        V::Secondary
+    } else if color == WARNING {
+        V::Outline
+    } else {
+        V::Default
+    };
+    let label = label.into_reactive();
+    nsh_shadcn::badge("").label(move || Some(label.get())).variant(variant)
 }
 
-/// A bordered card grouping related rows.
+/// A tooltip's bubble of words: shadcn's TooltipContent (nsh-shadcn's
+/// classes), the foreground's fill and the background's text.
+pub(crate) fn tooltip_text(label: impl IntoReactive<SharedString>) -> View {
+    view()
+        .app_class(Some(SharedString::from("w-fit rounded-md bg-foreground px-3 py-1.5")))
+        .child(nsh_core::element::text(label).app_class(Some(SharedString::from("text-xs text-background"))))
+}
+
+/// A floating surface of richer content (a picture, a panel): shadcn's
+/// PopoverContent surface, its padding the caller's.
+pub(crate) fn popover_surface() -> View {
+    view().app_class(Some(SharedString::from("rounded-md border border-border bg-popover text-popover-foreground shadow-md")))
+}
+
+/// A bordered card grouping related rows: shadcn's Card surface (its
+/// fill, border, radius and shadow), without its padding and gaps, which
+/// the rows have.
 pub(crate) fn card() -> View {
-    view().rounded(px(R_XL)).border_1().border_color(BORDER()).bg(SURFACE0()).overflow_hidden()
+    view().app_class(Some(SharedString::from("bg-card text-card-foreground rounded-xl border border-border shadow-sm overflow-hidden")))
 }
 
 /// The label above a stack of rows or a form field.
@@ -349,27 +336,9 @@ pub(crate) fn kbd(label: &'static str) -> View {
         .child(text(label).text_size(tx(TEXT_XS)).text_color(FG_MUTED()))
 }
 
-/// An on / off switch: 34 × 20, the accent when on.
-pub(crate) fn switch(on: impl Fn() -> bool + 'static, on_change: impl Fn(bool) + 'static) -> ButtonElement {
-    let on = computed(on);
-    button()
-        .on_press(move || on_change(!on.get_untracked()))
-        .w(px(34.0))
-        .h(px(20.0))
-        .p(px(2.0))
-        .rounded(px(R_FULL))
-        .bg(move || if on.get() { ACCENT() } else { SURFACE4() })
-        .flex_row()
-        .justify_start()
-        .child(
-            view()
-                .w(px(16.0))
-                .h(px(16.0))
-                .rounded(px(R_FULL))
-                .bg(ACCENT_FG())
-                .shadow_sm()
-                .ml(move || px(if on.get() { 14.0 } else { 0.0 })),
-        )
+/// An on/off switch: nsh-shadcn's `Switch`, controlled by `on`.
+pub(crate) fn switch(on: impl Fn() -> bool + 'static, on_change: impl Fn(bool) + 'static) -> nsh_shadcn::SwitchElement {
+    nsh_shadcn::switch().checked(move || Some(on())).on_checked_change(move |checked: &bool| on_change(*checked))
 }
 
 /// A liquid-glass panel: translucent, blurring what is behind it, with a

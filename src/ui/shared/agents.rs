@@ -15,7 +15,7 @@ use nsh_core::{
 use serde_json::Value;
 
 use crate::daemon::Provider;
-use crate::daemon::agents::{self, Base, Diagnostic, KeyInstance, PRESETS};
+use crate::daemon::agents::{self, AgyAuth, Base, Diagnostic, KeyInstance, PRESETS};
 use crate::store::{self, Modal, SignIn};
 use crate::ui::kit::*;
 use crate::ui::kit::text;
@@ -395,10 +395,18 @@ fn name_field(id: String, label: String) -> View {
 /// How a provider that is not signed in signs in from here.
 #[derive(Clone)]
 enum Way {
-    /// Codex's own sign-in to ChatGPT, started from Sophon.
-    Codex,
+    /// The CLI's own sign-in, started from Sophon: Codex's to ChatGPT, or
+    /// Antigravity's to Google.
+    App(Brand),
     /// A command run in a terminal on the host.
     Command(String),
+}
+
+/// Whose account an in-app sign-in is.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Brand {
+    ChatGpt,
+    Google,
 }
 
 /// How `p` signs in, when it says it is not signed in (or, for an
@@ -419,11 +427,16 @@ fn sign_in_way(p: &Provider, d: &Diagnostic, cfg: Option<&Value>, family: &str) 
     }
     let dir = |var: &str| env.get(var).and_then(Value::as_str).map(str::to_owned).or_else(|| d.files.clone());
     match family {
-        "codex" => Some(Way::Codex),
+        "codex" => Some(Way::App(Brand::ChatGpt)),
         "claude" if mine => dir("CLAUDE_CONFIG_DIR").map(|dir| Way::Command(agents::login_command(Base::Claude, &dir))),
         "claude" => d.path.clone().map(|path| Way::Command(format!("'{}' auth login", path.replace('\'', "")))),
-        "antigravity" if mine => dir("GEMINI_HOME").map(|dir| Way::Command(agents::login_command(Base::Antigravity, &dir))),
-        "antigravity" => antigravity_login(d).map(Way::Command),
+        // In the browser for a Google account; by its key or project
+        // otherwise, which the settings give.
+        "antigravity" => {
+            let configured = cfg.and_then(|c| c["providers"][&p.id]["authMethod"].as_str().map(str::to_owned));
+            let method = configured.or_else(|| d.login.as_ref().and_then(|l| l.method.clone()));
+            method.is_none_or(|m| m.starts_with("oauth")).then_some(Way::App(Brand::Google))
+        }
         _ => None,
     }
 }
@@ -444,16 +457,22 @@ fn sign_in_block(id: String, way: Way, editable: bool) -> View {
             }
             v.child(muted(t("Or run it on that computer yourself:").to_owned())).child(command_box(cmd))
         }
-        Way::Codex if !editable => view().child(muted(t("Sign it in from Sophon on the desktop").to_owned())),
-        Way::Codex => codex_sign_in(id),
+        Way::App(_) if !editable => view().child(muted(t("Sign it in from Sophon on the desktop").to_owned())),
+        Way::App(brand) => app_sign_in(id, brand),
     }
 }
 
-/// Codex's sign-in to ChatGPT, started here (as T3 Code starts it): its
-/// page opens in this Mac's browser; from another computer than the
-/// host, the page takes a code. Where it stands, as it goes.
-pub(crate) fn codex_sign_in(id: String) -> View {
-    let device = !store::on_this_mac();
+/// The CLI's own sign-in, started here (as T3 Code starts it): Codex's
+/// to ChatGPT, whose page opens in this Mac's browser or, from another
+/// computer than the host, takes a code; Antigravity's to Google, whose
+/// page opens in this Mac's browser and, from another computer, ends at
+/// an address pasted back here. Where it stands, as it goes.
+pub(crate) fn app_sign_in(id: String, brand: Brand) -> View {
+    let device = brand == Brand::ChatGpt && !store::on_this_mac();
+    let (label, mark) = match brand {
+        Brand::ChatGpt => (t("Continue with ChatGPT"), Icon::Codex),
+        Brand::Google => (t("Continue with Google"), Icon::Gemini),
+    };
     view().gap(sp(S2)).child(dynamic(move || {
         let state = store::sign_in_state(&id);
         let id = id.clone();
@@ -468,26 +487,29 @@ pub(crate) fn codex_sign_in(id: String) -> View {
             };
             let row = view().flex_row().flex_wrap().items_center().gap(sp(S2));
             match state {
-                None => row
-                    .child(btn(t("Continue with ChatGPT"), Variant::Primary, Sz::Sm, Some(Icon::Codex), start))
-                    .into_element(),
+                None => row.child(btn(label, Variant::Primary, Sz::Sm, Some(mark), start)).into_element(),
                 Some(SignIn::Failed(error)) => view()
                     .gap(sp(S2))
                     .child(text(tf("The sign-in did not finish: {}", &[&error])).text_size(tx(TEXT_SM)).text_color(DANGER))
-                    .child(row.child(btn(t("Try again"), Variant::Primary, Sz::Sm, Some(Icon::Codex), start)))
+                    .child(row.child(btn(t("Try again"), Variant::Primary, Sz::Sm, Some(mark), start)))
                     .into_element(),
                 Some(SignIn::Starting) => row.child(working(t("Opening the sign-in…"))).child(btn(t("Cancel"), Variant::Ghost, Sz::Sm, None, cancel)).into_element(),
-                Some(SignIn::Waiting { url, code: None }) => view()
-                    .gap(sp(S2))
-                    .child(muted(t("Finish signing in in your browser. Choose the account this provider is for").to_owned()))
-                    .child(
-                        row.child(btn(t("Open the page again"), Variant::Outline, Sz::Sm, Some(Icon::ExternalLink), move || {
-                            drop(open_url(url.clone()));
-                        }))
-                        .child(btn(t("Cancel"), Variant::Ghost, Sz::Sm, None, cancel)),
-                    )
-                    .into_element(),
-                Some(SignIn::Waiting { url, code: Some(code) }) => {
+                Some(SignIn::Waiting { url, code: None, paste }) => {
+                    let mut v = view()
+                        .gap(sp(S2))
+                        .child(muted(t("Finish signing in in your browser. Choose the account this provider is for").to_owned()))
+                        .child(
+                            row.child(btn(t("Open the page again"), Variant::Outline, Sz::Sm, Some(Icon::ExternalLink), move || {
+                                drop(open_url(url.clone()));
+                            }))
+                            .child(btn(t("Cancel"), Variant::Ghost, Sz::Sm, None, cancel)),
+                        );
+                    if paste {
+                        v = v.child(paste_reply(id.clone()));
+                    }
+                    v.into_element()
+                }
+                Some(SignIn::Waiting { url, code: Some(code), .. }) => {
                     let copy = code.clone();
                     view()
                         .gap(sp(S2))
@@ -509,6 +531,40 @@ pub(crate) fn codex_sign_in(id: String) -> View {
             }
         }))
     }))
+}
+
+/// Where the address a Google sign-in's page went to is pasted, when the
+/// browser was on another device than the host (its page, after the
+/// sign-in, goes to the host's own address, which that device cannot
+/// reach).
+fn paste_reply(id: String) -> View {
+    let typed = signal(String::new());
+    let send = move || {
+        let url = typed.get_untracked();
+        if !url.trim().is_empty() {
+            store::sign_in_reply(&id, &url);
+        }
+    };
+    let submit = send.clone();
+    view()
+        .gap(sp(S1))
+        .child(muted(t("Signing in on another device? Paste the address its page went to after you signed in:").to_owned()))
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap(sp(S2))
+                .child(
+                    field()
+                        .flex_1()
+                        .value(move || typed.get())
+                        .on_change(move |v: &str| typed.set(v.to_owned()))
+                        .on_submit(move |_: &str| submit())
+                        .placeholder("http://127.0.0.1:…/?state=…&code=…")
+                        .font_family(mono_font),
+                )
+                .child(btn(t("Send"), Variant::Secondary, Sz::Sm, None, send).disabled(move || typed.with(|t| t.trim().is_empty()))),
+        )
 }
 
 /// A newer version, the update under way, or why it failed.
@@ -569,13 +625,6 @@ fn login_line(d: &Diagnostic) -> Option<nsh_core::element::Text> {
         parts.push(tf("until {}", &[day]));
     }
     Some(muted(parts.join(" · ")))
-}
-
-/// Antigravity's sign-in to a Google account, in the folder it says it
-/// keeps, when it says it is signed out of one.
-fn antigravity_login(d: &Diagnostic) -> Option<String> {
-    let l = d.login.as_ref().filter(|l| !l.signed_in && l.method.as_deref() == Some("oauth-personal"))?;
-    Some(agents::login_command(Base::Antigravity, l.config_dir.as_deref()?))
 }
 
 /// A command in a mono box with a copy button.
@@ -645,6 +694,11 @@ pub(crate) fn add_provider() -> View {
     let url = signal(String::new());
     let models = signal(String::new());
     let key = signal(String::new());
+    // An Antigravity account: how it signs in, and its Google Cloud
+    // project and location (its key is `key`).
+    let agy_auth = signal(AgyAuth::Google);
+    let gcp_project = signal(String::new());
+    let gcp_location = signal(String::new());
     // The account added: its id, label and kind (the last step signs it in).
     let added: Signal<Option<(String, String, Base, String)>> = signal(None);
 
@@ -683,6 +737,7 @@ pub(crate) fn add_provider() -> View {
     let problem = computed(move || match kind.get() {
         Kind::Account(_) if name.with(|n| n.trim().is_empty()) => Some(t("Give it a name")),
         Kind::Account(_) if target.with(Option::is_none) => Some(t("Use a full path: Sophon does not know that computer's home folder")),
+        Kind::Account(Base::Antigravity) => agents::agy_problem(agy_auth.get(), &key.get(), &gcp_project.get()).map(t),
         Kind::Account(_) => None,
         Kind::Endpoint(_) => endpoint.with(|e| e.as_ref().and_then(|(_, k)| agents::key_instance_problem(k)).map(t)),
     });
@@ -697,7 +752,18 @@ pub(crate) fn add_provider() -> View {
                 let n = name.get_untracked();
                 let id = agents::new_id(&n, b.id(), &store::provider_ids());
                 let label = format!("{} ({})", base_label(b), n.trim());
-                store::patch_providers(agents::account_patch(&id, b, &label, &dir));
+                store::patch_providers(match b {
+                    Base::Antigravity => agents::agy_patch(
+                        &id,
+                        &label,
+                        &dir,
+                        agy_auth.get_untracked(),
+                        &key.get_untracked(),
+                        &gcp_project.get_untracked(),
+                        &gcp_location.get_untracked(),
+                    ),
+                    _ => agents::account_patch(&id, b, &label, &dir),
+                });
                 store::clear_sign_in(&id);
                 added.set(Some((id, label, b, dir)));
                 step.set(2);
@@ -722,8 +788,10 @@ pub(crate) fn add_provider() -> View {
             let at = step.get();
             Some(untracked(move || match at {
                 0 => choose_kind(kind).into_element(),
-                1 => details_step(kind, name, dir, base, url, models, key, target, folder_placeholder(kind, name)).into_element(),
-                _ => sign_in_step(added).into_element(),
+                1 => details_step(kind, name, dir, base, url, models, key, target, folder_placeholder(kind, name))
+                    .child(agy_details(kind, agy_auth, key, gcp_project, gcp_location))
+                    .into_element(),
+                _ => sign_in_step(added, agy_auth).into_element(),
             }))
         }))
         .child(dynamic(move || problem.get().filter(|_| step.get() == 1).map(|p| hint(p).text_color(WARNING).into_element())))
@@ -739,6 +807,7 @@ pub(crate) fn add_provider() -> View {
                     }
                     1 => {
                         let label = match k {
+                            Kind::Account(Base::Antigravity) if !agy_auth.get_untracked().browser() => t("Add"),
                             Kind::Account(_) => t("Add and sign in"),
                             Kind::Endpoint(_) => t("Add"),
                         };
@@ -992,14 +1061,80 @@ fn second_account_note(b: Base) -> Option<View> {
 }
 
 /// The last step of adding an account: signing it in.
-fn sign_in_step(added: Signal<Option<(String, String, Base, String)>>) -> View {
+fn sign_in_step(added: Signal<Option<(String, String, Base, String)>>, agy_auth: Signal<AgyAuth>) -> View {
     let Some((id, label, b, dir)) = added.get_untracked() else { return view() };
+    if b == Base::Antigravity && !agy_auth.get_untracked().browser() {
+        return view().child(hint(tf("“{}” is added. It signs in with its key or Google Cloud project when it starts", &[&label])));
+    }
     let intro = hint(tf("“{}” is added. Sign it in: it uses this account until you remove it", &[&label]));
     let way = match b {
-        Base::Codex => codex_sign_in(id),
+        Base::Codex => app_sign_in(id, Brand::ChatGpt),
+        Base::Antigravity => app_sign_in(id, Brand::Google),
         _ => sign_in_block(id, Way::Command(agents::login_command(b, &dir)), true),
     };
     view().gap(sp(S3)).child(intro).child(way)
+}
+
+/// An Antigravity account's sign-in, as T3 Code asks it: a Google
+/// account (the subscription) or Gemini Enterprise, in the browser; a
+/// Gemini API key; or Google Cloud's Agent Platform, by a key or the
+/// project of the host's own Google Cloud sign-in. Nothing for others.
+fn agy_details(
+    kind: Signal<Kind>,
+    auth: Signal<AgyAuth>,
+    key: Signal<String>,
+    project: Signal<String>,
+    location: Signal<String>,
+) -> View {
+    if kind.get_untracked() != Kind::Account(Base::Antigravity) {
+        return view();
+    }
+    let label = |a: AgyAuth| -> SharedString {
+        match a {
+            AgyAuth::Google => t("Google account").into(),
+            AgyAuth::Enterprise => "Gemini Enterprise".into(),
+            AgyAuth::ApiKey => t("Gemini API key").into(),
+            AgyAuth::AgentPlatform => "Agent Platform (Vertex AI)".into(),
+        }
+    };
+    view()
+        .gap(sp(S3))
+        .child(labelled(
+            t("How it signs in"),
+            t("A Google account uses its subscription; an API key and Agent Platform are billed by use"),
+            segmented(AgyAuth::ALL.iter().map(|a| (*a, label(*a))).collect(), move || auth.get(), move |a| auth.set(a)),
+        ))
+        .child(dynamic(move || {
+            let a = auth.get();
+            Some(untracked(move || {
+                let mut v = view().gap(sp(S3));
+                if matches!(a, AgyAuth::ApiKey | AgyAuth::AgentPlatform) {
+                    v = v.child(labelled(
+                        t("API key"),
+                        if a == AgyAuth::ApiKey {
+                            t("A Gemini or Vertex AI express key, kept on that computer")
+                        } else {
+                            t("Optional: without one, the project below and that computer's Google Cloud sign-in")
+                        },
+                        field().value(move || key.get()).on_change(move |v: &str| key.set(v.to_owned())).masked(true).placeholder(t("API key")),
+                    ));
+                }
+                if matches!(a, AgyAuth::Enterprise | AgyAuth::AgentPlatform) {
+                    v = v
+                        .child(labelled(
+                            t("Google Cloud project"),
+                            if a == AgyAuth::Enterprise { t("Gemini Enterprise needs it") } else { t("Used when there is no API key") },
+                            field().value(move || project.get()).on_change(move |v: &str| project.set(v.to_owned())).placeholder("my-project-id").font_family(mono_font),
+                        ))
+                        .child(labelled(
+                            t("Google Cloud location"),
+                            t("The region it runs in"),
+                            field().value(move || location.get()).on_change(move |v: &str| location.set(v.to_owned())).placeholder("us-central1").font_family(mono_font),
+                        ));
+                }
+                v.into_element()
+            }))
+        }))
 }
 
 /// Removing an instance Sophon added: its entry leaves the config; its
