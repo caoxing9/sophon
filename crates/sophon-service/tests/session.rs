@@ -2801,6 +2801,21 @@ async fn background_work_a_fork_and_going_back() {
         listed.contains(&json!("other-9")) && !listed.contains(&json!(session)),
         "{recent}"
     );
+    // Asked of every agent, as Sophon asks: only Claude Code gives it, not
+    // Antigravity or Gemini CLI under their names too.
+    let everyone = ask(
+        &mut socket,
+        json!({"type":"fetch_recent_provider_sessions_request","limit":50,"providers":["claude","antigravity","gemini"]}),
+    )
+    .await;
+    let given: Vec<_> = everyone["payload"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["providerHandleId"] == "other-9")
+        .map(|entry| entry["providerId"].clone())
+        .collect();
+    assert_eq!(given, [json!("claude")], "{everyone}");
     let taken = ask(&mut socket, json!({"type":"import_agent_request","providerId":"claude","providerHandleId":"other-9","cwd":service.0.path()})).await;
     assert_eq!(
         (

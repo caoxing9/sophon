@@ -469,6 +469,12 @@ pub fn recent(
     query: &str,
 ) -> Vec<Value> {
     use std::io::{BufRead, BufReader};
+    // Only Claude Code's and Codex's sessions are kept where they can be
+    // read and continued: another family (Gemini CLI, Antigravity) has
+    // none to give, rather than Claude Code's under its own name.
+    if !matches!(family, "claude" | "codex") {
+        return Vec::new();
+    }
     let mut records = Vec::new();
     if family == "codex" {
         let dir = crate::models::kept(settings, "CODEX_HOME", ".codex").join("sessions");
