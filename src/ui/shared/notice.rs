@@ -1,5 +1,5 @@
-//! Notices over the main surface, with an undo for archiving: at the top,
-//! under the title bar, clear of the composer.
+//! Notices over the main surface, with an undo for archiving: a toast at
+//! its top right, under the title bar, clear of the composer.
 
 use crate::i18n::t;
 use nsh_core::prelude::*;
@@ -31,56 +31,41 @@ pub(crate) fn notice_bar(top: Memo<Length>) -> impl IntoElement {
         .child(dynamic(move || {
         let (m, action) = message.get()?;
         Some(untracked(move || {
+            // A toast as shadcn's (Sonner): a card at the surface's top
+            // right, clear of the page's title row and of the composer.
             view()
                 .absolute()
+                // Under a page's title row, whose right end has the
+                // page's actions (Save, Create, Refresh).
                 .top(move || top.get())
-                .px(sp(S2))
-                .left(px(0.0))
-                .right(px(0.0))
-                .items_center()
+                .mt(px(64.0))
+                .right(sp(S4))
                 .pointer_events(PointerEvents::BoxNone)
                 .child(
                     view()
                         .flex_row()
                         .items_center()
                         .gap(sp(S2))
-                        .max_w(px(560.0))
-                        .pl(sp(S4))
+                        .min_w(px(240.0))
+                        .max_w(px(420.0))
+                        .pl(sp(S3))
                         .pr(sp(S1))
-                        .py(sp(S1))
-                        .rounded(px(R_FULL))
-                        .bg(FG())
-                        .child(icon(Icon::Info, 15.0).text_color(SURFACE0()))
+                        .py(sp(S2))
+                        .rounded(px(R_LG))
+                        .bg(POPOVER())
+                        .border_1()
+                        .border_color(BORDER())
+                        .shadow_lg()
+                        .child(icon(Icon::Info, 15.0).text_color(FG_MUTED()))
                         .child(
                             text(m.clone())
                                 .text_size(tx(TEXT_SM))
-                                .text_color(SURFACE0())
+                                .text_color(FG())
                                 .number_of_lines(2)
-                                .flex_shrink(1.0),
+                                .flex_1(),
                         )
-                        .when(action.is_some(), |v| {
-                            v.child(
-                                nsh_base::button()
-                                    .on_press(store::run_notice_action)
-                                    .px(sp(S3))
-                                    .h(px(26.0))
-                                    .rounded(px(R_FULL))
-                                    .items_center()
-                                    .justify_center()
-                                    .bg(tint(SURFACE0(), 0.18))
-                                    .child(text(t("Undo")).text_size(tx(TEXT_SM)).font_weight(nsh_core::element::FontWeight(600)).text_color(SURFACE0())),
-                            )
-                        })
-                        .child(
-                            nsh_base::button()
-                                .on_press(store::dismiss_notice)
-                                .w(px(26.0))
-                                .h(px(26.0))
-                                .rounded(px(R_FULL))
-                                .items_center()
-                                .justify_center()
-                                .child(icon(Icon::X, 14.0).text_color(SURFACE0())),
-                        ),
+                        .when(action.is_some(), |v| v.child(btn(t("Undo"), Variant::Outline, Sz::Sm, None, store::run_notice_action)))
+                        .child(icon_btn(Icon::X, Sz::Sm, t("Close"), store::dismiss_notice)),
                 )
                 .into_element()
         }))

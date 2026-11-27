@@ -436,19 +436,14 @@ pub(crate) fn storage_card() -> View {
 /// The settings page frame: a centered column under the title.
 pub(crate) fn page(compact: bool, sections: View) -> impl IntoElement {
     scroll().flex_1().child(
-        view()
-            .w_full()
-            .max_w(px(720.0))
-            .self_center()
-            .px(px(if compact { S4 } else { S6 }))
-            .py(px(if compact { S4 } else { S8 }))
+        page_column(compact)
             .gap(px(if compact { S6 } else { S8 }))
             .child(
                 view()
                     .flex_row()
                     .items_center()
                     .gap(sp(S2))
-                    .child(text(t("Settings")).text_size(tx(TEXT_2XL)).font_weight(FontWeight(500))),
+                    .child(page_title(t("Settings"))),
             )
             .child(sections.gap(px(if compact { S6 } else { S8 }))),
     )

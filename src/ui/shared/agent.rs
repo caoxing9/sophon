@@ -3,7 +3,7 @@
 //! agent in the open workspace.
 
 use crate::i18n::{t, tf};
-use nsh_core::{element::FontWeight, prelude::*};
+use nsh_core::prelude::*;
 
 use super::{
     composer::{self, Target},
@@ -188,7 +188,7 @@ pub(crate) fn draft_pane() -> AnyElement {
                 .max_w(px(CONTENT_MAX_WIDTH()))
                 .self_center()
                 .px(sp(S2))
-                .child(text(t("New agent")).text_size(tx(TEXT_2XL)).font_weight(FontWeight(500))),
+                .child(page_title(t("New agent"))),
         )
         .child(composer::composer(Target::Form, t("What should the agent do?")))
         .child(composer::hint(move || {

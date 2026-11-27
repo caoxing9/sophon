@@ -136,6 +136,13 @@ pub(crate) fn field() -> InputElement {
     input().app_class(Some(CLASSES.with(Clone::clone)))
 }
 
+/// An input without the box (no border, fill or ring): a title edited in
+/// place, as the automation's name at the head of its page. `field`'s
+/// classes would draw over any border or fill set after them.
+pub(crate) fn bare_field() -> InputElement {
+    input()
+}
+
 /// A segmented control: nsh-shadcn's Tabs list (a muted track, the
 /// picked segment raised), its tabs Sophon's `options`.
 pub(crate) fn segmented<T: Clone + PartialEq + 'static>(
@@ -581,4 +588,25 @@ pub(crate) fn working(label: impl IntoReactive<SharedString>) -> View {
         .gap(px(6.0))
         .child(eclipse(24.0))
         .child(text(label).text_size(tx(TEXT_SM)).text_color(FG_MUTED()))
+}
+
+/// How wide a page is (settings, usage, automations, history, plugins):
+/// the same on each, so the title stays put going from one to another.
+pub(crate) const PAGE_MAX_WIDTH: f32 = 820.0;
+
+/// A page's column: centered, `PAGE_MAX_WIDTH` at most, inset as every
+/// page is (less on a narrow window).
+pub(crate) fn page_column(compact: bool) -> View {
+    view()
+        .w_full()
+        .max_w(px(PAGE_MAX_WIDTH))
+        .self_center()
+        .px(px(if compact { S4 } else { S6 }))
+        .pt(px(if compact { S4 } else { S8 }))
+        .pb(sp(S8))
+}
+
+/// A page's title, the same size and weight on every page.
+pub(crate) fn page_title(words: impl IntoReactive<SharedString>) -> nsh_core::element::Text {
+    text(words).text_size(tx(TEXT_2XL)).font_weight(nsh_core::element::FontWeight(600))
 }

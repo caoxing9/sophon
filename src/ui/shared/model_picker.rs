@@ -172,7 +172,10 @@ pub(crate) fn model_picker(live: bool, current_name: Memo<String>) -> impl IntoE
             }
         })
         .placement(nsh_core::overlay::Placement::Top)
-        .align(nsh_core::overlay::Align::Start)
+        // Its right edge at the trigger's: the trigger sits at the
+        // composer's right, and the panel (552 wide) spread past the
+        // window's edge from its left.
+        .align(nsh_core::overlay::Align::End)
         .offset(px(4.0))
         .popup_style(|s: nsh_core::element::StyleRefinement| {
             s.bg(POPOVER()).rounded(px(R_LG)).border_1().border_color(tint(FG(), 0.10)).overflow_hidden()
@@ -196,10 +199,12 @@ pub(crate) fn model_picker(live: bool, current_name: Memo<String>) -> impl IntoE
                     Some(untracked(move || mark(&p, 16.0).into_element()))
                 }))
                 .child(
+                    // As the bar's other chips (the project, the mode): the
+                    // agent's mark carries the color.
                     text(move || current_name.get())
                         .text_size(tx(TEXT_SM))
-                        .font_weight(FontWeight(500))
-                        .text_color(tint(FG(), 0.8))
+                        .text_color(move || if open.get() { color(FG()) } else { color(FG_MUTED()) })
+                        .group_hover(|s| s.text_color(FG()))
                         .number_of_lines(1)
                         .max_w(px(224.0))
                         .flex_shrink(1.0),
@@ -213,7 +218,7 @@ pub(crate) fn model_picker(live: bool, current_name: Memo<String>) -> impl IntoE
                         let tone = move || if open.get() { color(FG()) } else { color(FG_MUTED()) };
                         let mut v = view().flex_row().items_center().gap(px(4.0)).flex_shrink_0();
                         if let Some(t) = thinking {
-                            v = v.child(text(t).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(tone).group_hover(|s| s.text_color(FG())));
+                            v = v.child(text(t).text_size(tx(TEXT_SM)).text_color(tone).group_hover(|s| s.text_color(FG())));
                         }
                         if fast {
                             v = v.child(icon(Icon::Zap, 12.0).text_color(tone).group_hover(|s| s.text_color(FG())));

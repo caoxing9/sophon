@@ -130,9 +130,11 @@ pub struct Opt {
 impl Opt {
     fn from_json(v: &Value) -> Option<Self> {
         let id = str_of(v, "id")?;
+        // The service names them in English (its permission modes): read
+        // in the app's language where the app has their words.
         Some(Self {
-            label: str_of(v, "label").filter(|l| !l.is_empty()).unwrap_or_else(|| id.clone()),
-            description: str_of(v, "description").unwrap_or_default(),
+            label: crate::i18n::tr(&str_of(v, "label").filter(|l| !l.is_empty()).unwrap_or_else(|| id.clone())),
+            description: crate::i18n::tr(&str_of(v, "description").unwrap_or_default()),
             id,
         })
     }
