@@ -484,11 +484,30 @@ mod tests {
     #[test]
     fn a_pairing_link_names_its_computer() {
         let key = [5u8; 32];
-        let link = PairingLink::format_named(Some(("10.0.0.2:61034", &key, "tok")), None, Some("MacBook Pro · 林"));
+        let link = PairingLink::format_named(Some(("10.0.0.2:61034", &key, "tok")), None, Some("MacBook Pro · 林"), None);
         let parsed = PairingLink::parse(&link).unwrap();
         assert_eq!(parsed.name.as_deref(), Some("MacBook Pro · 林"));
         assert_eq!(parsed.lan, Some(("10.0.0.2:61034".into(), key, "tok".into())));
         assert_eq!(PairingLink::parse(&PairingLink::format(Some(("a:1", &key, "t")), None)).unwrap().name, None);
+    }
+
+    #[test]
+    fn a_pairing_link_carries_its_peer_to_peer_id() {
+        let key = [5u8; 32];
+        let id = "ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6";
+        let offer = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(json!({ "v": 2, "serverId": "srv_1", "daemonPublicKeyB64": B64.encode(key), "relay": { "endpoint": "r:1", "useTls": false } }).to_string());
+        let relay = format!("sophon://relay/#offer={offer}");
+        let own = "https://47.119.154.134:3443";
+        let link = PairingLink::format_named(Some(("10.0.0.2:1", &key, "tok")), Some(&relay), Some("Mac"), Some((id, Some(own))));
+        let parsed = PairingLink::parse(&link).unwrap();
+        assert_eq!(parsed.p2p.as_deref(), Some(id));
+        assert_eq!(parsed.p2p_relay.as_deref(), Some(own), "the self-hosted relay it is found through");
+        let n0 = PairingLink::parse(&PairingLink::format_named(Some(("10.0.0.2:1", &key, "tok")), None, None, Some((id, None)))).unwrap();
+        assert_eq!((n0.p2p.as_deref(), n0.p2p_relay), (Some(id), None));
+        assert_eq!(parsed.name.as_deref(), Some("Mac"));
+        assert!(parsed.relay.is_some());
+
     }
 
     #[test]
@@ -546,6 +565,11 @@ pub fn generate_key() -> ([u8; 32], [u8; 32]) {
     (kp.private.try_into().expect("32"), kp.public.try_into().expect("32"))
 }
 
+/// The relay for peer to peer when the relay server set has none (none
+/// set, or one too old to host it): Sophon's own, in China, so every
+/// Sophon gets there fast with nothing to set up.
+pub const DEFAULT_P2P_RELAY: &str = "https://47.119.154.134:3443";
+
 /// A Sophon pairing link: the LAN bridge (address, key, token) and the
 /// daemon's relay offer, so a phone tries the LAN first and the relay after.
 #[derive(Debug, Clone, PartialEq)]
@@ -555,6 +579,13 @@ pub struct PairingLink {
     /// What the paired computer is called here (a space's
     /// `MacBook Pro · Lin`), when the link names it.
     pub name: Option<String>,
+    /// The bridge's iroh endpoint id (`p2p=`): it is reached peer to peer
+    /// away from its LAN, before the relay. The LAN's key and token go with
+    /// it.
+    pub p2p: Option<String>,
+    /// The relay it is found through (`p2pRelay=`): the self-hosted one of
+    /// the server Sophon uses; none, n0's.
+    pub p2p_relay: Option<String>,
 }
 
 impl PairingLink {
@@ -574,16 +605,19 @@ impl PairingLink {
         };
         let lan = (|| Some((param("lan")?, key(&param("lanKey")?)?, param("token")?)))();
         let name = param("name").filter(|n| !n.trim().is_empty());
-        (lan.is_some() || relay.is_some()).then_some(Self { lan, relay, name })
+        let p2p = param("p2p").filter(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric()));
+        let p2p_relay = param("p2pRelay").filter(|r| r.starts_with("https://") || r.starts_with("http://"));
+        (lan.is_some() || relay.is_some()).then_some(Self { lan, relay, name, p2p, p2p_relay })
     }
 
     pub fn format(lan: Option<(&str, &[u8; 32], &str)>, relay_link: Option<&str>) -> String {
-        Self::format_named(lan, relay_link, None)
+        Self::format_named(lan, relay_link, None, None)
     }
 
     /// [`Self::format`] naming the computer (`name=`), as the device that
-    /// pairs saves it.
-    pub fn format_named(lan: Option<(&str, &[u8; 32], &str)>, relay_link: Option<&str>, name: Option<&str>) -> String {
+    /// pairs saves it, and its bridge's peer to peer id and relay (`p2p=`,
+    /// `p2pRelay=`, with the LAN's part only).
+    pub fn format_named(lan: Option<(&str, &[u8; 32], &str)>, relay_link: Option<&str>, name: Option<&str>, p2p: Option<(&str, Option<&str>)>) -> String {
         let enc = |v: &str| {
             v.bytes()
                 .map(|b| match b {
@@ -596,6 +630,12 @@ impl PairingLink {
         let mut params: Vec<String> = Vec::new();
         if let Some((addr, key, token)) = lan {
             params.push(format!("lan={addr}&lanKey={}&token={token}", enc(&B64.encode(key))));
+            if let Some((id, relay)) = p2p.filter(|(id, _)| !id.is_empty()) {
+                params.push(format!("p2p={}", enc(id)));
+                if let Some(relay) = relay {
+                    params.push(format!("p2pRelay={}", enc(relay)));
+                }
+            }
         }
         if let Some(name) = name.filter(|n| !n.trim().is_empty()) {
             params.push(format!("name={}", enc(name)));

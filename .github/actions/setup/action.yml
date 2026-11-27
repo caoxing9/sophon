@@ -38,7 +38,7 @@ runs:
     - uses: actions/cache/restore@v4
       with:
         path: ~/.cache/sophon-nsh
-        key: nsh-cli-${{ runner.os }}-${{ inputs.rev }}
+        key: nsh-bin-${{ runner.os }}-${{ inputs.rev }}
         fail-on-cache-miss: true
     - uses: Swatinem/rust-cache@v2
       with:

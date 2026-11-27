@@ -816,40 +816,39 @@ fn queue_track(live: bool) -> impl IntoElement {
                         .items_center()
                         .gap(sp(S2))
                         .child(icon(Icon::Inbox, 14.0).text_color(FG_FAINT()))
-                        .child(text({
-                            let mut body = msg.text.clone();
-                            for image in &msg.images {
-                                body = body.replace(&format!("[{}]", image.name), "");
-                            }
-                            body.trim().to_owned()
-                        }).text_size(tx(TEXT_BASE)).number_of_lines(1).flex_1())
+                        // Its words and its attachments' chips where they
+                        // stand, as the composer had them: one line.
                         .child({
-                            let mut previews = view().flex_row().items_center().gap(sp(1.0));
-                            for attachment in msg.images.clone() {
-                                let uri = format!("data:{};base64,{}", attachment.mime, attachment.data);
-                                let name = attachment.name.clone();
-                                let open_uri = uri.clone();
-                                previews = previews.child(
-                                    nsh_base::button()
-                                        .on_press(move || store::open_modal(store::Modal::Picture { name: name.clone(), uri: open_uri.clone() }))
-                                        .w(px(30.0))
-                                        .h(px(30.0))
-                                        .p(px(1.0))
-                                        .rounded(px(R_MD))
-                                        .overflow_hidden()
-                                        .child(image(uri).w(px(28.0)).h(px(28.0)).object_fit(nsh_core::ResizeMode::Cover)),
-                                );
+                            let mut thumbs: Vec<(String, Option<String>)> = msg
+                                .images
+                                .iter()
+                                .map(|i| (i.name.clone(), Some(format!("data:{};base64,{}", i.mime, i.data))))
+                                .collect();
+                            thumbs.extend(msg.attachments.iter().map(|a| (a.get("fileName").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned(), None)));
+                            let mut line = view().flex_row().items_center().flex_1().min_w(px(0.0)).overflow_hidden();
+                            for segment in composer_doc::segments(&msg.text) {
+                                line = match segment {
+                                    composer_doc::Segment::Text(t) => {
+                                        line.child(text(t.replace('\n', " ")).text_size(tx(TEXT_BASE)).number_of_lines(1).flex_shrink(1.0))
+                                    }
+                                    composer_doc::Segment::Chip(name) => {
+                                        let thumb = thumbs.iter().position(|(n, _)| n.replace(['[', ']', '\n'], " ").trim() == name).map(|i| thumbs.remove(i).1).flatten();
+                                        line.child(super::timeline::sent_chip(name, thumb).flex_shrink_0())
+                                    }
+                                };
                             }
-                            previews
+                            for (name, thumb) in thumbs {
+                                line = line.child(super::timeline::sent_chip(name, thumb).flex_shrink_0());
+                            }
+                            line
                         })
-                        // Back into the composer, to be changed and sent again.
-                        .when(msg.images.is_empty() && msg.attachments.is_empty(), |row| {
-                            row.child(btn(t("Edit"), Variant::Ghost, Sz::Sm, Some(Icon::Pencil), move || {
-                                if let Some(id) = store::selected_id() {
-                                    store::edit_queued(&id, i);
-                                }
-                            }))
-                        })
+                        // Back into the composer, attachments and all, to be
+                        // changed and sent again.
+                        .child(btn(t("Edit"), Variant::Ghost, Sz::Sm, Some(Icon::Pencil), move || {
+                            if let Some(id) = store::selected_id() {
+                                store::edit_queued(&id, i);
+                            }
+                        }))
                         // Into the running turn now, without waiting for it
                         // to end.
                         .child(btn(t("Steer"), Variant::Ghost, Sz::Sm, Some(Icon::CircleArrowUp), move || {

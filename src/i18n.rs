@@ -130,6 +130,70 @@ pub(crate) fn tr(en: &str) -> String {
     table().get(en).map(|s| (*s).to_owned()).unwrap_or_else(|| en.to_owned())
 }
 
+/// A notice from the connection, in the active language: as [`tr`], and
+/// when it was put together (`Added proj`, `Could not load agents: …`)
+/// by the template of the table's it fits best (`Added {}`), its parts
+/// that the table has ("load agents") read in the language too.
+pub(crate) fn tr_notice(en: &str) -> String {
+    if !is_zh() {
+        return en.to_owned();
+    }
+    notice_zh(en)
+}
+
+/// [`tr_notice`]'s Chinese, whatever the language now.
+fn notice_zh(en: &str) -> String {
+    if let Some(zh) = table().get(en) {
+        return (*zh).to_owned();
+    }
+    let mut best: Option<(usize, String)> = None;
+    for (template, zh) in ZH_HANS.iter().filter(|(k, _)| k.contains("{}")) {
+        let Some(args) = fill(template, en) else { continue };
+        // The most words of its own: `Could not load schedules: {}` over
+        // `Could not {}: {}`.
+        let literal = template.len() - 2 * args.len();
+        if best.as_ref().is_some_and(|(l, _)| *l >= literal) {
+            continue;
+        }
+        let mut out = String::new();
+        let mut args = args.iter();
+        let mut parts = zh.split("{}").peekable();
+        while let Some(part) = parts.next() {
+            out.push_str(part);
+            if parts.peek().is_some() {
+                let arg = args.next().map(String::as_str).unwrap_or("");
+                out.push_str(table().get(arg).copied().unwrap_or(arg));
+            }
+        }
+        best = Some((literal, out));
+    }
+    best.map_or_else(|| en.to_owned(), |(_, out)| out)
+}
+
+/// What `text` puts in `template`'s placeholders, if it fits it: each
+/// taken up to the next literal part (the last, to the end).
+fn fill(template: &str, text: &str) -> Option<Vec<String>> {
+    let parts: Vec<&str> = template.split("{}").collect();
+    let mut rest = text.strip_prefix(parts[0])?;
+    let mut args = Vec::new();
+    for (i, part) in parts.iter().enumerate().skip(1) {
+        let at = if i == parts.len() - 1 {
+            if !rest.ends_with(part) {
+                return None;
+            }
+            rest.len() - part.len()
+        } else {
+            rest.find(part)?
+        };
+        if at == 0 {
+            return None;
+        }
+        args.push(rest[..at].to_owned());
+        rest = &rest[at + part.len()..];
+    }
+    Some(args)
+}
+
 /// `en`, a template with `{}` placeholders, in the active language, with
 /// `args` in its placeholders in order.
 pub(crate) fn tf(en: &'static str, args: &[&str]) -> String {
@@ -340,7 +404,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("The service on this Mac did not start: {}", "本机服务没能启动：{}"),
     ("Try again", "重试"),
     ("Through Magpie", "经 Magpie"),
-    ("Still this agent's harness; the requests go to another provider", "仍用这个 agent 的 harness，请求转发给其他服务商"),
+    ("Still this agent's harness; the requests go to another provider", "仍用这个 Agent 的 harness，请求转发给其他服务商"),
     ("Subscription", "订阅"),
     ("Search models", "搜索模型"),
     ("Starred", "收藏"),
@@ -352,13 +416,13 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Notifications", "通知"),
     ("Push notifications", "推送通知"),
     ("When an agent waits for you or finishes; an Apple Watch shows them too", "Agent 等你确认或完成时提醒，Apple Watch 上也会显示"),
-    ("This computer sends none yet: it needs a relay server of its own with the push gateway", "这台电脑还不能发送：需要配置带推送网关的自有中继服务器"),
+    ("This computer sends none yet: it needs a relay server of its own with the push gateway", "这台电脑还不能发送：需要配置带推送网关的自有中转服务器"),
     ("Hide content", "隐藏内容"),
     ("Notifications say only that something needs you, not what", "通知只提示有事需要你处理，不显示具体内容"),
     ("{} runs from its desktop app: it is not installed on its own", "{} 没有单独安装，改用桌面 App 自带的那份"),
     ("{} was not on the service's PATH: Sophon found it and pointed the service at it", "服务的 PATH 里找不到 {}：Sophon 已找到它并让服务改用这个位置"),
     ("Not installed on this computer, or it can't start", "这台电脑上没有安装，或者无法启动"),
-    ("Continues in {}: a new agent, with this conversation", "将在 {} 中继续：新建智能体，带上这段对话"),
+    ("Continues in {}: a new agent, with this conversation", "将在 {} 中继续：新建 Agent，带上这段对话"),
     ("Too large to preview here", "文件太大，无法在这里预览"),
     ("Open in its app", "用默认应用打开"),
     ("Too large to open here: download it", "文件太大，请下载后打开"),
@@ -369,8 +433,8 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Rename this host…", "重命名此主机…"),
     ("Rename host", "重命名主机"),
     ("Rename this computer", "重命名这台电脑"),
-    ("Continue in another agent", "在其他智能体中继续"),
-    ("A new agent, with this conversation", "新建智能体，带上这段对话"),
+    ("Continue in another agent", "在其他 Agent 中继续"),
+    ("A new agent, with this conversation", "新建 Agent，带上这段对话"),
     ("Download…", "下载…"),
     ("Downloading “{}”…", "正在下载「{}」…"),
     ("Saved “{}”", "已保存「{}」"),
@@ -383,7 +447,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Files", "文件"),
     ("All changes", "全部更改"),
     ("No changes", "没有更改"),
-    ("What the agents change shows here.", "智能体改动的代码会显示在这里。"),
+    ("What the agents change shows here.", "Agent 改动的代码会显示在这里。"),
     ("Too many changes to show", "改动太多，无法显示"),
     ("Commit some of them, or look in a terminal.", "先提交一部分，或在终端里查看。"),
     ("Open in a tab", "在标签页中打开"),
@@ -515,6 +579,34 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Photo Library", "照片图库"),
     ("Choose Files", "选取文件"),
     ("Uploading…", "上传中…"),
+    ("Could not {}: {}", "无法{}：{}"),
+    ("save the file", "保存文件"),
+    ("search files", "搜索文件"),
+    ("load agents", "加载 Agent"),
+    ("load projects", "加载项目"),
+    ("load providers", "加载服务商"),
+    ("save agent settings", "保存 Agent 设置"),
+    ("look for projects", "查找项目"),
+    ("sign in", "登录"),
+    ("use resets", "使用重置额度"),
+    ("request", "完成请求"),
+    ("Could not load earlier messages: {}", "无法加载更早的消息：{}"),
+    ("Could not load schedules: {}", "无法加载自动化：{}"),
+    ("Could not load the schedule's runs: {}", "无法加载自动化的运行记录：{}"),
+    ("Could not make the file", "无法创建文件"),
+    ("Could not open a terminal: {}", "无法打开终端：{}"),
+    ("Could not attach the terminal: {}", "无法连接终端：{}"),
+    ("Could not recover: {}", "无法恢复：{}"),
+    ("Daemon update: {}", "服务更新：{}"),
+    ("Schedule {} failed: {}", "自动化{}失败：{}"),
+    ("Workspace recovered", "对话已恢复"),
+    ("run-once", "运行"),
+    ("delete", "删除"),
+    ("Ready to send", "可以发送"),
+    ("Unknown", "未知"),
+    ("Message", "消息"),
+    ("Type", "类型"),
+    ("Size", "大小"),
     ("Remove file", "移除文件"),
     ("Wait for the files to finish uploading", "请等文件上传完"),
     ("“{}” is over 50 MB", "“{}” 超过 50 MB"),
@@ -794,6 +886,11 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Language", "语言"),
     ("System", "跟随系统"),
     ("Appearance", "外观"),
+    ("General", "通用"),
+    ("Agents & models", "Agent 与模型"),
+    ("Connections", "连接"),
+    ("Service", "服务"),
+    ("Maintenance", "维护"),
     ("Theme", "主题"),
     ("Light, dark, or as the system is set", "浅色、深色，或跟随系统设置"),
     ("Light", "浅色"),
@@ -854,6 +951,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Can't reach your computer · retrying…", "连不上电脑 · 正在重试…"),
     ("Connected · over the local network", "已连接 · 局域网"),
     ("Connected · through the relay", "已连接 · 中转服务器"),
+    ("Connected · peer to peer", "已连接 · 点对点直连"),
     ("Retry now", "立即重试"),
     ("Copy all", "全部复制"),
     ("Select text", "选取文字"),
@@ -906,7 +1004,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Pull requests show here", "PR 会显示在这里"),
     ("No open pull requests involve you", "没有跟你相关的进行中 PR"),
     ("Review requested", "请你 review"),
-    ("Pull requests", "Pull requests"),
+    ("Pull requests", "拉取请求"),
     ("Loading the pull request…", "正在加载 PR…"),
     ("Create a merge commit", "创建合并提交"),
     ("Rebase and merge", "Rebase 合并"),
@@ -987,6 +1085,43 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Expanded", "展开"),
     ("Folded", "折叠"),
     ("Quiet", "精简"),
+    ("Live", "实时"),
+    ("Working", "工作中"),
+    ("1 step", "1 步"),
+    ("{} steps", "{} 步"),
+    ("1 tool call", "1 次工具调用"),
+    ("{} tool calls", "{} 次工具调用"),
+    ("1 message", "1 条消息"),
+    ("{} messages", "{} 条消息"),
+    ("Updated the plan", "更新了计划"),
+    ("Changed 1 file", "改动了 1 个文件"),
+    ("Changed {} files", "改动了 {} 个文件"),
+    ("{} more", "还有 {} 个"),
+    ("View changes", "查看改动"),
+    ("Always Ask", "每次询问"),
+    ("Accept File Edits", "自动接受编辑"),
+    ("Plan Mode", "计划模式"),
+    ("Auto", "自动"),
+    ("Auto mode", "自动模式"),
+    ("Full Access", "完全访问"),
+    ("Bypass", "跳过确认"),
+    ("Default Permissions", "默认权限"),
+    ("Read Only", "只读"),
+    ("Prompts for approval before edits and commands", "编辑文件和运行命令前先征求同意"),
+    ("Approves edits inside the workspace; asks before the rest", "工作区内的编辑自动通过，其余的先问"),
+    ("Plans before it changes anything", "改动之前先做计划"),
+    ("Antigravity reviews its own requests where the account offers it", "账号支持时由 Antigravity 自己审核请求"),
+    ("Approves every tool without prompting (use with caution)", "所有工具都不问直接通过（谨慎使用）"),
+    ("Automatically approves edit tools", "编辑类工具自动通过"),
+    ("Read-only: plans without editing or running", "只读：只做计划，不编辑也不运行"),
+    ("Edit files and run commands with Codex's own approval settings.", "按 Codex 自己的审批设置编辑文件、运行命令。"),
+    ("Read files and answer; edits and commands ask first.", "读文件并回答；编辑和命令先征求同意。"),
+    ("Edit files, run commands, and access the network without additional prompts.", "编辑文件、运行命令、访问网络，都不再额外确认。"),
+    ("Prompts for permission the first time a tool is used", "每个工具第一次使用时征求同意"),
+    ("Automatically approves edit-focused tools without prompting", "编辑类工具不问直接通过"),
+    ("Analyze the codebase without executing tools or edits", "只分析代码，不执行工具也不改动"),
+    ("Uses a model classifier to review permission prompts automatically", "用模型自动审核权限请求"),
+    ("Skip all permission prompts (use with caution)", "跳过所有权限确认（谨慎使用）"),
     ("Hidden", "隐藏"),
     ("Scripts", "脚本"),
     ("click to stop", "点击停止"),
@@ -1078,7 +1213,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Labels…", "标签…"),
     ("Daily 9:00", "每天 9:00"),
     ("Weekdays 9:00", "工作日 9:00"),
-    ("Background", "后台"),
+    ("Background", "背景"),
     ("Background task", "后台任务"),
     ("Outline", "大纲"),
     // Generic
@@ -1141,7 +1276,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("A new conversation in {}", "在 {} 里开始新对话"),
     ("Search workspaces", "搜索对话"),
     ("Relay server", "中转服务器"),
-    ("Enter your relay address for access away from home. Leave empty for LAN only.", "填写中继地址即可从外网连接。留空时仅使用局域网。"),
+    ("Enter your relay address for access away from home. Leave empty for LAN only.", "填写中转地址即可从外网连接。留空时只用局域网。"),
     ("The service restarted", "服务已重启"),
     ("Thinking · {}", "思考 · {}"),
     ("Mode · {}", "模式 · {}"),
@@ -1211,14 +1346,14 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("This build cannot show notifications", "这个版本不支持通知"),
     ("Open System Settings", "打开系统设置"),
     ("Turn finished", "轮次完成"),
-    ("When an agent finishing its turn is told", "agent 完成一轮后何时提醒你"),
+    ("When an agent finishing its turn is told", "Agent 完成一轮后何时提醒你"),
     ("Always", "始终"),
     ("Only when unfocused", "仅在未聚焦时"),
     ("Never", "从不"),
     ("Approvals", "权限请求"),
-    ("When an agent waits for your approval", "agent 需要你批准时提醒"),
+    ("When an agent waits for your approval", "Agent 需要你批准时提醒"),
     ("Questions and errors", "提问和出错"),
-    ("When an agent asks you something or stops on an error", "agent 向你提问或出错停下时提醒"),
+    ("When an agent asks you something or stops on an error", "Agent 向你提问或出错停下时提醒"),
     ("Sound", "提示音"),
     ("The system's notification sound", "通知时播放系统提示音"),
     // The Agents settings section.
@@ -1310,6 +1445,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Allow only if the device shows the same code", "仅当对方设备显示相同的确认码时才允许"),
     ("Cannot pair: {}", "无法配对：{}"),
     ("Connected now, over the LAN", "正通过局域网连接"),
+    ("Connected now, peer to peer", "正通过点对点直连"),
     ("Connecting to “{}”…", "正在连接「{}」…"),
     ("Device connected", "设备已连接"),
     ("Devices", "设备"),
@@ -1408,7 +1544,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("API endpoints", "API 接口"),
     ("Accounts", "账号"),
     ("Add and sign in", "添加并登录"),
-    ("Add provider", "添加提供方"),
+    ("Add provider", "添加服务商"),
     ("Another account, signed in on its own, or an API endpoint. Sophon never switches accounts on its own", "另一个单独登录的账号，或一个 API 接口。Sophon 不会自动切换账号"),
     ("ChatGPT account", "ChatGPT 账号"),
     ("Code copied", "已复制验证码"),
@@ -1419,17 +1555,17 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Display name", "显示名称"),
     ("Endpoint", "接口地址"),
     ("Executable", "可执行文件"),
-    ("Finish signing in in your browser. Choose the account this provider is for", "在浏览器里完成登录，选择这个提供方要用的账号"),
+    ("Finish signing in in your browser. Choose the account this provider is for", "在浏览器里完成登录，选择这个服务商要用的账号"),
     ("Its address, as the CLI asks it", "CLI 要求的接口地址"),
-    ("Kept in the service's config file on that computer, like any provider's", "和其他提供方一样，保存在那台电脑上服务的配置文件里"),
+    ("Kept in the service's config file on that computer, like any provider's", "和其他服务商一样，保存在那台电脑上服务的配置文件里"),
     ("Models", "模型"),
     ("Next", "下一步"),
     ("On any device, open {} and enter this code:", "在任意设备上打开 {}，输入这个验证码："),
     ("Open the page again", "再次打开登录页"),
     ("Opening the sign-in…", "正在打开登录页…"),
     ("Or run it on that computer yourself:", "或者在那台电脑上自己运行："),
-    ("Provider", "提供方"),
-    ("Shown in the provider list and the model picker", "显示在提供方列表和模型选择器里"),
+    ("Provider", "服务商"),
+    ("Shown in the provider list and the model picker", "显示在服务商列表和模型选择器里"),
     ("Sign in in Terminal", "在终端中登录"),
     ("Sign it in from Sophon on the desktop", "请在桌面端的 Sophon 里登录"),
     ("The sign-in did not finish: {}", "登录没有完成：{}"),
@@ -1440,6 +1576,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Command copied", "命令已复制"),
     ("Custom", "自定义"),
     ("Give it a name", "给它起个名字"),
+    ("“{}” already uses this folder: it would be the same account twice", "「{}」已经在用这个文件夹，再加一次就是同一个账号的重复"),
     ("Its config folder on that computer: {}", "它在那台电脑上的配置文件夹：{}"),
     ("List at least one model", "至少列出一个模型"),
     ("Model ids, the default first, e.g. model-a, model-b", "模型 ID，默认的放第一个，如 model-a, model-b"),
@@ -1503,6 +1640,18 @@ mod tests {
     #[test]
     fn templates_fill_in_order() {
         assert_eq!(tf("{} of {}", &["1", "2"]), "1 of 2");
+    }
+
+    #[test]
+    fn a_notice_put_together_reads_by_its_template() {
+        assert_eq!(notice_zh("Added feat-user-lockdown"), "已添加 feat-user-lockdown");
+        assert_eq!(notice_zh("Could not load agents: connection reset"), "无法加载 Agent：connection reset");
+        // The template with the most words of its own wins.
+        assert_eq!(notice_zh("Could not load schedules: gone"), "无法加载自动化：gone");
+        assert_eq!(notice_zh("Schedule run-once failed: busy"), "自动化运行失败：busy");
+        assert_eq!(notice_zh("Workspace recovered"), "对话已恢复");
+        assert_eq!(notice_zh("Something else entirely"), "Something else entirely");
+        assert_eq!(fill("Added {}", "Added "), None, "an empty part is no fit");
     }
 
     #[test]

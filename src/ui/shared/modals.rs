@@ -589,7 +589,7 @@ fn mcp_panel(cwd: String) -> View {
             let signing_now = store::github_loading_with("mcp:signin:");
             let cwd = cwd.clone();
             Some(untracked(move || match answer {
-                None => view().py(sp(S6)).items_center().gap(sp(S2)).child(eclipse(20.0)).child(text(t("Asking Claude Code…")).text_size(tx(TEXT_SM)).text_color(FG_MUTED())).into_element(),
+                None => view().py(sp(S6)).items_center().gap(sp(S2)).child(spinner(20.0)).child(text(t("Asking Claude Code…")).text_size(tx(TEXT_SM)).text_color(FG_MUTED())).into_element(),
                 Some(Err(e)) => text(e).text_size(tx(TEXT_SM)).text_color(DANGER).into_element(),
                 Some(Ok(v)) => {
                     let list = servers_of(&v);
@@ -614,7 +614,7 @@ fn mcp_panel(cwd: String) -> View {
                         let mut right = view().flex_row().items_center().gap(sp(S2)).child(text(word).text_size(tx(TEXT_XS)).text_color(tone));
                         if s.state == State::NeedsAuth {
                             right = if signing {
-                                right.child(eclipse(14.0)).child(text(t("Waiting for the browser…")).text_size(tx(TEXT_XS)).text_color(FG_MUTED()))
+                                right.child(spinner(14.0)).child(text(t("Waiting for the browser…")).text_size(tx(TEXT_XS)).text_color(FG_MUTED()))
                             } else if MOBILE {
                                 right.child(text(t("Sign in on the computer")).text_size(tx(TEXT_XS)).text_color(FG_FAINT()))
                             } else {
@@ -1481,9 +1481,11 @@ fn import_list(
         )
         .child(btn(
             move || -> SharedString { if reviewing.get() { t("Hide").into() } else { tf("Review all {}", &[&total.to_string()]).into() } },
-            Variant::Ghost,
+            // A control, not a line of text: outlined, with the chevron a
+            // list that opens has.
+            Variant::Outline,
             Sz::Sm,
-            None,
+            Some(Icon::ChevronDown),
             move || reviewing.update(|r| *r = !*r),
         ));
     let all_select = all.clone();

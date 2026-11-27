@@ -285,7 +285,7 @@ pub(crate) fn inbox_page() -> impl IntoElement {
                         .hover(|s| s.bg(highlight()))
                         .child(dynamic(move || {
                             let busy = loading.get();
-                            Some(untracked(move || if busy { eclipse(13.0).into_element() } else { icon(Icon::RotateCw, 13.0).text_color(FG_MUTED()).into_element() }))
+                            Some(untracked(move || if busy { spinner(13.0).into_element() } else { icon(Icon::RotateCw, 13.0).text_color(FG_MUTED()).into_element() }))
                         })),
                 ),
         )
@@ -306,7 +306,7 @@ pub(crate) fn inbox_page() -> impl IntoElement {
             Some(untracked(move || {
                 if list.is_empty() {
                     if !any && busy {
-                        return view().py(sp(S8)).items_center().child(eclipse(18.0)).into_element();
+                        return view().py(sp(S8)).items_center().child(spinner(18.0)).into_element();
                     }
                     let failed = crate::github::STATES.iter().find_map(|s| store::github(&format!("inbox:{s}")).and_then(Result::err));
                     let words = match failed {
@@ -612,7 +612,7 @@ pub(crate) fn pull_request(repo: String, number: u64, agent: Option<String>, fix
         let detail = detail.get();
         let (repo, agent, fixed) = (repo2.clone(), agent.clone(), fixed.clone());
         Some(untracked(move || match detail {
-            None => view().flex_1().items_center().pt(px(80.0)).child(eclipse(20.0)).into_element(),
+            None => view().flex_1().items_center().pt(px(80.0)).child(spinner(20.0)).into_element(),
             Some(Err(e)) => failure(e).into_element(),
             Some(Ok(v)) => {
                 let d = Detail::from_json(&v);
@@ -858,7 +858,7 @@ fn actions(repo: &str, d: &Detail, busy: Memo<bool>) -> View {
                 .child(icon(Icon::ExternalLink, 14.0).text_color(FG_MUTED()))
                 .child(text(t("Review on GitHub")).text_size(tx(TEXT_SM)).text_color(FG_MUTED())),
         )
-        .child(when(move || busy.get(), || eclipse(16.0)));
+        .child(when(move || busy.get(), || spinner(16.0)));
     let conflicting = open && d.mergeable.eq_ignore_ascii_case("CONFLICTING");
     view()
         .gap(sp(S2))

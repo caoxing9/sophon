@@ -14,6 +14,7 @@ pub(crate) fn settings() -> impl IntoElement {
         .flex_1()
         .child(page(
             true,
+            t("Settings"),
             view()
                 .child(section(t("Appearance"), appearance_card()))
                 .child(section(t("Sending"), sending_card()))

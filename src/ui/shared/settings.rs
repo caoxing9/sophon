@@ -223,6 +223,7 @@ pub(crate) fn sending_card() -> View {
                 (ToolDisplay::Auto, t("Expanded").into()),
                 (ToolDisplay::Folded, t("Folded").into()),
                 (ToolDisplay::Quiet, t("Quiet").into()),
+                (ToolDisplay::Stream, t("Live").into()),
                 (ToolDisplay::Hidden, t("Hidden").into()),
             ],
             store::tool_display,
@@ -297,7 +298,7 @@ pub(crate) fn notifications_card() -> View {
                     NotifyWhen::Away => t("Only when unfocused"),
                     NotifyWhen::Always => t("Always"),
                 };
-                dropdown(picker_trigger(None, move || SharedString::from(name(store::settings().notify_finished))))
+                dropdown(select_trigger(None, move || SharedString::from(name(store::settings().notify_finished))))
                     .align(nsh_core::overlay::Align::End)
                     .child(dynamic(move || {
                         let current = store::settings().notify_finished;
@@ -433,22 +434,18 @@ pub(crate) fn storage_card() -> View {
         ))
 }
 
-/// The settings page frame: a centered column under the title.
-pub(crate) fn page(compact: bool, sections: View) -> impl IntoElement {
+/// The settings page frame: a centered column under the title (the
+/// section of the settings shown, on the desktop).
+pub(crate) fn page(compact: bool, title: &'static str, sections: View) -> impl IntoElement {
     scroll().flex_1().child(
-        view()
-            .w_full()
-            .max_w(px(720.0))
-            .self_center()
-            .px(px(if compact { S4 } else { S6 }))
-            .py(px(if compact { S4 } else { S8 }))
+        page_column(compact)
             .gap(px(if compact { S6 } else { S8 }))
             .child(
                 view()
                     .flex_row()
                     .items_center()
                     .gap(sp(S2))
-                    .child(text(t("Settings")).text_size(tx(TEXT_2XL)).font_weight(FontWeight(500))),
+                    .child(page_title(title)),
             )
             .child(sections.gap(px(if compact { S6 } else { S8 }))),
     )
@@ -533,7 +530,7 @@ pub(crate) fn default_model_card() -> View {
         .child(row(
             t("Default model"),
             t("What a new conversation starts with. It can still be changed in the conversation"),
-            dropdown(picker_trigger(Some(Icon::Cpu), move || label.get()))
+            dropdown(select_trigger(Some(Icon::Cpu), move || label.get()))
                 .align(nsh_core::overlay::Align::End)
                 .child(dynamic(move || {
                     let current = store::default_model();
@@ -576,7 +573,7 @@ pub(crate) fn default_model_card() -> View {
             Some(untracked(move || {
                 let now = d.thinking.clone().filter(|t| model.levels.iter().any(|(id, _)| id == t)).or(model.default_level.clone());
                 let shown = model.levels.iter().find(|(id, _)| Some(id) == now.as_ref()).map(|(_, l)| l.clone()).unwrap_or_default();
-                let mut menu = dropdown(picker_trigger(Some(Icon::Brain), shown)).align(nsh_core::overlay::Align::End);
+                let mut menu = dropdown(select_trigger(Some(Icon::Brain), shown)).align(nsh_core::overlay::Align::End);
                 for (id, level) in &model.levels {
                     let (on, pick) = (Some(id) == now.as_ref(), DefaultModel { thinking: Some(id.clone()), ..d.clone() });
                     menu = menu.child(menu_row(level.clone(), None, None, on, move || store::set_default_model(Some(pick.clone()))));
@@ -601,10 +598,10 @@ pub(crate) fn text_generation_card() -> View {
         t("Names chats and branches. A small, fast model is plenty and costs less"),
         dynamic(move || {
             if !loaded.get() {
-                return Some(untracked(|| eclipse(20.0).into_element()));
+                return Some(untracked(|| spinner(20.0).into_element()));
             }
             Some(untracked(move || {
-                dropdown(picker_trigger(Some(Icon::Cpu), move || label.get()))
+                dropdown(select_trigger(Some(Icon::Cpu), move || label.get()))
                     .align(nsh_core::overlay::Align::End)
                     .child(dynamic(move || {
                         let current = store::text_generation_model();
@@ -682,7 +679,7 @@ pub(crate) fn behavior_card() -> impl IntoElement {
     });
     view().child(dynamic(move || {
         if !loaded.get() {
-            return Some(untracked(|| eclipse(20.0).into_element()));
+            return Some(untracked(|| spinner(20.0).into_element()));
         }
         Some(untracked(move || {
             card()

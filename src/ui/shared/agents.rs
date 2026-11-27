@@ -145,7 +145,9 @@ fn agent_row(
         .items_center()
         .gap(sp(S2))
         .child(text(p.label.clone()).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)));
-    if let Some(v) = &d.version {
+    // The version alone (`2.1.3`): what the CLI said when asked may be a
+    // failure ("did not answer"), not a version to show beside its name.
+    if let Some(v) = &installed {
         title = title.child(text(v.clone()).font_family(mono_font).text_size(tx(TEXT_SM)).text_color(FG_MUTED()));
     }
     if let (Some(latest), Some(path)) = (&newer, &d.path)
@@ -735,11 +737,14 @@ pub(crate) fn add_provider() -> View {
         Some((id, k))
     });
     let problem = computed(move || match kind.get() {
-        Kind::Account(_) if name.with(|n| n.trim().is_empty()) => Some(t("Give it a name")),
-        Kind::Account(_) if target.with(Option::is_none) => Some(t("Use a full path: Sophon does not know that computer's home folder")),
-        Kind::Account(Base::Antigravity) => agents::agy_problem(agy_auth.get(), &key.get(), &gcp_project.get()).map(t),
+        Kind::Account(_) if name.with(|n| n.trim().is_empty()) => Some(t("Give it a name").to_owned()),
+        Kind::Account(_) if target.with(Option::is_none) => Some(t("Use a full path: Sophon does not know that computer's home folder").to_owned()),
+        Kind::Account(b) if let Some(other) = target.with(|d| d.as_deref().and_then(|d| agents::same_folder(store::daemon_config().as_ref(), b, d))) => {
+            Some(tf("“{}” already uses this folder: it would be the same account twice", &[&other]))
+        }
+        Kind::Account(Base::Antigravity) => agents::agy_problem(agy_auth.get(), &key.get(), &gcp_project.get()).map(|p| t(p).to_owned()),
         Kind::Account(_) => None,
-        Kind::Endpoint(_) => endpoint.with(|e| e.as_ref().and_then(|(_, k)| agents::key_instance_problem(k)).map(t)),
+        Kind::Endpoint(_) => endpoint.with(|e| e.as_ref().and_then(|(_, k)| agents::key_instance_problem(k)).map(|p| t(p).to_owned())),
     });
 
     let add = move || {

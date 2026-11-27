@@ -3,7 +3,7 @@
 
 #![allow(dead_code)]
 
-use nsh_shadcn::{DropdownMenuElement, DropdownMenuItemElement, DropdownMenuLabelElement};
+use nsh_shadcn::{DropdownMenuElement, DropdownMenuItemElement};
 use nsh_core::{
     element::{FontWeight, View},
     prelude::*,
@@ -72,21 +72,58 @@ pub(crate) fn menu_row(
     item
 }
 
-/// A destructive row (archive, remove).
+/// A destructive row (archive, remove): laid out as every row (its icon
+/// first, the label the rows' size), in the destructive color. Built on
+/// the item's own label, the icon came after the words and the words a
+/// size larger.
 pub(crate) fn menu_row_danger(label: &'static str, lead: Icon, on_select: impl Fn() + 'static) -> DropdownMenuItemElement {
-    nsh_shadcn::dropdown_menu_item(label)
+    nsh_shadcn::dropdown_menu_item("")
+        .label(None::<SharedString>)
         .destructive()
-        .child(icon(lead, 16.0).text_color(DESTRUCTIVE))
         .on_select(on_select)
+        .child(icon(lead, 16.0).text_color(DESTRUCTIVE))
+        .child(text(label).text_size(tx(TEXT_SM)).text_color(DESTRUCTIVE).number_of_lines(1).flex_1())
 }
 
-/// A heading inside a menu.
-pub(crate) fn menu_heading(label: impl Into<SharedString>) -> DropdownMenuLabelElement {
-    nsh_shadcn::dropdown_menu_label(label)
+/// A heading inside a menu: small and muted over its rows, as shadcn's
+/// label reads (it was the rows' size and bolder, louder than they).
+pub(crate) fn menu_heading(label: impl Into<SharedString>) -> View {
+    let label: SharedString = label.into();
+    view()
+        .px(sp(S2))
+        .pt(px(6.0))
+        .pb(px(4.0))
+        .child(text(label).text_size(tx(TEXT_XS)).font_weight(nsh_core::element::FontWeight(500)).text_color(FG_MUTED()).number_of_lines(1))
 }
 
 pub(crate) fn menu_divider() -> impl IntoElement {
     nsh_shadcn::dropdown_menu_separator()
+}
+
+/// A select's trigger on a form (a settings row): outlined as the form's
+/// buttons are (the font pickers beside it), its value in the text color
+/// and a chevron at its end. The toolbar's pill (`picker_trigger`), bare
+/// and muted, read as loose words there.
+pub(crate) fn select_trigger(lead: Option<Icon>, label: impl IntoReactive<SharedString>) -> View {
+    let mut v = view()
+        .flex_row()
+        .items_center()
+        .gap(px(6.0))
+        .h(px(if MOBILE { 36.0 } else { 32.0 }))
+        .pl(sp(S3))
+        .pr(sp(S2))
+        .min_w(px(0.0))
+        .flex_shrink(1.0)
+        .rounded(px(R_MD))
+        .border_1()
+        .border_color(BORDER())
+        .bg(SURFACE0())
+        .hover(|s| s.bg(highlight()));
+    if let Some(lead) = lead {
+        v = v.child(icon(lead, 15.0).text_color(FG_MUTED()));
+    }
+    v.child(text(label).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG()).number_of_lines(1).max_w(px(220.0)).flex_shrink(1.0))
+        .child(icon(Icon::ChevronDown, 14.0).text_color(FG_MUTED()))
 }
 
 /// A pill trigger for a picker in a toolbar: icon, label, chevron.

@@ -198,6 +198,17 @@ pub fn remove_patch(id: &str) -> Value {
     json!({ "removeProviders": [id] })
 }
 
+/// The name of the account already on `dir` (another of `base`'s, with its
+/// own folder): adding it again would be the same account twice.
+pub fn same_folder(config: Option<&Value>, base: Base, dir: &str) -> Option<String> {
+    let dir = dir.trim_end_matches('/');
+    config?.get("providers")?.as_object()?.iter().find_map(|(id, e)| {
+        let on = e.get("extends").and_then(Value::as_str) == Some(base.id())
+            && e.get("env").and_then(|env| env.get(base.home_var())).and_then(Value::as_str).map(|d| d.trim_end_matches('/')) == Some(dir);
+        on.then(|| e.get("label").and_then(Value::as_str).unwrap_or(id).to_owned())
+    })
+}
+
 /// What an instance runs on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Base {
@@ -630,6 +641,10 @@ mod tests {
     fn enable_and_remove_patch_only_their_keys() {
         assert_eq!(enable_patch("copilot", false), json!({ "providers": { "copilot": { "enabled": false } } }));
         assert_eq!(remove_patch("work"), json!({ "removeProviders": ["work"] }));
+        let agy = json!({"providers":{"work":{"extends":"antigravity","label":"Antigravity (work)","env":{"GEMINI_HOME":"/h/.sophon-antigravity-work"}}}});
+        assert_eq!(same_folder(Some(&agy), Base::Antigravity, "/h/.sophon-antigravity-work/").as_deref(), Some("Antigravity (work)"), "the same account again");
+        assert_eq!(same_folder(Some(&agy), Base::Antigravity, "/h/.sophon-antigravity-home"), None);
+        assert_eq!(same_folder(Some(&agy), Base::Claude, "/h/.sophon-antigravity-work"), None, "another CLI's");
         let p = Provider { id: "omp".into(), enabled: false, ..Default::default() };
         assert!(!enabled(None, &p));
         assert!(enabled(Some(&json!({ "providers": { "omp": { "enabled": true } } })), &p));

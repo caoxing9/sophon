@@ -22,12 +22,7 @@ use crate::{
 pub(crate) fn usage_page(compact: bool) -> impl IntoElement {
     let range = signal(Range::Week);
     scroll().flex_1().child(
-        view()
-            .w_full()
-            .max_w(px(CONTENT_MAX_WIDTH() + 80.0))
-            .self_center()
-            .px(sp(S6))
-            .py(sp(S8))
+        page_column(compact)
             .gap(sp(S6))
             .child(
                 view()
@@ -35,7 +30,7 @@ pub(crate) fn usage_page(compact: bool) -> impl IntoElement {
                     .items_center()
                     .gap(sp(S2))
                     .when(compact, |v| v.child(icon_btn(Icon::ArrowLeft, Sz::Sm, t("Back"), store::go_home)))
-                    .child(text(t("Usage")).text_size(tx(TEXT_2XL)).font_weight(FontWeight(500)).flex_1())
+                    .child(page_title(t("Usage")).flex_1())
                     .child(icon_btn(Icon::RotateCw, Sz::Md, t("Refresh"), store::refresh_usage)),
             )
             .child(history_section(range))
@@ -76,7 +71,7 @@ fn history_section(range: Signal<Range>) -> View {
                         // screen: the small mark beside the title, on the
                         // phone and the desktop alike.
                         .child(dynamic(move || {
-                            local.with(|l| l.loading && l.report.is_some()).then(|| untracked(|| eclipse(18.0).into_element()))
+                            local.with(|l| l.loading && l.report.is_some()).then(|| untracked(|| spinner(18.0).into_element()))
                         })),
                 )
                 .child(segmented(
@@ -135,7 +130,7 @@ fn muted(s: &str) -> nsh_core::element::Text {
 fn tile(label: &str, value: String, note: Option<String>) -> View {
     view()
         .flex_1()
-        .min_w(px(120.0))
+        .min_w(px(if MOBILE { 120.0 } else { 0.0 }))
         .p(sp(S3))
         .gap(px(2.0))
         .rounded(px(R_XL))
@@ -143,7 +138,7 @@ fn tile(label: &str, value: String, note: Option<String>) -> View {
         .border_color(BORDER())
         .bg(SURFACE0())
         .child(text(label.to_owned()).text_size(tx(TEXT_XS)).text_color(FG_MUTED()).number_of_lines(1))
-        .child(text(value).text_size(tx(TEXT_XL)).font_weight(FontWeight(500)).font_family(mono_font).number_of_lines(1))
+        .child(text(value).text_size(tx(TEXT_XL)).font_weight(FontWeight(600)).number_of_lines(1))
         .when_some(note, |v, n| v.child(text(n).text_size(tx(TEXT_XS)).text_color(FG_FAINT()).number_of_lines(2)))
 }
 
@@ -154,10 +149,14 @@ fn hit_rate(t: &usage::Tokens) -> String {
 fn totals(tot: &Totals) -> View {
     let k = tot.tokens;
     let unpriced = (tot.unpriced > 0).then(|| tf("{} tokens unpriced", &[&usage::compact(tot.unpriced)]));
+    // One row of six on the desktop (the page has room). The row's first
+    // child is laid out but not painted (an nsh fault, whichever tile it
+    // is): an empty one goes first, and the gap with it.
     view()
         .flex_row()
-        .flex_wrap()
+        .when(MOBILE, |v| v.flex_wrap())
         .gap(sp(S2))
+        .child(view().w(px(0.0)).h(px(0.0)).ml(px(-S2)))
         .child(tile(t("Est. cost"), usage::dollars(tot.cost), unpriced))
         .child(tile(t("Input"), usage::compact(k.input), None))
         .child(tile(t("Output"), usage::compact(k.output), None))
@@ -351,7 +350,9 @@ fn provider_card(p: &ProviderUsage, history: &limits::History) -> View {
             .child(text(p.plan.clone().unwrap_or_default()).text_size(tx(TEXT_SM)).text_color(FG_MUTED())),
     );
     if let Some(e) = p.error.clone() {
-        c = c.child(text(e).text_size(tx(TEXT_SM)).text_color(DANGER));
+        // Mostly a state (not signed in there), not a failure: said
+        // quietly, as the card's other notes are.
+        c = c.child(text(e).text_size(tx(TEXT_SM)).text_color(FG_MUTED()));
     }
     for w in &p.windows {
         let points = history.windows.get(&store::limit_key(p, w)).map(Vec::as_slice).unwrap_or_default();
@@ -453,7 +454,7 @@ fn resets_row(provider: String) -> View {
                             let (provider, option) = (provider.clone(), option.clone());
                             Some(untracked(move || {
                                 if busy {
-                                    return eclipse(16.0).into_element();
+                                    return spinner(16.0).into_element();
                                 }
                                 btn(t("Use"), Variant::Outline, Sz::Sm, None, move || store::confirm_reset(&provider, option.clone())).into_element()
                             }))

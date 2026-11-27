@@ -83,25 +83,49 @@ mod native {
     pub use tokio::time::sleep;
 
     type Ws = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+    /// Peer to peer: the WebSocket over an iroh stream.
+    type P2p = WebSocketStream<super::super::p2p::Stream>;
 
-    pub struct WsTx(SplitSink<Ws, tungstenite::Message>);
-    pub struct WsRx(SplitStream<Ws>);
+    pub enum WsTx {
+        Tcp(SplitSink<Ws, tungstenite::Message>),
+        P2p(SplitSink<P2p, tungstenite::Message>),
+    }
+    pub enum WsRx {
+        Tcp(SplitStream<Ws>),
+        P2p(SplitStream<P2p>),
+    }
 
+    /// A WebSocket to `url`; `iroh://<endpoint id>` is a paired computer
+    /// reached peer to peer.
     pub async fn connect(url: &str) -> Result<(WsTx, WsRx), String> {
+        if let Some((id, relay)) = super::super::p2p::parse_url(url) {
+            let stream = super::super::p2p::connect(&id, relay.as_deref()).await?;
+            let (ws, _) = tokio_tungstenite::client_async("ws://sophon.p2p/ws", stream).await.map_err(|e| e.to_string())?;
+            let (tx, rx) = ws.split();
+            return Ok((WsTx::P2p(tx), WsRx::P2p(rx)));
+        }
         let (ws, _) = tokio_tungstenite::connect_async(url).await.map_err(|e| e.to_string())?;
         let (tx, rx) = ws.split();
-        Ok((WsTx(tx), WsRx(rx)))
+        Ok((WsTx::Tcp(tx), WsRx::Tcp(rx)))
     }
 
     impl WsTx {
         pub async fn send(&mut self, m: Message) -> Result<(), String> {
-            self.0.send(to_ws(m)).await.map_err(|e| e.to_string())
+            match self {
+                Self::Tcp(tx) => tx.send(to_ws(m)).await,
+                Self::P2p(tx) => tx.send(to_ws(m)).await,
+            }
+            .map_err(|e| e.to_string())
         }
     }
 
     impl WsRx {
         pub async fn next(&mut self) -> Option<Result<Message, String>> {
-            self.0.next().await.map(|r| r.map(from_ws).map_err(|e| e.to_string()))
+            let frame = match self {
+                Self::Tcp(rx) => rx.next().await,
+                Self::P2p(rx) => rx.next().await,
+            };
+            frame.map(|r| r.map(from_ws).map_err(|e| e.to_string()))
         }
     }
 

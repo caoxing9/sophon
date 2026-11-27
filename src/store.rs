@@ -1785,6 +1785,15 @@ pub(crate) fn providers() -> Vec<Provider> {
     global::<Providers>().with(|p| p.0.clone())
 }
 
+/// What a provider is called where it is named (`Claude`, not `claude`):
+/// its label, else its id with a capital.
+pub(crate) fn provider_name(id: &str) -> String {
+    provider(id).map(|p| p.label).filter(|l| !l.is_empty()).unwrap_or_else(|| {
+        let mut c = id.chars();
+        c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+    })
+}
+
 pub(crate) fn provider(id: &str) -> Option<Provider> {
     global::<Providers>().with(|p| p.0.iter().find(|p| p.id == id).cloned())
 }
@@ -2229,6 +2238,33 @@ pub(crate) fn group_summary(start: usize, end: usize) -> crate::fold::Summary {
     global::<Timeline>().with(|t| crate::fold::summarize(t.items.get(start..end).unwrap_or_default()))
 }
 
+/// A live turn's work (`start..end`): how many steps, and its last `n`.
+pub(crate) fn work_steps(start: usize, end: usize, n: usize) -> (usize, Vec<crate::fold::Step>) {
+    global::<Timeline>().with(|t| crate::fold::steps(t.items.get(start..end).unwrap_or_default(), n))
+}
+
+/// A done turn's work (`start..end`) for its line, with how long the turn
+/// took: from the user's message to its reply.
+pub(crate) fn work_tally(start: usize, end: usize) -> (crate::fold::Tally, Option<u64>) {
+    global::<Timeline>().with(|t| {
+        let tally = crate::fold::tally(t.items.get(start..end).unwrap_or_default());
+        let at = |i: Option<usize>| match i.and_then(|i| t.items.get(i)) {
+            Some(Item::User { at, .. } | Item::Assistant { at, .. }) => at.as_deref().and_then(crate::usage::parse::rfc3339),
+            _ => None,
+        };
+        let took = match (at(start.checked_sub(1)), at(Some(end))) {
+            (Some(from), Some(to)) if to >= from => Some((to - from) as u64),
+            _ => None,
+        };
+        (tally, took)
+    })
+}
+
+/// The files a turn (`start..end`) changed.
+pub(crate) fn turn_changes(start: usize, end: usize) -> Vec<crate::fold::FileChange> {
+    global::<Timeline>().with(|t| crate::fold::changes(t.items.get(start..end).unwrap_or_default()))
+}
+
 /// Opens or folds a group of tool calls.
 /// The conversation's list scrolled: its offset from the top, the
 /// content's height and its own. Keeps how far it is from its end, and
@@ -2370,7 +2406,7 @@ pub(crate) fn set_group_open(id: &str, open: bool) {
         // the top once they are laid out, where it folds them again.
         let id = id.to_owned();
         set_timeout(std::time::Duration::from_millis(60), move || {
-            let row = untracked(display_rows).iter().position(|r| matches!(r, crate::fold::Row::Group(g) if g.id == id));
+            let row = untracked(display_rows).iter().position(|r| matches!(r, crate::fold::Row::Group(g) | crate::fold::Row::Work(g) if g.id == id));
             if let Some(row) = row {
                 TIMELINE_LIST.with_borrow(|l| {
                     if let Some(list) = l {
@@ -2927,10 +2963,14 @@ pub(crate) fn pairing_link(daemon_relay: Option<&str>) -> Option<String> {
     #[cfg(not(target_arch = "wasm32"))]
     let lan = {
         let home = space.as_ref().and_then(|h| crate::spaces::home_of(&h.url)).map(|h| h.to_string_lossy().into_owned());
-        crate::daemon::bridge::info_for(home.as_deref()).map(|b| (b.addr, b.key, b.token))
+        crate::daemon::bridge::info_for(home.as_deref())
     };
+    #[cfg(not(target_arch = "wasm32"))]
+    let p2p = lan.as_ref().and_then(|b| b.p2p.clone().map(|id| (id, b.p2p_relay.clone())));
+    #[cfg(not(target_arch = "wasm32"))]
+    let lan = lan.map(|b| (b.addr, b.key, b.token));
     #[cfg(target_arch = "wasm32")]
-    let lan: Option<(String, [u8; 32], String)> = None;
+    let (lan, p2p): (Option<(String, [u8; 32], String)>, Option<(String, Option<String>)>) = (None, None);
     if lan.is_none() && relay_link.is_none() {
         return None;
     }
@@ -2939,6 +2979,7 @@ pub(crate) fn pairing_link(daemon_relay: Option<&str>) -> Option<String> {
         lan.as_ref().map(|(a, k, t)| (a.as_str(), k, t.as_str())),
         relay_link,
         name.as_deref(),
+        p2p.as_ref().map(|(id, relay)| (id.as_str(), relay.as_deref())),
     ))
 }
 
@@ -4506,22 +4547,60 @@ pub(crate) fn steer_queued(agent_id: &str, index: usize) {
 /// with pictures or files stays where it is: those stand as chips in
 /// the composer's text, which only the composer that made them has.
 pub(crate) fn edit_queued(agent_id: &str, index: usize) {
+    use crate::ui::shared::composer_doc::{self, Chip, Kind, Part, Segment};
     let mut taken = None;
     global::<Queues>().update(|q| {
         if let Some(list) = q.0.get_mut(agent_id)
-            && list.get(index).is_some_and(|m| m.images.is_empty() && m.attachments.is_empty())
+            && index < list.len()
         {
             taken = Some(list.remove(index));
         }
     });
     let Some(message) = taken else { return };
-    let mut text = message.text;
-    let writing = draft(agent_id);
-    if !writing.trim().is_empty() {
-        text.push('\n');
-        text.push_str(&writing);
+    // Its attachments wait in the composer again (a file is on the host
+    // already: not sent again), each with a chip.
+    let mut chips: Vec<Chip> = Vec::new();
+    for image in message.images {
+        let id = uuid::Uuid::new_v4().to_string();
+        chips.push(Chip { id: id.clone(), kind: Kind::Image, name: image.name.clone(), mime: image.mime.clone() });
+        global::<PendingImages>().update(|p| p.0.entry(agent_id.to_owned()).or_default().push(PendingImage { id, image, detached: false }));
     }
-    set_draft(agent_id, &text);
+    for attachment in message.attachments {
+        let field = |k: &str| attachment.get(k).and_then(serde_json::Value::as_str).unwrap_or_default().to_owned();
+        let (name, mime) = (field("fileName"), field("mimeType"));
+        let size = attachment.get("size").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize;
+        let id = uuid::Uuid::new_v4().to_string();
+        chips.push(Chip { id: id.clone(), kind: Kind::File, name: name.clone(), mime: mime.clone() });
+        let file = PendingFile { id, name, mime, size, attachment: Some(attachment), detached: false };
+        global::<PendingFiles>().update(|p| p.0.entry(agent_id.to_owned()).or_default().push(file));
+    }
+    // Its words, each chip where its `[name]` stood; any not named, after.
+    let mut parts: Vec<Part> = Vec::new();
+    for segment in composer_doc::segments(&message.text) {
+        match segment {
+            Segment::Text(t) => parts.push(Part::Text(t)),
+            Segment::Chip(name) => match chips.iter().position(|c| c.name.replace(['[', ']', '\n'], " ").trim() == name) {
+                Some(i) => parts.push(Part::Chip(chips.remove(i))),
+                None => parts.push(Part::Text(format!("[{name}]"))),
+            },
+        }
+    }
+    parts.extend(chips.into_iter().map(Part::Chip));
+    match composer_doc::existing(&format!("agent:{agent_id}")) {
+        Some(session) => {
+            composer_doc::prepend_parts(&session, &parts);
+            // The draft as the composer now holds it: the composer keeps
+            // its document (chips and all) when they agree.
+            let text = composer_doc::outgoing(session.state().doc()).text;
+            set_draft(agent_id, &text);
+        }
+        // No composer made yet: its words alone, as before.
+        None => {
+            let words: String = parts.iter().filter_map(|p| if let Part::Text(t) = p { Some(t.as_str()) } else { None }).collect();
+            let writing = draft(agent_id);
+            set_draft(agent_id, &if writing.trim().is_empty() { words } else { format!("{words}\n{writing}") });
+        }
+    }
 }
 
 pub(crate) fn unqueue(agent_id: &str, index: usize) {
@@ -7814,7 +7893,7 @@ pub(crate) fn apply(event: Event) {
                 }
             });
         }
-        Event::Notice(message) => notify(crate::i18n::tr(&message)),
+        Event::Notice(message) => notify(crate::i18n::tr_notice(&message)),
     }
 }
 

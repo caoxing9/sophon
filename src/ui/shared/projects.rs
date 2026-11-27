@@ -190,7 +190,7 @@ pub(crate) fn projects_heading(actions: bool) -> View {
         .pr(px(2.0))
         .h(px(28.0))
         .child(section_label(t("Projects")).flex_1())
-        .when(actions && !MOBILE, |v| v.child(icon_btn(Icon::Plus, Sz::Sm, t("Add project"), || store::open_modal(store::Modal::AddProject))))
+        .when(actions && !MOBILE, |v| v.child(row_btn(Icon::Plus, t("Add project"), || store::open_modal(store::Modal::AddProject))))
 }
 
 fn group(g: ReadSignal<store::Group>, actions: bool) -> AnyElement {
@@ -376,13 +376,13 @@ fn conversation_row(agent: ReadSignal<crate::daemon::Agent>, actions: bool) -> i
     let menu_open = signal(false);
     let more = dropdown(
         view()
-            .w(px(24.0))
-            .h(px(24.0))
+            .w(px(ROW_BTN))
+            .h(px(ROW_BTN))
             .items_center()
             .justify_center()
-            .rounded(px(R_FULL))
+            .rounded(px(R_MD))
             .hover(|s| s.bg(highlight()))
-            .child(icon(Icon::Ellipsis, 15.0).text_color(FG_FAINT())),
+            .child(icon(Icon::Ellipsis, 14.0).text_color(FG_FAINT())),
     )
     .align(nsh_core::overlay::Align::End)
     .on_open_change(move |open: &bool| menu_open.set(*open))
@@ -479,10 +479,10 @@ fn hover_actions(pinned: Memo<bool>, pin: impl Fn(bool) + 'static, archive: impl
             let on = pinned.get();
             let pin = pin.clone();
             Some(untracked(move || {
-                icon_btn(if on { Icon::PinOff } else { Icon::Pin }, Sz::Sm, if on { t("Unpin") } else { t("Pin") }, move || pin(!on))
+                row_btn(if on { Icon::PinOff } else { Icon::Pin }, if on { t("Unpin") } else { t("Pin") }, move || pin(!on))
             }))
         }))
-        .child(icon_btn(Icon::Archive, Sz::Sm, t("Archive"), archive))
+        .child(row_btn(Icon::Archive, t("Archive"), archive))
 }
 
 /// How far the pointer goes before a press on a project's header is a drag.
@@ -579,7 +579,7 @@ fn project_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
     };
     header
         .when(actions, |v| {
-            v.child(view().flex_row().items_center().opacity(if MOBILE { 1.0 } else { 0.0 }).group_hover(|s| s.opacity(1.0)).transition_opacity().child(icon_btn(Icon::Plus, Sz::Sm, t("New workspace in project"), move || {
+            v.child(view().flex_row().items_center().opacity(if MOBILE { 1.0 } else { 0.0 }).group_hover(|s| s.opacity(1.0)).transition_opacity().child(row_btn(Icon::Plus, t("New workspace in project"), move || {
                 if let Some(p) = project.get_untracked().filter(|p| !p.root_path.is_empty()) {
                     store::new_chat_in(p.root_path);
                 }
@@ -587,14 +587,14 @@ fn project_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
             .child(
                 dropdown(
                     view()
-                        .w(px(24.0))
-                        .h(px(24.0))
+                        .w(px(ROW_BTN))
+                        .h(px(ROW_BTN))
                         .items_center()
                         .justify_center()
-                        .rounded(px(R_FULL))
+                        .rounded(px(R_MD))
                         .hover(|s| s.bg(highlight()))
                         .label(t("Project actions"))
-                        .child(icon(Icon::Ellipsis, 15.0).text_color(FG_FAINT())),
+                        .child(icon(Icon::Ellipsis, 14.0).text_color(FG_FAINT())),
                 )
                 .align(nsh_core::overlay::Align::End)
                 .child(dynamic(move || {
@@ -690,13 +690,13 @@ fn workspace_row(item: Memo<Option<Row>>, actions: bool) -> impl IntoElement {
     let menu_open = signal(false);
     let more = dropdown(
         view()
-            .w(px(24.0))
-            .h(px(24.0))
+            .w(px(ROW_BTN))
+            .h(px(ROW_BTN))
             .items_center()
             .justify_center()
-            .rounded(px(R_FULL))
+            .rounded(px(R_MD))
             .hover(|s| s.bg(highlight()))
-            .child(icon(Icon::Ellipsis, 15.0).text_color(FG_FAINT())),
+            .child(icon(Icon::Ellipsis, 14.0).text_color(FG_FAINT())),
     )
     .align(nsh_core::overlay::Align::End)
     .on_open_change(move |open: &bool| menu_open.set(*open))

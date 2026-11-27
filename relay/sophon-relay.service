@@ -13,6 +13,27 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 LimitNOFILE=65536
+# Held in, so a fault in it stays inside the service: no privileges, no
+# devices, no kernel settings, only the network and its own files.
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0077
 # The push gateway's own key (push.key): /var/lib/sophon-relay, kept across restarts.
 StateDirectory=sophon-relay
 StateDirectoryMode=0700

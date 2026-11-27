@@ -123,6 +123,28 @@ pub(crate) fn icon_btn(glyph: Icon, size: Sz, label: &'static str, on_press: imp
         .on_press(on_press)
 }
 
+/// An icon button inside a list row (the sidebar's +, pin, archive, …):
+/// 24 points, so it fits a 28-point row, rounded as the row is, its glyph
+/// faint until the pointer is on it. `icon_btn`'s smallest (32) stood out
+/// of the rows as a square.
+pub(crate) fn row_btn(glyph: Icon, label: &'static str, on_press: impl Fn() + 'static) -> nsh_base::ButtonElement {
+    nsh_base::button()
+        .on_press(on_press)
+        .accessibility_label(label)
+        .w(px(ROW_BTN))
+        .h(px(ROW_BTN))
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .rounded(px(R_MD))
+        .group()
+        .hover(|s| s.bg(highlight()))
+        .child(icon(glyph, 14.0).text_color(FG_FAINT()).group_hover(|s| s.text_color(FG())))
+}
+
+/// A row button's side ([`row_btn`]), and the "…" menus' beside them.
+pub(crate) const ROW_BTN: f32 = 24.0;
+
 /// A single-line text field: nsh-shadcn's Input look on a field of
 /// Sophon's own (its fonts, its events). Its width is the caller's: a
 /// class wins over the field's own `w(..)`, so shadcn's `w-full` (a field
@@ -134,6 +156,13 @@ pub(crate) fn field() -> InputElement {
         );
     }
     input().app_class(Some(CLASSES.with(Clone::clone)))
+}
+
+/// An input without the box (no border, fill or ring): a title edited in
+/// place, as the automation's name at the head of its page. `field`'s
+/// classes would draw over any border or fill set after them.
+pub(crate) fn bare_field() -> InputElement {
+    input()
 }
 
 /// A segmented control: nsh-shadcn's Tabs list (a muted track, the
@@ -388,68 +417,30 @@ pub(crate) fn ambient() -> View {
         .bg(SURFACE0())
 }
 
-/// Loading: an eclipse passing, drawn rather than the icon's layers (no
-/// tile, no box, on light pages and dark): the sun, a disc of the accent;
-/// the moon, a disc of the page, sliding in from the left until it covers
-/// the sun; at totality the corona flares round it and fades; the moon
-/// slides on and the sun comes back. 2.4 s a pass, eased at both ends. All
-/// natively, animated values bound to translation, scale and opacity: no
-/// layout or engine work per frame.
-pub(crate) fn eclipse(size: f32) -> View {
-    let disc = size * 0.62;
-    let travel = disc * 1.05;
-    let moon_x = animated_value(-travel);
-    let corona = animated_value(0.0);
-    let flare = animated_value(0.9);
-    let glide = nsh_core::element::Timing::new(1000.0, Easing::EaseInOut);
-    Animation::sequence([
-        Animation::timing(&moon_x, 0.0, glide.clone()),
-        Animation::delay(250.0),
-        Animation::timing(&moon_x, travel, glide),
-        Animation::delay(150.0),
-        Animation::timing(&moon_x, -travel, nsh_core::element::Timing::new(0.0, Easing::Linear)),
-    ])
-    .looped(None)
-    .start();
-    // The corona: dark until the moon nearly covers the sun, a flare at
-    // totality (brightening and opening out), gone as the moon moves on.
-    let quiet = nsh_core::element::Timing::new(0.0, Easing::Linear);
-    Animation::sequence([
-        Animation::delay(820.0),
-        Animation::timing(&corona, 1.0, nsh_core::element::Timing::new(260.0, Easing::EaseOut)),
-        Animation::timing(&corona, 0.0, nsh_core::element::Timing::new(420.0, Easing::EaseIn)),
-        Animation::delay(900.0),
-    ])
-    .looped(None)
-    .start();
-    Animation::sequence([
-        Animation::delay(820.0),
-        Animation::timing(&flare, 1.12, nsh_core::element::Timing::new(680.0, Easing::EaseOut)),
-        Animation::timing(&flare, 0.9, quiet),
-        Animation::delay(900.0),
-    ])
-    .looped(None)
-    .start();
-    let centered = move |d: f32| view().absolute().top(px((size - d) / 2.0)).left(px((size - d) / 2.0)).w(px(d)).h(px(d)).rounded(px(R_FULL));
+/// Loading: a circle turning (shadcn's spinner), in the muted text color,
+/// in a box `size` square so it takes the room laid out for it. Natively
+/// animated: an animated value bound to its rotation, no layout or engine
+/// work per frame; still when the system asks for less motion.
+pub(crate) fn spinner(size: f32) -> View {
+    let turn = animated_value(0.0);
+    if !reduce_motion() {
+        Animation::sequence([
+            Animation::timing(&turn, 360.0, nsh_core::element::Timing::new(800.0, Easing::Linear)),
+            Animation::timing(&turn, 0.0, nsh_core::element::Timing::new(0.0, Easing::Linear)),
+        ])
+        .looped(None)
+        .start();
+    }
+    let glyph = (size * 0.62).clamp(12.0, 28.0);
     view()
         .w(px(size))
         .h(px(size))
         .flex_shrink_0()
-        // The moon only passes in front of the sun: clipped to it.
-        .child(
-            centered(size * 0.86)
-                .when(size >= 32.0, |v| v.border_2())
-                .when(size < 32.0, |v| v.border_1())
-                .border_color(tint(ACCENT(), 0.55))
-                .bind_opacity(&corona)
-                .bind_scale(&flare),
-        )
-        .child(
-            centered(disc)
-                .bg(ACCENT())
-                .overflow_hidden()
-                .child(view().w(px(disc)).h(px(disc)).rounded(px(R_FULL)).bg(SURFACE0()).bind_translate_x(&moon_x)),
-        )
+        .items_center()
+        .justify_center()
+        .accessible(true)
+        .label(crate::i18n::t("Loading…"))
+        .child(view().bind_rotate(&turn).child(icon(Icon::LoaderCircle, glyph).text_color(FG_MUTED())))
 }
 
 /// How far the mark's tile stands off the page.
@@ -485,7 +476,7 @@ pub(crate) fn mark(size: f32, lift: Lift) -> View {
 
 /// Working: Claude Code's own mark for it, the six it turns through (a
 /// dot opening into a flower and closing again), set one on another and
-/// each shown in its turn. Natively, as [`eclipse`]: an animated opacity
+/// each shown in its turn. Natively, as [`spinner`]: an animated opacity
 /// for each, no layout or engine work per frame.
 /// A hand raised and waving now and then: a conversation waits for the
 /// user (an approval, a question).
@@ -556,7 +547,7 @@ pub(crate) fn loader(label: Option<&'static str>) -> View {
     view()
         .items_center()
         .gap(sp(S3))
-        .child(eclipse(44.0))
+        .child(spinner(44.0))
         .when_some(label, |v, l| v.child(text(crate::i18n::t(l)).text_size(tx(TEXT_SM)).text_color(FG_MUTED())))
 }
 
@@ -565,7 +556,7 @@ pub(crate) fn loader(label: Option<&'static str>) -> View {
 /// The mark alone, in the middle of a block `height` tall: what a part of
 /// a page shows while its data comes (a card's worth, not the page's).
 pub(crate) fn loading_block(height: f32) -> View {
-    view().w_full().min_h(px(height)).items_center().justify_center().child(eclipse(36.0))
+    view().w_full().min_h(px(height)).items_center().justify_center().child(spinner(36.0))
 }
 
 pub(crate) fn loading() -> View {
@@ -579,6 +570,27 @@ pub(crate) fn working(label: impl IntoReactive<SharedString>) -> View {
         .flex_row()
         .items_center()
         .gap(px(6.0))
-        .child(eclipse(24.0))
+        .child(spinner(24.0))
         .child(text(label).text_size(tx(TEXT_SM)).text_color(FG_MUTED()))
+}
+
+/// How wide a page is (settings, usage, automations, history, plugins):
+/// the same on each, so the title stays put going from one to another.
+pub(crate) const PAGE_MAX_WIDTH: f32 = 820.0;
+
+/// A page's column: centered, `PAGE_MAX_WIDTH` at most, inset as every
+/// page is (less on a narrow window).
+pub(crate) fn page_column(compact: bool) -> View {
+    view()
+        .w_full()
+        .max_w(px(PAGE_MAX_WIDTH))
+        .self_center()
+        .px(px(if compact { S4 } else { S6 }))
+        .pt(px(if compact { S4 } else { S8 }))
+        .pb(sp(S8))
+}
+
+/// A page's title, the same size and weight on every page.
+pub(crate) fn page_title(words: impl IntoReactive<SharedString>) -> nsh_core::element::Text {
+    text(words).text_size(tx(TEXT_2XL)).font_weight(nsh_core::element::FontWeight(600))
 }

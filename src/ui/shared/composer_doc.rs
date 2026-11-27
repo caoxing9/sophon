@@ -663,6 +663,71 @@ pub(crate) fn prepend_quote(session: &EditorSession, quote: &str) {
     dispatch(session, tr);
 }
 
+/// A piece of a message put back in a composer: text, or a chip.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Part {
+    Text(String),
+    Chip(Chip),
+}
+
+/// `parts` as paragraphs: text split at its line breaks, chips inline
+/// where they stand.
+fn paragraphs_of(schema: &Schema, parts: &[Part]) -> Fragment {
+    let paragraph = schema.node_type("paragraph").expect("paragraph");
+    let chip = schema.node_type(ATTACHMENT);
+    let mut blocks: Vec<Node> = Vec::new();
+    let mut line: Vec<Node> = Vec::new();
+    let end_line = |line: &mut Vec<Node>, blocks: &mut Vec<Node>| {
+        if let Ok(p) = paragraph.create(None, Fragment::from(std::mem::take(line)), vec![]) {
+            blocks.push(p);
+        }
+    };
+    for part in parts {
+        match part {
+            Part::Text(t) => {
+                for (i, piece) in t.split('\n').enumerate() {
+                    if i > 0 {
+                        end_line(&mut line, &mut blocks);
+                    }
+                    if !piece.is_empty() {
+                        line.push(schema.text(piece, vec![]));
+                    }
+                }
+            }
+            Part::Chip(c) => {
+                let mut attrs = Attrs::new();
+                attrs.insert("id".into(), Value::from(c.id.clone()));
+                attrs.insert("kind".into(), Value::from(c.kind.as_str()));
+                attrs.insert("name".into(), Value::from(c.name.clone()));
+                attrs.insert("mime".into(), Value::from(c.mime.clone()));
+                if let Some(node) = chip.as_ref().and_then(|ty| ty.create(Some(attrs), Fragment::empty(), vec![]).ok()) {
+                    line.push(node);
+                }
+            }
+        }
+    }
+    end_line(&mut line, &mut blocks);
+    Fragment::from(blocks)
+}
+
+/// Puts a queued message back (`parts`: its words and its chips where
+/// they stood) ahead of what the composer holds, which stays after it on
+/// a line of its own; in place of it when the composer is empty. The
+/// caret at the end.
+pub(crate) fn prepend_parts(session: &EditorSession, parts: &[Part]) {
+    let state = session.state();
+    let size = state.doc().content().size();
+    let empty = outgoing(state.doc()).is_empty();
+    let mut tr = state.tr();
+    if tr.replace_with(0, if empty { size } else { 0 }, paragraphs_of(state.schema(), parts)).is_err() {
+        return;
+    }
+    let end = Selection::at_end(tr.doc());
+    tr.set_selection(end);
+    tr.scroll_into_view();
+    dispatch(session, tr);
+}
+
 /// Replaces `from..to` with `text`, the caret after it.
 pub(crate) fn replace_text(session: &EditorSession, from: usize, to: usize, text: &str) {
     let state = session.state();
@@ -779,6 +844,25 @@ mod tests {
         assert_eq!(segments("[image.png]"), [Chip("image.png".into())]);
         assert_eq!(segments("plain"), [Text("plain".into())]);
         assert!(is_image_name("Shot.PNG") && !is_image_name("a.pdf"));
+    }
+
+    /// A queued message put back to be edited: its chips where its
+    /// `[name]`s stood, its lines kept, and sent again it reads as before.
+    #[test]
+    fn a_queued_message_goes_back_as_text_and_chips() {
+        let schema = schema();
+        let chip = |id: &str, name: &str| Chip { id: id.into(), kind: Kind::Image, name: name.into(), mime: "image/png".into() };
+        let parts = vec![
+            Part::Text("see ".into()),
+            Part::Chip(chip("a", "shot.png")),
+            Part::Text(" here\nand ".into()),
+            Part::Chip(chip("b", "two.png")),
+        ];
+        let doc = schema.top_node_type().create(None, paragraphs_of(&schema, &parts), vec![]).unwrap();
+        let out = outgoing(&doc);
+        assert_eq!(out.message, "see [shot.png] here\nand [two.png]");
+        assert_eq!(out.text, "see  here\nand ");
+        assert_eq!(out.attachments, vec!["a".to_owned(), "b".to_owned()]);
     }
 
     #[test]

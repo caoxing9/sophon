@@ -182,6 +182,7 @@ fn host_chip() -> impl IntoElement {
                 Conn::Connected { .. } => match store::conn_progress().via {
                     Some(crate::daemon::connection::Via::Lan) => t("Connected · over the local network").to_owned(),
                     Some(crate::daemon::connection::Via::Relay) => t("Connected · through the relay").to_owned(),
+                    Some(crate::daemon::connection::Via::P2p) => t("Connected · peer to peer").to_owned(),
                     _ => t("Connected").to_owned(),
                 },
                 Conn::Down(_) => t("Offline").to_owned(),
@@ -219,12 +220,14 @@ fn host_chip() -> impl IntoElement {
         .active(|s| s.opacity(0.7))
         .child(crate::ui::shared::conn_mark())
         .child(text(move || name.get()).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).number_of_lines(1).flex_shrink(1.0))
-        // How it is reached, once it is: the local network or the relay.
+        // How it is reached, once it is: the local network, peer to peer or
+        // the relay.
         .child(dynamic(move || {
             use crate::daemon::connection::Via;
             let glyph = match (conn.get(), store::conn_progress().via) {
                 (Conn::Connected { .. }, Some(Via::Lan)) => Icon::Wifi,
                 (Conn::Connected { .. }, Some(Via::Relay)) => Icon::Cloud,
+                (Conn::Connected { .. }, Some(Via::P2p)) => Icon::Zap,
                 _ => return None,
             };
             Some(untracked(move || icon(glyph, 12.0).text_color(FG_MUTED()).into_element()))

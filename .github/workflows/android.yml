@@ -77,7 +77,7 @@ jobs:
           path: ~/.cache/sophon-nsh
           key: nsh-android-${{ runner.os }}-${{ steps.nshrev.outputs.rev }}
           restore-keys: |
-            nsh-cli-${{ runner.os }}-${{ steps.nshrev.outputs.rev }}
+            nsh-bin-${{ runner.os }}-${{ steps.nshrev.outputs.rev }}
       - name: The nsh CLI (the commit Cargo.toml pins)
         run: echo "$(scripts/install-nsh.sh)" >> "$GITHUB_PATH"
       # The build number is the version code, which has to go up for an

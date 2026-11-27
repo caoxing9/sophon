@@ -24,6 +24,13 @@ pub(crate) enum Row {
     Item { index: usize, grouped: bool, turn_end: bool },
     /// The summary of a run of tool calls.
     Group(Group),
+    /// A turn's work, as `ToolDisplay::Stream` shows it: its calls, its
+    /// thinking and what it said on the way to its reply. While the agent
+    /// is at it, a small box its steps run through; done, one line ("Done ·
+    /// 5 tool calls · 1 message"), pressed open to show them all.
+    Work(Group),
+    /// What a finished turn changed (`changes`): a card under its reply.
+    Changes { start: usize, end: usize, id: String },
 }
 
 /// A run of two or more tool calls with nothing said between them.
@@ -49,6 +56,10 @@ impl Row {
         match self {
             Row::Item { index, .. } => index.to_string(),
             Row::Group(g) => format!("g:{}", g.id),
+            // Its id says what it is ("w:…"): the user's choice is kept
+            // by it, apart from a run's of the same first call.
+            Row::Work(g) => g.id.clone(),
+            Row::Changes { id, .. } => format!("c:{id}"),
         }
     }
 }
@@ -60,14 +71,18 @@ impl Row {
 /// settings): runs open while the agent works in them (`Auto`), folded to
 /// their count, a single call too, until pressed open (`Folded`), a turn's
 /// all in one line at its start, only what it does now showing while it
-/// works (`Quiet`, the default: what it says reads on), or not at all
-/// (`Hidden`: what it says alone, its thinking and calls left out).
+/// works (`Quiet`: what it says reads on), a turn's work running through a
+/// small box while the agent is at it and one line once done, its reply
+/// alone read on with a card of the files it changed (`Stream`, the
+/// default, as Grok's and DSH Go's), or not at all (`Hidden`: what it says
+/// alone, its thinking and calls left out).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum ToolDisplay {
     Auto,
     Folded,
-    #[default]
     Quiet,
+    #[default]
+    Stream,
     Hidden,
 }
 
@@ -77,6 +92,7 @@ impl ToolDisplay {
             ToolDisplay::Auto => "auto",
             ToolDisplay::Folded => "folded",
             ToolDisplay::Quiet => "quiet",
+            ToolDisplay::Stream => "stream",
             ToolDisplay::Hidden => "hidden",
         }
     }
@@ -85,6 +101,7 @@ impl ToolDisplay {
         match s {
             "folded" => ToolDisplay::Folded,
             "quiet" => ToolDisplay::Quiet,
+            "stream" => ToolDisplay::Stream,
             "hidden" => ToolDisplay::Hidden,
             _ => ToolDisplay::Auto,
         }
@@ -98,7 +115,7 @@ pub(crate) fn fold(items: &[Item], running: bool, choice: &HashMap<String, bool>
 
 pub(crate) fn fold_as(items: &[Item], running: bool, choice: &HashMap<String, bool>, display: ToolDisplay) -> Vec<Row> {
     let mut rows = Vec::with_capacity(items.len());
-    if display != ToolDisplay::Quiet {
+    if !matches!(display, ToolDisplay::Quiet | ToolDisplay::Stream) {
         fold_range(items, 0, items.len(), running, choice, display, &mut rows);
         return rows;
     }
@@ -109,7 +126,11 @@ pub(crate) fn fold_as(items: &[Item], running: bool, choice: &HashMap<String, bo
         while end < items.len() && !matches!(items[end], Item::User { .. }) {
             end += 1;
         }
-        quiet_turn(items, start, end, running, choice, &mut rows);
+        if display == ToolDisplay::Stream {
+            stream_turn(items, start, end, running, choice, &mut rows);
+        } else {
+            quiet_turn(items, start, end, running, choice, &mut rows);
+        }
         start = end;
     }
     rows
@@ -156,6 +177,52 @@ fn quiet_turn(items: &[Item], start: usize, end: usize, running: bool, choice: &
         }
     }
     fold_range(items, live_from, end, running, choice, ToolDisplay::Folded, rows);
+}
+
+/// A turn as `Stream` shows it: the user's message; the work before the
+/// reply as one row (`Row::Work`: a box while the agent is at it, a line
+/// once done); the reply, the turn's last words once nothing the agent did
+/// follows them; then, the turn done, the files it changed. Errors and
+/// notices in the work still show, after its row.
+fn stream_turn(items: &[Item], start: usize, end: usize, running: bool, choice: &HashMap<String, bool>, rows: &mut Vec<Row>) {
+    let mut body = start;
+    if matches!(items[start], Item::User { .. }) {
+        rows.push(Row::Item { index: start, grouped: false, turn_end: false });
+        body += 1;
+    }
+    let work = |item: &Item| matches!(item, Item::Tool { .. } | Item::Reasoning { .. });
+    let live = running_here(running, end, items.len());
+    // The reply: its last words, nothing done after them (while they
+    // stream, they may yet be more work's: then they join it).
+    let reply = (body..end).rev().find(|&i| matches!(items[i], Item::Assistant { .. })).filter(|&r| !items[r + 1..end].iter().any(work));
+    let work_end = reply.unwrap_or(end);
+    let Some(first) = (body..work_end).find(|&i| work(&items[i])) else {
+        return fold_range(items, body, end, running, choice, ToolDisplay::Folded, rows);
+    };
+    let id = match &items[first] {
+        Item::Tool { call_id, .. } if !call_id.is_empty() => format!("w:{call_id}"),
+        _ => format!("w:#{first}"),
+    };
+    let open = choice.get(&id).copied().unwrap_or(false);
+    // What was said before the work ("Let me look at…") is the work's too.
+    rows.push(Row::Work(Group { start: body, end: work_end, id: id.clone(), live, open }));
+    if open {
+        // Each step under it, as it happened.
+        rows.extend((body..work_end).map(|index| Row::Item { index, grouped: true, turn_end: false }));
+    } else {
+        for i in body..work_end {
+            if matches!(items[i], Item::Error { .. } | Item::Notice { .. } | Item::Retry { .. }) {
+                rows.push(Row::Item { index: i, grouped: false, turn_end: false });
+            }
+        }
+    }
+    if let Some(r) = reply {
+        rows.push(Row::Item { index: r, grouped: false, turn_end: turn_end(items, r) });
+        fold_range(items, r + 1, end, running, choice, ToolDisplay::Folded, rows);
+    }
+    if !live && !changes(&items[body..end]).is_empty() {
+        rows.push(Row::Changes { start: body, end, id });
+    }
 }
 
 /// The agent works in the turn that ends at `end`.
@@ -225,7 +292,7 @@ pub(crate) fn row_of(rows: &[Row], index: usize) -> Option<usize> {
     // Its own row first: a turn's folded line spans words that have rows
     // of their own.
     rows.iter().position(|r| matches!(r, Row::Item { index: i, .. } if *i == index)).or_else(|| {
-        rows.iter().position(|r| matches!(r, Row::Group(g) if !g.open && (g.start..g.end).contains(&index)))
+        rows.iter().position(|r| matches!(r, Row::Group(g) | Row::Work(g) if !g.open && (g.start..g.end).contains(&index)))
     })
 }
 
@@ -234,6 +301,121 @@ fn status_of(item: &Item) -> &str {
         Item::Tool { status, .. } => status,
         _ => "",
     }
+}
+
+/// A step of a turn's work, as its live box shows it: a call (its kind,
+/// name and summary), a thought or words said on the way (their first
+/// line), a plan.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Step {
+    /// The call's kind (`shell`, `read`…), else `thinking`, `said`, `plan`.
+    pub(crate) kind: String,
+    pub(crate) name: String,
+    pub(crate) words: String,
+    pub(crate) running: bool,
+    pub(crate) failed: bool,
+}
+
+/// A path as the box has room for: its folder and name (`src/login.rs`);
+/// anything else as it is.
+fn short_path(words: &str) -> String {
+    if !(words.starts_with('/') || words.starts_with("~/")) || words.contains(' ') {
+        return words.to_owned();
+    }
+    let parts: Vec<&str> = words.trim_end_matches('/').rsplit('/').take(2).collect();
+    parts.into_iter().rev().collect::<Vec<_>>().join("/")
+}
+
+fn first_line(text: &str) -> String {
+    text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or_default().chars().take(160).collect()
+}
+
+/// How many steps `run` has, and its last `n`, oldest first.
+pub(crate) fn steps(run: &[Item], n: usize) -> (usize, Vec<Step>) {
+    let step = |item: &Item| -> Option<Step> {
+        Some(match item {
+            Item::Tool { kind, name, status, summary, error, .. } => Step {
+                kind: kind.clone(),
+                name: name.clone(),
+                words: short_path(summary),
+                running: status == "running",
+                failed: status == "failed" || (status != "canceled" && error.is_some()),
+            },
+            Item::Reasoning { text } => Step { kind: "thinking".into(), name: t("Thinking").into(), words: first_line(text), ..Step::default() },
+            Item::Assistant { text, .. } => Step { kind: "said".into(), words: first_line(text), ..Step::default() },
+            Item::Todo { .. } => Step { kind: "plan".into(), name: t("Updated the plan").into(), ..Step::default() },
+            _ => return None,
+        })
+    };
+    let total = run.iter().filter(|i| matches!(i, Item::Tool { .. } | Item::Reasoning { .. } | Item::Assistant { .. } | Item::Todo { .. })).count();
+    let mut last: Vec<Step> = run.iter().rev().filter_map(step).take(n).collect();
+    last.reverse();
+    (total, last)
+}
+
+/// What a turn's done line says: its calls, the words said on the way,
+/// how many failed, and whether it was stopped.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Tally {
+    pub(crate) calls: usize,
+    pub(crate) messages: usize,
+    pub(crate) failed: usize,
+    pub(crate) stopped: bool,
+}
+
+pub(crate) fn tally(run: &[Item]) -> Tally {
+    let s = summarize(run);
+    Tally {
+        calls: run.iter().filter(|i| matches!(i, Item::Tool { .. })).count(),
+        messages: run.iter().filter(|i| matches!(i, Item::Assistant { .. })).count(),
+        failed: s.failed,
+        stopped: run.iter().any(|i| matches!(i, Item::Tool { status, .. } if status == "canceled")),
+    }
+}
+
+/// A file a turn changed: lines added and taken away, as its edits say.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct FileChange {
+    pub(crate) path: String,
+    pub(crate) added: usize,
+    pub(crate) removed: usize,
+}
+
+/// The files `run`'s calls edited or wrote, each once, in the order first
+/// changed.
+pub(crate) fn changes(run: &[Item]) -> Vec<FileChange> {
+    let mut out: Vec<FileChange> = vec![];
+    for item in run {
+        let Item::Tool { kind, summary, detail, status, .. } = item else { continue };
+        if !matches!(kind.as_str(), "edit" | "write") || status == "failed" {
+            continue;
+        }
+        let field = |k: &str| detail.get(k).and_then(serde_json::Value::as_str);
+        let Some(path) = field("filePath").or(Some(summary.as_str())).filter(|p| !p.trim().is_empty()) else { continue };
+        let (added, removed) = if let Some(diff) = field("unifiedDiff") {
+            diff.lines().fold((0, 0), |(a, r), l| {
+                if l.starts_with('+') && !l.starts_with("+++") {
+                    (a + 1, r)
+                } else if l.starts_with('-') && !l.starts_with("---") {
+                    (a, r + 1)
+                } else {
+                    (a, r)
+                }
+            })
+        } else if kind == "write" {
+            (field("content").map_or(0, |c| c.lines().count()), 0)
+        } else {
+            (field("newString").map_or(0, |c| c.lines().count()), field("oldString").map_or(0, |c| c.lines().count()))
+        };
+        match out.iter_mut().find(|c| c.path == path) {
+            Some(c) => {
+                c.added += added;
+                c.removed += removed;
+            }
+            None => out.push(FileChange { path: path.to_owned(), added, removed }),
+        }
+    }
+    out
 }
 
 /// What a run of tool calls did, by kind.
@@ -466,7 +648,7 @@ mod tests {
             .iter()
             .filter_map(|r| match r {
                 Row::Item { turn_end, .. } => Some(*turn_end),
-                Row::Group(_) => None,
+                _ => None,
             })
             .collect();
         assert_eq!(ends, [false, false, false, true, true]);
@@ -617,5 +799,110 @@ mod tests {
         assert_eq!(keys(&fold_as(&live, true, &none(), ToolDisplay::Quiet)), ["0", "g:a"]);
         let said_after = vec![asked("go"), tool("a", "shell", "completed", ""), tool("b", "read", "completed", "x"), said("done")];
         assert_eq!(keys(&fold_as(&said_after, false, &none(), ToolDisplay::Quiet)), ["0", "g:a", "3"]);
+    }
+
+    fn stream(items: &[Item], running: bool, choice: &HashMap<String, bool>) -> Vec<Row> {
+        fold_as(items, running, choice, ToolDisplay::Stream)
+    }
+
+    fn edit(id: &str, path: &str, diff: &str) -> Item {
+        Item::Tool {
+            call_id: id.into(),
+            name: "Edit".into(),
+            kind: "edit".into(),
+            status: "completed".into(),
+            summary: path.into(),
+            detail: serde_json::json!({ "type": "edit", "filePath": path, "unifiedDiff": diff }),
+            error: None,
+        }
+    }
+
+    /// Done, a turn is the user's message, one line for all its work (what
+    /// it said on the way too), its reply, and the files it changed.
+    #[test]
+    fn streamed_a_done_turn_is_one_line_its_reply_and_its_changes() {
+        let items = vec![
+            asked("fix it"),
+            said("Let me look."),
+            tool("a", "read", "completed", "src/a.rs"),
+            Item::Reasoning { text: "hm".into() },
+            edit("b", "src/a.rs", "@@\n-old\n+new\n+more"),
+            said("Fixed."),
+        ];
+        let rows = stream(&items, false, &none());
+        assert_eq!(keys(&rows), ["0", "w:a", "5", "c:w:a"]);
+        assert!(matches!(&rows[1], Row::Work(g) if g.start == 1 && g.end == 5 && !g.live && !g.open));
+        assert!(matches!(rows[2], Row::Item { index: 5, turn_end: true, .. }), "the reply ends the turn");
+        assert!(matches!(&rows[3], Row::Changes { start: 1, end: 6, .. }));
+        // Opened: its steps, all of them, under its line.
+        let open = HashMap::from([("w:a".to_owned(), true)]);
+        assert_eq!(keys(&stream(&items, false, &open)), ["0", "w:a", "1", "2", "3", "4", "5", "c:w:a"]);
+    }
+
+    /// While the agent works, the turn's work is one live row; words it
+    /// writes after its last call show as they stream (its reply, maybe),
+    /// and go into the work if it calls a tool again.
+    #[test]
+    fn streamed_the_work_is_live_and_the_last_words_stream_under_it() {
+        let mut items = vec![asked("go"), tool("a", "shell", "running", "ls")];
+        assert_eq!(keys(&stream(&items, true, &none())), ["0", "w:a"]);
+        assert!(matches!(&stream(&items, true, &none())[1], Row::Work(g) if g.live && g.end == 2));
+        items.push(said("Now the tests"));
+        assert_eq!(keys(&stream(&items, true, &none())), ["0", "w:a", "2"]);
+        items.push(tool("b", "shell", "running", "cargo test"));
+        let rows = stream(&items, true, &none());
+        assert_eq!(keys(&rows), ["0", "w:a"], "the words joined the work");
+        assert!(matches!(&rows[1], Row::Work(g) if g.end == 4));
+        // An earlier turn is done while a later one runs.
+        items.extend([said("ok"), asked("again"), tool("c", "shell", "running", "ls")]);
+        let rows = stream(&items, true, &none());
+        assert_eq!(keys(&rows), ["0", "w:a", "4", "5", "w:c"]);
+        assert!(matches!(&rows[1], Row::Work(g) if !g.live));
+        assert!(matches!(&rows[4], Row::Work(g) if g.live));
+    }
+
+    /// A turn that only talks is as it was; an error in the work still
+    /// shows; a turn that changed nothing has no card.
+    #[test]
+    fn streamed_talk_errors_and_no_changes() {
+        let items = vec![asked("hi"), said("hello")];
+        assert_eq!(keys(&stream(&items, false, &none())), ["0", "1"]);
+        let items = vec![asked("run"), tool("a", "shell", "failed", "x"), Item::Error { message: "boom".into() }];
+        assert_eq!(keys(&stream(&items, false, &none())), ["0", "w:a", "2"]);
+        assert_eq!(row_of(&stream(&items, false, &none()), 1), Some(1), "a call is found in its work's line");
+    }
+
+    #[test]
+    fn changes_count_lines_per_file_once() {
+        let items = vec![
+            edit("a", "src/a.rs", "--- a\n+++ b\n@@\n-x\n+y\n+z"),
+            edit("b", "src/a.rs", "@@\n-q"),
+            Item::Tool {
+                call_id: "c".into(),
+                name: "Write".into(),
+                kind: "write".into(),
+                status: "completed".into(),
+                summary: "new.txt".into(),
+                detail: serde_json::json!({ "filePath": "new.txt", "content": "1\n2\n3" }),
+                error: None,
+            },
+            tool("d", "edit", "failed", "nope.rs"),
+        ];
+        assert_eq!(
+            changes(&items),
+            vec![
+                FileChange { path: "src/a.rs".into(), added: 2, removed: 2 },
+                FileChange { path: "new.txt".into(), added: 3, removed: 0 },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_step_names_a_file_by_its_folder_and_name() {
+        let (n, last) = steps(&[tool("a", "read", "completed", "/tmp/x/proj/src/login.rs"), tool("b", "shell", "running", "cargo test /a/b")], 5);
+        assert_eq!(n, 2);
+        assert_eq!(last[0].words, "src/login.rs");
+        assert_eq!(last[1].words, "cargo test /a/b", "a command as it is");
+        assert!(last[1].running);
     }
 }

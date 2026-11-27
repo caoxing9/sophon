@@ -265,13 +265,30 @@ fn tree_row_body(row: Memo<Option<store::TreeRow>>) -> impl IntoElement {
         .hover(|s| s.bg(highlight()))
         .child(dynamic(move || {
             let (dir, open) = row.with(|r| r.as_ref().map_or((false, false), |r| (r.entry.is_dir, r.expanded)));
+            // As an editor's tree: a folder's chevron and its folder, a
+            // file's room for a chevron and its page, the names in one
+            // column whichever it is.
             Some(untracked(move || {
-                let glyph = match (dir, open) {
-                    (true, true) => Icon::ChevronDown,
-                    (true, false) => Icon::ChevronRight,
-                    _ => Icon::File,
+                let chevron = match (dir, open) {
+                    (true, true) => Some(Icon::ChevronDown),
+                    (true, false) => Some(Icon::ChevronRight),
+                    _ => None,
                 };
-                icon(glyph, 14.0).text_color(FG_FAINT())
+                let kind = match (dir, open) {
+                    (true, true) => Icon::FolderOpen,
+                    (true, false) => Icon::Folder,
+                    _ => Icon::FileText,
+                };
+                view()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(4.0))
+                    .child(match chevron {
+                        Some(c) => icon(c, 12.0).text_color(FG_FAINT()).into_element(),
+                        None => view().w(px(12.0)).into_element(),
+                    })
+                    .child(icon(kind, 15.0).text_color(FG_MUTED()))
+                    .into_element()
             }))
         }))
         .child(
@@ -308,7 +325,7 @@ pub(super) fn empty_state(glyph: Icon, title: &'static str, detail: &'static str
 }
 
 fn loading_state() -> View {
-    view().flex_1().items_center().justify_center().pb(px(48.0)).child(eclipse(28.0))
+    view().flex_1().items_center().justify_center().pb(px(48.0)).child(spinner(28.0))
 }
 
 #[derive(Clone, Default)]
