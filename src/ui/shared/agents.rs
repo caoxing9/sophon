@@ -495,7 +495,7 @@ pub(crate) fn codex_sign_in(id: String) -> View {
                         .child(
                             row.child(text(code).font_family(mono_font).text_size(tx(TEXT_LG)).font_weight(FontWeight(600)))
                                 .child(icon_btn(Icon::Copy, Sz::Sm, t("Copy"), move || {
-                                    set_clipboard(copy.clone());
+                                    let _ = set_clipboard(copy.clone());
                                     store::notify(t("Code copied").into());
                                 }))
                                 .child(btn(t("Cancel"), Variant::Ghost, Sz::Sm, None, cancel)),

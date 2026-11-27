@@ -1044,7 +1044,9 @@ fn select_in_place(content: View) -> View {
     let area = element_ref();
     let selected_once = signal(false);
     let select = area.clone();
-    // Once its texts are laid out.
+    // Once its texts are laid out. nsh's selectable views do not take
+    // `selectAll` from an app yet (only Sophon's fork of nsh did): until
+    // they do, the message opens ready to select, with nothing selected.
     set_timeout(std::time::Duration::from_millis(120), move || select.command("selectAll", nsh_core::JsonValue::Null));
     view()
         .gap(px(6.0))
