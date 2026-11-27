@@ -3726,9 +3726,11 @@ while IFS= read -r line; do
             else
                 PORT=$(cat "$D/agy-port")
                 URL="https://accounts.google.com/o/oauth2/v2/auth?response_type=code&state=s1&redirect_uri=http%3A%2F%2F127.0.0.1%3A$PORT%2F"
-                ( python3 "$D/loopback.py" "$PORT" "$D/callback.txt" < /dev/null && echo '{}' > "$GEMINI_HOME/antigravity-acp/acp_token.json" \
+                rm -f "$D/listening"
+                ( python3 "$D/loopback.py" "$PORT" "$D/callback.txt" "$D/listening" < /dev/null && echo '{}' > "$GEMINI_HOME/antigravity-acp/acp_token.json" \
                     && say "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{}}" ) &
-                sleep 0.3
+                # The link once the loopback listens, as the CLI gives it.
+                while [ ! -f "$D/listening" ]; do sleep 0.05; done
                 if [ -f "$D/by-browser" ]; then "$BROWSER" "$URL"; else say "Open the following link to authenticate the ACP server: $URL"; fi
             fi ;;
         *'"method":"session/new"'*)
@@ -3743,6 +3745,7 @@ s = socket.socket()
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 s.bind(("127.0.0.1", int(sys.argv[1])))
 s.listen(1)
+open(sys.argv[3], "w").close()
 c, _ = s.accept()
 data = b""
 while b"\r\n\r\n" not in data:

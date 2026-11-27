@@ -338,9 +338,18 @@ pub(crate) async fn forward(reply: &str) -> Result<(), String> {
     let rest = reply.strip_prefix("http://127.0.0.1:").ok_or("Not a loopback address")?;
     let (port, target) = rest.split_once('/').ok_or("Not a loopback address")?;
     let port: u16 = port.parse().map_err(|_| "Not a loopback address")?;
-    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
-        .await
-        .map_err(|_| "Antigravity is no longer waiting for this sign-in".to_owned())?;
+    // The CLI may be a moment from listening when the link is out.
+    let mut tries = 0;
+    let mut stream = loop {
+        match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
+            Ok(stream) => break stream,
+            Err(_) if tries < 15 => {
+                tries += 1;
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            Err(_) => return Err("Antigravity is no longer waiting for this sign-in".to_owned()),
+        }
+    };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let request = format!("GET /{target} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
     stream.write_all(request.as_bytes()).await.map_err(|e| e.to_string())?;

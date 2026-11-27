@@ -1,8 +1,11 @@
 name: Sync nsh-shadcn
 
-# crates/nsh-shadcn is a git subtree of caoxing9/nsh-shadcn. When main
-# changes it, its history is split out and pushed to a branch there, with
-# a pull request onto its main to merge (opened once, then kept up to date).
+# crates/nsh-shadcn is developed here and mirrored to caoxing9/nsh-shadcn.
+# When main changes it, its files as they are now are copied onto the
+# latest main there, as one commit on the sync/sophon branch, with a pull
+# request onto its main (opened once, then kept up to date). The branch
+# starts from that main each time, so the pull request may be merged in
+# any way, squash too.
 #
 # Needs the secret NSH_SHADCN_TOKEN: a fine-grained token with Contents and
 # Pull requests (read and write) on caoxing9/nsh-shadcn. Without it the job
@@ -32,36 +35,40 @@ jobs:
         run: |
           if [ -z "$TOKEN" ]; then
             echo "::warning::NSH_SHADCN_TOKEN is not set: nothing synced to $REPO"
-            exit 0
           fi
       - uses: actions/checkout@v4
         if: env.TOKEN != ''
         with:
-          fetch-depth: 0
+          path: sophon
           persist-credentials: false
-      - name: Split and push
+      - name: Copy onto its main
         if: env.TOKEN != ''
         run: |
+          git clone --depth 1 "https://x-access-token:${TOKEN}@github.com/${REPO}.git" mirror
+          cd mirror
+          git checkout -B "$BRANCH"
+          rsync -a --delete --exclude .git ../sophon/crates/nsh-shadcn/ ./
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "$REPO main already has these files"
+            echo "CHANGED=" >> "$GITHUB_ENV"
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          split=$(git subtree split --prefix=crates/nsh-shadcn)
-          git push --force "https://x-access-token:${TOKEN}@github.com/${REPO}.git" "${split}:refs/heads/${BRANCH}"
-          echo "SPLIT=$split" >> "$GITHUB_ENV"
+          git add -A
+          git commit -q -m "Sync from Sophon ${GITHUB_SHA:0:7}" -m "crates/nsh-shadcn as of caoxing9/sophon@${GITHUB_SHA}."
+          git push --force origin "$BRANCH"
+          echo "CHANGED=1" >> "$GITHUB_ENV"
       - name: Pull request
-        if: env.TOKEN != ''
+        if: env.TOKEN != '' && env.CHANGED == '1'
         env:
           GH_TOKEN: ${{ secrets.NSH_SHADCN_TOKEN }}
         run: |
-          main=$(gh api "repos/${REPO}/commits/main" --jq .sha)
-          if [ "$main" = "$SPLIT" ]; then
-            echo "$REPO main is already this"
-            exit 0
-          fi
           open=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
           if [ -n "$open" ]; then
-            gh pr comment "$open" --repo "$REPO" --body "Updated from Sophon ${GITHUB_SHA:0:7}."
+            gh pr comment "$open" --repo "$REPO" --body "Updated to Sophon ${GITHUB_SHA:0:7}."
           else
             gh pr create --repo "$REPO" --base main --head "$BRANCH" \
               --title "Sync from Sophon" \
-              --body "The changes to \`crates/nsh-shadcn\` merged in Sophon (up to caoxing9/sophon@${GITHUB_SHA}). Merge with a merge commit or fast-forward, not a squash, so the next sync stays a fast-forward."
+              --body "\`crates/nsh-shadcn\` as merged in Sophon (caoxing9/sophon@${GITHUB_SHA}). Any merge method works."
           fi
