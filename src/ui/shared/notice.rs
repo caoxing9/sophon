@@ -19,7 +19,16 @@ pub(crate) fn notice_bar(top: Memo<Length>) -> impl IntoElement {
             set_timeout(std::time::Duration::from_secs(8), move || store::dismiss_notice_numbered(id));
         }
     });
-    view().child(dynamic(move || {
+    // Over the surface from its top: placed in the flow, after what fills
+    // the surface, the bar was laid out from the surface's foot, below the
+    // window.
+    view()
+        .absolute()
+        .top(px(0.0))
+        .left(px(0.0))
+        .right(px(0.0))
+        .pointer_events(PointerEvents::BoxNone)
+        .child(dynamic(move || {
         let (m, action) = message.get()?;
         Some(untracked(move || {
             view()
