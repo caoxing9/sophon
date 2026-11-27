@@ -160,7 +160,7 @@ pub(crate) fn timeline() -> impl IntoElement {
                 // Earlier pages load by themselves as the start nears: a
                 // small loader says so while one is on its way, no button.
                 .child(when(store::loading_older, || {
-                    view().absolute().top(sp(S2)).left(px(0.0)).right(px(0.0)).items_center().child(eclipse(24.0))
+                    view().absolute().top(sp(S2)).left(px(0.0)).right(px(0.0)).items_center().child(spinner(24.0))
                 }))
                 .when(!MOBILE, |v| v.child(turn_rail()))
                 .child(jump_buttons())
@@ -2575,7 +2575,7 @@ fn short_time(secs: u64) -> String {
 }
 
 /// While the agent works, at the conversation's foot, as Claude Code's
-/// status line: the app's loading mark (the eclipse, as the sidebar has it
+/// status line: the app's running mark (the spark, as the sidebar has it
 /// for a conversation that runs; Claude Code's star was a letter of
 /// whatever font had it, small and off its place), the turn's word, how long it has run and
 /// about how many tokens it has written so far (its messages, thinking and

@@ -602,7 +602,7 @@ pub(crate) fn text_generation_card() -> View {
         t("Names chats and branches. A small, fast model is plenty and costs less"),
         dynamic(move || {
             if !loaded.get() {
-                return Some(untracked(|| eclipse(20.0).into_element()));
+                return Some(untracked(|| spinner(20.0).into_element()));
             }
             Some(untracked(move || {
                 dropdown(picker_trigger(Some(Icon::Cpu), move || label.get()))
@@ -683,7 +683,7 @@ pub(crate) fn behavior_card() -> impl IntoElement {
     });
     view().child(dynamic(move || {
         if !loaded.get() {
-            return Some(untracked(|| eclipse(20.0).into_element()));
+            return Some(untracked(|| spinner(20.0).into_element()));
         }
         Some(untracked(move || {
             card()
