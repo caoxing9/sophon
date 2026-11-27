@@ -2,7 +2,8 @@
 # GitHub PR 值守：Sophon 的插件。触发它的是「GitHub」集成的「有人请求我 review」，
 # 这里只管 review 完之后的事：
 #
-#   notify reply    AI 说了结论后，在飞书通知 PR 作者（通过「飞书」集成）
+#   notify reply    开始 review 时，在飞书告诉请求你 review 的人；AI 说了结论后，
+#                   在飞书通知 PR 作者（都通过「飞书」集成）
 #   notify use pair 记下一个 GitHub 账号在飞书里是谁（sophon use github-pr-watch pair …）
 set -eu
 
@@ -28,11 +29,42 @@ whom() {
     done | tail -1
 }
 
+on() { case "$1" in yes | true | 1 | on) return 0 ;; *) return 1 ;; esac; }
+
+# 开始 review 时：告诉请求我 review 的人，我在看了。是谁请求的，从 PR 的时间线里找
+# 最近一次请求我的那条；找不到，或是我自己加的，就告诉作者。不知道对方在飞书里是谁
+# 时不打扰（等 AI 说结论时会先配对）。
+started() {
+    on "${SOPHON_PARAM_NOTIFY_START:-yes}" || exit 0
+    me=$("$gh" api user --jq .login 2>/dev/null || true)
+    who=""
+    [ -n "$me" ] && who=$("$gh" api --paginate "repos/${SOPHON_VAR_REPO}/issues/${SOPHON_VAR_NUMBER}/timeline" \
+        --jq '.[] | select(.event == "review_requested" and .requested_reviewer.login == "'"$me"'") | .actor.login' 2>/dev/null | tail -1 || true)
+    [ -n "$who" ] && [ "$(lower "$who")" != "$(lower "$me")" ] || who=${SOPHON_VAR_AUTHOR:-}
+    [ -n "$who" ] || exit 0
+    to=$(whom "$(lower "$who")")
+    to=${to%%:*}
+    case "$to" in
+    ou_*) kind=--open-id ;;
+    *@*) kind=--email ;;
+    *)
+        echo "不知道 @$who 在飞书里是谁，没有告诉对方我在 review" >&2
+        exit 0
+        ;;
+    esac
+    sophon use feishu send "$kind" "$to" --text "👀 我在 review 你的 PR #${SOPHON_VAR_NUMBER} 了（AI 助手在帮我看），有结论会告诉你
+${SOPHON_VAR_URL}"
+}
+
 case "${1:-}" in
 reply)
-    # 只在 AI 说了结论（sophon reply）时通知；接手、结束、失败不打扰对方。
+    # 接手时告诉对方我在看；AI 说了结论（sophon reply）时通知作者；结束、失败不打扰对方。
+    if [ "${SOPHON_ACTION:-}" = ack ]; then
+        started
+        exit 0
+    fi
     [ "${SOPHON_ACTION:-}" = reply ] || exit 0
-    case "${SOPHON_PARAM_NOTIFY:-yes}" in yes | true | 1 | on) ;; *) exit 0 ;; esac
+    on "${SOPHON_PARAM_NOTIFY:-yes}" || exit 0
     author=${SOPHON_VAR_AUTHOR:-}
     [ -n "$author" ] || { echo "不知道这个 PR 的作者是谁，没有通知" >&2; exit 1; }
     # 作者在飞书里是谁：先看记下的对应关系（你写的，或 AI 配对后记的），

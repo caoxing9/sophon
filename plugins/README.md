@@ -13,7 +13,7 @@
 |---|---|---|
 | `github` | 集成 | 用本机 `gh` 的登录。提供触发器「有人请求我 review」 |
 | `feishu` | 集成 | 用你本人的飞书身份登录一次，供自动化按名字找同事、给同事发消息 |
-| `github-pr-watch` | 插件 | 「GitHub PR 值守」：有人请求你 review 时替你 review，结论提交在 PR 上，并在飞书通知作者。依赖上面两个集成 |
+| `github-pr-watch` | 插件 | 「GitHub PR 值守」：有人请求你 review 时，在飞书告诉请求的人你在 review，替你 review，结论提交在 PR 上，并在飞书通知作者。依赖上面两个集成 |
 
 清单的写法见 [服务指南](../docs/native-service.md#集成与插件)。在「集成」页里安装一个同 id 的包会替换这里自带的那个。
 

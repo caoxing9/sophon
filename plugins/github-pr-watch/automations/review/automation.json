@@ -18,6 +18,13 @@
       }
     },
     {
+      "name": "notify_start",
+      "type": "switch",
+      "label": "开始 review 时在飞书告诉请求的人",
+      "hint": "告诉对方你在 review 了；对方在飞书里是谁要先配对过（或写在插件设置里）",
+      "value": true
+    },
+    {
       "name": "notify",
       "type": "switch",
       "label": "完成后在飞书通知 PR 作者",

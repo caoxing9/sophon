@@ -6,10 +6,15 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 mkdir "$work/bin"
 
-# 假的 gh：提交记录里的邮箱是 $FAKE_COMMIT_EMAIL。
+# 假的 gh：登录的是 $FAKE_ME，时间线上请求我 review 的是 $FAKE_REQUESTER，
+# 提交记录里的邮箱是 $FAKE_COMMIT_EMAIL。
 cat >"$work/bin/gh" <<'SH'
 #!/bin/sh
-printf '%s\n' "${FAKE_COMMIT_EMAIL:-}"
+case "$*" in
+"api user"*) printf '%s\n' "${FAKE_ME:-me}" ;;
+*timeline*) [ -n "${FAKE_REQUESTER:-}" ] && printf '%s\n' "$FAKE_REQUESTER" || true ;;
+*) printf '%s\n' "${FAKE_COMMIT_EMAIL:-}" ;;
+esac
 SH
 # 假的 sophon：记下每次调用；飞书只认 ada@x.com 和 ou_ 开头的；plugin set 把值存下。
 cat >"$work/bin/sophon" <<'SH'
@@ -69,5 +74,24 @@ before=$(wc -l <"$FAKE_LOG")
 SOPHON_PARAM_NOTIFY=no "$here/notify" reply
 SOPHON_ACTION=done "$here/notify" reply
 check "关了通知或不是结论时不发" "$before" "$(wc -l <"$FAKE_LOG")"
+
+# 开始 review 时：告诉请求我的人，按记下的对应关系发。
+SOPHON_ACTION=ack FAKE_REQUESTER=Bob SOPHON_PARAM_PEOPLE="bob=ou_bob:鲍勃,uno-fn=ada@x.com" "$here/notify" reply >/dev/null
+check "开始时告诉请求我的人" "use feishu send --open-id ou_bob" "$(last)"
+case "$(tail -1 "$FAKE_LOG")" in *"我在 review 你的 PR #12"*) ok=yes ;; *) ok=$(tail -1 "$FAKE_LOG") ;; esac
+check "说的是我在 review" yes "$ok"
+
+# 时间线上找不到，或是我自己加的：告诉作者。
+SOPHON_ACTION=ack FAKE_REQUESTER="" SOPHON_PARAM_PEOPLE="uno-fn=ada@x.com" "$here/notify" reply >/dev/null
+check "找不到请求的人就告诉作者" "use feishu send --email ada@x.com" "$(last)"
+SOPHON_ACTION=ack FAKE_ME=me FAKE_REQUESTER=me SOPHON_PARAM_PEOPLE="uno-fn=ada@x.com" "$here/notify" reply >/dev/null
+check "我自己加的也告诉作者" "use feishu send --email ada@x.com" "$(last)"
+
+# 不知道对方在飞书里是谁，或关了这一项：不发，也不算失败。
+before=$(wc -l <"$FAKE_LOG")
+SOPHON_ACTION=ack FAKE_REQUESTER=stranger FAKE_COMMIT_EMAIL=ada@x.com SOPHON_PARAM_PEOPLE="" "$here/notify" reply 2>/dev/null && code=0 || code=$?
+check "不知道是谁时不发也不失败" "0 $before" "$code $(wc -l <"$FAKE_LOG")"
+SOPHON_ACTION=ack SOPHON_PARAM_NOTIFY_START=no FAKE_REQUESTER=Bob SOPHON_PARAM_PEOPLE="bob=ou_bob" "$here/notify" reply
+check "关了开始通知时不发" "$before" "$(wc -l <"$FAKE_LOG")"
 
 exit "$failed"
