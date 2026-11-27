@@ -31,7 +31,7 @@ qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 crypto_box = { version = "0.9", features = ["std"] }
 # shadcn/ui for NSH: Sophon's components, kept here while they change
 # with Sophon (`crates/nsh-shadcn`, a git subtree of caoxing9/nsh-shadcn:
-# `git subtree push --prefix=crates/nsh-shadcn https://github.com/caoxing9/nsh-shadcn main`).
+# a change merged here opens a pull request there, sync-nsh-shadcn.yml).
 nsh-shadcn = { path = "crates/nsh-shadcn" }
 
 # Natively the connection runs on a thread of its own with tokio; in a

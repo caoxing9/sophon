@@ -1,0 +1,67 @@
+name: Sync nsh-shadcn
+
+# crates/nsh-shadcn is a git subtree of caoxing9/nsh-shadcn. When main
+# changes it, its history is split out and pushed to a branch there, with
+# a pull request onto its main to merge (opened once, then kept up to date).
+#
+# Needs the secret NSH_SHADCN_TOKEN: a fine-grained token with Contents and
+# Pull requests (read and write) on caoxing9/nsh-shadcn. Without it the job
+# says so and does nothing.
+on:
+  push:
+    branches: [main]
+    paths: ["crates/nsh-shadcn/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-nsh-shadcn
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      TOKEN: ${{ secrets.NSH_SHADCN_TOKEN }}
+      REPO: caoxing9/nsh-shadcn
+      BRANCH: sync/sophon
+    steps:
+      - name: Token
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::warning::NSH_SHADCN_TOKEN is not set: nothing synced to $REPO"
+            exit 0
+          fi
+      - uses: actions/checkout@v4
+        if: env.TOKEN != ''
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Split and push
+        if: env.TOKEN != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          split=$(git subtree split --prefix=crates/nsh-shadcn)
+          git push --force "https://x-access-token:${TOKEN}@github.com/${REPO}.git" "${split}:refs/heads/${BRANCH}"
+          echo "SPLIT=$split" >> "$GITHUB_ENV"
+      - name: Pull request
+        if: env.TOKEN != ''
+        env:
+          GH_TOKEN: ${{ secrets.NSH_SHADCN_TOKEN }}
+        run: |
+          main=$(gh api "repos/${REPO}/commits/main" --jq .sha)
+          if [ "$main" = "$SPLIT" ]; then
+            echo "$REPO main is already this"
+            exit 0
+          fi
+          open=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$open" ]; then
+            gh pr comment "$open" --repo "$REPO" --body "Updated from Sophon ${GITHUB_SHA:0:7}."
+          else
+            gh pr create --repo "$REPO" --base main --head "$BRANCH" \
+              --title "Sync from Sophon" \
+              --body "The changes to \`crates/nsh-shadcn\` merged in Sophon (up to caoxing9/sophon@${GITHUB_SHA}). Merge with a merge commit or fast-forward, not a squash, so the next sync stays a fast-forward."
+          fi
