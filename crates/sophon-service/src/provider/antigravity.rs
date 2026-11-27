@@ -48,7 +48,7 @@ const REMOVED: &[&str] = &[
     "AGY_ACP_ENABLE_OAUTH",
     "GEMINI_HOME",
     "AGY_ACP_FORCE_FILE_STORAGE",
-    "AGY_CLI_DISABLE_AUTO_UPDATE",
+    "ANTIGRAVITY_HARNESS_PATH",
     "BROWSER",
     "PYTHONUNBUFFERED",
     "ELECTRON_RUN_AS_NODE",
@@ -181,13 +181,13 @@ fn private(_path: &Path, _mode: u32) -> io::Result<()> {
 
 /// What the CLI's environment has over the service's (from which
 /// [`REMOVED`] is left out), as T3 Code gives it.
-fn environment(home: &Path, run: &Path, browser: &Path, method: &str) -> Vec<(String, String)> {
+fn environment(home: &Path, run: &Path, browser: &Path) -> Vec<(String, String)> {
+    // As T3 Code's `antigravityEnvironment`: the sign-in kept as a file in
+    // the folder, not the keyring all folders share. Nothing tells the CLI
+    // it runs over SSH, which would refuse a sign-in in the browser.
     let mut env = vec![
         (HOME_VAR.to_owned(), home.display().to_string()),
         ("AGY_ACP_FORCE_FILE_STORAGE".to_owned(), "1".to_owned()),
-        // `true`, as its own troubleshooting says (with `1` it still
-        // updates itself).
-        ("AGY_CLI_DISABLE_AUTO_UPDATE".to_owned(), "true".to_owned()),
         ("PYTHONUNBUFFERED".to_owned(), "1".to_owned()),
         ("TMPDIR".to_owned(), run.display().to_string()),
     ];
@@ -195,15 +195,6 @@ fn environment(home: &Path, run: &Path, browser: &Path, method: &str) -> Vec<(St
     let browser = browser.display().to_string();
     if !browser.contains(':') {
         env.push(("BROWSER".to_owned(), browser));
-    }
-    // A Google sign-in is kept in the folder (not the keyring all folders
-    // share) only when the CLI believes it runs over SSH.
-    if method == "oauth-personal" {
-        let ssh = std::env::var("SSH_CONNECTION")
-            .ok()
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "127.0.0.1 0 127.0.0.1 0".to_owned());
-        env.push(("SSH_CONNECTION".to_owned(), ssh));
     }
     env
 }
@@ -378,7 +369,7 @@ pub async fn login(
     let run = home.join("runs").join(crate::state::id());
     std::fs::create_dir_all(&run)?;
     private(&run, 0o700)?;
-    let given = environment(&home, &run, &browser, method);
+    let given = environment(&home, &run, &browser);
     let env: Vec<(&str, &str)> = given.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
     let args: Vec<String> = ["acp", "--gemini-dir", &home.display().to_string(), "--app-data-dir", APP_DATA]
         .map(str::to_owned)
@@ -879,7 +870,7 @@ impl Antigravity {
         let run = home.join("runs").join(crate::state::id());
         std::fs::create_dir_all(&run)?;
         private(&run, 0o700)?;
-        let given = environment(&home, &run, &browser, method);
+        let given = environment(&home, &run, &browser);
         let env: Vec<(&str, &str)> = given
             .iter()
             .chain(self.start.env.iter())
@@ -1535,27 +1526,15 @@ mod tests {
     }
 
     #[test]
-    fn a_google_sign_in_is_kept_in_its_folder_and_the_cli_never_updates_itself() {
-        let env = environment(
-            Path::new("/h"),
-            Path::new("/h/runs/1"),
-            Path::new("/h/browser"),
-            "oauth-personal",
-        );
+    fn a_sign_in_is_kept_in_its_folder_and_the_cli_is_not_told_it_runs_over_ssh() {
+        let env = environment(Path::new("/h"), Path::new("/h/runs/1"), Path::new("/h/browser"));
         let get = |name: &str| env.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str());
         assert_eq!(get("GEMINI_HOME"), Some("/h"));
         assert_eq!(get("AGY_ACP_FORCE_FILE_STORAGE"), Some("1"));
-        assert_eq!(get("AGY_CLI_DISABLE_AUTO_UPDATE"), Some("true"));
         assert_eq!(get("TMPDIR"), Some("/h/runs/1"));
         assert_eq!(get("BROWSER"), Some("/h/browser"));
-        assert!(get("SSH_CONNECTION").is_some());
-        let keyed = environment(
-            Path::new("/h"),
-            Path::new("/r"),
-            Path::new("/b"),
-            "gemini-api-key",
-        );
-        assert!(!keyed.iter().any(|(name, _)| name == "SSH_CONNECTION"));
+        // SSH_CONNECTION made it refuse a sign-in in the browser.
+        assert_eq!(get("SSH_CONNECTION"), None);
     }
 
     #[test]

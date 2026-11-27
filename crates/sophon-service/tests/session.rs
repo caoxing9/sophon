@@ -3503,7 +3503,7 @@ say() { printf '%s\n' "$1"; }
 note() { printf '%s\n' "$1" >> agy-calls; }
 update() { say "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"agy-1\",\"update\":$1}}"; }
 note "args $*"
-note "env FS=$AGY_ACP_FORCE_FILE_STORAGE UP=$AGY_CLI_DISABLE_AUTO_UPDATE SSH=${SSH_CONNECTION:-} KEY=${GEMINI_API_KEY:-none} HOME=$GEMINI_HOME BROWSER=${BROWSER:-} TMP=$TMPDIR"
+note "env FS=$AGY_ACP_FORCE_FILE_STORAGE SSH=${SSH_CONNECTION:-none} KEY=${GEMINI_API_KEY:-none} HOME=$GEMINI_HOME BROWSER=${BROWSER:-} TMP=$TMPDIR"
 version=$(cat agy-version 2>/dev/null || echo 1.5.14)
 opened='{"sessionId":"agy-1","modes":{"availableModes":[{"id":"default","name":"Default"},{"id":"plan","name":"Plan"}],"currentModeId":"default"},"configOptions":[{"id":"model","category":"model","type":"select","currentValue":"gemini-3-pro","options":[{"value":"gemini-3-pro","name":"Gemini 3 Pro"},{"value":"claude-sonnet","name":"Claude Sonnet"}]}]}'
 turns=0
@@ -3857,7 +3857,10 @@ async fn antigravity_runs_as_t3_code_runs_it_and_asks_only_what_its_mode_does_no
         calls.contains(&format!("args acp --gemini-dir {home} --app-data-dir antigravity-acp\n")),
         "{calls}"
     );
-    assert!(calls.contains("FS=1 UP=true SSH=") && !calls.contains("SSH= "), "{calls}");
+    // Told nothing of SSH (it would refuse a sign-in in the browser).
+    if std::env::var_os("SSH_CONNECTION").is_none() {
+        assert!(calls.contains("FS=1 SSH=none "), "{calls}");
+    }
     assert!(calls.contains(&format!("KEY=none HOME={home} BROWSER={home}/browser TMP={home}/runs/")), "{calls}");
     assert!(calls.contains(r#""clientInfo":{"name":"sophon""#), "{calls}");
     assert!(calls.contains(r#""writeTextFile":false"#) && calls.contains(r#""terminal":false"#), "{calls}");

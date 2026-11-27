@@ -22,7 +22,6 @@ target/debug/sophon-service daemon stop
   - 要求 CLI 版本至少 1.5.1、低于 2。
   - 每个提供商有自己的目录（`GEMINI_HOME`，默认 `~/.sophon-antigravity`），用 `--gemini-dir` 交给 CLI。
   - 登录凭据以文件形式存在这个目录里（`AGY_ACP_FORCE_FILE_STORAGE=1`），不进所有目录共用的钥匙串。
-  - 不让 CLI 自动更新。
   - 服务环境里的 `GEMINI_API_KEY`、`GOOGLE_*` 等变量不会传给它。
   - CLI 要打开浏览器时只记一个标记，不打开，也不显示链接。没登录的会话会提示去“设置 › Agents”登录；登录用 CLI 自己的 `agy acp --login`。
   - 服务不读凭据，也不直接调 Google 的接口。
