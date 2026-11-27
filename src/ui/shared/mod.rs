@@ -36,7 +36,7 @@ pub(crate) fn conn_mark() -> impl nsh_core::prelude::IntoElement {
         let state = state.get();
         Some(untracked(move || match state {
             Some(status) => status_dot(move || status).into_element(),
-            None => eclipse(16.0).into_element(),
+            None => spinner(16.0).into_element(),
         }))
     }))
 }

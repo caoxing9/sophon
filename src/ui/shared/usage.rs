@@ -76,7 +76,7 @@ fn history_section(range: Signal<Range>) -> View {
                         // screen: the small mark beside the title, on the
                         // phone and the desktop alike.
                         .child(dynamic(move || {
-                            local.with(|l| l.loading && l.report.is_some()).then(|| untracked(|| eclipse(18.0).into_element()))
+                            local.with(|l| l.loading && l.report.is_some()).then(|| untracked(|| spinner(18.0).into_element()))
                         })),
                 )
                 .child(segmented(
@@ -453,7 +453,7 @@ fn resets_row(provider: String) -> View {
                             let (provider, option) = (provider.clone(), option.clone());
                             Some(untracked(move || {
                                 if busy {
-                                    return eclipse(16.0).into_element();
+                                    return spinner(16.0).into_element();
                                 }
                                 btn(t("Use"), Variant::Outline, Sz::Sm, None, move || store::confirm_reset(&provider, option.clone())).into_element()
                             }))

@@ -308,7 +308,7 @@ pub(super) fn empty_state(glyph: Icon, title: &'static str, detail: &'static str
 }
 
 fn loading_state() -> View {
-    view().flex_1().items_center().justify_center().pb(px(48.0)).child(eclipse(28.0))
+    view().flex_1().items_center().justify_center().pb(px(48.0)).child(spinner(28.0))
 }
 
 #[derive(Clone, Default)]
