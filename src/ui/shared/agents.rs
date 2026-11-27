@@ -243,7 +243,21 @@ fn agent_row(
                 .justify_center()
                 .rounded(px(R_LG))
                 .bg(SURFACE2())
-                .child(mark(&family, 16.0)),
+                .child(mark(&family, 16.0))
+                .when_some(agents::accent(cfg, &p.id), |v, rgb| {
+                    v.child(
+                        view()
+                            .absolute()
+                            .right(px(-2.0))
+                            .bottom(px(-2.0))
+                            .w(px(10.0))
+                            .h(px(10.0))
+                            .rounded(px(R_FULL))
+                            .border_2()
+                            .border_color(SURFACE0())
+                            .bg(pair(rgb, rgb)),
+                    )
+                }),
         )
         .child(view().flex_1().min_w(px(0.0)).gap(px(3.0)).child(title).child(status));
 
@@ -374,6 +388,9 @@ fn details(
     if editable && removable {
         v = v.child(field_row(t("Display name"), name_field(p.id.clone(), p.label.clone())));
     }
+    if editable {
+        v = v.child(field_row(t("Color"), accent_swatches(p.id.clone(), agents::accent(cfg, &p.id))));
+    }
     if let Some(path) = &d.path {
         v = v.child(field_row(t("Executable"), mono(path.clone())));
     }
@@ -439,6 +456,44 @@ fn field_row(label: &'static str, value: impl IntoElement) -> View {
         .gap(sp(S3))
         .child(text(label).w(px(120.0)).flex_shrink_0().text_size(tx(TEXT_SM)).text_color(FG_MUTED()).pt(px(2.0)))
         .child(view().flex_1().min_w(px(0.0)).child(value))
+}
+
+/// The colours an agent can be marked with, and none: its mark in the
+/// model picker wears it, so two accounts of one CLI tell apart.
+fn accent_swatches(id: String, current: Option<u32>) -> View {
+    let swatch = |color: Option<&'static str>, name: &'static str| {
+        let id = id.clone();
+        let rgb = color.and_then(|c| u32::from_str_radix(&c[1..], 16).ok());
+        let on = rgb == current;
+        nsh_base::button()
+            .on_press(move || store::patch_providers(agents::accent_patch(&id, color)))
+            .accessibility_label(t(name))
+            .w(px(22.0))
+            .h(px(22.0))
+            .rounded(px(R_FULL))
+            .items_center()
+            .justify_center()
+            .border_2()
+            .border_color(if on { FG() } else { tint(FG(), 0.0) })
+            .child(match rgb {
+                Some(rgb) => view().w(px(16.0)).h(px(16.0)).rounded(px(R_FULL)).bg(pair(rgb, rgb)).into_element(),
+                None => view()
+                    .w(px(16.0))
+                    .h(px(16.0))
+                    .rounded(px(R_FULL))
+                    .border_1()
+                    .border_color(BORDER())
+                    .items_center()
+                    .justify_center()
+                    .child(icon(Icon::X, 10.0).text_color(FG_MUTED()))
+                    .into_element(),
+            })
+    };
+    let mut row = view().flex_row().flex_wrap().gap(sp(S1)).child(swatch(None, "No color"));
+    for (hex, name) in agents::ACCENTS {
+        row = row.child(swatch(Some(hex), name));
+    }
+    row
 }
 
 fn mono(s: String) -> nsh_core::element::Text {

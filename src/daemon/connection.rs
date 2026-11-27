@@ -2613,6 +2613,9 @@ fn startup_messages(open_agent: Option<&str>, pending: &mut HashMap<String, Pend
             json!({ "type": "fetch_agents_request", "page": { "limit": 200 }, "subscribe": {} }),
         ),
         request(pending, Pending::Providers, json!({ "type": "get_providers_snapshot_request" })),
+        // The providers' settings: the picker tells accounts apart by them
+        // (their CLI, their colour) before Settings is ever opened.
+        request(pending, Pending::Optional, json!({ "type": "get_daemon_config_request" })),
         request(pending, Pending::Optional, json!({ "type": "workspace.label.list.request" })),
     ]);
     out
