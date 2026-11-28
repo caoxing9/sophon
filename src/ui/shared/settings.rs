@@ -23,7 +23,7 @@ pub(crate) fn appearance_sections() -> View {
             t("Theme"),
             t("Light or dark, the interface's colours, its accent and background."),
             card()
-                .child(row(
+                .child(row_wide(
                     t("Theme"),
                     t("System follows this device's appearance"),
                     segmented(
@@ -37,7 +37,7 @@ pub(crate) fn appearance_sections() -> View {
                     ),
                     true,
                 ))
-                .child(row(t("Color theme"), t("Each theme has a light and a dark palette"), theme_picker(), false))
+                .child(row_wide(t("Color theme"), t("Each theme has a light and a dark palette"), theme_picker(), false))
                 .child(row_wide(
                     t("Accent color"),
                     t("Buttons, links and the caret"),
@@ -55,7 +55,7 @@ pub(crate) fn appearance_sections() -> View {
             t("Text"),
             t("The interface's language, fonts and size."),
             card()
-                .child(row(
+                .child(row_wide(
                     t("Language"),
                     t("The language of Sophon's interface"),
                     segmented(
@@ -301,9 +301,9 @@ fn font_field(mono: bool, _example: &'static str) -> impl IntoElement {
 pub(crate) fn sending_card() -> View {
     use crate::fold::ToolDisplay;
     card()
-    .child(row(
+    .child(row_wide(
         t("Tool calls"),
-        t("Full: each step as it happens. Quiet: one line of what the agent does now"),
+        t("Full: each step as it happens. Quiet: the steps folded into one line, what the agent says and thinks in full"),
         segmented(
             vec![
                 (ToolDisplay::Stream, t("Full").into()),
@@ -318,9 +318,9 @@ pub(crate) fn sending_card() -> View {
         t("Pet"),
         t("A little one over the composer that works, waits and sleeps with the agent"),
         switch(store::show_pet, store::set_show_pet),
-        true,
+        false,
     ))
-    .child(row(
+    .child(row_wide(
         t("While an agent is running"),
         t("What Return does with your message"),
         segmented(
@@ -545,6 +545,11 @@ pub(crate) fn page_about(compact: bool, title: &'static str, about: Option<&'sta
 }
 
 pub(crate) fn section(title: &'static str, body: impl IntoElement) -> View {
+    // The phone's page mixes these with the appearance's headed sections
+    // (`section_about`): headed as they are, so the page reads as one.
+    if MOBILE {
+        return view().gap(sp(S3)).child(text(title).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).text_color(FG())).child(body);
+    }
     view().gap(sp(S3)).child(section_label(title)).child(body)
 }
 

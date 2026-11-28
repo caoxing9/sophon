@@ -1150,7 +1150,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Document", "文档"),
     ("Media", "音视频"),
     ("Web page", "网页"),
-    ("Full: each step as it happens. Quiet: one line of what the agent does now", "完整：每一步依次显示；精简：只显示一行当前在做什么"),
+    ("Full: each step as it happens. Quiet: the steps folded into one line, what the agent says and thinks in full", "完整：每一步依次显示；精简：步骤收成一行，agent 说的话和思考照常显示"),
     ("Live", "实时"),
     ("Working", "工作中"),
     ("1 step", "1 步"),
