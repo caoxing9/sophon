@@ -426,8 +426,16 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                     }
                     let offer = signal(super::notes::Chosen::None);
                     let noting = signal(super::notes::Chosen::None);
+                    // A button held down over the reply: words being chosen
+                    // by a drag. The pill waits for its end, then shows once
+                    // over what was chosen, rather than following each word.
+                    let dragging = signal(false);
                     effect(move || {
                         let c = chosen.get();
+                        if dragging.get() {
+                            offer.set(None);
+                            return;
+                        }
                         if c.cleared.is_none() && !c.words.trim().is_empty() {
                             let anchor = match (c.page, origin.get_untracked()) {
                                 (Some(b), Some((x, y))) => {
@@ -498,8 +506,16 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                             origin.set(Some((e.page_position.x.0 - at.0, e.page_position.y.0 - at.1)));
                             if e.pressed_button.is_none() {
                                 pressed_at.set(at);
+                                // Let go elsewhere: over the reply again with
+                                // no button down, the drag is over.
+                                if dragging.get_untracked() {
+                                    dragging.set(false);
+                                }
+                            } else if !dragging.get_untracked() {
+                                dragging.set(true);
                             }
                         })
+                        .on_mouse_up(move |_: &MouseEvent| dragging.set(false))
                         .child(copy_area_choosing(chosen, dynamic(move || {
                             let list = pieces.get();
                             Some(untracked(move || {
