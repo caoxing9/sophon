@@ -124,7 +124,12 @@ pub(crate) fn timeline() -> impl IntoElement {
             // On the desktop the whole conversation is one selectable area:
             // a selection runs from reply to reply, as on a web page (each
             // reply its own area stopped it at the reply's edge).
-            view().flex_1().opacity(move || if settled.get() { 1.0_f32 } else { 0.0 }).transition_opacity().when(!MOBILE, |v| v.selectable(true).on_text_selection_change(list_chosen)).child(virtual_list(move || rows.with(Vec::len), move |at: Position| row(at, rows, running))
+            view().flex_1().opacity(move || if settled.get() { 1.0_f32 } else { 0.0 }).transition_opacity().when(!MOBILE, |v| {
+                v.selectable(true)
+                    .on_text_selection_change(list_chosen)
+                    .on_mouse_move(list_pointer)
+                    .on_mouse_up(|_: &MouseEvent| global::<ListDragging>().set(ListDragging(false)))
+            }).child(virtual_list(move || rows.with(Vec::len), move |at: Position| row(at, rows, running))
                 // On the phone, a drag down the conversation takes the
                 // keyboard with it, as Messages does.
                 .keyboard_dismiss_mode(if MOBILE { KeyboardDismissMode::Interactive } else { KeyboardDismissMode::None })
@@ -366,7 +371,7 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                             .on_mouse_enter(move |_: &MouseEvent| hover.set(true))
                             .on_mouse_leave(move |_: &MouseEvent| hover.set(false))
                             .child(view().px(px(14.0)).py(px(9.0)).rounded(px(18.0)).bg(user_bubble()).selectable(true).on_text_selection_change(take_copy).child(user_text(item, true)))
-                            .child(user_actions(item).opacity(move || if hover.get() { 1.0_f32 } else { 0.0 }).transition_opacity()),
+                            .child(user_actions(item).select_none().opacity(move || if hover.get() { 1.0_f32 } else { 0.0 }).transition_opacity()),
                     )
                     .into_element()
                 }
@@ -426,13 +431,12 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                     }
                     let offer = signal(super::notes::Chosen::None);
                     let noting = signal(super::notes::Chosen::None);
-                    // A button held down over the reply: words being chosen
-                    // by a drag. The pill waits for its end, then shows once
-                    // over what was chosen, rather than following each word.
-                    let dragging = signal(false);
+                    // Words being chosen by a drag in the list: the pill
+                    // waits for its end, then shows once over what was
+                    // chosen, rather than following each word.
                     effect(move || {
                         let c = chosen.get();
-                        if dragging.get() {
+                        if global::<ListDragging>().get().0 {
                             offer.set(None);
                             return;
                         }
@@ -506,16 +510,8 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                             origin.set(Some((e.page_position.x.0 - at.0, e.page_position.y.0 - at.1)));
                             if e.pressed_button.is_none() {
                                 pressed_at.set(at);
-                                // Let go elsewhere: over the reply again with
-                                // no button down, the drag is over.
-                                if dragging.get_untracked() {
-                                    dragging.set(false);
-                                }
-                            } else if !dragging.get_untracked() {
-                                dragging.set(true);
                             }
                         })
-                        .on_mouse_up(move |_: &MouseEvent| dragging.set(false))
                         .child(copy_area_choosing(chosen, dynamic(move || {
                             let list = pieces.get();
                             Some(untracked(move || {
@@ -537,7 +533,7 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                         // Under the reply (as T3 Code's): copy it, fork the
                         // conversation, quote it in the next message, and when
                         // it was written; there under the pointer once written.
-                        .child(when(turn_end, move || reply_actions(item, text_of, chosen, computed(move || !streaming.get() && hover.get()))))
+                        .child(when(turn_end, move || view().select_none().child(reply_actions(item, text_of, chosen, computed(move || !streaming.get() && hover.get())))))
                         // Over the reply, so last.
                         .child(super::notes::selection_layer(offer, noting))
                         .into_element()
@@ -559,6 +555,7 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                                     });
                                 })
                                 .accessibility_label(t("Thinking"))
+                                .select_none()
                                 .flex_row()
                                 .items_center()
                                 .gap(sp(S2))
@@ -593,10 +590,14 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                 // A call under an open group sits indented under its
                 // summary, past the summary's chevron.
                 RowKind::Tool => tool_row(item).into_element(),
-                RowKind::Group => group_row(group).into_element(),
-                RowKind::Work => work_row(work).into_element(),
-                RowKind::Changes => changes_card(changed).into_element(),
-                RowKind::Made => made_card(made).into_element(),
+                // The app's own words (a turn's line, its cards, a call's
+                // name) are not the conversation's: a drag through them
+                // leaves them out of what is chosen, rather than catching
+                // on them.
+                RowKind::Group => view().select_none().child(group_row(group)).into_element(),
+                RowKind::Work => view().select_none().child(work_row(work)).into_element(),
+                RowKind::Changes => view().select_none().child(changes_card(changed)).into_element(),
+                RowKind::Made => view().select_none().child(made_card(made)).into_element(),
                 RowKind::Todo => todo_card(item).into_element(),
                 // A line where the reply would be, not a red block: the mark
                 // says it failed, the words say why, quietly.
@@ -619,6 +620,7 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                 // Claude Code retrying a failed request: which attempt, why;
                 // the last message sent again at a press, not after the wait.
                 RowKind::Retry => view()
+                    .select_none()
                     .flex_row()
                     .items_center()
                     .gap(sp(S2))
@@ -632,6 +634,7 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                     .child(when(last, move || retry_button(WARNING)))
                     .into_element(),
                 RowKind::Notice => text(text_of)
+                    .select_none()
                     .text_size(tx(TEXT_SM))
                     .text_color(FG_FAINT())
                     .text_center()
@@ -844,6 +847,20 @@ mod quote_tests {
         assert_eq!(quote_pieces("Just words.\n\nMore."), [piece("Just words.\n\nMore.", None)]);
         let code = "Run:\n\n```sh\n> not a quote\n```";
         assert_eq!(quote_pieces(code), [piece(code, None)]);
+    }
+}
+
+/// A button held down over the conversation's list: words being chosen
+/// by a drag (the note's pill waits for its end).
+#[derive(Clone, Copy, Default, PartialEq)]
+struct ListDragging(bool);
+
+/// The list's pointer: a move with a button down begins a drag, one with
+/// none (let go outside the list) ends it.
+fn list_pointer(e: &MouseEvent) {
+    let held = e.pressed_button.is_some();
+    if global::<ListDragging>().get_untracked().0 != held {
+        global::<ListDragging>().set(ListDragging(held));
     }
 }
 
@@ -1852,6 +1869,7 @@ fn tool_row(item: Memo<Option<Item>>) -> impl IntoElement {
         _ => None,
     });
     let header = nsh_base::button()
+        .select_none()
         .on_press(move || {
             let Some(Item::Tool { call_id, name, kind, detail, error, .. }) = item.get_untracked() else { return };
             if !super::tool_detail::has_body(&detail, error.as_deref()) {
