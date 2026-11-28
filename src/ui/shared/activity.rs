@@ -1,8 +1,9 @@
-//! Over the composer, as DSH Go's: while the agent works, a pill of what it
-//! does now (its step, the command or file, how long the turn has run);
-//! and the pet, Sophon's eclipse, standing on whatever is topmost there, in
-//! the mood of the conversation: typing while the agent works, a hand up
-//! while it waits for the user, a hop when it is done, asleep otherwise.
+//! Over the composer, as DSH Go's: a line as wide as it, the pet at its
+//! start, Sophon's eclipse in pixels, in the conversation's mood (typing
+//! while the agent works, a hand up while it waits for the user, a hop when
+//! a turn ends, asleep otherwise); beside it, while the agent works, what
+//! it does now (its step, the command or file, how long the turn has run).
+//! No box, and nothing laid over the conversation.
 
 use nsh_core::prelude::*;
 
@@ -44,9 +45,10 @@ impl Mood {
 /// each (its strips are drawn six to a pixel: three device pixels apiece
 /// on a 2x screen).
 const PET: f32 = 48.0;
-/// How far the pet reaches up over what is above its block (its frame less
-/// the few points its feet stand into it).
-pub(crate) const PET_REACH: f32 = PET - 6.0;
+/// The line's height: the pet's body, its frame's empty sky above it.
+const BAR_H: f32 = 34.0;
+/// How far under its feet the pet's frame goes (empty).
+const PET_FEET: f32 = 5.0;
 /// How long it hops for joy once a turn ends (ms).
 const HAPPY_FOR: u64 = 4000;
 
@@ -72,8 +74,11 @@ fn now_doing(agent: &crate::daemon::Agent) -> (String, String, String) {
     (String::new(), String::new(), String::new())
 }
 
-/// The pill over the composer while the agent works.
-pub(crate) fn strip() -> impl IntoElement {
+/// The line over the composer, as wide as it and lined up with it: the
+/// pet, and while the agent works, what it does now (its step, the file or
+/// command, how long the turn has run). No box: words beside the pet, which
+/// has room of its own, so nothing is covered.
+pub(crate) fn bar() -> impl IntoElement {
     let agent = computed(store::selected_agent);
     let running = computed(move || agent.with(|a| a.as_ref().is_some_and(|a| a.is_running())));
     let id = computed(store::selected_id);
@@ -88,6 +93,27 @@ pub(crate) fn strip() -> impl IntoElement {
             }
         });
     });
+    view()
+        .w_full()
+        .max_w(px(CONTENT_MAX_WIDTH()))
+        .self_center()
+        .flex_row()
+        .items_center()
+        .gap(sp(S2))
+        .h(px(BAR_H))
+        .px(sp(S2))
+        .child(pet(agent, running))
+        .child(view().flex_1().min_w(px(0.0)).child(dynamic(move || {
+            if !running.get() {
+                return None;
+            }
+            let id = id.get_untracked().unwrap_or_default();
+            Some(untracked(move || doing_line(agent, id).into_element()))
+        })))
+}
+
+/// What the agent does now, one line of words.
+fn doing_line(agent: Memo<Option<crate::daemon::Agent>>, id: String) -> View {
     let doing = computed(move || {
         store::item_count();
         agent.with(|a| a.as_ref().map(now_doing).unwrap_or_default())
@@ -106,80 +132,62 @@ pub(crate) fn strip() -> impl IntoElement {
         }
         tokens
     });
-    view().child(dynamic(move || {
-        if !running.get() {
-            return None;
+    let started = TURN_STARTED.with_borrow(|m| m.get(&id).copied()).unwrap_or_else(std::time::Instant::now);
+    // A word for the turn while no step has one, by when it began.
+    let seed = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        format!("{started:?}{id}").hash(&mut h);
+        h.finish() as usize
+    };
+    let idle_word = if crate::i18n::is_zh() { VERBS_ZH[seed % VERBS_ZH.len()] } else { VERBS_EN[seed % VERBS_EN.len()] };
+    let tick = signal(0u64);
+    spawn(async move {
+        loop {
+            nsh_core::element::timer(std::time::Duration::from_secs(1)).await;
+            tick.update(|t| *t += 1);
         }
-        let id = id.get_untracked().unwrap_or_default();
-        Some(untracked(move || {
-            let started = TURN_STARTED.with_borrow(|m| m.get(&id).copied()).unwrap_or_else(std::time::Instant::now);
-            // A word for the turn while no step has one, by when it began.
-            let seed = {
-                use std::hash::{Hash, Hasher};
-                let mut h = std::collections::hash_map::DefaultHasher::new();
-                format!("{started:?}{id}").hash(&mut h);
-                h.finish() as usize
-            };
-            let idle_word = if crate::i18n::is_zh() { VERBS_ZH[seed % VERBS_ZH.len()] } else { VERBS_EN[seed % VERBS_EN.len()] };
-            let tick = signal(0u64);
-            spawn(async move {
-                loop {
-                    nsh_core::element::timer(std::time::Duration::from_secs(1)).await;
-                    tick.update(|t| *t += 1);
-                }
-            });
-            let clock = move || {
-                tick.get();
-                let secs = started.elapsed().as_secs();
-                let time = if secs >= 3600 { format!("{}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60) } else { format!("{}:{:02}", secs / 60, secs % 60) };
-                match written.get() {
-                    0 => time,
-                    n => format!("{time} · ↓{}", short_count(n)),
-                }
-            };
-            glass_strong(view())
-                .rounded(px(R_FULL))
-                .flex_row()
-                .items_center()
-                .gap(sp(S2))
-                .min_h(px(36.0))
-                .pl(px(10.0))
-                .pr(px(14.0))
-                .mb(sp(S2))
-                .child(dynamic(move || {
-                    let kind = doing.with(|(k, ..)| k.clone());
-                    Some(untracked(move || match kind.as_str() {
-                        "" | "thinking" | "said" => spark(14.0).into_element(),
-                        k => tool_glyph(k, "", 20.0).into_element(),
-                    }))
-                }))
-                .child(
-                    text(move || doing.with(|(_, word, _)| if word.is_empty() { format!("{idle_word}…") } else { word.clone() }))
-                        .text_size(tx(TEXT_XS))
-                        .font_weight(FontWeight(600))
-                        .text_color(FG())
-                        .flex_shrink_0(),
-                )
-                .child(
-                    text(move || doing.with(|(.., detail)| detail.clone()))
-                        .text_size(tx(TEXT_XS))
-                        .font_family(mono_font)
-                        .text_color(FG_MUTED())
-                        .number_of_lines(1)
-                        .flex_1(),
-                )
-                .child(text(clock).text_size(tx(TEXT_XS)).text_color(FG_FAINT()).flex_shrink_0())
-                .into_element()
+    });
+    let clock = move || {
+        tick.get();
+        let secs = started.elapsed().as_secs();
+        let time = if secs >= 3600 { format!("{}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60) } else { format!("{}:{:02}", secs / 60, secs % 60) };
+        match written.get() {
+            0 => time,
+            n => format!("{time} · ↓{}", short_count(n)),
+        }
+    };
+    view()
+        .flex_row()
+        .items_center()
+        .gap(sp(S2))
+        .child(dynamic(move || {
+            let kind = doing.with(|(k, ..)| k.clone());
+            Some(untracked(move || match kind.as_str() {
+                "" | "thinking" | "said" => spark(13.0).into_element(),
+                k => tool_glyph(k, "", 18.0).into_element(),
+            }))
         }))
-    }))
+        .child(
+            text(move || doing.with(|(_, word, _)| if word.is_empty() { format!("{idle_word}…") } else { word.clone() }))
+                .text_size(tx(TEXT_SM))
+                .font_weight(FontWeight(500))
+                .text_color(FG_MUTED())
+                .flex_shrink_0(),
+        )
+        .child(
+            text(move || doing.with(|(.., detail)| detail.clone()))
+                .text_size(tx(TEXT_XS))
+                .font_family(mono_font)
+                .text_color(FG_FAINT())
+                .number_of_lines(1)
+                .flex_1(),
+        )
+        .child(text(clock).text_size(tx(TEXT_XS)).text_color(FG_FAINT()).flex_shrink_0())
 }
 
-/// The pet, standing on the top edge of the block it is put in (the
-/// composer and what is over it). Laid over what is above, taking no room
-/// and no presses.
-pub(crate) fn pet() -> impl IntoElement {
-    let agent = computed(store::selected_agent);
-    let running = computed(move || agent.with(|a| a.as_ref().is_some_and(|a| a.is_running())));
+/// The pet in its room at the line's start, in the conversation's mood.
+fn pet(agent: Memo<Option<crate::daemon::Agent>>, running: Memo<bool>) -> impl IntoElement {
     let waiting = computed(move || {
         agent.with(|a| {
             a.as_ref().is_some_and(|a| !a.pending.is_empty() || matches!(a.attention_reason.as_deref(), Some("permission" | "needs_input")))
@@ -213,18 +221,16 @@ pub(crate) fn pet() -> impl IntoElement {
             Mood::Sleeping
         }
     });
-    view()
-        .absolute()
-        // Its feet a few points into its frame: they touch the edge below.
-        .top(px(-PET_REACH))
-        .left(px(if MOBILE { S4 } else { S6 + S3 }))
-        .w(px(PET))
-        .h(px(PET))
-        .pointer_events(nsh_core::PointerEvents::None)
-        .child(dynamic(move || {
-            let mood = mood.get();
-            Some(untracked(move || sprite(mood).into_element()))
-        }))
+    // Its frame is taller than the line: the empty sky over its head
+    // reaches up past it, its feet on the line's foot.
+    view().w(px(PET)).h(px(BAR_H)).flex_shrink_0().child(
+        view().absolute().bottom(px(-PET_FEET)).left(px(0.0)).w(px(PET)).h(px(PET)).pointer_events(nsh_core::PointerEvents::None).child(dynamic(
+            move || {
+                let mood = mood.get();
+                Some(untracked(move || sprite(mood).into_element()))
+            },
+        )),
+    )
 }
 
 /// A mood's frames, one after another, round and round: its strip slid

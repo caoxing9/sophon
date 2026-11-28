@@ -146,9 +146,8 @@ pub(crate) fn timeline() -> impl IntoElement {
                 .on_scroll_drag_start(|_: &nsh_core::Point<nsh_core::Points>| store::timeline_scrolled_by_user())
                 .content_padding_top(sp(S4))
                 // The phone's composer floats over the end; the desktop's
-                // sits below the list, the pet standing on it reaching up
-                // into the list: the end stops clear of it.
-                .content_padding_bottom(px(if MOBILE { 200.0 } else { S4 + super::activity::PET_REACH }))
+                // sits below the list.
+                .content_padding_bottom(px(if MOBILE { 200.0 } else { S4 }))
                 // Earlier pages come as the conversation nears its start.
                 // Not while it opens: an earlier page put before the rows
                 // keeps what shows in place, away from the end.
