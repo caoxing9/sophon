@@ -138,6 +138,10 @@ fn new_workspace_form(compact: bool, form: Memo<store::Form>, project_label: Mem
 /// a blank chat, the project named above it, the composer at the foot;
 /// its first message makes it.
 fn project_chat(form: Memo<store::Form>, project_label: Memo<String>) -> View {
+    // Its name in the title bar's height, beside the window's buttons, as
+    // a conversation's header is (`workspace::header`): not a row of its
+    // own under the strip that keeps the bar's room, which left it empty.
+    let bar = computed(nsh_core::element::desktop::title_bar);
     view()
         .flex_1()
         .child(
@@ -145,8 +149,10 @@ fn project_chat(form: Memo<store::Form>, project_label: Memo<String>) -> View {
                 .flex_row()
                 .items_center()
                 .gap(sp(S2))
-                .h(px(44.0))
-                .px(sp(S4))
+                .h(move || Length::from(px(bar.get().top.0.max(40.0))))
+                .mt(move || Length::from(px(-bar.get().top.0)))
+                .pl(move || Length::from(px(if store::sidebar_hidden() && bar.get().top.0 > 0.0 { bar.get().left.0 + 40.0 } else { S4 })))
+                .pr(sp(S4))
                 .window_drag(true)
                 .child(icon(Icon::Folder, 14.0).text_color(FG_MUTED()))
                 .child(text(move || project_label.get()).text_size(tx(TEXT_BASE)).font_weight(FontWeight(500)))

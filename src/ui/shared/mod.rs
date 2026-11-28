@@ -1,5 +1,6 @@
 //! Product components the desktop and the phone share.
 
+pub(crate) mod activity;
 pub(crate) mod agent;
 pub(crate) mod agents;
 pub(crate) mod chips;

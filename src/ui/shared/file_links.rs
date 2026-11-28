@@ -200,13 +200,12 @@ pub(crate) fn chip(node: &nsh_base::text_view::CustomNode) -> AnyElement {
             .into_element()
     };
     let tip = tooltip_text(format!("{}  ·  {}", folder_of(&file), t("⌘-click to show in Finder"))).into_element();
-    // An inline element sits on the baseline: moved down (drawing only)
-    // so its middle meets the middle of the line's letters, ~0.36 em up
-    // (CJK and capitals alike), as nsh centres inline images.
-    let em = TEXT_CONTENT * crate::store::ui_scale().0;
+    // nsh stands an inline element with text in it on the line by that
+    // text's baseline (as CSS's `inline-flex`): its name sits on the line
+    // with the words round it, no nudge needed (one, from when nsh stood
+    // it on its bottom edge, pushed it down past the line, clipped).
     view()
         .tooltip(tip)
-        .translate_y(px(CHIP_H / 2.0 - 0.36 * em))
         .child(
             view()
                 .on_press(move |e: &nsh_core::element::PressEvent| open(&path, e.modifiers.cmd))

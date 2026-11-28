@@ -12,111 +12,112 @@ use crate::ui::kit::text;
 use crate::ui::kit::*;
 use crate::store::{self, Conn, DefaultModel, SendBehavior};
 
-/// Theme and language.
-pub(crate) fn appearance_card() -> View {
-    card()
-        .child(row(
+/// Appearance, in sections as monocode's: the theme and its colours, the
+/// text, the layout, and the settings file.
+pub(crate) fn appearance_sections() -> View {
+    view()
+        .child(section_about(
             t("Theme"),
-            t("Light, dark, or as the system is set"),
-            segmented(
-                vec![
-                    (nsh_core::platform::Appearance::System, t("System").into()),
-                    (nsh_core::platform::Appearance::Light, t("Light").into()),
-                    (nsh_core::platform::Appearance::Dark, t("Dark").into()),
-                ],
-                store::appearance,
-                store::set_appearance,
-            ),
-            true,
+            t("Light or dark, the interface's colours, its accent and background."),
+            card()
+                .child(row(
+                    t("Theme"),
+                    t("System follows this device's appearance"),
+                    segmented(
+                        vec![
+                            (nsh_core::platform::Appearance::System, t("System").into()),
+                            (nsh_core::platform::Appearance::Light, t("Light").into()),
+                            (nsh_core::platform::Appearance::Dark, t("Dark").into()),
+                        ],
+                        store::appearance,
+                        store::set_appearance,
+                    ),
+                    true,
+                ))
+                .child(row(t("Color theme"), t("Each theme has a light and a dark palette"), theme_picker(), false))
+                .child(row(
+                    t("Accent color"),
+                    t("Buttons, links and the caret"),
+                    color_control(ACCENTS, || store::color_theme().accent, |c| store::edit_color_theme(|t| t.accent = c)),
+                    false,
+                ))
+                .child(row(
+                    t("Background"),
+                    t("A solid color of your own; light or dark follows it"),
+                    color_control(BACKGROUNDS, || store::color_theme().background, |c| store::edit_color_theme(|t| t.background = c)),
+                    false,
+                )),
         ))
-        .child(row(t("Color theme"), t("The interface's colors"), theme_swatches(), false))
-        .child(row(
-            t("Background"),
-            t("A solid color of your own; light or dark follows it"),
-            hex_control(
-                BACKGROUNDS,
-                || store::color_theme().background,
-                |c| store::edit_color_theme(|t| t.background = c),
-            ),
-            false,
-        ))
-        .child(row(
-            t("Accent color"),
-            t("Buttons, links and the caret"),
-            hex_control(ACCENTS, || store::color_theme().accent, |c| store::edit_color_theme(|t| t.accent = c)),
-            false,
-        ))
-        .child(row(
-            t("Language"),
-            t("The language of Sophon's interface"),
-            segmented(
-                vec![(Lang::Auto, t("System").into()), (Lang::En, "English".into()), (Lang::Zh, "中文".into())],
-                crate::i18n::lang,
-                store::set_language,
-            ),
-            false,
-        ))
-        .child(row(
-            t("Interface font"),
-            t("Any font installed on this device"),
-            font_field(false, "SF Pro"),
-            false,
-        ))
-        .child(row(
-            t("Code font"),
-            t("For code, terminals and numbers"),
-            font_field(true, "JetBrains Mono"),
-            false,
-        ))
-        .child(row(
-            t("Text size"),
-            t("The size of the interface's text, in points"),
-            view()
-                .flex_row()
-                .items_center()
-                .gap(px(6.0))
-                .child(icon_btn(Icon::Minus, Sz::Sm, t("Smaller"), || store::set_font_size(store::look().0 - 1.0)))
-                .child(
-                    nsh_base::button()
-                        .on_press(|| store::set_font_size(store::DEFAULT_FONT_SIZE))
-                        .accessibility_label(t("Back to the default size"))
-                        .w(px(40.0))
+        .child(section_about(
+            t("Text"),
+            t("The interface's language, fonts and size."),
+            card()
+                .child(row(
+                    t("Language"),
+                    t("The language of Sophon's interface"),
+                    segmented(
+                        vec![(Lang::Auto, t("System").into()), (Lang::En, "English".into()), (Lang::Zh, "中文".into())],
+                        crate::i18n::lang,
+                        store::set_language,
+                    ),
+                    true,
+                ))
+                .child(row(t("Interface font"), t("Any font installed on this device"), font_field(false, "SF Pro"), false))
+                .child(row(t("Code font"), t("For code, terminals and numbers"), font_field(true, "JetBrains Mono"), false))
+                .child(row(
+                    t("Text size"),
+                    t("The size of the interface's text, in points"),
+                    view()
+                        .flex_row()
                         .items_center()
-                        .child(text(|| format!("{}", store::look().0)).text_size(tx(TEXT_BASE)).font_family(mono_font)),
-                )
-                .child(icon_btn(Icon::Plus, Sz::Sm, t("Larger"), || store::set_font_size(store::look().0 + 1.0))),
-            false,
+                        .gap(px(6.0))
+                        .child(icon_btn(Icon::Minus, Sz::Sm, t("Smaller"), || store::set_font_size(store::look().0 - 1.0)))
+                        .child(
+                            nsh_base::button()
+                                .on_press(|| store::set_font_size(store::DEFAULT_FONT_SIZE))
+                                .accessibility_label(t("Back to the default size"))
+                                .w(px(40.0))
+                                .items_center()
+                                .child(text(|| format!("{}", store::look().0)).text_size(tx(TEXT_BASE)).font_family(mono_font)),
+                        )
+                        .child(icon_btn(Icon::Plus, Sz::Sm, t("Larger"), || store::set_font_size(store::look().0 + 1.0))),
+                    false,
+                )),
         ))
-        .when(!MOBILE, |card| {
-            card.child(row(
-                t("Content width"),
-                t("How wide the conversation and the composer go"),
-                segmented(
-                    vec![
-                        (store::ContentWidth::Standard, t("Standard").into()),
-                        (store::ContentWidth::Wide, t("Wide").into()),
-                        (store::ContentWidth::Full, t("Full width").into()),
-                    ],
-                    store::content_width_tracked,
-                    store::set_content_width,
-                ),
-                false,
-            ))
-        })
-        .child(row(
-            t("Compact"),
-            t("Tighter rows and gaps: more on screen"),
-            switch(|| store::look().1, store::set_compact),
-            false,
+        .child(section_about(
+            t("Layout"),
+            t("How wide the conversation goes and how close its rows sit."),
+            card()
+                .when(!MOBILE, |card| {
+                    card.child(row(
+                        t("Content width"),
+                        t("How wide the conversation and the composer go"),
+                        segmented(
+                            vec![
+                                (store::ContentWidth::Standard, t("Standard").into()),
+                                (store::ContentWidth::Wide, t("Wide").into()),
+                                (store::ContentWidth::Full, t("Full width").into()),
+                            ],
+                            store::content_width_tracked,
+                            store::set_content_width,
+                        ),
+                        true,
+                    ))
+                })
+                .child(row(t("Compact"), t("Tighter rows and gaps: more on screen"), switch(|| store::look().1, store::set_compact), MOBILE)),
         ))
         // The same, by hand: `fontFamily`, `monoFontFamily`, `fontSize` and
         // `compact` in the settings file, read when Sophon starts.
-        .when(!MOBILE && cfg!(target_os = "macos"), |card| {
-            card.child(row(
+        .when(!MOBILE && cfg!(target_os = "macos"), |v| {
+            v.child(section_about(
                 t("Settings file"),
                 t("fontFamily, monoFontFamily, fontSize and compact can be set there too; Sophon reads it when it starts"),
-                btn(t("Open settings.json"), Variant::Outline, Sz::Sm, None, store::open_settings_file),
-                false,
+                card().child(row(
+                    t("settings.json"),
+                    t("In Sophon's folder"),
+                    btn(t("Open settings.json"), Variant::Outline, Sz::Sm, None, store::open_settings_file),
+                    true,
+                )),
             ))
         })
 }
@@ -139,31 +140,113 @@ fn swatch(color: u32, selected: bool, label: SharedString, on_press: impl Fn() +
         .child(view().flex_1().rounded(px(R_FULL)).bg(AdaptiveColor::rgb(color, color)).border_1().border_color(BORDER_STRONG()))
 }
 
-/// The theme presets, each a swatch of its accent.
-fn theme_swatches() -> impl IntoElement {
-    let current = store::color_theme().preset;
-    let mut row = view().flex_row().items_center().gap(px(4.0));
-    for &(key, name, color, _, _) in THEME_PRESETS {
-        row = row.child(swatch(color, current == key, name.into(), move || store::edit_color_theme(|t| t.preset = key.to_owned())));
-    }
-    row
+/// A theme's look in small: its light background and its dark one side by
+/// side, its accent on them.
+fn theme_chip(key: &'static str, size: f32) -> View {
+    let p = THEME_PRESETS.iter().find(|p| p.0 == key).unwrap_or(&THEME_PRESETS[0]);
+    let (light, dark) = (p.3, p.4);
+    view()
+        .w(px(size))
+        .h(px(size))
+        .flex_shrink_0()
+        .rounded(px(size * 0.3))
+        .overflow_hidden()
+        .border_1()
+        .border_color(BORDER_STRONG())
+        .flex_row()
+        .child(view().flex_1().bg(AdaptiveColor::rgb(light.bg, light.bg)))
+        .child(view().flex_1().bg(AdaptiveColor::rgb(dark.bg, dark.bg)))
+        // Its accent in the middle, over both.
+        .child(
+            view()
+                .absolute()
+                .top(px(0.0))
+                .left(px(0.0))
+                .right(px(0.0))
+                .bottom(px(0.0))
+                .items_center()
+                .justify_center()
+                .child(view().w(px(size * 0.42)).h(px(size * 0.42)).rounded(px(R_FULL)).bg(AdaptiveColor::rgb(light.accent, dark.accent))),
+        )
 }
 
-/// A colour of the user's own: swatches to press, a hex field (applied on
-/// Return: each change mounts the UI again) and a reset.
-fn hex_control(choices: &'static [u32], current: fn() -> Option<u32>, set: fn(Option<u32>)) -> impl IntoElement {
+/// The colour theme in use, by its name and look; pressed, the themes.
+fn theme_picker() -> impl IntoElement {
+    let current = store::color_theme().preset;
+    let now = THEME_PRESETS.iter().find(|p| p.0 == current).unwrap_or(&THEME_PRESETS[0]);
+    let trigger = view()
+        .flex_row()
+        .items_center()
+        .gap(sp(S2))
+        .h(sp(CONTROL_SM))
+        .min_w(px(180.0))
+        .pl(px(6.0))
+        .pr(sp(S2))
+        .rounded(px(R_MD))
+        .border_1()
+        .border_color(BORDER())
+        .bg(SURFACE0())
+        .child(theme_chip(now.0, 18.0))
+        .child(text(t(now.1)).text_size(tx(TEXT_SM)).text_color(FG()).flex_1())
+        .child(icon(Icon::ChevronDown, 14.0).text_color(FG_MUTED()));
+    let mut menu = dropdown(trigger).align(nsh_core::overlay::Align::End);
+    for &(key, name, ..) in THEME_PRESETS {
+        menu = menu.child(
+            nsh_shadcn::dropdown_menu_item("")
+                .label(None::<SharedString>)
+                .on_select(move || store::edit_color_theme(|t| t.preset = key.to_owned()))
+                .child(theme_chip(key, 18.0))
+                .child(text(t(name)).text_size(tx(TEXT_SM)).text_color(FG()).flex_1())
+                .when(key == current, |i| i.child(icon(Icon::Check, 16.0).text_color(FG()))),
+        );
+    }
+    menu
+}
+
+/// A colour to pick: swatches, and a last one for a colour of the user's
+/// own that opens a hex field (applied on Return: each change mounts the
+/// UI again). A colour of one's own in use shows its field, and a reset.
+fn color_control(choices: &'static [u32], current: fn() -> Option<u32>, set: fn(Option<u32>)) -> impl IntoElement {
     let now = current();
+    let own = now.is_some_and(|c| !choices.contains(&c));
+    let editing = signal(own);
     let typed = signal(now.map(store::hex_of).unwrap_or_default());
     let mut wells = view().flex_row().items_center().gap(px(2.0));
     for &c in choices {
         wells = wells.child(swatch(c, now == Some(c), store::hex_of(c).into(), move || set(Some(c))));
     }
+    // Its own: a ring of hues round its colour (or a plus, none yet).
+    wells = wells.child(
+        nsh_base::button()
+            .on_press(move || editing.update(|e| *e = !*e))
+            .accessibility_label(t("Custom color"))
+            .w(px(26.0))
+            .h(px(26.0))
+            .p(px(2.0))
+            .rounded(px(R_FULL))
+            .border_1()
+            .border_color(if own { ACCENT() } else { tint(BORDER(), 0.0) })
+            .child(
+                view()
+                    .flex_1()
+                    .rounded(px(R_FULL))
+                    .border_2()
+                    .border_color(BORDER_STRONG())
+                    .items_center()
+                    .justify_center()
+                    .bg(match now.filter(|_| own) {
+                        Some(c) => AdaptiveColor::rgb(c, c),
+                        None => SURFACE0(),
+                    })
+                    .when(!own, |v| v.child(icon(Icon::Plus, 12.0).text_color(FG_MUTED()))),
+            ),
+    );
     view()
         .flex_row()
         .items_center()
         .gap(sp(S2))
         .child(wells)
-        .child(
+        .child(when(move || editing.get(), move || {
             field()
                 .w(px(92.0))
                 .h(sp(CONTROL_SM))
@@ -177,8 +260,8 @@ fn hex_control(choices: &'static [u32], current: fn() -> Option<u32>, set: fn(Op
                     } else if let Some(c) = store::parse_hex(v) {
                         set(Some(c));
                     }
-                }),
-        )
+                })
+        }))
         .child(when(move || now.is_some(), move || icon_btn(Icon::Undo2, Sz::Sm, t("Reset"), move || set(None))))
 }
 
@@ -217,14 +300,11 @@ pub(crate) fn sending_card() -> View {
     card()
     .child(row(
         t("Tool calls"),
-        t("The commands and reads between the agent's replies"),
+        t("Full: each step as it happens. Quiet: one line of what the agent does now"),
         segmented(
             vec![
-                (ToolDisplay::Auto, t("Expanded").into()),
-                (ToolDisplay::Folded, t("Folded").into()),
+                (ToolDisplay::Stream, t("Full").into()),
                 (ToolDisplay::Quiet, t("Quiet").into()),
-                (ToolDisplay::Stream, t("Live").into()),
-                (ToolDisplay::Hidden, t("Hidden").into()),
             ],
             store::tool_display,
             store::set_tool_display,
@@ -437,15 +517,19 @@ pub(crate) fn storage_card() -> View {
 /// The settings page frame: a centered column under the title (the
 /// section of the settings shown, on the desktop).
 pub(crate) fn page(compact: bool, title: &'static str, sections: View) -> impl IntoElement {
+    page_about(compact, title, None, sections)
+}
+
+/// [`page`] with a line under its title saying what is on it.
+pub(crate) fn page_about(compact: bool, title: &'static str, about: Option<&'static str>, sections: View) -> impl IntoElement {
     scroll().flex_1().child(
         page_column(compact)
             .gap(px(if compact { S6 } else { S8 }))
             .child(
                 view()
-                    .flex_row()
-                    .items_center()
-                    .gap(sp(S2))
-                    .child(page_title(title)),
+                    .gap(px(6.0))
+                    .child(page_title(title))
+                    .when_some(about, |v, a| v.child(text(a).text_size(tx(TEXT_SM)).text_color(FG_MUTED()))),
             )
             .child(sections.gap(px(if compact { S6 } else { S8 }))),
     )
@@ -453,6 +537,19 @@ pub(crate) fn page(compact: bool, title: &'static str, sections: View) -> impl I
 
 pub(crate) fn section(title: &'static str, body: impl IntoElement) -> View {
     view().gap(sp(S3)).child(section_label(title)).child(body)
+}
+
+/// A section with a heading and a line about it over its card (monocode's).
+pub(crate) fn section_about(title: &'static str, about: &'static str, body: impl IntoElement) -> View {
+    view()
+        .gap(sp(S3))
+        .child(
+            view()
+                .gap(px(4.0))
+                .child(text(title).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).text_color(FG()))
+                .child(text(about).text_size(tx(TEXT_SM)).text_color(FG_MUTED())),
+        )
+        .child(body)
 }
 
 /// A settings row: title and hint on the leading rail, the control trailing.

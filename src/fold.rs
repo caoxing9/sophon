@@ -31,6 +31,9 @@ pub(crate) enum Row {
     Work(Group),
     /// What a finished turn changed (`changes`): a card under its reply.
     Changes { start: usize, end: usize, id: String },
+    /// The files a finished turn made for the user (`made`): a card under
+    /// the changes.
+    Made { start: usize, end: usize, id: String },
 }
 
 /// A run of two or more tool calls with nothing said between them.
@@ -60,65 +63,54 @@ impl Row {
             // by it, apart from a run's of the same first call.
             Row::Work(g) => g.id.clone(),
             Row::Changes { id, .. } => format!("c:{id}"),
+            Row::Made { id, .. } => format!("m:{id}"),
         }
     }
 }
 
-/// The display rows for `items`. `running`: the agent's turn is going on.
-/// `choice`: groups the user opened (true) or closed (false), by id; the
-/// rest are open while live and folded otherwise.
-/// How the conversation shows the agent's tool calls (`toolCalls` in the
-/// settings): runs open while the agent works in them (`Auto`), folded to
-/// their count, a single call too, until pressed open (`Folded`), a turn's
-/// all in one line at its start, only what it does now showing while it
-/// works (`Quiet`: what it says reads on), a turn's work running through a
-/// small box while the agent is at it and one line once done, its reply
-/// alone read on with a card of the files it changed (`Stream`, the
-/// default, as Grok's and DSH Go's), or not at all (`Hidden`: what it says
-/// alone, its thinking and calls left out).
+/// How the conversation shows the agent's work (`toolCalls` in the
+/// settings), as DSH Go's:
+/// - `Stream` (the default): while the agent works, each step a line of
+///   its own as it happens (three calls in a row or more one line, "Ran 3
+///   commands"); once the turn is done, all of it one line ("Done · 5 tool
+///   calls · 1 message") over its reply, pressed open to show the steps,
+///   then cards of the files it changed and the files it made. A turn that
+///   was stopped or failed stays open, to show where it ended.
+/// - `Quiet`: while it works, one line of what it does now; done, as
+///   `Stream`.
+///
+/// The settings' older choices read as the nearest: "quiet" and "hidden"
+/// as `Quiet`, the rest as `Stream`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum ToolDisplay {
-    Auto,
-    Folded,
-    Quiet,
     #[default]
     Stream,
-    Hidden,
+    Quiet,
 }
 
 impl ToolDisplay {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
-            ToolDisplay::Auto => "auto",
-            ToolDisplay::Folded => "folded",
-            ToolDisplay::Quiet => "quiet",
             ToolDisplay::Stream => "stream",
-            ToolDisplay::Hidden => "hidden",
+            ToolDisplay::Quiet => "quiet",
         }
     }
 
     pub(crate) fn parse(s: &str) -> Self {
         match s {
-            "folded" => ToolDisplay::Folded,
-            "quiet" => ToolDisplay::Quiet,
-            "stream" => ToolDisplay::Stream,
-            "hidden" => ToolDisplay::Hidden,
-            _ => ToolDisplay::Auto,
+            "quiet" | "hidden" => ToolDisplay::Quiet,
+            _ => ToolDisplay::Stream,
         }
     }
 }
 
-#[cfg(test)]
-pub(crate) fn fold(items: &[Item], running: bool, choice: &HashMap<String, bool>) -> Vec<Row> {
-    fold_as(items, running, choice, ToolDisplay::Auto)
-}
+/// How many calls in a row make one line of them.
+const GROUP_MIN: usize = 3;
 
+/// The display rows for `items`. `running`: the agent's turn is going on.
+/// `choice`: what the user opened (true) or closed (false), by id.
 pub(crate) fn fold_as(items: &[Item], running: bool, choice: &HashMap<String, bool>, display: ToolDisplay) -> Vec<Row> {
     let mut rows = Vec::with_capacity(items.len());
-    if !matches!(display, ToolDisplay::Quiet | ToolDisplay::Stream) {
-        fold_range(items, 0, items.len(), running, choice, display, &mut rows);
-        return rows;
-    }
     // A turn at a time: from a message of the user's to the next.
     let mut start = 0;
     while start < items.len() {
@@ -126,65 +118,21 @@ pub(crate) fn fold_as(items: &[Item], running: bool, choice: &HashMap<String, bo
         while end < items.len() && !matches!(items[end], Item::User { .. }) {
             end += 1;
         }
-        if display == ToolDisplay::Stream {
-            stream_turn(items, start, end, running, choice, &mut rows);
-        } else {
-            quiet_turn(items, start, end, running, choice, &mut rows);
-        }
+        turn(items, start, end, running, choice, display, &mut rows);
         start = end;
     }
     rows
 }
 
-/// A turn, quietly: its calls and thinking one line where the first was
-/// ("Ran 11 commands, edited 7 files"), pressed to show them as `Folded`
-/// does; what it says between them reads on. While the agent works in it,
-/// what it does now (the run at its end) shows under its words as well.
-fn quiet_turn(items: &[Item], start: usize, end: usize, running: bool, choice: &HashMap<String, bool>, rows: &mut Vec<Row>) {
-    let work = |item: &Item| matches!(item, Item::Tool { .. } | Item::Reasoning { .. });
-    let Some(first) = (start..end).find(|&i| matches!(items[i], Item::Tool { .. })) else {
-        return fold_range(items, start, end, running, choice, ToolDisplay::Folded, rows);
-    };
-    let id = format!("t:{}", match &items[first] {
-        Item::Tool { call_id, .. } if !call_id.is_empty() => call_id.clone(),
-        _ => format!("#{first}"),
-    });
-    let open = choice.get(&id).copied().unwrap_or(false);
-    // Its first call's place: what was said before it comes first.
-    let lead = (start..first).rev().find(|&i| !work(&items[i])).map_or(start, |i| i + 1);
-    // One run of calls in the turn: its own line says it all, and a line
-    // over the turn would say it again (opened, or while the agent is in it).
-    let runs = (lead..end).filter(|&i| work(&items[i]) && (i == lead || !work(&items[i - 1]))).count();
-    if runs <= 1 {
-        return fold_range(items, start, end, running, choice, ToolDisplay::Folded, rows);
-    }
-    fold_range(items, start, lead, running, choice, ToolDisplay::Folded, rows);
-    rows.push(Row::Group(Group { start: lead, end, id, live: false, open }));
-    if open {
-        return fold_range(items, lead, end, running, choice, ToolDisplay::Folded, rows);
-    }
-    // The run the agent is in now, at the turn's end.
-    let live_from = if running_here(running, end, items.len()) {
-        (lead..end).rev().find(|&i| !work(&items[i])).map_or(lead, |i| i + 1)
-    } else {
-        end
-    };
-    for i in lead..live_from {
-        if !work(&items[i]) {
-            // Its calls folded away, the turn's last words end it.
-            let last = !running_here(running, end, items.len()) && !items[i + 1..end].iter().any(|x| matches!(x, Item::Assistant { .. }));
-            rows.push(Row::Item { index: i, grouped: false, turn_end: last });
-        }
-    }
-    fold_range(items, live_from, end, running, choice, ToolDisplay::Folded, rows);
+#[cfg(test)]
+pub(crate) fn fold(items: &[Item], running: bool, choice: &HashMap<String, bool>) -> Vec<Row> {
+    fold_as(items, running, choice, ToolDisplay::Stream)
 }
 
-/// A turn as `Stream` shows it: the user's message; the work before the
-/// reply as one row (`Row::Work`: a box while the agent is at it, a line
-/// once done); the reply, the turn's last words once nothing the agent did
-/// follows them; then, the turn done, the files it changed. Errors and
-/// notices in the work still show, after its row.
-fn stream_turn(items: &[Item], start: usize, end: usize, running: bool, choice: &HashMap<String, bool>, rows: &mut Vec<Row>) {
+/// A turn: the user's message; its work, as `display` says; its reply,
+/// the turn's last words once nothing the agent did follows them; then,
+/// the turn done, the files it changed and the files it made.
+fn turn(items: &[Item], start: usize, end: usize, running: bool, choice: &HashMap<String, bool>, display: ToolDisplay, rows: &mut Vec<Row>) {
     let mut body = start;
     if matches!(items[start], Item::User { .. }) {
         rows.push(Row::Item { index: start, grouped: false, turn_end: false });
@@ -197,31 +145,44 @@ fn stream_turn(items: &[Item], start: usize, end: usize, running: bool, choice: 
     let reply = (body..end).rev().find(|&i| matches!(items[i], Item::Assistant { .. })).filter(|&r| !items[r + 1..end].iter().any(work));
     let work_end = reply.unwrap_or(end);
     let Some(first) = (body..work_end).find(|&i| work(&items[i])) else {
-        return fold_range(items, body, end, running, choice, ToolDisplay::Folded, rows);
+        return fold_range(items, body, end, running, choice, rows);
     };
     let id = match &items[first] {
         Item::Tool { call_id, .. } if !call_id.is_empty() => format!("w:{call_id}"),
         _ => format!("w:#{first}"),
     };
-    let open = choice.get(&id).copied().unwrap_or(false);
-    // What was said before the work ("Let me look at…") is the work's too.
-    rows.push(Row::Work(Group { start: body, end: work_end, id: id.clone(), live, open }));
-    if open {
-        // Each step under it, as it happened.
-        rows.extend((body..work_end).map(|index| Row::Item { index, grouped: true, turn_end: false }));
+    // Stopped or failed: as it ran, to show where it ended.
+    let broke = !live
+        && items[body..end].iter().any(|i| matches!(i, Item::Error { .. }) || matches!(i, Item::Tool { status, .. } if status == "canceled"));
+    if display == ToolDisplay::Stream && (live || broke) {
+        fold_range(items, body, end, running, choice, rows);
     } else {
-        for i in body..work_end {
-            if matches!(items[i], Item::Error { .. } | Item::Notice { .. } | Item::Retry { .. }) {
-                rows.push(Row::Item { index: i, grouped: false, turn_end: false });
+        let open = choice.get(&id).copied().unwrap_or(false);
+        // What was said before the work ("Let me look at…") is the work's too.
+        rows.push(Row::Work(Group { start: body, end: work_end, id: id.clone(), live, open }));
+        if open {
+            // Each step under it, as it happened.
+            rows.extend((body..work_end).map(|index| Row::Item { index, grouped: true, turn_end: false }));
+        } else {
+            for i in body..work_end {
+                if matches!(items[i], Item::Error { .. } | Item::Notice { .. } | Item::Retry { .. }) {
+                    rows.push(Row::Item { index: i, grouped: false, turn_end: false });
+                }
             }
         }
+        if let Some(r) = reply {
+            rows.push(Row::Item { index: r, grouped: false, turn_end: turn_end(items, r) });
+            fold_range(items, r + 1, end, running, choice, rows);
+        }
     }
-    if let Some(r) = reply {
-        rows.push(Row::Item { index: r, grouped: false, turn_end: turn_end(items, r) });
-        fold_range(items, r + 1, end, running, choice, ToolDisplay::Folded, rows);
-    }
-    if !live && !changes(&items[body..end]).is_empty() {
-        rows.push(Row::Changes { start: body, end, id });
+    if !live {
+        let run = &items[body..end];
+        if !changes(run).is_empty() {
+            rows.push(Row::Changes { start: body, end, id: id.clone() });
+        }
+        if !made(run).is_empty() {
+            rows.push(Row::Made { start: body, end, id });
+        }
     }
 }
 
@@ -230,33 +191,18 @@ fn running_here(running: bool, end: usize, len: usize) -> bool {
     running && end == len
 }
 
-/// Items `from..to` as rows, each run of calls folded as `display` says.
-fn fold_range(
-    items: &[Item],
-    from: usize,
-    to: usize,
-    running: bool,
-    choice: &HashMap<String, bool>,
-    display: ToolDisplay,
-    rows: &mut Vec<Row>,
-) {
+/// Items `from..to` as rows, as they happened: three calls in a row or
+/// more (and the thinking between them) one line, pressed open; a call
+/// still going in one shows under it all the same.
+fn fold_range(items: &[Item], from: usize, to: usize, running: bool, choice: &HashMap<String, bool>, rows: &mut Vec<Row>) {
     let mut i = from;
     while i < to {
-        if display == ToolDisplay::Hidden && matches!(items[i], Item::Tool { .. } | Item::Reasoning { .. }) {
-            i += 1;
-            continue;
-        }
-        // A run is the agent at work between what it says: its calls, and
-        // its thinking between them (as Claude Code's app shows a turn's
-        // steps under one summary), two calls at least.
         let mut end = i;
         while end < to && matches!(items[end], Item::Tool { .. } | Item::Reasoning { .. }) {
             end += 1;
         }
         let calls = items[i..end].iter().filter(|t| matches!(t, Item::Tool { .. })).count();
-        // Folded, one call is a count too ("Ran 1 command"): no command
-        // shows until it is asked for.
-        if calls < if display == ToolDisplay::Folded { 1 } else { 2 } {
+        if calls < GROUP_MIN {
             rows.push(Row::Item { index: i, grouped: false, turn_end: turn_end(items, i) });
             i += 1;
             continue;
@@ -270,13 +216,13 @@ fn fold_range(
                 _ => None,
             })
             .unwrap_or_else(|| format!("#{i}"));
-        // The run the agent is in (the last one), or one with a call still
-        // going, stays open so its progress shows.
         let live = running && (end == items.len() || run.iter().any(|t| status_of(t) == "running"));
-        let open = choice.get(&id).copied().unwrap_or(live && display == ToolDisplay::Auto);
+        let open = choice.get(&id).copied().unwrap_or(false);
         rows.push(Row::Group(Group { start: i, end, id, live, open }));
         if open {
             rows.extend((i..end).map(|index| Row::Item { index, grouped: true, turn_end: false }));
+        } else if live {
+            rows.extend((i..end).filter(|&k| status_of(&items[k]) == "running").map(|index| Row::Item { index, grouped: true, turn_end: false }));
         }
         i = end;
     }
@@ -303,54 +249,14 @@ fn status_of(item: &Item) -> &str {
     }
 }
 
-/// A step of a turn's work, as its live box shows it: a call (its kind,
-/// name and summary), a thought or words said on the way (their first
-/// line), a plan.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct Step {
-    /// The call's kind (`shell`, `read`…), else `thinking`, `said`, `plan`.
-    pub(crate) kind: String,
-    pub(crate) name: String,
-    pub(crate) words: String,
-    pub(crate) running: bool,
-    pub(crate) failed: bool,
-}
-
-/// A path as the box has room for: its folder and name (`src/login.rs`);
+/// A path as a line has room for: its folder and name (`src/login.rs`);
 /// anything else as it is.
-fn short_path(words: &str) -> String {
+pub(crate) fn short_path(words: &str) -> String {
     if !(words.starts_with('/') || words.starts_with("~/")) || words.contains(' ') {
         return words.to_owned();
     }
     let parts: Vec<&str> = words.trim_end_matches('/').rsplit('/').take(2).collect();
     parts.into_iter().rev().collect::<Vec<_>>().join("/")
-}
-
-fn first_line(text: &str) -> String {
-    text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or_default().chars().take(160).collect()
-}
-
-/// How many steps `run` has, and its last `n`, oldest first.
-pub(crate) fn steps(run: &[Item], n: usize) -> (usize, Vec<Step>) {
-    let step = |item: &Item| -> Option<Step> {
-        Some(match item {
-            Item::Tool { kind, name, status, summary, error, .. } => Step {
-                kind: kind.clone(),
-                name: name.clone(),
-                words: short_path(summary),
-                running: status == "running",
-                failed: status == "failed" || (status != "canceled" && error.is_some()),
-            },
-            Item::Reasoning { text } => Step { kind: "thinking".into(), name: t("Thinking").into(), words: first_line(text), ..Step::default() },
-            Item::Assistant { text, .. } => Step { kind: "said".into(), words: first_line(text), ..Step::default() },
-            Item::Todo { .. } => Step { kind: "plan".into(), name: t("Updated the plan").into(), ..Step::default() },
-            _ => return None,
-        })
-    };
-    let total = run.iter().filter(|i| matches!(i, Item::Tool { .. } | Item::Reasoning { .. } | Item::Assistant { .. } | Item::Todo { .. })).count();
-    let mut last: Vec<Step> = run.iter().rev().filter_map(step).take(n).collect();
-    last.reverse();
-    (total, last)
 }
 
 /// What a turn's done line says: its calls, the words said on the way,
@@ -413,6 +319,72 @@ pub(crate) fn changes(run: &[Item]) -> Vec<FileChange> {
                 c.removed += removed;
             }
             None => out.push(FileChange { path: path.to_owned(), added, removed }),
+        }
+    }
+    out
+}
+
+/// The kinds of file made for the user to open, by extension (as DSH
+/// Go's): pictures, documents, sheets, slides, archives, sound, video, web
+/// pages and calendar or contact cards. Code and notes are the work's own:
+/// the changes card has them.
+const MADE_KINDS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "webp", "svg", "heic", "pdf", "doc", "docx", "rtf", "pages", "xls", "xlsx", "csv", "numbers", "ppt", "pptx",
+    "key", "zip", "tar", "gz", "tgz", "7z", "dmg", "mp3", "wav", "m4a", "aac", "flac", "mp4", "mov", "webm", "html", "htm", "ics", "vcf",
+    "epub",
+];
+
+/// Whether `name` is a file of a kind made for the user.
+pub(crate) fn made_kind(name: &str) -> bool {
+    name.rsplit_once('.').is_some_and(|(stem, ext)| !stem.is_empty() && MADE_KINDS.contains(&ext.to_ascii_lowercase().as_str()))
+}
+
+/// The files `run` (a turn) made for the user, each once, as written: a
+/// file of such a kind its calls wrote, or one its last words name that its
+/// calls named too (a script's output: "make_chart.py → 10月趋势.png").
+pub(crate) fn made(run: &[Item]) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    let mut add = |path: String| {
+        if !out.contains(&path) {
+            out.push(path);
+        }
+    };
+    let mut said_by_calls = String::new();
+    for item in run {
+        let Item::Tool { kind, summary, detail, status, .. } = item else { continue };
+        if status == "failed" {
+            continue;
+        }
+        said_by_calls.push_str(summary);
+        said_by_calls.push('\n');
+        said_by_calls.push_str(&detail.to_string());
+        said_by_calls.push('\n');
+        if kind == "write" {
+            let path = detail.get("filePath").and_then(serde_json::Value::as_str).unwrap_or(summary);
+            if made_kind(path) {
+                add(path.to_owned());
+            }
+        }
+    }
+    let Some(reply) = run.iter().rev().find_map(|i| match i {
+        Item::Assistant { text, .. } => Some(text),
+        _ => None,
+    }) else {
+        return out;
+    };
+    for word in reply.split(|c: char| c.is_whitespace() || "`()[]<>\"'*|，。；：！？、《》「」『』（）".contains(c)) {
+        let word = word.trim_end_matches(|c: char| ".,;:!?".contains(c));
+        if !made_kind(word) {
+            continue;
+        }
+        // Words run on into a name where nothing parts them ("生成了报表.xlsx"):
+        // the shortest end of it the calls named, from the longest down.
+        let name = word.char_indices().map(|(at, _)| &word[at..]).find(|tail| {
+            let file = tail.rsplit('/').next().unwrap_or(tail);
+            made_kind(file) && said_by_calls.contains(file)
+        });
+        if let Some(name) = name {
+            add(name.to_owned());
         }
     }
     out
@@ -518,11 +490,6 @@ impl Summary {
         .filter(|(_, n)| *n > 0)
         .collect()
     }
-
-    /// "1 failed", or nothing.
-    pub(crate) fn failures(&self) -> Option<String> {
-        (self.failed > 0).then(|| tf("{} failed", &[&self.failed.to_string()]))
-    }
 }
 
 fn capitalize(s: &str) -> String {
@@ -532,22 +499,6 @@ fn capitalize(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn thinking_between_calls_folds_with_them() {
-        let think = || Item::Reasoning { text: "hm".into() };
-        let call = |id: &str| Item::Tool { call_id: id.into(), name: "Bash".into(), kind: "shell".into(), status: "completed".into(), summary: String::new(), detail: serde_json::Value::Null, error: None };
-        let say = || Item::Assistant { text: "done".into(), at: None };
-        // thinking, call, thinking, call, thinking, call, then words.
-        let items = vec![think(), call("a"), think(), call("b"), think(), call("c"), say()];
-        let rows = fold(&items, false, &HashMap::new());
-        assert_eq!(rows.len(), 2);
-        assert!(matches!(&rows[0], Row::Group(g) if g.start == 0 && g.end == 6 && g.id == "a" && !g.open));
-        assert_eq!(summarize(&items[0..6]).commands, 3);
-        // Thinking with one call stays as it is.
-        let items = vec![think(), call("a"), say()];
-        assert_eq!(fold(&items, false, &HashMap::new()).len(), 3);
-    }
-
     use super::*;
     use serde_json::Value;
 
@@ -567,6 +518,10 @@ mod tests {
         Item::Assistant { text: text.into(), at: None }
     }
 
+    fn asked(text: &str) -> Item {
+        Item::User { text: text.into(), message_id: None, images: vec![], at: None }
+    }
+
     fn keys(rows: &[Row]) -> Vec<String> {
         rows.iter().map(Row::key).collect()
     }
@@ -575,76 +530,59 @@ mod tests {
         HashMap::new()
     }
 
+    /// Items as they happened (a live turn, a stopped one).
+    fn flat(items: &[Item], running: bool, choice: &HashMap<String, bool>) -> Vec<Row> {
+        let mut rows = vec![];
+        fold_range(items, 0, items.len(), running, choice, &mut rows);
+        rows
+    }
+
+    fn quiet(items: &[Item], running: bool, choice: &HashMap<String, bool>) -> Vec<Row> {
+        fold_as(items, running, choice, ToolDisplay::Quiet)
+    }
+
     #[test]
-    fn a_run_folds_into_one_row() {
+    fn three_calls_in_a_row_are_one_line_and_two_are_not() {
+        let think = || Item::Reasoning { text: "hm".into() };
+        // thinking, call, thinking, call, thinking, call, then words.
+        let items = vec![think(), tool("a", "shell", "completed", ""), think(), tool("b", "shell", "completed", ""), think(), tool("c", "shell", "completed", ""), said("done")];
+        let rows = flat(&items, false, &none());
+        assert_eq!(keys(&rows), ["g:a", "6"]);
+        assert!(matches!(&rows[0], Row::Group(g) if g.start == 0 && g.end == 6 && !g.open));
         let items = vec![said("hi"), tool("a", "shell", "completed", "ls"), tool("b", "read", "completed", "x"), said("done")];
-        let rows = fold(&items, false, &none());
-        assert_eq!(keys(&rows), ["0", "g:a", "3"]);
-        assert!(matches!(&rows[1], Row::Group(g) if g.start == 1 && g.end == 3 && !g.open && !g.live));
+        assert_eq!(keys(&flat(&items, false, &none())), ["0", "1", "2", "3"]);
     }
 
     #[test]
-    fn a_single_tool_stays_a_row() {
-        let items = vec![said("hi"), tool("a", "shell", "completed", "ls"), said("ok"), tool("b", "edit", "completed", "f")];
-        let rows = fold(&items, false, &none());
-        assert_eq!(keys(&rows), ["0", "1", "2", "3"]);
-    }
-
-    #[test]
-    fn messages_between_tools_split_the_runs() {
+    fn words_between_calls_split_the_runs() {
         let items = vec![
             tool("a", "shell", "completed", ""),
             tool("b", "shell", "completed", ""),
-            // What the agent says splits runs; its thinking does not
-            // (`thinking_between_calls_folds_with_them`).
-            Item::Assistant { text: "so".into(), at: None },
-            tool("c", "read", "completed", "x"),
-            tool("d", "read", "completed", "y"),
-            tool("e", "read", "completed", "z"),
-        ];
-        let rows = fold(&items, false, &none());
-        assert_eq!(keys(&rows), ["g:a", "2", "g:c"]);
-    }
-
-    #[test]
-    fn the_live_run_stays_open_until_the_turn_ends() {
-        let items = vec![
-            tool("a", "shell", "completed", ""),
-            tool("b", "shell", "completed", ""),
-            said("next"),
             tool("c", "shell", "completed", ""),
-            tool("d", "shell", "running", ""),
+            said("so"),
+            tool("d", "read", "completed", "x"),
+            tool("e", "read", "completed", "y"),
+            tool("f", "read", "completed", "z"),
         ];
-        let rows = fold(&items, true, &none());
-        // The earlier run folds; the one at the end shows its calls.
-        assert_eq!(keys(&rows), ["g:a", "2", "g:c", "3", "4"]);
-        assert!(matches!(&rows[2], Row::Group(g) if g.live && g.open));
-        assert!(matches!(&rows[3], Row::Item { grouped: true, .. }));
-        let rows = fold(&items, false, &none());
-        assert_eq!(keys(&rows), ["g:a", "2", "g:c"]);
+        assert_eq!(keys(&flat(&items, false, &none())), ["g:a", "3", "g:d"]);
     }
 
     #[test]
-    fn the_users_choice_wins() {
-        let items = vec![tool("a", "shell", "completed", ""), tool("b", "shell", "running", "")];
-        let closed = HashMap::from([("a".to_owned(), false)]);
-        assert_eq!(keys(&fold(&items, true, &closed)), ["g:a"]);
+    fn a_call_still_going_shows_under_its_line() {
+        let items = vec![tool("a", "shell", "completed", ""), tool("b", "shell", "completed", ""), tool("c", "shell", "running", "")];
+        let rows = flat(&items, true, &none());
+        assert_eq!(keys(&rows), ["g:a", "2"]);
+        assert!(matches!(&rows[0], Row::Group(g) if g.live && !g.open));
+        assert!(matches!(&rows[1], Row::Item { grouped: true, .. }));
+        // Opened, all of them.
         let opened = HashMap::from([("a".to_owned(), true)]);
-        assert_eq!(keys(&fold(&items, false, &opened)), ["g:a", "0", "1"]);
-        assert_eq!(keys(&fold_as(&items, true, &none(), ToolDisplay::Folded)), ["g:a"]);
-        assert!(fold_as(&items, true, &none(), ToolDisplay::Hidden).is_empty());
-        // Folded, a single call is a count as well, and opens when pressed.
-        let one = vec![said("go"), tool("x", "shell", "running", "")];
-        assert_eq!(keys(&fold_as(&one, true, &none(), ToolDisplay::Folded)), ["0", "g:x"]);
-        let opened = HashMap::from([("x".to_owned(), true)]);
-        assert_eq!(keys(&fold_as(&one, true, &opened, ToolDisplay::Folded)), ["0", "g:x", "1"]);
+        assert_eq!(keys(&flat(&items, true, &opened)), ["g:a", "0", "1", "2"]);
     }
 
     #[test]
     fn a_reply_ends_its_turn_unless_the_agent_goes_on() {
-        let user = |text: &str| Item::User { text: text.into(), message_id: None, images: vec![], at: None };
-        let items = vec![user("go"), said("looking"), tool("a", "shell", "completed", ""), said("done"), user("next")];
-        let ends: Vec<bool> = fold(&items, false, &none())
+        let items = vec![asked("go"), said("looking"), tool("a", "shell", "completed", ""), said("done"), asked("next")];
+        let ends: Vec<bool> = flat(&items, false, &none())
             .iter()
             .filter_map(|r| match r {
                 Row::Item { turn_end, .. } => Some(*turn_end),
@@ -656,34 +594,29 @@ mod tests {
 
     #[test]
     fn keys_hold_as_items_stream_in() {
-        let mut items = vec![said("go"), tool("a", "shell", "running", "")];
-        let before = keys(&fold(&items, true, &none()));
-        assert_eq!(before, ["0", "1"]);
-        // A second call makes a group: its summary comes in over the first
-        // call, which keeps its key.
-        items.push(tool("b", "shell", "running", ""));
-        let after = keys(&fold(&items, true, &none()));
-        assert_eq!(after, ["0", "g:a", "1", "2"]);
+        let mut items = vec![said("go"), tool("a", "shell", "running", ""), tool("b", "shell", "running", "")];
+        assert_eq!(keys(&flat(&items, true, &none())), ["0", "1", "2"]);
+        // A third call makes a line: it comes in over the calls, which keep
+        // their keys.
         items.push(tool("c", "read", "running", "x"));
-        assert_eq!(keys(&fold(&items, true, &none())), ["0", "g:a", "1", "2", "3"]);
+        assert_eq!(keys(&flat(&items, true, &none())), ["0", "g:a", "1", "2", "3"]);
     }
 
     #[test]
     fn a_call_without_an_id_keys_by_position() {
-        let items = vec![tool("", "shell", "completed", ""), tool("", "shell", "completed", "")];
-        assert_eq!(keys(&fold(&items, false, &none())), ["g:#0"]);
+        let items = vec![tool("", "shell", "completed", ""), tool("", "shell", "completed", ""), tool("", "shell", "completed", "")];
+        assert_eq!(keys(&flat(&items, false, &none())), ["g:#0"]);
     }
 
     #[test]
-    fn a_folded_item_is_found_in_its_group() {
-        let items = vec![said("hi"), tool("a", "shell", "completed", ""), tool("b", "shell", "completed", ""), said("x")];
+    fn a_folded_item_is_found_in_its_line() {
+        let items = vec![asked("hi"), tool("a", "shell", "completed", ""), tool("b", "shell", "completed", ""), said("x")];
         let rows = fold(&items, false, &none());
-        assert_eq!(row_of(&rows, 0), Some(0));
+        assert_eq!(keys(&rows), ["0", "w:a", "3"]);
         assert_eq!(row_of(&rows, 2), Some(1));
         assert_eq!(row_of(&rows, 3), Some(2));
-        let open = fold(&items, false, &HashMap::from([("a".to_owned(), true)]));
+        let open = fold(&items, false, &HashMap::from([("w:a".to_owned(), true)]));
         assert_eq!(row_of(&open, 2), Some(3));
-        assert_eq!(row_of(&open, 3), Some(4));
     }
 
     #[test]
@@ -725,84 +658,12 @@ mod tests {
         let run = vec![tool("1", "shell", "failed", ""), tool("2", "shell", "running", ""), errored, tool("4", "shell", "canceled", "")];
         let s = summarize(&run);
         assert_eq!((s.failed, s.running), (2, 1));
-        assert_eq!(summarize(&run[1..2]).failures(), None);
     }
 
     #[test]
     fn capitalizes_the_first_phrase_only() {
         assert_eq!(capitalize("ran 2 commands, read 1 file"), "Ran 2 commands, read 1 file");
         assert_eq!(capitalize("运行了 2 条命令"), "运行了 2 条命令");
-    }
-
-    fn asked(text: &str) -> Item {
-        Item::User { text: text.into(), message_id: None, images: vec![], at: None }
-    }
-
-    #[test]
-    fn quietly_a_turn_s_calls_are_one_line_at_its_start_and_its_words_read_on() {
-        // asked, said, 2 calls, said, 3 calls, said: then asked again.
-        let items = vec![
-            asked("go"),
-            said("looking"),
-            tool("a", "shell", "completed", ""),
-            tool("b", "read", "completed", "x.rs"),
-            said("found it"),
-            tool("c", "edit", "completed", "x.rs"),
-            tool("d", "shell", "completed", ""),
-            tool("e", "shell", "failed", ""),
-            said("done"),
-            asked("thanks"),
-        ];
-        let rows = fold_as(&items, false, &none(), ToolDisplay::Quiet);
-        assert_eq!(keys(&rows), ["0", "1", "g:t:a", "4", "8", "9"]);
-        assert!(matches!(&rows[2], Row::Group(g) if g.start == 2 && g.end == 9 && !g.open));
-        let s = summarize(&items[2..9]);
-        assert_eq!((s.commands, s.read, s.edited, s.failed), (3, 1, 1, 1));
-        // Only the last words end the turn (its actions under them).
-        let ends: Vec<bool> = rows.iter().map(|r| matches!(r, Row::Item { turn_end: true, .. })).collect();
-        assert_eq!(ends, [false, false, false, false, true, true]);
-        // Opened, the turn shows its runs as Folded does.
-        let opened = HashMap::from([("t:a".to_owned(), true)]);
-        let rows = fold_as(&items, false, &opened, ToolDisplay::Quiet);
-        assert_eq!(keys(&rows), ["0", "1", "g:t:a", "g:a", "4", "g:c", "8", "9"]);
-        // A word's own row is where it shows, not the line over the turn.
-        let rows = fold_as(&items, false, &none(), ToolDisplay::Quiet);
-        assert_eq!(row_of(&rows, 4), Some(3));
-        assert_eq!(row_of(&rows, 6), Some(2));
-    }
-
-    #[test]
-    fn quietly_what_the_agent_does_now_shows_while_it_works() {
-        let items = vec![
-            asked("go"),
-            tool("a", "shell", "completed", ""),
-            said("next"),
-            tool("b", "shell", "completed", ""),
-            tool("c", "shell", "running", ""),
-        ];
-        let rows = fold_as(&items, true, &none(), ToolDisplay::Quiet);
-        // The turn's line, its words, and the run it is in now.
-        assert_eq!(keys(&rows), ["0", "g:t:a", "2", "g:b"]);
-        assert!(matches!(&rows[3], Row::Group(g) if g.live && g.start == 3 && g.end == 5));
-    }
-
-    #[test]
-    fn quietly_a_turn_of_one_run_is_that_run_s_line_alone() {
-        // asked, two calls, asked again: one line, not the turn's over the run's.
-        let items = vec![asked("go"), tool("a", "shell", "failed", ""), tool("b", "shell", "completed", ""), asked("next")];
-        assert_eq!(keys(&fold_as(&items, false, &none(), ToolDisplay::Quiet)), ["0", "g:a", "3"]);
-        // Opened, its calls show under it, once.
-        let opened = HashMap::from([("a".to_owned(), true)]);
-        assert_eq!(keys(&fold_as(&items, false, &opened, ToolDisplay::Quiet)), ["0", "g:a", "1", "2", "3"]);
-        // While the agent is in it, and with words after it.
-        let live = vec![asked("go"), tool("a", "shell", "completed", ""), tool("b", "shell", "running", "")];
-        assert_eq!(keys(&fold_as(&live, true, &none(), ToolDisplay::Quiet)), ["0", "g:a"]);
-        let said_after = vec![asked("go"), tool("a", "shell", "completed", ""), tool("b", "read", "completed", "x"), said("done")];
-        assert_eq!(keys(&fold_as(&said_after, false, &none(), ToolDisplay::Quiet)), ["0", "g:a", "3"]);
-    }
-
-    fn stream(items: &[Item], running: bool, choice: &HashMap<String, bool>) -> Vec<Row> {
-        fold_as(items, running, choice, ToolDisplay::Stream)
     }
 
     fn edit(id: &str, path: &str, diff: &str) -> Item {
@@ -820,7 +681,7 @@ mod tests {
     /// Done, a turn is the user's message, one line for all its work (what
     /// it said on the way too), its reply, and the files it changed.
     #[test]
-    fn streamed_a_done_turn_is_one_line_its_reply_and_its_changes() {
+    fn a_done_turn_is_one_line_its_reply_and_its_changes() {
         let items = vec![
             asked("fix it"),
             said("Let me look."),
@@ -829,47 +690,84 @@ mod tests {
             edit("b", "src/a.rs", "@@\n-old\n+new\n+more"),
             said("Fixed."),
         ];
-        let rows = stream(&items, false, &none());
-        assert_eq!(keys(&rows), ["0", "w:a", "5", "c:w:a"]);
-        assert!(matches!(&rows[1], Row::Work(g) if g.start == 1 && g.end == 5 && !g.live && !g.open));
-        assert!(matches!(rows[2], Row::Item { index: 5, turn_end: true, .. }), "the reply ends the turn");
-        assert!(matches!(&rows[3], Row::Changes { start: 1, end: 6, .. }));
+        for rows in [fold(&items, false, &none()), quiet(&items, false, &none())] {
+            assert_eq!(keys(&rows), ["0", "w:a", "5", "c:w:a"]);
+            assert!(matches!(&rows[1], Row::Work(g) if g.start == 1 && g.end == 5 && !g.live && !g.open));
+            assert!(matches!(rows[2], Row::Item { index: 5, turn_end: true, .. }), "the reply ends the turn");
+            assert!(matches!(&rows[3], Row::Changes { start: 1, end: 6, .. }));
+        }
         // Opened: its steps, all of them, under its line.
         let open = HashMap::from([("w:a".to_owned(), true)]);
-        assert_eq!(keys(&stream(&items, false, &open)), ["0", "w:a", "1", "2", "3", "4", "5", "c:w:a"]);
+        assert_eq!(keys(&fold(&items, false, &open)), ["0", "w:a", "1", "2", "3", "4", "5", "c:w:a"]);
     }
 
-    /// While the agent works, the turn's work is one live row; words it
-    /// writes after its last call show as they stream (its reply, maybe),
-    /// and go into the work if it calls a tool again.
+    /// While the agent works, its steps show one by one; quietly, one line
+    /// of what it does now, the last words streaming under it.
     #[test]
-    fn streamed_the_work_is_live_and_the_last_words_stream_under_it() {
-        let mut items = vec![asked("go"), tool("a", "shell", "running", "ls")];
-        assert_eq!(keys(&stream(&items, true, &none())), ["0", "w:a"]);
-        assert!(matches!(&stream(&items, true, &none())[1], Row::Work(g) if g.live && g.end == 2));
+    fn a_live_turn_shows_its_steps_or_one_line() {
+        let mut items = vec![asked("go"), said("Looking"), tool("a", "shell", "running", "ls")];
+        assert_eq!(keys(&fold(&items, true, &none())), ["0", "1", "2"]);
+        assert_eq!(keys(&quiet(&items, true, &none())), ["0", "w:a"]);
+        assert!(matches!(&quiet(&items, true, &none())[1], Row::Work(g) if g.live && g.end == 3));
         items.push(said("Now the tests"));
-        assert_eq!(keys(&stream(&items, true, &none())), ["0", "w:a", "2"]);
+        assert_eq!(keys(&quiet(&items, true, &none())), ["0", "w:a", "3"]);
         items.push(tool("b", "shell", "running", "cargo test"));
-        let rows = stream(&items, true, &none());
-        assert_eq!(keys(&rows), ["0", "w:a"], "the words joined the work");
-        assert!(matches!(&rows[1], Row::Work(g) if g.end == 4));
+        assert_eq!(keys(&quiet(&items, true, &none())), ["0", "w:a"], "the words joined the work");
         // An earlier turn is done while a later one runs.
         items.extend([said("ok"), asked("again"), tool("c", "shell", "running", "ls")]);
-        let rows = stream(&items, true, &none());
-        assert_eq!(keys(&rows), ["0", "w:a", "4", "5", "w:c"]);
+        let rows = fold(&items, true, &none());
+        assert_eq!(keys(&rows), ["0", "w:a", "5", "6", "7"]);
         assert!(matches!(&rows[1], Row::Work(g) if !g.live));
-        assert!(matches!(&rows[4], Row::Work(g) if g.live));
     }
 
-    /// A turn that only talks is as it was; an error in the work still
-    /// shows; a turn that changed nothing has no card.
+    /// A stopped or failed turn stays as it ran; quietly it folds as well.
     #[test]
-    fn streamed_talk_errors_and_no_changes() {
-        let items = vec![asked("hi"), said("hello")];
-        assert_eq!(keys(&stream(&items, false, &none())), ["0", "1"]);
+    fn a_turn_that_broke_stays_open() {
         let items = vec![asked("run"), tool("a", "shell", "failed", "x"), Item::Error { message: "boom".into() }];
-        assert_eq!(keys(&stream(&items, false, &none())), ["0", "w:a", "2"]);
-        assert_eq!(row_of(&stream(&items, false, &none()), 1), Some(1), "a call is found in its work's line");
+        assert_eq!(keys(&fold(&items, false, &none())), ["0", "1", "2"]);
+        assert_eq!(keys(&quiet(&items, false, &none())), ["0", "w:a", "2"]);
+        let stopped = vec![asked("run"), tool("a", "shell", "canceled", "x")];
+        assert_eq!(keys(&fold(&stopped, false, &none())), ["0", "1"]);
+        // A turn that only talks is as it was.
+        assert_eq!(keys(&fold(&[asked("hi"), said("hello")], false, &none())), ["0", "1"]);
+    }
+
+    #[test]
+    fn older_choices_read_as_the_nearest() {
+        for (old, now) in [("auto", ToolDisplay::Stream), ("folded", ToolDisplay::Stream), ("stream", ToolDisplay::Stream), ("quiet", ToolDisplay::Quiet), ("hidden", ToolDisplay::Quiet)] {
+            assert_eq!(ToolDisplay::parse(old), now);
+        }
+    }
+
+    fn wrote(id: &str, path: &str) -> Item {
+        Item::Tool {
+            call_id: id.into(),
+            name: "Write".into(),
+            kind: "write".into(),
+            status: "completed".into(),
+            summary: path.into(),
+            detail: serde_json::json!({ "filePath": path, "content": "x" }),
+            error: None,
+        }
+    }
+
+    /// Made: what its calls wrote of a kind for the user, and what its
+    /// reply names that its calls named; not code, nor what it only talks of.
+    #[test]
+    fn the_files_a_turn_made() {
+        let items = vec![
+            asked("chart my spending"),
+            wrote("a", "/w/make_chart.py"),
+            wrote("b", "/w/notes.md"),
+            wrote("c", "/w/out/summary.pdf"),
+            tool("d", "shell", "completed", "python3 make_chart.py 账单-10月.csv -o 10月趋势.png"),
+            said("做好了：生成了10月趋势.png，也写了 `/w/out/summary.pdf`。参考了 report.xlsx。"),
+        ];
+        assert_eq!(made(&items), ["/w/out/summary.pdf", "10月趋势.png"]);
+        let rows = fold(&items, false, &none());
+        assert_eq!(keys(&rows), ["0", "w:a", "5", "c:w:a", "m:w:a"]);
+        // Live, no cards yet.
+        assert!(!keys(&fold(&items, true, &none())).iter().any(|k| k.starts_with("m:")));
     }
 
     #[test]
@@ -898,11 +796,8 @@ mod tests {
     }
 
     #[test]
-    fn a_step_names_a_file_by_its_folder_and_name() {
-        let (n, last) = steps(&[tool("a", "read", "completed", "/tmp/x/proj/src/login.rs"), tool("b", "shell", "running", "cargo test /a/b")], 5);
-        assert_eq!(n, 2);
-        assert_eq!(last[0].words, "src/login.rs");
-        assert_eq!(last[1].words, "cargo test /a/b", "a command as it is");
-        assert!(last[1].running);
+    fn a_path_is_named_by_its_folder_and_name() {
+        assert_eq!(short_path("/tmp/x/proj/src/login.rs"), "src/login.rs");
+        assert_eq!(short_path("cargo test /a/b"), "cargo test /a/b", "a command as it is");
     }
 }

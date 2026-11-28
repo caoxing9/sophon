@@ -52,7 +52,11 @@ pub(crate) fn agent_pane(bar: bool) -> impl IntoElement {
                 .pb(px(if MOBILE { S2 } else { S4 }))
                 .child(timeline::tracks())
                 .child(timeline::permissions())
-                .child(composer::composer(Target::Agent, t("Message the agent…"))),
+                // What the agent does now, right over the composer.
+                .child(super::activity::strip())
+                .child(composer::composer(Target::Agent, t("Message the agent…")))
+                // On whatever is topmost here, last: over the rest.
+                .child(super::activity::pet()),
         )
 }
 

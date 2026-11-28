@@ -37,6 +37,18 @@ impl Tab {
         }
     }
 
+    /// A line under the section's title: what is in it.
+    fn about(self) -> &'static str {
+        match self {
+            Tab::General => t("Sending, notifications, keyboard, power and updates."),
+            Tab::Appearance => t("Theme, colors, text and layout."),
+            Tab::Agents => t("Coding agents, the model new conversations start on, and text generation."),
+            Tab::Connections => t("This host, this Mac's service and spaces, and the devices paired with it."),
+            Tab::Service => t("How the host's agents behave."),
+            Tab::Maintenance => t("Storage, diagnostics and logs."),
+        }
+    }
+
     fn icon(self) -> Icon {
         match self {
             Tab::General => Icon::Settings2,
@@ -58,7 +70,7 @@ pub(crate) fn settings(compact: bool) -> impl IntoElement {
     let tab = computed(|| global::<Shown>().get().0);
     let content = view().flex_1().child(dynamic(move || {
         let tab = tab.get();
-        Some(untracked(move || page(compact, tab.label(), sections(tab)).into_element()))
+        Some(untracked(move || page_about(compact, tab.label(), Some(tab.about()), sections(tab)).into_element()))
     }));
     if compact {
         // A narrow window: the sections a row of buttons over the page.
@@ -72,8 +84,6 @@ pub(crate) fn settings(compact: bool) -> impl IntoElement {
     let mut nav = view()
         .w(px(220.0))
         .flex_shrink_0()
-        .border_r_1()
-        .border_color(BORDER())
         .px(sp(S2))
         .pt(sp(S6))
         .gap(px(2.0))
@@ -116,7 +126,7 @@ fn sections(tab: Tab) -> View {
             .when(cfg!(target_os = "macos"), |v| v.child(section(t("Dictation"), dictation_card())))
             .child(section(t("Power"), keep_awake_card()))
             .child(when(crate::update::can_check, || section(t("Updates"), updates_card()))),
-        Tab::Appearance => view().child(section(t("Appearance"), appearance_card())),
+        Tab::Appearance => appearance_sections(),
         Tab::Agents => view()
             .child(section(t("Coding agents"), crate::ui::shared::agents::agents_card(true)))
             .child(section(t("New conversations"), crate::ui::shared::settings::default_model_card()))
