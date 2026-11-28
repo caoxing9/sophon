@@ -159,6 +159,18 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
     let running = computed(move || live && store::selected_agent().is_some_and(|a| a.is_running()));
     let busy = computed(move || !live && store::form().busy);
     let empty = computed(move || doc.tracked().is_none_or(|s| composer_doc::outgoing(s.state().doc()).is_empty()));
+    // While the agent works, what a message sent now does with it.
+    let placeholder = computed(move || {
+        if !running.get() {
+            return placeholder.to_owned();
+        }
+        match store::settings().send_behavior {
+            store::SendBehavior::Steer => t("Working · a message joins this turn"),
+            store::SendBehavior::Interrupt => t("Working · a message stops this turn"),
+            store::SendBehavior::Queue => t("Working · a message waits for this turn"),
+        }
+        .to_owned()
+    });
 
     if MOBILE {
         // One glass card, as Lody's: the text on top, a bar under it with
@@ -247,6 +259,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                             // The context, beside Send (a press opens the
                             // usage page; the phone has no pointer to rest).
                             .child(when(move || live, context_meter_ring))
+                            .child(when(computed(move || running.get() && !empty.get()), move || send_as(submit)))
                             .child(disc(running, busy, empty, submit)),
                     )
                     // While it listens, the whole card is the listening:
@@ -311,6 +324,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         )
         .child(view().flex_1().min_w(px(0.0)).min_h(sp(CONTROL_SM)).justify_center().child(editor(doc, text_value, placeholder, suggestion, TEXT_BASE, 220.0, changed).mx(sp(S1))))
         .child(view().flex_shrink_0().child(mic_button(doc)))
+        .child(when(computed(move || running.get() && !empty.get()), move || send_as(submit)))
         .child(when(stoppable, || {
             button()
                 .on_press(store::stop_selected)
@@ -349,7 +363,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
 fn editor(
     doc: Doc,
     text_value: Memo<String>,
-    placeholder: &'static str,
+    placeholder: Memo<String>,
     suggestion: Memo<Option<String>>,
     size: f32,
     max_height: f32,
@@ -404,7 +418,7 @@ fn editor(
                 .pr(move || Length::from(px(if suggestion.with(Option::is_some) { 44.0 } else { 0.0 })));
             // The agent's guess at the next message stands where the
             // placeholder does.
-            el.placeholder(move || SharedString::from(suggestion.get().unwrap_or_else(|| placeholder.to_owned())))
+            el.placeholder(move || SharedString::from(suggestion.get().unwrap_or_else(|| placeholder.get())))
         }))
     }))
     // The guess's key at the end of the line while it shows: pressed (the
@@ -882,6 +896,44 @@ pub(crate) fn queue_track(live: bool) -> impl IntoElement {
             track
         }))
     }))
+}
+
+/// While the agent works and there is a message: how it goes, this once
+/// (into the turn, stopping it, or after it), the setting's way checked.
+fn send_as(submit: impl Fn() + Clone + 'static) -> impl IntoElement {
+    use store::SendBehavior as B;
+    let now = store::settings().send_behavior;
+    let word = |b: B| match b {
+        B::Steer => t("Steer"),
+        B::Interrupt => t("Interrupt"),
+        B::Queue => t("Queue"),
+    };
+    let trigger = view()
+        .flex_row()
+        .items_center()
+        .gap(px(2.0))
+        .h(sp(CONTROL_SM))
+        .pl(sp(S2))
+        .pr(px(6.0))
+        .rounded(px(R_FULL))
+        .hover(|s| s.bg(highlight()))
+        .accessible(true)
+        .label(t("Send as"))
+        .child(text(word(now)).text_size(tx(TEXT_SM)).text_color(FG_MUTED()))
+        .child(icon(Icon::ChevronUp, 13.0).text_color(FG_FAINT()));
+    let mut menu = dropup(trigger).align(nsh_core::overlay::Align::End);
+    for (b, detail) in [
+        (B::Steer, t("Into this turn, now")),
+        (B::Interrupt, t("Stop this turn and send")),
+        (B::Queue, t("After this turn ends")),
+    ] {
+        let submit = submit.clone();
+        menu = menu.child(menu_row(word(b), None, Some(detail.into()), b == now, move || {
+            store::send_next_as(b);
+            submit();
+        }));
+    }
+    view().flex_shrink_0().child(menu)
 }
 
 /// The trailing control: send, or stop while the agent runs.

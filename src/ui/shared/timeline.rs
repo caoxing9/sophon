@@ -541,14 +541,39 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                         .child(when(turn_end, move || {
                             // What the turn took, at the row's end, always (DSH Go's
                             // footer); the reply's actions at its start, under the pointer.
-                            let stats = computed(move || index.get().map(store::turn_stats).unwrap_or_default());
+                            // Nothing while its turn goes on (quietly, its words so
+                            // far end it for now).
+                            let stats = computed(move || {
+                                let i = index.get()?;
+                                // (Read the items only while it runs: rows are many.)
+                                let live = store::selected_agent().is_some_and(|a| a.is_running())
+                                    && !(i + 1..store::item_count()).any(|j| matches!(store::item_at(j), Some(Item::User { .. })));
+                                (!live).then(|| store::turn_stats(i))
+                            });
+                            let stats = computed(move || stats.get().unwrap_or_default());
                             view()
                                 .select_none()
                                 .flex_row()
                                 .items_center()
                                 .child(reply_actions(item, text_of, chosen, computed(move || !streaming.get() && hover.get())))
                                 .child(view().flex_1())
-                                .child(when(move || !streaming.get(), move || text(move || stats.get()).text_size(tx(TEXT_XS)).text_color(FG_FAINT()).mt(px(2.0))))
+                                // Pressed: the turn's trace (DSH Go's 本轮轨迹).
+                                .child(when(move || !streaming.get() && !stats.with(String::is_empty), move || {
+                                    let trigger = view()
+                                        .flex_row()
+                                        .items_center()
+                                        .gap(px(3.0))
+                                        .px(px(6.0))
+                                        .mr(px(-6.0))
+                                        .h(px(22.0))
+                                        .rounded(px(R_MD))
+                                        .hover(|s| s.bg(highlight()))
+                                        .child(text(move || stats.get()).text_size(tx(TEXT_XS)).text_color(FG_FAINT()))
+                                        .child(icon(Icon::ChevronDown, 11.0).text_color(FG_FAINT()));
+                                    dropdown(trigger)
+                                        .align(nsh_core::overlay::Align::End)
+                                        .child(dynamic(move || index.get().map(|i| untracked(move || turn_trace(i).into_element()))))
+                                }))
                         }))
                         // Over the reply, so last.
                         .child(super::notes::selection_layer(offer, noting))
@@ -591,12 +616,17 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                                 .group()
                                 .hover(|s| s.bg(highlight()))
                                 .child(tool_glyph("thinking", "", 22.0))
-                                .child(
-                                    text(move || if streaming.get() { t("Thinking…") } else { t("Thinking") }.to_owned())
-                                        .text_size(tx(TEXT_SM))
-                                        .text_color(FG_MUTED())
-                                        .flex_shrink_0(),
-                                )
+                                // While it thinks, a light sweeps across the word.
+                                .child(dynamic(move || {
+                                    let on = streaming.get();
+                                    Some(untracked(move || {
+                                        let word = text(if on { t("Thinking…") } else { t("Thinking") }.to_owned())
+                                            .text_size(tx(TEXT_SM))
+                                            .text_color(FG_MUTED())
+                                            .flex_shrink_0();
+                                        if on { shimmer(word, 64.0).into_element() } else { word.into_element() }
+                                    }))
+                                }))
                                 .child(view().w(px(3.0)).h(px(3.0)).rounded(px(R_FULL)).bg(FG_FAINT()).flex_shrink_0())
                                 .child(text(gist).text_size(tx(TEXT_SM)).text_color(FG_FAINT()).number_of_lines(1).flex_1())
                                 .child(
@@ -1733,6 +1763,146 @@ fn changes_card(range: Memo<Option<(usize, usize)>>) -> impl IntoElement {
     }))
 }
 
+/// A made file's "⋯": shown in Sophon (its preview), opened in its own
+/// app, shown in the Finder, its path copied. The phone opens and copies.
+fn file_menu(path: String) -> impl IntoElement {
+    let trigger = view()
+        .w(px(28.0))
+        .h(px(28.0))
+        .items_center()
+        .justify_center()
+        .rounded(px(R_MD))
+        .hover(|s| s.bg(highlight()))
+        .accessible(true)
+        .label(t("More"))
+        .child(icon(Icon::Ellipsis, 15.0).text_color(FG_MUTED()));
+    let mut menu = dropdown(trigger).align(nsh_core::overlay::Align::End);
+    if !MOBILE {
+        // In a tab of the workspace, as its own folder's files open: by the
+        // path under the conversation's folder where it is under it.
+        let shown = path.clone();
+        menu = menu.child(menu_row(t("Preview in Sophon"), Some(Icon::Eye), None, false, move || {
+            let cwd = store::selected_agent().map(|a| a.cwd).unwrap_or_default();
+            let inside = (!cwd.is_empty()).then(|| shown.strip_prefix(&format!("{}/", cwd.trim_end_matches('/')))).flatten();
+            store::open_file(inside.unwrap_or(&shown));
+        }));
+    }
+    let open = path.clone();
+    menu = menu.child(menu_row(t("Open"), Some(Icon::ExternalLink), None, false, move || super::file_links::open_path(&open)));
+    if !MOBILE {
+        let reveal = path.clone();
+        menu = menu.child(menu_row(t("Show in Finder"), Some(Icon::FolderOpen), None, false, move || store::reveal_path(&reveal)));
+    }
+    menu.child(menu_divider()).child(menu_row(t("Copy path"), Some(Icon::Copy), None, false, move || {
+        let _ = set_clipboard(path.clone());
+        store::notify(t("Copied").into());
+    }))
+}
+
+/// How many steps the turn's trace lists before "N more".
+const TRACE_SHOWN: usize = 60;
+
+/// The trace of the turn that the reply at `reply` ends (DSH Go's 本轮轨迹):
+/// how long it took, its steps and words written; then each step in turn,
+/// with when it came where the host said (its words), a failed one red.
+fn turn_trace(reply: usize) -> View {
+    let start = (0..reply).rev().find(|&i| matches!(store::item_at(i), Some(Item::User { .. }))).map_or(0, |i| i + 1);
+    let began = start.checked_sub(1).and_then(store::item_at).and_then(|i| match i {
+        Item::User { at, .. } => at.as_deref().and_then(crate::usage::parse::rfc3339),
+        _ => None,
+    });
+    let (tally, _) = store::work_tally(start, reply);
+    let mut written = 0;
+    let mut kinds: Vec<(String, String, usize)> = vec![];
+    let mut steps: Vec<(String, String, String, String, bool)> = vec![];
+    for i in start..=reply {
+        let Some(item) = store::item_at(i) else { continue };
+        let first = |t: &str| t.lines().map(str::trim).find(|l| !l.is_empty()).map(|l| sophon_push::clip(&sophon_push::excerpt(l), 90)).unwrap_or_default();
+        match item {
+            Item::Reasoning { text } => {
+                written += tokens_in(&text);
+                steps.push(("thinking".into(), t("Thinking").into(), first(&text), String::new(), false));
+            }
+            Item::Assistant { text, at } => {
+                written += tokens_in(&text);
+                let when = match (began, at.as_deref().and_then(crate::usage::parse::rfc3339)) {
+                    (Some(from), Some(to)) if to >= from => {
+                        let s = (to - from) as u64;
+                        format!("+{}:{:02}", s / 60, s % 60)
+                    }
+                    _ => String::new(),
+                };
+                let word = if i == reply { t("Replied") } else { t("Said") };
+                steps.push(("said".into(), word.into(), first(&text), when, false));
+            }
+            Item::Tool { kind, name, status, summary, .. } => {
+                let verb = tool_verb(&kind, &name);
+                match kinds.iter_mut().find(|(k, ..)| *k == kind) {
+                    Some(k) => k.2 += 1,
+                    None => kinds.push((kind.clone(), verb.clone(), 1)),
+                }
+                let target = crate::fold::target_shown(&kind, &summary);
+                steps.push((kind, verb, target, String::new(), status == "failed"));
+            }
+            Item::Error { .. } => steps.push(("failed".into(), t("Failed").into(), String::new(), String::new(), true)),
+            _ => {}
+        }
+    }
+    let mut card = view().w(px(380.0)).p(sp(S3)).gap(sp(S2));
+    let mut head = view()
+        .flex_row()
+        .items_center()
+        .gap(sp(S2))
+        .child(text(t("This turn")).text_size(tx(TEXT_SM)).font_weight(FontWeight(600)).text_color(FG()))
+        .child(view().flex_1())
+        .child(text(store::turn_stats(reply)).text_size(tx(TEXT_XS)).text_color(FG_MUTED()));
+    if written > 0 {
+        head = head.child(text(format!("↓{}", short_count(written))).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(FG_FAINT()));
+    }
+    card = card.child(head);
+    // What it did, by kind: "Ran ×3  Read ×2".
+    if !kinds.is_empty() || tally.failed > 0 {
+        let mut chips = view().flex_row().flex_wrap().gap(px(6.0));
+        for (kind, verb, n) in kinds {
+            chips = chips.child(
+                view()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(4.0))
+                    .px(px(8.0))
+                    .h(px(22.0))
+                    .rounded(px(R_FULL))
+                    .bg(SURFACE2())
+                    .child(tool_glyph(&kind, "", 14.0))
+                    .child(text(format!("{verb} ×{n}")).text_size(tx(TEXT_XS)).text_color(FG_MUTED())),
+            );
+        }
+        if tally.failed > 0 {
+            chips = chips.child(text(tf("{} failed", &[&tally.failed.to_string()])).text_size(tx(TEXT_XS)).text_color(DANGER).h(px(22.0)));
+        }
+        card = card.child(chips);
+    }
+    let mut list = view().gap(px(1.0));
+    let n = steps.len();
+    for (kind, verb, what, when, failed) in steps.into_iter().take(TRACE_SHOWN) {
+        list = list.child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap(sp(S2))
+                .h(px(24.0))
+                .child(text(when).text_size(tx(TEXT_XS)).font_family(mono_font).tabular_nums().text_color(FG_FAINT()).w(px(40.0)))
+                .child(tool_glyph(&kind, "", 16.0))
+                .child(text(verb).text_size(tx(TEXT_XS)).text_color(if failed { DANGER } else { FG_MUTED() }).flex_shrink_0())
+                .child(text(what).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(if failed { DANGER } else { FG_FAINT() }).number_of_lines(1).flex_1()),
+        );
+    }
+    if n > TRACE_SHOWN {
+        list = list.child(text(tf("{} more", &[&(n - TRACE_SHOWN).to_string()])).text_size(tx(TEXT_XS)).text_color(FG_FAINT()).pl(px(40.0 + S2)));
+    }
+    card.child(menu_divider()).child(scroll().max_h(px(320.0)).child(list))
+}
+
 /// How many files a turn's "made" card lists before "All N files".
 const MADE_SHOWN: usize = 4;
 
@@ -1835,9 +2005,7 @@ fn made_card(range: Memo<Option<(usize, usize)>>) -> impl IntoElement {
                             .child(text(name).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG()).number_of_lines(1))
                             .child(text(subtitle).text_size(tx(TEXT_XS)).text_color(FG_FAINT()).number_of_lines(1)),
                     );
-                if !MOBILE {
-                    line = line.child(icon_btn(Icon::FolderOpen, Sz::Sm, t("Show in Finder"), move || store::reveal_path(&reveal)));
-                }
+                line = line.child(file_menu(reveal));
                 card = card.child(line);
             }
             if list.len() > MADE_SHOWN && !shown_all {
@@ -1901,6 +2069,25 @@ fn tool_row(item: Memo<Option<Item>>) -> impl IntoElement {
         Some(it @ Item::Tool { .. }) => crate::fold::changes(std::slice::from_ref(&it)).first().map(|c| (c.added, c.removed)),
         _ => None,
     });
+    // A call seen going and then done: its tick shows, holds and fades.
+    let done_flash = animated_value(0.0);
+    let was = std::cell::Cell::new(None::<(String, bool)>);
+    effect(move || {
+        let now = (call.get(), tool.with(|(_, _, s, _)| s == "running"));
+        let done = tool.with(|(_, _, s, _)| s == "completed");
+        match was.replace(Some(now.clone())) {
+            Some((id, true)) if id == now.0 && done && !reduce_motion() => {
+                done_flash.set(1.0);
+                Animation::sequence([
+                    Animation::delay(700.0),
+                    Animation::timing(&done_flash, 0.0, nsh_core::element::Timing::new(400.0, Easing::EaseOut)),
+                ])
+                .start();
+            }
+            Some((id, _)) if id != now.0 => done_flash.set(0.0),
+            _ => {}
+        }
+    });
     let header = nsh_base::button()
         .select_none()
         .on_press(move || {
@@ -1930,6 +2117,24 @@ fn tool_row(item: Memo<Option<Item>>) -> impl IntoElement {
             let (name, kind) = tool.with(|(n, k, ..)| (n.clone(), k.clone()));
             Some(untracked(move || tool_glyph(&kind, &name, 22.0)))
         }))
+        // Seen to finish here: a tick on its glyph's corner for a moment.
+        .child(
+            view()
+                .absolute()
+                .left(px(S2 + 13.0))
+                .top(px(17.0))
+                .w(px(12.0))
+                .h(px(12.0))
+                .rounded(px(R_FULL))
+                .bg(SUCCESS)
+                .border_2()
+                .border_color(SURFACE0())
+                .items_center()
+                .justify_center()
+                .pointer_events(nsh_core::PointerEvents::None)
+                .bind_opacity(&done_flash)
+                .child(icon(Icon::Check, 7.0).text_color(pair(0xffffff, 0xffffff))),
+        )
         .child(
             text(move || tool.with(|(n, k, ..)| tool_verb(k, n)))
                 .text_size(tx(TEXT_SM))
@@ -1968,7 +2173,7 @@ fn tool_row(item: Memo<Option<Item>>) -> impl IntoElement {
             let status = tool.with(|(_, _, s, _)| s.clone());
             let lines = counted.get();
             Some(untracked(move || match status.as_str() {
-                "running" => status_dot(|| Status::Running).into_element(),
+                "running" => spinner(14.0).into_element(),
                 "failed" => icon(Icon::X, 14.0).text_color(DANGER).into_element(),
                 "canceled" => icon(Icon::CircleX, 14.0).text_color(FG_FAINT()).into_element(),
                 _ => match lines {

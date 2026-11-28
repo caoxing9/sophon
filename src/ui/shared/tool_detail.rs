@@ -21,10 +21,10 @@ pub(crate) fn tool_body(kind: &str, detail: &Value, error: Option<&str>) -> View
     match kind {
         "shell" => {
             if let Some(cmd) = field("command") {
-                body = body.child(code(format!("$ {cmd}"), 160.0));
+                body = body.child(code(t("Command"), format!("$ {cmd}"), 160.0));
             }
             if let Some(out) = field("output") {
-                body = body.child(label(t("Output"))).child(code(out, 320.0));
+                body = body.child(code(t("Output"), out, 320.0));
             }
             match detail.get("exitCode").and_then(Value::as_i64) {
                 Some(0) | None => {}
@@ -36,7 +36,7 @@ pub(crate) fn tool_body(kind: &str, detail: &Value, error: Option<&str>) -> View
                 body = body.child(path_row(Icon::FileText, path));
             }
             if let Some(content) = field("content") {
-                body = body.child(code(content, 240.0));
+                body = body.child(code(t("Content"), content, 240.0));
             }
         }
         "edit" => {
@@ -59,12 +59,12 @@ pub(crate) fn tool_body(kind: &str, detail: &Value, error: Option<&str>) -> View
                 body = body.child(path_row(Icon::FileText, path));
             }
             if let Some(content) = field("content") {
-                body = body.child(code(content, 240.0));
+                body = body.child(code(t("Content"), content, 240.0));
             }
         }
         "search" => {
             if let Some(q) = field("query") {
-                body = body.child(code(q, 80.0));
+                body = body.child(code(t("Query"), q, 80.0));
             }
             let files: Vec<String> = detail
                 .get("filePaths")
@@ -81,7 +81,7 @@ pub(crate) fn tool_body(kind: &str, detail: &Value, error: Option<&str>) -> View
                 })
                 .unwrap_or_default();
             if !files.is_empty() {
-                body = body.child(label(t("Results"))).child(code(files.join("\n"), 200.0));
+                body = body.child(code(t("Results"), files.join("\n"), 200.0));
             }
             if !webs.is_empty() {
                 let mut list = view().gap(px(6.0));
@@ -98,7 +98,7 @@ pub(crate) fn tool_body(kind: &str, detail: &Value, error: Option<&str>) -> View
             if files.is_empty()
                 && let Some(content) = field("content")
             {
-                body = body.child(code(content, 240.0));
+                body = body.child(code(t("Content"), content, 240.0));
             }
         }
         "fetch" => {
@@ -106,7 +106,7 @@ pub(crate) fn tool_body(kind: &str, detail: &Value, error: Option<&str>) -> View
                 body = body.child(path_row(Icon::Globe, url));
             }
             if let Some(result) = field("result") {
-                body = body.child(code(result, 240.0));
+                body = body.child(code(t("Result"), result, 240.0));
             }
         }
         "sub_agent" | "plain_text" => {
@@ -116,7 +116,7 @@ pub(crate) fn tool_body(kind: &str, detail: &Value, error: Option<&str>) -> View
         }
         _ => {
             if !detail.is_null() {
-                body = body.child(code(serde_json::to_string_pretty(detail).unwrap_or_default(), 280.0));
+                body = body.child(code(t("Detail"), serde_json::to_string_pretty(detail).unwrap_or_default(), 280.0));
             }
         }
     }
@@ -177,17 +177,55 @@ fn path_row(glyph: Icon, path: String) -> impl IntoElement {
         .child(text(path).text_size(tx(TEXT_CODE)).font_family(mono_font).text_color(FG()).selectable(true).flex_1())
 }
 
-/// Monospaced text on a soft panel, scrolling past `max_h`.
-fn code(s: String, max_h: f32) -> impl IntoElement {
-    scroll().max_h(px(max_h)).rounded(px(R_LG)).bg(SURFACE2()).child(
-        text(clip(s))
-            .px(sp(S3))
-            .py(sp(S2))
-            .text_size(tx(TEXT_CODE))
-            .line_height(px(18.0))
-            .font_family(mono_font)
-            .text_color(FG())
-            .selectable(true),
+/// A part of a call's detail on a panel of its own: its title and a copy
+/// button on a strip over it, then what it holds, scrolling past `max_h`,
+/// so a long output never fills the screen.
+fn panel(title: &'static str, copy: Option<String>, body: impl IntoElement, max_h: f32) -> impl IntoElement {
+    let mut head = view()
+        .flex_row()
+        .items_center()
+        .h(px(26.0))
+        .pl(sp(S3))
+        .pr(px(4.0))
+        .border_b(px(1.0))
+        .border_color(BORDER())
+        .select_none()
+        .child(text(title).text_size(tx(TEXT_XS)).font_weight(FontWeight(600)).text_color(FG_MUTED()).flex_1());
+    if let Some(words) = copy {
+        head = head.child(
+            nsh_base::button()
+                .on_press(move || {
+                    let _ = set_clipboard(words.clone());
+                    crate::store::notify(t("Copied").into());
+                })
+                .accessibility_label(t("Copy"))
+                .w(px(22.0))
+                .h(px(22.0))
+                .items_center()
+                .justify_center()
+                .rounded(px(R_MD))
+                .hover(|s| s.bg(highlight()))
+                .child(icon(Icon::Copy, 12.0).text_color(FG_FAINT())),
+        );
+    }
+    view()
+        .rounded(px(R_LG))
+        .border_1()
+        .border_color(BORDER())
+        .bg(SURFACE2())
+        .overflow_hidden()
+        .child(head)
+        .child(scroll().max_h(px(max_h)).child(body))
+}
+
+/// Monospaced text on a titled panel, scrolling past `max_h`.
+fn code(title: &'static str, s: String, max_h: f32) -> impl IntoElement {
+    let s = clip(s);
+    panel(
+        title,
+        Some(s.clone()),
+        text(s).px(sp(S3)).py(sp(S2)).text_size(tx(TEXT_CODE)).line_height(px(18.0)).font_family(mono_font).text_color(FG()).selectable(true),
+        max_h,
     )
 }
 
@@ -221,5 +259,5 @@ fn diff_block(lines: Vec<String>) -> impl IntoElement {
                 .selectable(true),
         );
     }
-    scroll().max_h(px(320.0)).rounded(px(R_LG)).bg(SURFACE2()).overflow_hidden().child(col)
+    panel(t("Changes"), None, col, 320.0)
 }

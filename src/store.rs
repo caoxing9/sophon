@@ -2329,7 +2329,47 @@ pub(crate) fn display_rows() -> Vec<crate::fold::Row> {
         let running = t.agent_id.as_deref().is_some_and(|id| {
             global::<Agents>().with(|a| a.0.iter().any(|x| x.id == id && x.is_running()))
         });
-        crate::fold::fold_as(&t.items, running, &t.folds, tool_display())
+        let live = running || settling(t.agent_id.as_deref(), running);
+        crate::fold::fold_as(&t.items, live, &t.folds, tool_display())
+    })
+}
+
+/// How long a turn seen to end stays as it was before it folds.
+const SETTLE_FOR: std::time::Duration = std::time::Duration::from_millis(700);
+
+thread_local! {
+    /// The conversation last folded, whether its agent was running, and
+    /// until when a turn that just ended stays unfolded.
+    static SETTLE: std::cell::RefCell<(Option<String>, bool, Option<std::time::Instant>)> =
+        const { std::cell::RefCell::new((None, false, None)) };
+}
+
+/// A turn ended now: wakes the rows once it has settled.
+#[derive(Clone, Default, PartialEq)]
+struct Settled(u64);
+
+/// Whether the turn of `agent`, which has just ended, stays a moment as it
+/// was while it ran (its steps, before its cards), so the eye sees it fold:
+/// then the rows glide to their places (`animate_rows`).
+fn settling(agent: Option<&str>, running: bool) -> bool {
+    global::<Settled>().with(|_| ());
+    let agent = agent.map(str::to_owned);
+    SETTLE.with_borrow_mut(|(seen, was, until)| {
+        if *seen != agent {
+            *until = None;
+        } else if *was && !running {
+            *until = Some(std::time::Instant::now() + SETTLE_FOR);
+            set_timeout(SETTLE_FOR, || {
+                SETTLE.with_borrow_mut(|(.., until)| *until = None);
+                animate_rows();
+                global::<Settled>().update(|s| s.0 += 1);
+            });
+        } else if running {
+            *until = None;
+        }
+        *seen = agent;
+        *was = running;
+        until.is_some_and(|u| std::time::Instant::now() < u)
     })
 }
 
@@ -2382,9 +2422,10 @@ pub(crate) fn turn_stats(reply: usize) -> String {
     parts.join(" · ")
 }
 
-/// The files a turn (`start..end`) changed.
+/// The files a turn (`start..end`) changed, less those it made for the
+/// user (`fold::work_changes`).
 pub(crate) fn turn_changes(start: usize, end: usize) -> Vec<crate::fold::FileChange> {
-    global::<Timeline>().with(|t| crate::fold::changes(t.items.get(start..end).unwrap_or_default()))
+    global::<Timeline>().with(|t| crate::fold::work_changes(t.items.get(start..end).unwrap_or_default()))
 }
 
 /// The files a turn (`start..end`) made for the user, each a path to open:
@@ -6470,6 +6511,17 @@ pub(crate) fn set_note(agent: &str, index: usize, note: crate::notes::Note) {
 
 // ---------------------------------------------------------- agent actions
 
+thread_local! {
+    /// How the next message goes while the agent runs, chosen for it alone
+    /// (the composer's menu), over the setting.
+    static SEND_NEXT_AS: std::cell::Cell<Option<SendBehavior>> = const { std::cell::Cell::new(None) };
+}
+
+/// Sends the next message `behavior`'s way, whatever the setting says.
+pub(crate) fn send_next_as(behavior: SendBehavior) {
+    SEND_NEXT_AS.set(Some(behavior));
+}
+
 pub(crate) fn send_message(text: &str) -> bool {
     let text = text.trim();
     let Some(agent) = selected_agent() else { return false };
@@ -6484,7 +6536,7 @@ pub(crate) fn send_message(text: &str) -> bool {
     global::<QueueHeld>().update(|h| {
         h.0.remove(&agent.id);
     });
-    let behavior = settings().send_behavior;
+    let behavior = SEND_NEXT_AS.take().unwrap_or(settings().send_behavior);
     // A pending permission must be answered first; queueing would wait forever.
     if agent.is_running() && behavior == SendBehavior::Queue && agent.pending.is_empty() {
         let queued = Queued { text: text.to_owned(), images: take_images(), attachments: take_files() };

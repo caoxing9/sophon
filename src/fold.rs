@@ -195,7 +195,7 @@ fn turn(items: &[Item], start: usize, end: usize, running: bool, choice: &HashMa
     }
     if !live {
         let run = &items[body..end];
-        if !changes(run).is_empty() {
+        if !work_changes(run).is_empty() {
             rows.push(Row::Changes { start: body, end, id: id.clone() });
         }
         if !made(run).is_empty() {
@@ -326,6 +326,14 @@ pub(crate) struct FileChange {
 
 /// The files `run`'s calls edited or wrote, each once, in the order first
 /// changed.
+/// The changes card's files: what `run` changed less what it made for the
+/// user (the made card has those, each once).
+pub(crate) fn work_changes(run: &[Item]) -> Vec<FileChange> {
+    let made = made(run);
+    let same = |a: &str, b: &str| a == b || a.ends_with(&format!("/{b}")) || b.ends_with(&format!("/{a}"));
+    changes(run).into_iter().filter(|c| !made.iter().any(|m| same(&c.path, m))).collect()
+}
+
 pub(crate) fn changes(run: &[Item]) -> Vec<FileChange> {
     let mut out: Vec<FileChange> = vec![];
     for item in run {
@@ -820,6 +828,9 @@ mod tests {
             said("做好了：生成了10月趋势.png，也写了 `/w/out/summary.pdf`。参考了 report.xlsx。"),
         ];
         assert_eq!(made(&items), ["/w/out/summary.pdf", "10月趋势.png"]);
+        // The changes card has the work's own files, the made card the rest.
+        let work: Vec<_> = work_changes(&items).into_iter().map(|c| c.path).collect();
+        assert_eq!(work, ["/w/make_chart.py", "/w/notes.md"]);
         let rows = fold(&items, false, &none());
         assert_eq!(keys(&rows), ["0", "w:a", "5", "c:w:a", "m:w:a"]);
         // Live, no cards yet.

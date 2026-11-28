@@ -270,13 +270,15 @@ fn doing_line(agent: Memo<Option<crate::daemon::Agent>>, id: String) -> View {
         .flex_row()
         .items_center()
         .gap(sp(S2))
-        .child(
+        // A light sweeps across the step's word now and then: it is going on.
+        .child(shimmer(
             text(move || doing.with(|(_, word, _)| if word.is_empty() { format!("{idle_word}…") } else { word.clone() }))
                 .text_size(tx(TEXT_SM))
                 .font_weight(FontWeight(500))
                 .text_color(tone)
                 .flex_shrink_0(),
-        )
+            72.0,
+        ))
         .child(
             text(move || doing.with(|(.., detail)| detail.clone()))
                 .text_size(tx(TEXT_XS))
@@ -312,8 +314,31 @@ fn pet(agent: Memo<Option<crate::daemon::Agent>>, running: Memo<bool>) -> impl I
             happy.set(false);
         }
     });
+    // Pressed, it turns round; three presses in a row, it hops for joy.
+    let turn = animated_value(0.0);
+    let cheer = signal(false);
+    let taps = std::rc::Rc::new(std::cell::Cell::new((0u32, None::<std::time::Instant>)));
+    let press = move || {
+        let now = std::time::Instant::now();
+        let (n, last) = taps.get();
+        let n = if last.is_some_and(|l| now.duration_since(l).as_millis() < 500) { n + 1 } else { 1 };
+        taps.set((n, Some(now)));
+        if n >= 3 {
+            taps.set((0, None));
+            cheer.set(true);
+            set_timeout(std::time::Duration::from_millis(2400), move || cheer.set(false));
+        } else if !reduce_motion() {
+            Animation::sequence([
+                Animation::timing(&turn, 360.0, nsh_core::element::Timing::new(520.0, Easing::EaseInOut)),
+                Animation::timing(&turn, 0.0, nsh_core::element::Timing::new(0.0, Easing::Linear)),
+            ])
+            .start();
+        }
+    };
     let mood = computed(move || {
-        if waiting.get() {
+        if cheer.get() {
+            Mood::Happy
+        } else if waiting.get() {
             Mood::Waiting
         } else if running.get() {
             Mood::Typing
@@ -326,13 +351,19 @@ fn pet(agent: Memo<Option<crate::daemon::Agent>>, running: Memo<bool>) -> impl I
     // Its frame is taller than its room: the empty sky over its head
     // reaches up past it, its feet on the room's foot (the capsule's top
     // edge, or the composer's).
-    view().ml(px(PET_AT)).w(px(PET)).h(px(ROOM)).flex_shrink_0().child(
-        view().absolute().bottom(px(-PET_FEET)).left(px(0.0)).w(px(PET)).h(px(PET)).pointer_events(nsh_core::PointerEvents::None).child(dynamic(
-            move || {
+    nsh_base::button().on_press(press).accessibility_label(t("Pet")).ml(px(PET_AT)).w(px(PET)).h(px(ROOM)).flex_shrink_0().child(
+        view()
+            .absolute()
+            .bottom(px(-PET_FEET))
+            .left(px(0.0))
+            .w(px(PET))
+            .h(px(PET))
+            .pointer_events(nsh_core::PointerEvents::None)
+            .bind_transform(nsh_core::TransformKind::RotateY, &turn)
+            .child(dynamic(move || {
                 let mood = mood.get();
                 Some(untracked(move || sprite(mood).into_element()))
-            },
-        )),
+            })),
     )
 }
 
