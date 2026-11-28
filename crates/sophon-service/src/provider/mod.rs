@@ -602,6 +602,48 @@ fn image(image: &Value) -> io::Result<(&str, &str, &str)> {
     Ok((mime, extension, data))
 }
 
+/// A piece of a message as an agent is given it: words, or a picture.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Piece<'a> {
+    Text(&'a str),
+    Image(&'a Value),
+}
+
+/// A message's words and pictures in the order they were written: each
+/// picture right after its name in the text (`[shot.png]`, the composer's
+/// chip), the words between them as they are, so "this [a.png] and that
+/// [b.png]" reaches the agent as words, picture, words, picture. Pictures
+/// are matched to names in order (two named `image.png` are the first and
+/// the second); one whose name is not there (or none: an older client) comes
+/// after the words. No piece of words is blank (an empty text block is
+/// refused); together they are the whole text.
+pub(crate) fn pieces<'a>(text: &'a str, images: &'a [Value]) -> Vec<Piece<'a>> {
+    let mut out = Vec::new();
+    let words = |out: &mut Vec<Piece<'a>>, s: &'a str| {
+        if !s.trim().is_empty() {
+            out.push(Piece::Text(s));
+        }
+    };
+    let (mut at, mut after) = (0, Vec::new());
+    for image in images {
+        let end = image["name"].as_str().filter(|n| !n.trim().is_empty()).and_then(|name| {
+            let mark = format!("[{}]", name.trim());
+            text[at..].find(&mark).map(|i| at + i + mark.len())
+        });
+        match end {
+            Some(end) => {
+                words(&mut out, &text[at..end]);
+                out.push(Piece::Image(image));
+                at = end;
+            }
+            None => after.push(image),
+        }
+    }
+    words(&mut out, &text[at..]);
+    out.extend(after.into_iter().map(Piece::Image));
+    out
+}
+
 fn tool(call: &str, name: &str, status: &str, detail: Value, error: Option<&str>) -> Value {
     json!({"type":"tool_call","callId":call,"name":name,"status":status,"detail":detail,"error":error})
 }
@@ -609,6 +651,30 @@ fn tool(call: &str, name: &str, status: &str, detail: Value, error: Option<&str>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pictures_go_where_they_were_named() {
+        let a = json!({"data":"A","mimeType":"image/png","name":"image.png"});
+        let b = json!({"data":"B","mimeType":"image/png","name":"image.png"});
+        let images = [a.clone(), b.clone()];
+        let text = "this [image.png] button is off, unlike [image.png] here";
+        assert_eq!(
+            pieces(text, &images),
+            vec![
+                Piece::Text("this [image.png]"),
+                Piece::Image(&a),
+                Piece::Text(" button is off, unlike [image.png]"),
+                Piece::Image(&b),
+                Piece::Text(" here"),
+            ]
+        );
+        // A picture first, then words; no blank words between.
+        assert_eq!(pieces("[image.png]", &images[..1]), vec![Piece::Text("[image.png]"), Piece::Image(&a)]);
+        // Unnamed (an older client) or not in the text: after the words.
+        let old = json!({"data":"C","mimeType":"image/png"});
+        assert_eq!(pieces("look", std::slice::from_ref(&old)), vec![Piece::Text("look"), Piece::Image(&old)]);
+        assert_eq!(pieces("", std::slice::from_ref(&old)), vec![Piece::Image(&old)]);
+    }
 
     #[test]
     fn a_mode_a_family_lacks_is_its_default() {

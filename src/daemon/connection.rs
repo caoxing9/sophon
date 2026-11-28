@@ -1214,8 +1214,10 @@ pub struct ImageInput {
     pub data: String,
 }
 
+/// The pictures as sent, in the text's order, each with its name as its
+/// chip wrote it in the text (`[name]`): the host puts each where it stood.
 fn images_json(images: &[ImageInput]) -> Value {
-    Value::Array(images.iter().map(|i| json!({ "data": i.data, "mimeType": i.mime })).collect())
+    Value::Array(images.iter().map(|i| json!({ "data": i.data, "mimeType": i.mime, "name": i.name.replace(['[', ']', '\n'], " ").trim() })).collect())
 }
 
 #[derive(Debug, Clone, PartialEq)]

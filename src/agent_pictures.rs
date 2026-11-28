@@ -136,7 +136,11 @@ fn codex_pictures(line: &str, id: &str, text: &str) -> Option<Vec<String>> {
         content.iter().filter(|c| c.get("type").and_then(Value::as_str) == Some(kind)).filter_map(|c| c.get(field)?.as_str()).collect()
     };
     let same_id = !id.is_empty() && message.get("id").and_then(Value::as_str) == Some(id);
-    let same_words = !text.is_empty() && of("input_text", "text").iter().any(|t| t.trim() == text);
+    // Its words: in one piece, or (pictures put where they were named) in
+    // several, round the `<image>` marks Codex puts about each picture.
+    let words = |t: &str| t.replace("</image>", " ").replace("<image>", " ").split_whitespace().collect::<Vec<_>>().join(" ");
+    let same_words = !text.is_empty()
+        && (of("input_text", "text").iter().any(|t| t.trim() == text) || words(&of("input_text", "text").join(" ")) == words(text));
     if !same_id && !same_words {
         return None;
     }
@@ -167,6 +171,9 @@ mod tests {
         assert_eq!(codex_pictures(line, "msg_1", ""), pictures);
         assert_eq!(codex_pictures(line, "other", "[a.png]look"), pictures);
         assert_eq!(codex_pictures(line, "other", "something else"), None);
+        // Words and pictures as they were written: the words in pieces.
+        let split = r#"{"type":"response_item","payload":{"type":"message","id":"msg_2","role":"user","content":[{"type":"input_text","text":"this [a.png]"},{"type":"input_text","text":"<image>"},{"type":"input_image","image_url":"data:image/png;base64,QUJD"},{"type":"input_text","text":"</image>"},{"type":"input_text","text":" is off"}]}}"#;
+        assert_eq!(codex_pictures(split, "other", "this [a.png] is off"), pictures);
     }
 
     #[test]

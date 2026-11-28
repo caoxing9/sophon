@@ -582,15 +582,21 @@ impl Claude {
     async fn command(&mut self, command: Command) -> io::Result<()> {
         match command {
             Command::Prompt { id, text, images } => {
-                let mut content = Vec::new();
-                for image in &images {
-                    let (mime, _, data) = super::image(image)?;
-                    content.push(json!({"type":"image","source":{"type":"base64","media_type":mime,"data":data}}));
-                }
-                let content = if content.is_empty() {
+                // Words and pictures in the order they were written; words
+                // alone as a string.
+                let content = if images.is_empty() {
                     json!(text)
                 } else {
-                    content.push(json!({"type":"text","text":text}));
+                    let mut content = Vec::new();
+                    for piece in super::pieces(&text, &images) {
+                        content.push(match piece {
+                            super::Piece::Text(words) => json!({"type":"text","text":words}),
+                            super::Piece::Image(image) => {
+                                let (mime, _, data) = super::image(image)?;
+                                json!({"type":"image","source":{"type":"base64","media_type":mime,"data":data}})
+                            }
+                        });
+                    }
                     json!(content)
                 };
                 self.open().await?;
