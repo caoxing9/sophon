@@ -178,6 +178,8 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         // thinking, mode; pressed, their sheets) and the send disc. Plain
         // buttons inside: the glass is the card's alone.
         let settings = computed(move || settings_summary(live));
+        // How far the card has been pulled down (see the card).
+        let pull = animated_value(0.0);
         return view()
             .w_full()
             .child(elsewhere_bar(live))
@@ -185,6 +187,21 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
             .child(chips::preview_layer(key))
             .child(
                 liquid_glass(view())
+                    // Pulled down while the keyboard is up, the card follows
+                    // the finger and puts the keyboard away (Telegram's,
+                    // Claude's): the hand is on the composer already. The
+                    // text's own scrolling goes first (`pan_scroll_handoff`);
+                    // let go, the card springs home.
+                    .pan_values(None, Some(&pull))
+                    .pan_scroll_handoff(true)
+                    .pan_enabled(move || nsh_core::element::keyboard_height().0 > 0.0)
+                    .bind_translate_y(&pull)
+                    .on_pan_end(move |e: &nsh_core::element::PanEvent| {
+                        if !e.cancelled && (e.translation.y.0 > PULL_TO_HIDE || e.velocity_y > 500.0) {
+                            dismiss_keyboard();
+                        }
+                        let _ = pull.spring(0.0, Spring { stiffness: 380.0, damping: 32.0, ..Spring::default() });
+                    })
                     .rounded(px(24.0))
                     .px(sp(S3))
                     .pt(sp(S3))
@@ -897,6 +914,9 @@ pub(crate) fn queue_track(live: bool) -> impl IntoElement {
         }))
     }))
 }
+
+/// How far the phone's composer is pulled down before the keyboard goes.
+const PULL_TO_HIDE: f32 = 28.0;
 
 /// While the agent works and there is a message: how it goes, this once
 /// (into the turn, stopping it, or after it), the setting's way checked.

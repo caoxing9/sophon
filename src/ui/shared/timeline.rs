@@ -150,9 +150,10 @@ pub(crate) fn timeline() -> impl IntoElement {
                 // A drag is the user's, whatever the content does meanwhile.
                 .on_scroll_drag_start(|_: &nsh_core::Point<nsh_core::Points>| store::timeline_scrolled_by_user())
                 .content_padding_top(sp(S4))
-                // The phone's composer floats over the end; the desktop's
-                // sits below the list.
-                .content_padding_bottom(px(if MOBILE { 200.0 } else { S4 }))
+                // The phone's composer floats over the end (with what is
+                // queued, the pet and the capsule over it): room for all of
+                // it, as tall as it is now. The desktop's sits below the list.
+                .content_padding_bottom(move || px(if MOBILE { store::floating_foot() + S3 } else { S4 }))
                 // Earlier pages come as the conversation nears its start.
                 // Not while it opens: an earlier page put before the rows
                 // keeps what shows in place, away from the end.
@@ -1537,7 +1538,7 @@ fn jump_buttons() -> impl IntoElement {
         .right(px(0.0))
         .pointer_events(PointerEvents::BoxNone)
         .child(row().top(sp(S3)).child(hover_keeps(held, to_start, disc(Icon::ArrowUp, t("Go to the start"), store::jump_timeline_start, to_start))))
-        .child(row().bottom(px(if MOBILE { 196.0 } else { S3 })).child(hover_keeps(held, to_end, disc(Icon::ArrowDown, t("Go to the end"), store::jump_timeline_end, to_end))))
+        .child(row().bottom(move || px(if MOBILE { store::floating_foot() - 4.0 } else { S3 })).child(hover_keeps(held, to_end, disc(Icon::ArrowDown, t("Go to the end"), store::jump_timeline_end, to_end))))
 }
 
 /// `el`, `held` while the pointer is over it. Hidden, it is not there to
@@ -2005,7 +2006,9 @@ fn made_card(range: Memo<Option<(usize, usize)>>) -> impl IntoElement {
                             .child(text(name).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG()).number_of_lines(1))
                             .child(text(subtitle).text_size(tx(TEXT_XS)).text_color(FG_FAINT()).number_of_lines(1)),
                     );
-                line = line.child(file_menu(reveal));
+                // The phone: a press opens it in a sheet (`open_path`), whose
+                // foot has its actions; a chevron says so.
+                line = if MOBILE { line.child(icon(Icon::ChevronRight, 15.0).text_color(FG_FAINT())) } else { line.child(file_menu(reveal)) };
                 card = card.child(line);
             }
             if list.len() > MADE_SHOWN && !shown_all {

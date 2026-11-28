@@ -123,6 +123,10 @@ fn open(path: &str, reveal: bool) {
         if reveal { store::reveal_path(&file) } else { store::open_artifact(&file) }
     } else if reveal {
         store::reveal_path(file);
+    } else if MOBILE {
+        // The phone shows it in a sheet over the conversation, fetched
+        // from the computer.
+        store::open_file_sheet(file);
     } else {
         super::preview::open_in_app(file.to_owned());
     }

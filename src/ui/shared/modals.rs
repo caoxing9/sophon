@@ -172,7 +172,7 @@ fn desktop_picture(uri: String) -> AnyElement {
 /// Whether `m` is one of the modals that are no dialog: a picture over the
 /// whole window, the palettes, a tool's details on the phone.
 fn own_layer(m: &Modal) -> bool {
-    matches!(m, Modal::Picture { .. } | Modal::Palette | Modal::ChangedFiles) || (MOBILE && matches!(m, Modal::ToolDetail { .. }))
+    matches!(m, Modal::Picture { .. } | Modal::Palette | Modal::ChangedFiles) || (MOBILE && matches!(m, Modal::ToolDetail { .. } | Modal::FileSheet { .. }))
 }
 
 pub(crate) fn modal_layer() -> impl IntoElement {
@@ -410,6 +410,69 @@ fn body(m: Modal) -> View {
             .child(view().items_center().child(view().w(px(36.0)).h(px(5.0)).rounded(px(R_FULL)).bg(tint(FG(), 0.18))))
             .child(text(name).text_size(tx(TEXT_LG)).font_weight(FontWeight(600)).number_of_lines(1))
             .child(scroll().flex_shrink(1.0).child(crate::ui::shared::tool_detail::tool_body(&kind, &detail, error.as_deref()))),
+        // The phone's file sheet (Lody's): the file shown as it is, most of
+        // the screen; over it its name, its folder, a copy of its path and
+        // its download.
+        Modal::FileSheet { path } => {
+            let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
+            let dir = path.rsplit_once('/').map(|(d, _)| d.to_owned()).unwrap_or_default();
+            let (copy, down) = (path.clone(), path.clone());
+            let busy = {
+                let p = path.clone();
+                computed(move || store::downloading(&p))
+            };
+            let action = |glyph: Icon, label: &'static str, press: Box<dyn Fn()>| {
+                nsh_base::button()
+                    .on_press(move || press())
+                    .accessibility_label(label)
+                    .w(px(36.0))
+                    .h(px(36.0))
+                    .rounded(px(R_FULL))
+                    .items_center()
+                    .justify_center()
+                    .bg(tint(FG(), 0.06))
+                    .active(|s| s.opacity(0.6))
+                    .child(icon(glyph, 17.0).text_color(FG()))
+            };
+            glass_strong(view())
+                .w_full()
+                .h(relative(0.88))
+                .pt(sp(S2))
+                .pb_safe_area_plus(sp(S2))
+                .gap(sp(S2))
+                .rounded_t(px(22.0))
+                .child(view().items_center().child(view().w(px(36.0)).h(px(5.0)).rounded(px(R_FULL)).bg(tint(FG(), 0.18))))
+                .child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap(sp(S2))
+                        .px(sp(S4))
+                        .child(
+                            view()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .gap(px(1.0))
+                                .child(text(name).text_size(tx(TEXT_BASE)).font_weight(FontWeight(600)).number_of_lines(1))
+                                .child(text(dir).text_size(tx(TEXT_XS)).text_color(FG_MUTED()).number_of_lines(1)),
+                        )
+                        .child(action(Icon::Copy, t("Copy path"), Box::new(move || {
+                            let _ = set_clipboard(copy.clone());
+                            store::notify(t("Copied").into());
+                        })))
+                        .child(view().opacity(move || if busy.get() { 0.4_f32 } else { 1.0 }).child(action(Icon::Download, t("Download"), Box::new(move || store::download_file(&down)))))
+                        .child(action(Icon::X, t("Close"), Box::new(store::close_modal))),
+                )
+                .child(
+                    view()
+                        .flex_1()
+                        .mx(sp(S2))
+                        .rounded(px(16.0))
+                        .overflow_hidden()
+                        .bg(SURFACE0())
+                        .child(crate::ui::mobile::files::content(path)),
+                )
+        }
         Modal::Update => update_dialog(),
         Modal::RenameProject { id, name } => rename(t("Rename project"), name, move |v| store::rename_project(&id, v)),
         Modal::ArchiveWorkspace { id, name } => sheet(t("Archive workspace"))
