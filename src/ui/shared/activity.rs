@@ -69,7 +69,8 @@ fn now_doing(agent: &crate::daemon::Agent) -> (String, String, String) {
         match store::item_at(i) {
             Some(Item::User { .. }) | None => break,
             Some(Item::Tool { kind, name, status, summary, .. }) if status == "running" => {
-                return (kind.clone(), tool_verb(&kind, &name), crate::fold::short_path(&summary));
+                let what = if kind == "shell" { command_shown(&summary) } else { crate::fold::short_path(&summary) };
+                return (kind.clone(), tool_verb(&kind, &name), what);
             }
             Some(Item::Reasoning { .. }) => return ("thinking".into(), t("Thinking").to_owned(), String::new()),
             Some(Item::Assistant { .. }) => return ("said".into(), t("Writing a reply").to_owned(), String::new()),
@@ -77,6 +78,17 @@ fn now_doing(agent: &crate::daemon::Agent) -> (String, String, String) {
         }
     }
     (String::new(), String::new(), String::new())
+}
+
+/// A command as the line has room for: its first line, without the `cd
+/// <folder> &&` an agent puts before it (the folder is the conversation's).
+fn command_shown(command: &str) -> String {
+    let first = command.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or_default();
+    let mut rest = first;
+    while let Some(after) = rest.strip_prefix("cd ").and_then(|r| r.split_once("&&")).map(|(_, a)| a.trim_start()) {
+        rest = after;
+    }
+    rest.to_owned()
 }
 
 /// The line over the composer, as wide as it and lined up with it: the
@@ -128,49 +140,39 @@ pub(crate) fn bar() -> impl IntoElement {
         })))
 }
 
-/// A line of the live feed: a thought, words of the reply, a call.
+/// A line of the live feed: a thought.
 #[derive(Clone, Debug, PartialEq)]
 struct FeedLine {
     words: String,
-    call: bool,
 }
 
-/// What the turn has thought and done so far, as lines: its thinking
-/// (Markdown's marks and code left out; its words read on in the
-/// conversation), each call done one line
-/// (the one going on is the line above the feed). How many there are, and
-/// the last `n`.
+/// What the turn has thought so far, as lines (Markdown's marks and code
+/// left out): its words read on in the conversation, and its calls are
+/// not here (a command line is long, and it crowded the feed out): the
+/// one going on is the line by the composer, the rest under the turn's
+/// line in the conversation. How many there are, and the last `n`.
 fn feed_lines(n: usize) -> (usize, Vec<FeedLine>) {
     let mut all: Vec<FeedLine> = Vec::new();
     let count = store::item_count();
     let start = (0..count).rev().find(|&i| matches!(store::item_at(i), Some(Item::User { .. }))).map_or(0, |i| i + 1);
     for i in start..count {
-        match store::item_at(i) {
-            // Its words read on in the conversation: here its thinking.
-            Some(Item::Reasoning { text }) => {
-                let mut fence = false;
-                for line in text.lines() {
-                    let t = line.trim();
-                    if t.starts_with("```") {
-                        fence = !fence;
-                        continue;
-                    }
-                    if fence || t.is_empty() {
-                        continue;
-                    }
-                    let words = sophon_push::excerpt(t);
-                    if !words.trim().is_empty() {
-                        all.push(FeedLine { words: sophon_push::clip(&words, 160), call: false });
-                    }
+        // Its words read on in the conversation: here its thinking.
+        if let Some(Item::Reasoning { text }) = store::item_at(i) {
+            let mut fence = false;
+            for line in text.lines() {
+                let t = line.trim();
+                if t.starts_with("```") {
+                    fence = !fence;
+                    continue;
+                }
+                if fence || t.is_empty() {
+                    continue;
+                }
+                let words = sophon_push::excerpt(t);
+                if !words.trim().is_empty() {
+                    all.push(FeedLine { words: sophon_push::clip(&words, 160) });
                 }
             }
-            // The call going on now is the line above's.
-            Some(Item::Tool { kind, name, summary, status, .. }) if status != "running" => {
-                let what = crate::fold::short_path(&summary);
-                let verb = tool_verb(&kind, &name);
-                all.push(FeedLine { words: if what.is_empty() { verb } else { format!("{verb} · {what}") }, call: true });
-            }
-            _ => {}
         }
     }
     let total = all.len();
@@ -201,7 +203,6 @@ fn feed() -> View {
             for (i, line) in list.into_iter().enumerate() {
                 let age = n - 1 - i;
                 let words = text(line.words).text_size(tx(TEXT_XS)).line_height(px(FEED_LINE)).text_color(FG_FAINT()).number_of_lines(1);
-                let words = if line.call { words.font_family(mono_font) } else { words };
                 column = column.child(view().h(px(FEED_LINE)).opacity([1.0_f32, 0.55, 0.25][age.min(2)]).child(words));
             }
             column.into_element()
@@ -350,4 +351,17 @@ fn sprite(mood: Mood) -> View {
         .h(px(PET))
         .overflow_hidden()
         .child(view().bind_translate_x(&at).child(image(strip).w(px(PET * frames as f32)).h(px(PET))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::command_shown;
+
+    #[test]
+    fn a_command_is_shown_without_its_cd_and_past_its_first_line() {
+        assert_eq!(command_shown("cd /Users/a/wt && cargo test --lib"), "cargo test --lib");
+        assert_eq!(command_shown("cd /a && cd b && python3 - <<'EOF'\nprint(1)\nEOF"), "python3 - <<'EOF'");
+        assert_eq!(command_shown("npm test"), "npm test");
+        assert_eq!(command_shown("cd /a"), "cd /a", "a cd alone is the command");
+    }
 }
