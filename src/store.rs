@@ -2833,6 +2833,29 @@ struct Downloads(HashMap<String, (String, bool)>);
 /// Saves the workspace's file `path` on this device, whatever its size or
 /// kind: on the Mac where the save panel says, on the phone in Sophon's
 /// folder of the Files app.
+/// How tall the phone's foot is over the end of the conversation: what
+/// floats there (the queue, the pet, the capsule, a permission, the
+/// composer), as laid out. The conversation leaves that much room at its
+/// end, so nothing floats over its last words.
+#[derive(Clone, PartialEq)]
+struct FloatingFoot(f32);
+
+impl Default for FloatingFoot {
+    fn default() -> Self {
+        Self(200.0)
+    }
+}
+
+pub(crate) fn floating_foot() -> f32 {
+    global::<FloatingFoot>().with(|f| f.0)
+}
+
+pub(crate) fn set_floating_foot(height: f32) {
+    if global::<FloatingFoot>().with_untracked(|f| (f.0 - height).abs() > 0.5) {
+        global::<FloatingFoot>().set(FloatingFoot(height));
+    }
+}
+
 /// `path` as the workspace's files are named, under its folder: a path the
 /// agent gave whole (`/Users/…/budget/out/a.pdf`) as `out/a.pdf`. The
 /// computer serves the files under that folder only.

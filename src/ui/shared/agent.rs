@@ -47,7 +47,14 @@ pub(crate) fn agent_pane(bar: bool) -> impl IntoElement {
         )
         .child(
             view()
-                .when(MOBILE, |v| v.absolute().left(px(0.0)).right(px(0.0)).bottom(px(0.0)))
+                .when(MOBILE, |v| {
+                    v.absolute()
+                        .left(px(0.0))
+                        .right(px(0.0))
+                        .bottom(px(0.0))
+                        // The conversation leaves room for all of it.
+                        .on_layout(|b: &nsh_core::Bounds<nsh_core::Points>| store::set_floating_foot(b.size.height.0))
+                })
                 .px(px(if MOBILE { S2 } else { S6 }))
                 .pb(px(if MOBILE { S2 } else { S4 }))
                 .child(timeline::tracks())
