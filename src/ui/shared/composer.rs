@@ -825,7 +825,10 @@ fn queue_track(live: bool) -> impl IntoElement {
                                 .map(|i| (i.name.clone(), Some(format!("data:{};base64,{}", i.mime, i.data))))
                                 .collect();
                             thumbs.extend(msg.attachments.iter().map(|a| (a.get("fileName").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned(), None)));
-                            let mut line = view().flex_row().items_center().flex_1().min_w(px(0.0)).overflow_hidden();
+                            // Clipped at its end (one line); room above and below,
+                            // so a chip, lifted to sit level with the words, keeps
+                            // its edge.
+                            let mut line = view().flex_row().items_center().flex_1().min_w(px(0.0)).py(px(2.0)).overflow_hidden();
                             for segment in composer_doc::segments(&msg.text) {
                                 line = match segment {
                                     composer_doc::Segment::Text(t) => {

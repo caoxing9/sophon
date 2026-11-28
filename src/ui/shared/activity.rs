@@ -47,6 +47,11 @@ impl Mood {
 const PET: f32 = 48.0;
 /// The line's height: the pet's body, its frame's empty sky above it.
 const BAR_H: f32 = 34.0;
+/// A line of the live feed under it (`Quiet`), and how many show.
+const FEED_LINE: f32 = 17.0;
+const FEED_SHOWN: usize = 2;
+/// The line's height with the feed: its words, then the feed.
+const LIVE_H: f32 = 22.0 + FEED_LINE * FEED_SHOWN as f32 + 4.0;
 /// How far under its feet the pet's frame goes (empty).
 const PET_FEET: f32 = 5.0;
 /// How long it hops for joy once a turn ends (ms).
@@ -93,23 +98,110 @@ pub(crate) fn bar() -> impl IntoElement {
             }
         });
     });
+    // Quietly, the conversation shows no steps: what the agent writes and
+    // runs scrolls by here instead, as DSH Go's strip does, so the work is
+    // seen going on.
+    let live = computed(move || running.get() && store::tool_display() == crate::fold::ToolDisplay::Quiet);
     view()
         .w_full()
         .max_w(px(CONTENT_MAX_WIDTH()))
         .self_center()
         .flex_row()
-        .items_center()
+        .items_end()
         .gap(sp(S2))
-        .h(px(BAR_H))
+        .h(move || Length::from(px(if live.get() { LIVE_H } else { BAR_H })))
         .px(sp(S2))
         .child(pet(agent, running))
-        .child(view().flex_1().min_w(px(0.0)).child(dynamic(move || {
+        .child(view().flex_1().min_w(px(0.0)).h_full().justify_center().child(dynamic(move || {
             if !running.get() {
                 return None;
             }
+            let quiet = live.get();
             let id = id.get_untracked().unwrap_or_default();
-            Some(untracked(move || doing_line(agent, id).into_element()))
+            Some(untracked(move || {
+                let line = doing_line(agent, id);
+                if quiet { view().gap(px(2.0)).child(line).child(feed()).into_element() } else { line.into_element() }
+            }))
         })))
+}
+
+/// A line of the live feed: a thought, words of the reply, a call.
+#[derive(Clone, Debug, PartialEq)]
+struct FeedLine {
+    words: String,
+    call: bool,
+}
+
+/// What the turn has said and done so far, as lines: its thinking and its
+/// words (Markdown's marks and code left out), each call done one line
+/// (the one going on is the line above the feed). How many there are, and
+/// the last `n`.
+fn feed_lines(n: usize) -> (usize, Vec<FeedLine>) {
+    let mut all: Vec<FeedLine> = Vec::new();
+    let count = store::item_count();
+    let start = (0..count).rev().find(|&i| matches!(store::item_at(i), Some(Item::User { .. }))).map_or(0, |i| i + 1);
+    for i in start..count {
+        match store::item_at(i) {
+            Some(Item::Reasoning { text } | Item::Assistant { text, .. }) => {
+                let mut fence = false;
+                for line in text.lines() {
+                    let t = line.trim();
+                    if t.starts_with("```") {
+                        fence = !fence;
+                        continue;
+                    }
+                    if fence || t.is_empty() {
+                        continue;
+                    }
+                    let words = sophon_push::excerpt(t);
+                    if !words.trim().is_empty() {
+                        all.push(FeedLine { words: sophon_push::clip(&words, 160), call: false });
+                    }
+                }
+            }
+            // The call going on now is the line above's.
+            Some(Item::Tool { kind, name, summary, status, .. }) if status != "running" => {
+                let what = crate::fold::short_path(&summary);
+                let verb = tool_verb(&kind, &name);
+                all.push(FeedLine { words: if what.is_empty() { verb } else { format!("{verb} · {what}") }, call: true });
+            }
+            _ => {}
+        }
+    }
+    let total = all.len();
+    let last = all.split_off(total.saturating_sub(n));
+    (total, last)
+}
+
+/// The live feed: the turn's last lines, the newest at the foot, growing
+/// as it is written; each new one slides the rest up (a quick spring), the
+/// older fainter.
+fn feed() -> View {
+    let lines = computed(|| feed_lines(FEED_SHOWN + 1));
+    let slide = animated_value(0.0);
+    let seen = std::cell::Cell::new(None::<usize>);
+    effect(move || {
+        let total = lines.with(|(n, _)| *n);
+        let before = seen.replace(Some(total));
+        if before.is_some_and(|b| total > b) && !reduce_motion() {
+            slide.set(FEED_LINE);
+            let _ = slide.spring(0.0, Spring { stiffness: 420.0, damping: 36.0, ..Spring::default() });
+        }
+    });
+    view().h(px(FEED_LINE * FEED_SHOWN as f32)).overflow_hidden().justify_end().child(view().bind_translate_y(&slide).child(dynamic(move || {
+        let (_, list) = lines.get();
+        Some(untracked(move || {
+            let n = list.len();
+            let mut column = view();
+            for (i, line) in list.into_iter().enumerate() {
+                let age = n - 1 - i;
+                let words = text(line.words).text_size(tx(TEXT_XS)).line_height(px(FEED_LINE)).text_color(FG_FAINT()).number_of_lines(1);
+                let words = if line.call { words.font_family(mono_font) } else { words };
+                column = column.child(view().h(px(FEED_LINE)).opacity([1.0_f32, 0.55, 0.25][age.min(2)]).child(words));
+            }
+            column.into_element()
+        }))
+    })))
 }
 
 /// What the agent does now, one line of words.

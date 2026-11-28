@@ -70,7 +70,7 @@ impl Row {
 
 /// How the conversation shows the agent's work (`toolCalls` in the
 /// settings), as DSH Go's:
-/// - `Stream` (the default): while the agent works, each step a line of
+/// - `Stream`: while the agent works, each step a line of
 ///   its own as it happens (three calls in a row or more one line, "Ran 3
 ///   commands"); once the turn is done, all of it one line ("Done · 5 tool
 ///   calls · 1 message") over its reply, pressed open to show the steps,
@@ -79,12 +79,14 @@ impl Row {
 /// - `Quiet`: while it works, one line of what it does now; done, as
 ///   `Stream`.
 ///
-/// The settings' older choices read as the nearest: "quiet" and "hidden"
-/// as `Quiet`, the rest as `Stream`.
+/// The settings' older choices read as the nearest: "auto" and "folded" as
+/// `Stream`; "hidden", and none chosen, as `Quiet`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum ToolDisplay {
-    #[default]
     Stream,
+    /// The default: the conversation reads as words, what the agent does
+    /// now one line over the composer.
+    #[default]
     Quiet,
 }
 
@@ -98,8 +100,8 @@ impl ToolDisplay {
 
     pub(crate) fn parse(s: &str) -> Self {
         match s {
-            "quiet" | "hidden" => ToolDisplay::Quiet,
-            _ => ToolDisplay::Stream,
+            "stream" | "auto" | "folded" => ToolDisplay::Stream,
+            _ => ToolDisplay::Quiet,
         }
     }
 }
@@ -737,6 +739,8 @@ mod tests {
         for (old, now) in [("auto", ToolDisplay::Stream), ("folded", ToolDisplay::Stream), ("stream", ToolDisplay::Stream), ("quiet", ToolDisplay::Quiet), ("hidden", ToolDisplay::Quiet)] {
             assert_eq!(ToolDisplay::parse(old), now);
         }
+        assert_eq!(ToolDisplay::parse(""), ToolDisplay::Quiet, "none chosen: the default");
+        assert_eq!(ToolDisplay::default(), ToolDisplay::Quiet);
     }
 
     fn wrote(id: &str, path: &str) -> Item {

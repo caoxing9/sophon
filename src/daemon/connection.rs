@@ -3292,14 +3292,15 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
             Pending::Other("pin workspace"),
             json!({ "type": "workspace.pin.set.request", "workspaceId": workspace_id, "pinned": pinned }),
         )],
+        // A service from before these knows neither: it says so, quietly.
         Command::Presence { front } => vec![request(
             pending,
-            Pending::Other("say whether Sophon is in front"),
+            Pending::Optional,
             json!({ "type": "sophon.presence.request", "front": front }),
         )],
         Command::PushUsage { label, percent, ends } => vec![request(
             pending,
-            Pending::Other("push a plan limit"),
+            Pending::Optional,
             json!({ "type": "sophon.push.usage.request", "label": label, "percent": percent, "ends": ends }),
         )],
         Command::RenameWorkspace { workspace_id, title } => vec![request(
