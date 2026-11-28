@@ -953,7 +953,7 @@ pub(crate) const CONTEXT_MARK: &str = "\n\n--- The conversation \"";
 /// A sent message's bubble: the surface a step above the page, opaque
 /// and without the accent's hue (a black or pale accent would vanish in
 /// it, a loud one shout).
-fn user_bubble() -> AdaptiveColor {
+pub(crate) fn user_bubble() -> AdaptiveColor {
     SURFACE2()
 }
 
@@ -1110,6 +1110,7 @@ fn tool_icon(kind: &str, name: &str) -> Icon {
         "sub_agent" => Icon::Bot,
         "plan" => Icon::ListTodo,
         "thinking" => Icon::Brain,
+        "said" => Icon::MessageSquare,
         _ if name.to_lowercase().contains("todo") => Icon::ListTodo,
         _ => Icon::Wrench,
     }
@@ -1146,6 +1147,7 @@ fn tool_tone(kind: &str) -> (AdaptiveColor, AdaptiveColor) {
         "sub_agent" => (pair(0xf9e2f0, 0x3a2232), pair(0x582b4a, 0xeeb2d6)),
         "plan" => (pair(0xd0f1f0, 0x163433), pair(0x004747, 0x8fdcd9)),
         "thinking" => (pair(0xe4e8fd, 0x252a42), pair(0x3346c4, 0xa9b6ff)),
+        "said" => (pair(0xebebef, 0x2c2c33), pair(0x4a4a55, 0xc4c4cc)),
         _ => (pair(0xebebef, 0x2c2c33), pair(0x4a4a55, 0xc4c4cc)),
     }
 }

@@ -805,66 +805,78 @@ pub(crate) fn queue_track(live: bool) -> impl IntoElement {
         Some(untracked(move || {
             // Waiting after an Escape: said, with the key that takes them back.
             let held = store::selected_id().is_some_and(|id| store::queue_held(&id));
-            let mut track = card().mb(sp(S2)).px(sp(S3)).py(sp(S2)).gap(sp(S1)).child(section_label(if held {
-                t("Queued · paused — Esc to edit, send to continue")
-            } else {
-                t("Queued")
-            }));
+            // Each as the message it will be, faint, on the right (DSH Go's):
+            // under it what becomes of it and, quietly, what can be done.
+            let mut track = view().w_full().max_w(px(CONTENT_MAX_WIDTH())).self_center().mb(sp(S2)).gap(sp(S2)).items_end();
             for (i, msg) in list.clone().into_iter().enumerate() {
+                let mut thumbs: Vec<(String, Option<String>)> =
+                    msg.images.iter().map(|i| (i.name.clone(), Some(format!("data:{};base64,{}", i.mime, i.data)))).collect();
+                thumbs.extend(msg.attachments.iter().map(|a| (a.get("fileName").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned(), None)));
+                // Its words and its attachments' chips where they stand, as
+                // the composer had them: one line, room above and below so
+                // a chip keeps its edge.
+                let mut line = view().flex_row().items_center().min_w(px(0.0)).py(px(2.0)).overflow_hidden();
+                for segment in composer_doc::segments(&msg.text) {
+                    line = match segment {
+                        composer_doc::Segment::Text(t) => line.child(text(t.replace('\n', " ")).text_size(tx(TEXT_BASE)).number_of_lines(1).flex_shrink(1.0)),
+                        composer_doc::Segment::Chip(name) => {
+                            let thumb = thumbs.iter().position(|(n, _)| n.replace(['[', ']', '\n'], " ").trim() == name).map(|i| thumbs.remove(i).1).flatten();
+                            line.child(super::timeline::sent_chip(name, thumb).flex_shrink_0())
+                        }
+                    };
+                }
+                for (name, thumb) in thumbs {
+                    line = line.child(super::timeline::sent_chip(name, thumb).flex_shrink_0());
+                }
+                let link = move |label: &'static str, press: Box<dyn Fn()>| {
+                    nsh_base::button()
+                        .on_press(move || press())
+                        .accessibility_label(label)
+                        .px(px(6.0))
+                        .h(px(24.0))
+                        .rounded(px(R_MD))
+                        .items_center()
+                        .justify_center()
+                        .hover(|s| s.bg(highlight()))
+                        .child(text(label).text_size(tx(TEXT_XS)).font_weight(FontWeight(600)).text_color(ACCENT()))
+                };
                 track = track.child(
                     view()
-                        .flex_row()
-                        .items_center()
-                        .gap(sp(S2))
-                        .child(icon(Icon::Inbox, 14.0).text_color(FG_FAINT()))
-                        // Its words and its attachments' chips where they
-                        // stand, as the composer had them: one line.
-                        .child({
-                            let mut thumbs: Vec<(String, Option<String>)> = msg
-                                .images
-                                .iter()
-                                .map(|i| (i.name.clone(), Some(format!("data:{};base64,{}", i.mime, i.data))))
-                                .collect();
-                            thumbs.extend(msg.attachments.iter().map(|a| (a.get("fileName").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned(), None)));
-                            // Clipped at its end (one line); room above and below,
-                            // so a chip, lifted to sit level with the words, keeps
-                            // its edge.
-                            let mut line = view().flex_row().items_center().flex_1().min_w(px(0.0)).py(px(2.0)).overflow_hidden();
-                            for segment in composer_doc::segments(&msg.text) {
-                                line = match segment {
-                                    composer_doc::Segment::Text(t) => {
-                                        line.child(text(t.replace('\n', " ")).text_size(tx(TEXT_BASE)).number_of_lines(1).flex_shrink(1.0))
+                        .items_end()
+                        .gap(px(2.0))
+                        .max_w(relative(0.85))
+                        .child(view().px(px(14.0)).py(px(9.0)).rounded(px(18.0)).bg(super::timeline::user_bubble()).opacity(0.6).child(line))
+                        .child(
+                            view()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(2.0))
+                                .child(icon(Icon::History, 12.0).text_color(FG_FAINT()).mr(px(4.0)))
+                                .child(
+                                    text(if held { t("Queued · paused — Esc to edit, send to continue") } else { t("Queued · sent when this turn ends") })
+                                        .text_size(tx(TEXT_XS))
+                                        .text_color(FG_FAINT())
+                                        .mr(px(4.0)),
+                                )
+                                // Back into the composer, attachments and all,
+                                // to be changed and sent again.
+                                .child(link(t("Edit"), Box::new(move || {
+                                    if let Some(id) = store::selected_id() {
+                                        store::edit_queued(&id, i);
                                     }
-                                    composer_doc::Segment::Chip(name) => {
-                                        let thumb = thumbs.iter().position(|(n, _)| n.replace(['[', ']', '\n'], " ").trim() == name).map(|i| thumbs.remove(i).1).flatten();
-                                        line.child(super::timeline::sent_chip(name, thumb).flex_shrink_0())
+                                })))
+                                // Into the running turn now, without waiting.
+                                .child(link(t("Steer"), Box::new(move || {
+                                    if let Some(id) = store::selected_id() {
+                                        store::steer_queued(&id, i);
                                     }
-                                };
-                            }
-                            for (name, thumb) in thumbs {
-                                line = line.child(super::timeline::sent_chip(name, thumb).flex_shrink_0());
-                            }
-                            line
-                        })
-                        // Back into the composer, attachments and all, to be
-                        // changed and sent again.
-                        .child(btn(t("Edit"), Variant::Ghost, Sz::Sm, Some(Icon::Pencil), move || {
-                            if let Some(id) = store::selected_id() {
-                                store::edit_queued(&id, i);
-                            }
-                        }))
-                        // Into the running turn now, without waiting for it
-                        // to end.
-                        .child(btn(t("Steer"), Variant::Ghost, Sz::Sm, Some(Icon::CircleArrowUp), move || {
-                            if let Some(id) = store::selected_id() {
-                                store::steer_queued(&id, i);
-                            }
-                        }))
-                        .child(icon_btn(Icon::X, Sz::Sm, t("Remove from queue"), move || {
-                            if let Some(id) = store::selected_id() {
-                                store::unqueue(&id, i);
-                            }
-                        })),
+                                })))
+                                .child(link(t("Take back"), Box::new(move || {
+                                    if let Some(id) = store::selected_id() {
+                                        store::unqueue(&id, i);
+                                    }
+                                }))),
+                        ),
                 );
             }
             track

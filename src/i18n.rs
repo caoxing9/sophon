@@ -643,6 +643,8 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Interrupt", "打断"),
     ("Queue", "排队"),
     ("Queued", "已排队"),
+    ("Queued · sent when this turn ends", "排队中 · 本轮结束后发送"),
+    ("Take back", "撤回"),
     ("Remove from queue", "移出队列"),
     ("Sending", "发送"),
     ("Submit", "提交"),

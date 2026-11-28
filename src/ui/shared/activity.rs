@@ -184,7 +184,8 @@ fn feed() -> View {
             let _ = slide.spring(0.0, Spring { stiffness: 420.0, damping: 36.0, ..Spring::default() });
         }
     });
-    view().max_h(px(FEED_LINE * FEED_SHOWN as f32)).overflow_hidden().justify_end().child(view().bind_translate_y(&slide).child(dynamic(move || {
+    // Lined up with the words of the line under it, past its glyph.
+    view().pl(px(18.0 + S2)).max_h(px(FEED_LINE * FEED_SHOWN as f32)).overflow_hidden().justify_end().child(view().bind_translate_y(&slide).child(dynamic(move || {
         let (_, list) = lines.get();
         Some(untracked(move || {
             let n = list.len();
@@ -250,8 +251,10 @@ fn doing_line(agent: Memo<Option<crate::daemon::Agent>>, id: String) -> View {
         .gap(sp(S2))
         .child(dynamic(move || {
             let kind = doing.with(|(k, ..)| k.clone());
+            // A steady glyph (the pet is what moves), as wide as any.
             Some(untracked(move || match kind.as_str() {
-                "" | "thinking" | "said" => spark(13.0).into_element(),
+                "" | "thinking" => tool_glyph("thinking", "", 18.0).into_element(),
+                "said" => tool_glyph("said", "", 18.0).into_element(),
                 k => tool_glyph(k, "", 18.0).into_element(),
             }))
         }))
