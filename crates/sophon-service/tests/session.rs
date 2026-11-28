@@ -259,6 +259,7 @@ while IFS= read -r line; do
             say '{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_start","content_block":{"type":"text"}}}'
             say '{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hel"}}}'
             say '{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"lo"}}}'
+            say '{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_start","content_block":{"type":"tool_use","id":"tool1","name":"Bash","input":{}}}}'
             say '{"type":"assistant","parent_tool_use_id":null,"message":{"id":"msg1","model":"m","content":[{"type":"text","text":"Hello"},{"type":"tool_use","id":"tool1","name":"Bash","input":{"command":"ls"}}],"usage":{"input_tokens":10,"output_tokens":5}}}'
             say '{"type":"control_request","request_id":"ask1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"},"tool_use_id":"tool1"}}' ;;
         *'"request_id":"ask1"'*)
@@ -317,6 +318,9 @@ async fn a_turn_streams_asks_before_a_command_and_keeps_what_happened() {
         (&json!(2), &json!(3))
     );
     assert_eq!(rows[2]["item"]["status"], "running");
+    // Shown as it began to be written, then whole in the same row.
+    assert_eq!(rows.len(), 3, "{live}");
+    assert_eq!(rows[2]["item"]["detail"]["command"], "ls");
 
     // A client answers under the permission's own id.
     send(
@@ -375,7 +379,8 @@ async fn a_turn_streams_asks_before_a_command_and_keeps_what_happened() {
     service.cli("start");
     let mut socket = service.connect(true).await;
     let sent = ask(&mut socket, json!({"type":"send_agent_message_request","agentId":agent["id"],"text":"again","messageId":"m2"})).await;
-    assert_eq!(sent["payload"]["seq"], 6, "{sent}");
+    // (The call shown as it began to be written was an event too.)
+    assert_eq!(sent["payload"]["seq"], 7, "{sent}");
     let asked = until(&mut socket, "permission_requested").await;
     send(
         &mut socket,

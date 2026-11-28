@@ -73,7 +73,8 @@ fn now_doing(agent: &crate::daemon::Agent) -> (String, String, String) {
         match store::item_at(i) {
             Some(Item::User { .. }) | None => break,
             Some(Item::Tool { kind, name, status, summary, .. }) if status == "running" => {
-                let what = crate::fold::target_shown(&kind, &summary);
+                // Shown as it begins to be written: its input still coming.
+                let what = if summary.trim().is_empty() { t("writing it…").to_owned() } else { crate::fold::target_shown(&kind, &summary) };
                 return (kind.clone(), tool_verb(&kind, &name), what);
             }
             Some(Item::Reasoning { .. }) => return ("thinking".into(), t("Thinking").to_owned(), String::new()),
