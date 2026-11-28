@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [workspace]
-members = ["crates/sophon-service", "crates/nsh-shadcn"]
+members = ["crates/sophon-service", "crates/sophon-push", "crates/nsh-shadcn"]
 # Its gallery is an app of its own.
 exclude = ["crates/nsh-shadcn/examples"]
 
@@ -29,6 +29,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 snow = "0.9"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 crypto_box = { version = "0.9", features = ["std"] }
+# Push notifications' shared part (`docs/push.md`).
+sophon-push = { path = "crates/sophon-push" }
 # shadcn/ui for NSH: Sophon's components, kept here while they change
 # with Sophon (`crates/nsh-shadcn`, mirrored to caoxing9/nsh-shadcn: a
 # change merged here opens a pull request there, sync-nsh-shadcn.yml).

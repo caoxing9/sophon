@@ -1767,10 +1767,19 @@ impl Antigravity {
     async fn command(&mut self, command: Command) -> io::Result<()> {
         match command {
             Command::Prompt { text, images, .. } => {
-                let mut prompt = vec![json!({"type":"text","text":text})];
-                for image in &images {
-                    let (mime, _, data) = super::image(image)?;
-                    prompt.push(json!({"type":"image","data":data,"mimeType":mime}));
+                // Words and pictures in the order they were written.
+                let mut prompt = Vec::new();
+                for piece in super::pieces(&text, &images) {
+                    prompt.push(match piece {
+                        super::Piece::Text(words) => json!({"type":"text","text":words}),
+                        super::Piece::Image(image) => {
+                            let (mime, _, data) = super::image(image)?;
+                            json!({"type":"image","data":data,"mimeType":mime})
+                        }
+                    });
+                }
+                if prompt.is_empty() {
+                    prompt.push(json!({"type":"text","text":text}));
                 }
                 self.prompt(json!(prompt)).await
             }

@@ -48,6 +48,8 @@ pub struct Host {
     /// ended in them), and those being counted now.
     stale: HashSet<String>,
     counting: HashSet<String>,
+    /// Push notifications to paired phones (`push`).
+    pub push: crate::push::Pusher,
 }
 
 /// Keeps the workspaces' branch and uncommitted lines (`gitRuntime.
@@ -159,6 +161,7 @@ impl Host {
                 agent["availableModes"] = provider::modes(family);
             }
         }
+        let home_for_push = home.clone();
         let mut host = Self {
             home,
             state,
@@ -176,6 +179,7 @@ impl Host {
             counted: HashSet::new(),
             stale: HashSet::new(),
             counting: HashSet::new(),
+            push: crate::push::Pusher::new(home_for_push),
         };
         // A run the last service left underway ended with it: it would
         // count as at work for good, and its automation start nothing.
@@ -488,6 +492,20 @@ impl Host {
                 "finished"
             });
         }
+        // The owner's phone hears of it after a moment (`push`): not of a
+        // turn stopped, nor one a follow-up comes after.
+        let told = match &outcome {
+            Outcome::Completed => Some((sophon_push::Kind::Finished, sophon_push::excerpt(reply.as_deref().unwrap_or_default()))),
+            Outcome::Failed(message) => Some((sophon_push::Kind::Failed, message.clone())),
+            Outcome::Canceled => None,
+        };
+        if let Some((kind, words)) = told
+            && !crate::push::quiet(record, kind)
+            && let Some(note) = crate::push::note_of(&self.state, agent, kind, words, None)
+        {
+            self.push.note(note);
+        }
+        let record = self.state.agents.get_mut(agent).unwrap();
         let mut closed = None;
         if let Some(schedule) = record
             .pointer("/labels/sophon.schedule-id")
@@ -660,6 +678,13 @@ impl Host {
                     "agent_stream",
                     json!({"agentId":agent,"event":{"type":"permission_requested","request":request}}),
                 );
+                // The owner's phone hears of it at once.
+                let (kind, words) = crate::push::asked_words(&request);
+                let quiet = self.state.agents.get(agent).is_none_or(|record| crate::push::quiet(record, kind));
+                let id = request["id"].as_str().map(str::to_owned);
+                if !quiet && let Some(note) = crate::push::note_of(&self.state, agent, kind, words, id) {
+                    self.push.note(note);
+                }
             }
             Event::Settled(permission) => {
                 let Some(asked) = record["pendingPermissions"].as_array_mut() else {
@@ -793,6 +818,8 @@ fn turn(
         json!({"type":"user_message","text":prompt,"messageId":message_id,"at":now()}),
     )?;
     host.stopping.remove(agent_id);
+    // The last turn's end is no news now.
+    host.push.began(agent_id);
     let record = host.state.agents.get_mut(agent_id).unwrap();
     // A conversation begun with nothing said is named by what is
     // first said in it.
@@ -1552,6 +1579,23 @@ fn answer(shared: &Shared, request: &Value, mut made: Option<Value>) -> Result<V
             json!({"parentAgentId":parent,"subagentId":started,"rows":page["entries"],"hasOlder":page["hasOlder"]})
         }
         "list_provider_features_request" => json!({"provider":request["provider"],"features":[]}),
+        // The app says whether it is in front, every half minute while it
+        // is: a turn's end is not pushed to the phone while someone is
+        // here using it (`push`).
+        "sophon.presence.request" => {
+            host.push.presence(request["front"] == true);
+            json!({})
+        }
+        // The plan's limit is near: the app watches the plans, the push
+        // goes from here.
+        "sophon.push.usage.request" => {
+            host.push.usage(
+                text(request, "label")?,
+                request["percent"].as_u64().unwrap_or(0) as u32,
+                request["ends"].as_str(),
+            );
+            json!({})
+        }
         "fetch_agent_history_request" => {
             let query = request["search"]
                 .as_str()

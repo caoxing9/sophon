@@ -63,6 +63,10 @@ fn native(registry: &mut Registry) {
         AssetFile { uri: LOADER_MOON.url, source: concat!(env!("CARGO_MANIFEST_DIR"), "/assets/loader/moon@2x.png"), kind: AssetKind::Image },
         AssetFile { uri: LOADER_SKY_LIGHT.url, source: concat!(env!("CARGO_MANIFEST_DIR"), "/assets/loader/sky-light@2x.png"), kind: AssetKind::Image },
         AssetFile { uri: LOADER_CORONA_LIGHT.url, source: concat!(env!("CARGO_MANIFEST_DIR"), "/assets/loader/corona-light@2x.png"), kind: AssetKind::Image },
+        AssetFile { uri: PET_TYPING.url, source: concat!(env!("CARGO_MANIFEST_DIR"), "/assets/pet/typing.png"), kind: AssetKind::Image },
+        AssetFile { uri: PET_HAPPY.url, source: concat!(env!("CARGO_MANIFEST_DIR"), "/assets/pet/happy.png"), kind: AssetKind::Image },
+        AssetFile { uri: PET_WAITING.url, source: concat!(env!("CARGO_MANIFEST_DIR"), "/assets/pet/waiting.png"), kind: AssetKind::Image },
+        AssetFile { uri: PET_SLEEPING.url, source: concat!(env!("CARGO_MANIFEST_DIR"), "/assets/pet/sleeping.png"), kind: AssetKind::Image },
     ]);
 }
 
@@ -92,6 +96,13 @@ pub(crate) const LOADER_MOON: ImageAsset = asset!("loader/moon@2x.png");
 pub(crate) const LOADER_SKY_LIGHT: ImageAsset = asset!("loader/sky-light@2x.png");
 pub(crate) const LOADER_CORONA_LIGHT: ImageAsset = asset!("loader/corona-light@2x.png");
 
+/// The pet over the composer, a strip of frames per mood
+/// (`assets/pet/gen_pet.py`).
+pub(crate) const PET_TYPING: ImageAsset = asset!("pet/typing.png");
+pub(crate) const PET_HAPPY: ImageAsset = asset!("pet/happy.png");
+pub(crate) const PET_WAITING: ImageAsset = asset!("pet/waiting.png");
+pub(crate) const PET_SLEEPING: ImageAsset = asset!("pet/sleeping.png");
+
 /// The application's root component.
 #[component]
 pub fn App() -> impl IntoElement {
@@ -109,8 +120,6 @@ pub fn App() -> impl IntoElement {
     #[cfg(not(target_os = "ios"))]
     store::watch_notification_presses();
     store::watch_pairing_links();
-    // Every device names conversations by the last thing said to them.
-    store::watch_last_said();
     // The web's desktop idiom is still a page: no bridge, no updates.
     if is_desktop() && !cfg!(target_arch = "wasm32") {
         // (Also from `main`, before anything logs; this is for the other entries.)
@@ -130,6 +139,8 @@ pub fn App() -> impl IntoElement {
         update::preview();
     }
     store::watch_limits();
+    // This Mac's service is told whether Sophon is in front (`push`).
+    store::watch_presence();
     store::watch_resume();
     store::watch_conn_clock();
     store::watch_network();

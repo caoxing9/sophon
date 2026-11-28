@@ -52,6 +52,8 @@ pub(crate) fn agent_pane(bar: bool) -> impl IntoElement {
                 .pb(px(if MOBILE { S2 } else { S4 }))
                 .child(timeline::tracks())
                 .child(timeline::permissions())
+                // The pet, and what the agent does now, over the composer.
+                .child(super::activity::bar())
                 .child(composer::composer(Target::Agent, t("Message the agent…"))),
         )
 }

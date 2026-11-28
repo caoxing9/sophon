@@ -692,11 +692,8 @@ impl Codex {
                     let text = if what.is_empty() { format!("${name}") } else { format!("${name} {what}") };
                     Some((text, json!({"type":"skill","name":name,"path":path})))
                 });
-                let mut input = match skill {
-                    Some((text, skill)) => vec![json!({"type":"text","text":text,"text_elements":[]}), skill],
-                    None => vec![json!({"type":"text","text":text,"text_elements":[]})],
-                };
-                for image in &images {
+                // A picture as Codex takes it: a file, kept while the turn runs.
+                let mut picture = |image: &Value| -> io::Result<Value> {
                     let (_, extension, data) = super::image(image)?;
                     let mut file = tempfile::Builder::new().suffix(extension).tempfile()?;
                     io::Write::write_all(
@@ -704,8 +701,32 @@ impl Codex {
                         &base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data)
                             .map_err(io::Error::other)?,
                     )?;
-                    input.push(json!({"type":"localImage","path":file.path()}));
+                    let item = json!({"type":"localImage","path":file.path()});
                     self.images.push(file);
+                    Ok(item)
+                };
+                let mut input = Vec::new();
+                match skill {
+                    // A skill's words are its own: the pictures after them.
+                    Some((text, skill)) => {
+                        input.push(json!({"type":"text","text":text,"text_elements":[]}));
+                        input.push(skill);
+                        for image in &images {
+                            input.push(picture(image)?);
+                        }
+                    }
+                    // Words and pictures in the order they were written.
+                    None => {
+                        for piece in super::pieces(&text, &images) {
+                            input.push(match piece {
+                                super::Piece::Text(words) => json!({"type":"text","text":words,"text_elements":[]}),
+                                super::Piece::Image(image) => picture(image)?,
+                            });
+                        }
+                        if input.is_empty() {
+                            input.push(json!({"type":"text","text":text,"text_elements":[]}));
+                        }
+                    }
                 }
                 match (self.busy, self.turn.is_some()) {
                     (true, true) => self.steer(json!(input)).await,

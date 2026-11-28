@@ -61,7 +61,11 @@ pub enum Command {
     /// (`docs/push.md`): its id, Apple's token for it (empty: no longer),
     /// which of Apple's servers knows the token, its language, and
     /// whether notifications hide what they are about.
-    PushRegister { device: String, token: String, env: String, lang: String, hide: bool },
+    PushRegister { device: String, token: String, env: String, lang: String, hide: bool, events: crate::daemon::push::Events },
+    /// Whether Sophon is in front on this Mac (`store::watch_presence`).
+    Presence { front: bool },
+    /// The plan's limit is near: the service pushes it to its phones.
+    PushUsage { label: String, percent: u32, ends: Option<String> },
     /// Uploads a file to the host for the next message; answered by
     /// [`Event::Uploaded`] with the same `id`.
     Upload { id: String, name: String, mime: String, bytes: Vec<u8> },
@@ -1214,8 +1218,10 @@ pub struct ImageInput {
     pub data: String,
 }
 
+/// The pictures as sent, in the text's order, each with its name as its
+/// chip wrote it in the text (`[name]`): the host puts each where it stood.
 fn images_json(images: &[ImageInput]) -> Value {
-    Value::Array(images.iter().map(|i| json!({ "data": i.data, "mimeType": i.mime })).collect())
+    Value::Array(images.iter().map(|i| json!({ "data": i.data, "mimeType": i.mime, "name": i.name.replace(['[', ']', '\n'], " ").trim() })).collect())
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2179,10 +2185,10 @@ async fn session(
                 if let Command::Open(id) = &cmd {
                     *open_agent = Some(id.clone());
                 }
-                if let Command::PushRegister { device, token, env, lang, hide } = &cmd {
+                if let Command::PushRegister { device, token, env, lang, hide, events } = &cmd {
                     // Only the host's Sophon (its bridge) keeps this.
                     if connected && endpoint.bridge_token.is_some() {
-                        send(&mut tx, &json!({ "type": "sophon_push_register", "device": device, "token": token, "env": env, "lang": lang, "hide": hide })).await?;
+                        send(&mut tx, &json!({ "type": "sophon_push_register", "device": device, "token": token, "env": env, "lang": lang, "hide": hide, "events": events.to_json() })).await?;
                     }
                     continue;
                 }
@@ -3285,6 +3291,16 @@ fn command_messages(cmd: Command, pending: &mut HashMap<String, Pending>) -> Vec
             pending,
             Pending::Other("pin workspace"),
             json!({ "type": "workspace.pin.set.request", "workspaceId": workspace_id, "pinned": pinned }),
+        )],
+        Command::Presence { front } => vec![request(
+            pending,
+            Pending::Other("say whether Sophon is in front"),
+            json!({ "type": "sophon.presence.request", "front": front }),
+        )],
+        Command::PushUsage { label, percent, ends } => vec![request(
+            pending,
+            Pending::Other("push a plan limit"),
+            json!({ "type": "sophon.push.usage.request", "label": label, "percent": percent, "ends": ends }),
         )],
         Command::RenameWorkspace { workspace_id, title } => vec![request(
             pending,

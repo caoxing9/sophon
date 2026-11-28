@@ -1536,6 +1536,8 @@ pub(crate) struct Settings {
     pub(crate) push_hide: bool,
     /// The phone's id at the computers it registers with, made once.
     pub(crate) push_device: String,
+    /// The phone: which kinds of news it wants pushed.
+    pub(crate) push_events: crate::daemon::push::Events,
     /// When a finished turn is told with a notification here.
     pub(crate) notify_finished: NotifyWhen,
     /// An agent waiting for an approval is told.
@@ -2342,11 +2344,6 @@ pub(crate) fn group_summary(start: usize, end: usize) -> crate::fold::Summary {
     global::<Timeline>().with(|t| crate::fold::summarize(t.items.get(start..end).unwrap_or_default()))
 }
 
-/// A live turn's work (`start..end`): how many steps, and its last `n`.
-pub(crate) fn work_steps(start: usize, end: usize, n: usize) -> (usize, Vec<crate::fold::Step>) {
-    global::<Timeline>().with(|t| crate::fold::steps(t.items.get(start..end).unwrap_or_default(), n))
-}
-
 /// A done turn's work (`start..end`) for its line, with how long the turn
 /// took: from the user's message to its reply.
 pub(crate) fn work_tally(start: usize, end: usize) -> (crate::fold::Tally, Option<u64>) {
@@ -2367,6 +2364,16 @@ pub(crate) fn work_tally(start: usize, end: usize) -> (crate::fold::Tally, Optio
 /// The files a turn (`start..end`) changed.
 pub(crate) fn turn_changes(start: usize, end: usize) -> Vec<crate::fold::FileChange> {
     global::<Timeline>().with(|t| crate::fold::changes(t.items.get(start..end).unwrap_or_default()))
+}
+
+/// The files a turn (`start..end`) made for the user, each a path to open:
+/// one it named relative to the conversation's folder, under it.
+pub(crate) fn turn_made(start: usize, end: usize) -> Vec<String> {
+    let cwd = selected_agent().map(|a| a.cwd).unwrap_or_default();
+    let made = global::<Timeline>().with(|t| crate::fold::made(t.items.get(start..end).unwrap_or_default()));
+    made.into_iter()
+        .map(|p| if p.starts_with('/') || p.starts_with("~/") || cwd.is_empty() { p } else { format!("{}/{p}", cwd.trim_end_matches('/')) })
+        .collect()
 }
 
 /// Opens or folds a group of tool calls.
@@ -3472,6 +3479,7 @@ fn forget_push(id: &str, current: bool) {
             env: crate::platform::ios_push::environment().to_owned(),
             lang: String::new(),
             hide: false,
+            events: Default::default(),
         });
     }
     if let Some((_, key, token)) = crate::daemon::relay::PairingLink::parse(&host.url).and_then(|l| l.lan) {
@@ -3553,6 +3561,9 @@ fn save_prefs() {
             _ => "system",
         },
     });
+    // Apart: one more field in the macro passes its recursion limit.
+    let mut json = json;
+    json["pushEvents"] = s.push_events.to_json();
     if let Err(e) = crate::daemon::write_file("settings.json", &json.to_string()) {
         log::warn!("cannot save settings: {e}");
     }
@@ -3716,6 +3727,7 @@ pub(crate) fn load_prefs() {
         s.push = PushWanted(v.get("push").and_then(serde_json::Value::as_bool).unwrap_or(true));
         s.push_hide = v.get("pushHide").and_then(serde_json::Value::as_bool).unwrap_or(false);
         s.push_device = v.get("pushDevice").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned();
+        s.push_events = crate::daemon::push::Events::from_json(v.get("pushEvents"));
         s.notify_finished = match v.get("notifyFinished").and_then(serde_json::Value::as_str) {
             Some("always") => NotifyWhen::Always,
             Some("never") => NotifyWhen::Never,
@@ -6206,18 +6218,6 @@ pub(crate) fn set_control(live: bool, change: Control) {
     }
 }
 
-thread_local! {
-    /// The last message the user sent each conversation, as far as this
-    /// device knows: what it sent itself, what the open conversation shows,
-    /// else (once) its copy of the conversation (`None`: looked, none).
-    static LAST_SAID: RefCell<HashMap<String, Option<String>>> = RefCell::new(HashMap::new());
-}
-
-/// Bumped when a conversation's last message here changes: the lists'
-/// names read it.
-#[derive(Clone, Copy, Default, PartialEq)]
-struct LastSaidRev(u64);
-
 /// A message as a name: its first line with words, without what came with
 /// it (another conversation's words, the attachments named in it:
 /// `[image.png]`) and without runs of spaces. `None` for a message of
@@ -6237,71 +6237,14 @@ fn as_name(text: &str) -> Option<String> {
     Some(line.chars().take(120).collect())
 }
 
-/// Keeps `said` as the conversation's last message, the lists told.
-fn set_last_said(agent_id: &str, said: Option<String>) {
-    let changed = LAST_SAID.with_borrow_mut(|l| l.insert(agent_id.to_owned(), said.clone()) != Some(said));
-    if changed {
-        global::<LastSaidRev>().update(|r| r.0 += 1);
-    }
-}
-
-/// The open conversation's last message from the user, as it changes:
-/// the freshest there is (the copy on disk is written as a page loads,
-/// not as messages come).
-pub(crate) fn watch_last_said() {
-    effect(|| {
-        let (agent_id, said) = global::<Timeline>().with(|t| {
-            let said = t.items.iter().rev().find_map(|i| match i {
-                Item::User { text, .. } => as_name(text),
-                _ => None,
-            });
-            (t.agent_id.clone(), said)
-        });
-        if let (Some(id), Some(said)) = (agent_id, said) {
-            untracked(|| set_last_said(&id, Some(said)));
-        }
-    });
-}
-
-/// The conversation's last message from the user, as a name.
-fn last_said(a: &Agent) -> Option<String> {
-    if let Some(said) = LAST_SAID.with_borrow(|l| l.get(&a.id).cloned()) {
-        return said;
-    }
-    let said = crate::daemon::connection::cached_timeline(&a.id).and_then(|(items, ..)| {
-        items.iter().rev().find_map(|i| match i {
-            Item::User { text, .. } => as_name(text),
-            _ => None,
-        })
-    });
-    // Kept quietly: read while a list draws.
-    LAST_SAID.with_borrow_mut(|l| {
-        l.insert(a.id.clone(), said.clone());
-    });
-    said
-}
-
-/// How long after its last activity a conversation is still called by
-/// the last thing said to it (seconds): later it is found by its name.
-const LAST_SAID_FOR: i64 = 2 * 60 * 60;
-
-/// Whether a conversation last active at `updated_at` is recent enough
-/// (`now`, seconds) to be called by its last message. An unknown time is.
-fn recently_active(updated_at: &str, now: i64) -> bool {
-    crate::usage::parse::rfc3339(updated_at).is_none_or(|at| now - at < LAST_SAID_FOR)
-}
-
-/// A conversation's name in its lists: the name someone gave it; else,
-/// while it was active in the last two hours, the last thing the user
-/// said to it (the easiest to recognise then); else the title it was
-/// given.
+/// A conversation's name in its lists. It is named once, when it begins
+/// (by what is first said in it), and keeps that name; a name someone
+/// gives it takes its place for good.
 pub(crate) fn conversation_title(a: &Agent) -> String {
-    if a.named || (!a.is_running() && !a.title.trim().is_empty() && !recently_active(&a.updated_at, crate::usage::now())) {
+    if a.named {
         return a.title.clone();
     }
-    // Read again when this device sends one.
-    global::<LastSaidRev>().with(|_| ());
-    last_said(a).unwrap_or_else(|| a.title.clone())
+    as_name(&a.title).unwrap_or_else(|| a.title.clone())
 }
 
 /// What the sidebar calls conversation `a`: its workspace's name when it is
@@ -6520,10 +6463,6 @@ fn deliver(agent_id: &str, text: &str, behavior: Option<&'static str>) {
 
 /// [`deliver`] with the pictures and files given (a queued message's own).
 fn deliver_with(agent_id: &str, text: &str, behavior: Option<&'static str>, images: Vec<ImageInput>, attachments: Vec<serde_json::Value>) {
-    // The conversation's name in its lists, until the host says when.
-    if let Some(name) = as_name(text) {
-        set_last_said(agent_id, Some(name));
-    }
     let mut shown = text.to_owned();
     // A file the text does not name where its chip stood (a message
     // queued before, a draft kept as text) is named after it.
@@ -6575,10 +6514,7 @@ fn notify_attention(next: &mut Agent) {
         send(Command::ClearAgentAttention(next.id.clone()));
         return;
     }
-    // The phones hear of what is not on screen here, as before.
-    if !on_screen(&next.id) {
-        push_attention(next, why);
-    }
+    // The phones hear of it from the service (`push`), the app open or not.
     // The computer's push says it to this phone already.
     if cfg!(target_os = "ios") && push_served() {
         return;
@@ -6656,6 +6592,12 @@ pub(crate) fn set_push(on: bool, hide: bool) {
     push_register_now();
 }
 
+/// Which kinds of news the phone wants pushed: told to the computer at once.
+pub(crate) fn set_push_events(events: crate::daemon::push::Events) {
+    edit_settings(|s| s.push_events = events);
+    push_register_now();
+}
+
 /// Tells the computer in use what this phone wants of push notifications
 /// (`docs/push.md`), once Apple gave the phone a token.
 fn push_register_now() {
@@ -6676,6 +6618,7 @@ fn push_register_now() {
         env: env.to_owned(),
         lang: if crate::i18n::is_zh() { "zh" } else { "en" }.to_owned(),
         hide: s.push_hide,
+        events: s.push_events,
     });
 }
 
@@ -6734,26 +6677,6 @@ fn open_pressed_agent() {
     }
 }
 
-/// The paired phones that asked for push notifications hear the same
-/// (`docs/push.md`): the computer whose service this is tells them, so
-/// only it.
-fn push_attention(next: &Agent, why: crate::daemon::push::Reason) {
-    #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
-    {
-        use crate::daemon::{push, push_gateway};
-        if !is_desktop() || !on_this_mac() {
-            return;
-        }
-        let Some(record) = push_gateway::record() else { return };
-        let space = current_space_home().map(|h| h.to_string_lossy().into_owned());
-        for wants in record.wanting(space.as_deref()) {
-            push_gateway::send(push::agent_push(&record.id, next, why, &wants));
-        }
-    }
-    #[cfg(any(target_arch = "wasm32", target_os = "ios", target_os = "android"))]
-    let _ = (next, why);
-}
-
 /// The mark each plan limit was last seen at (`push::limit_mark`), by its
 /// key: a push says a limit once as it passes 80% and 95%.
 #[cfg_attr(any(target_arch = "wasm32", target_os = "ios"), allow(dead_code))]
@@ -6765,7 +6688,7 @@ struct LimitMarks(HashMap<String, u32>);
 fn push_limits(list: &[crate::daemon::connection::ProviderUsage]) {
     #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
     {
-        use crate::daemon::{push, push_gateway};
+        use crate::daemon::push;
         use crate::usage::{self, limits};
         if !is_desktop() || !on_this_mac() {
             return;
@@ -6788,15 +6711,9 @@ fn push_limits(list: &[crate::daemon::connection::ProviderUsage]) {
                 }
             }
         });
-        if news.is_empty() {
-            return;
-        }
-        let Some(record) = push_gateway::record() else { return };
-        let space = current_space_home().map(|h| h.to_string_lossy().into_owned());
-        for wants in record.wanting(space.as_deref()) {
-            for (label, percent, ends) in &news {
-                push_gateway::send(push::usage_push(&record.id, label, *percent, ends.as_deref(), &wants));
-            }
+        // The service of this space sends it to its phones.
+        for (label, percent, ends) in news {
+            send(Command::PushUsage { label, percent, ends });
         }
     }
     #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
@@ -6845,32 +6762,6 @@ pub(crate) fn watch_limits() {
         });
     }
     Owner::detached().run(again);
-}
-
-/// An action a paired device pressed on a notification: the approval is
-/// answered, the reply sent, as from here.
-pub(crate) fn push_act(act: crate::daemon::push::Act) {
-    use crate::daemon::push::Act;
-    match act {
-        Act::Permission { agent: agent_id, permission, allow } => {
-            // Answered already, here or on another device: nothing to do.
-            if agent(&agent_id).is_some_and(|a| a.pending.iter().any(|p| p.id == permission)) {
-                global::<Agents>().update(|a| {
-                    if let Some(agent) = a.0.iter_mut().find(|a| a.id == agent_id) {
-                        agent.pending.retain(|p| p.id != permission);
-                    }
-                });
-                send(Command::Permit { agent_id, permission_id: permission, allow, action_id: None, updated_input: None });
-            }
-        }
-        Act::Reply { agent: agent_id, text } => {
-            if agent(&agent_id).is_some() {
-                deliver(&agent_id, text.trim(), None);
-            }
-        }
-        // Done by the bridge itself.
-        Act::Forget { .. } => {}
-    }
 }
 
 /// Back in the foreground after being away: the connection is checked at
@@ -6934,6 +6825,33 @@ pub(crate) fn watch_network() {
 
 fn lifecycle_active() -> bool {
     matches!(lifecycle(), nsh_core::element::Lifecycle::Active)
+}
+
+/// Tells this Mac's service whether Sophon is in front, as it changes and
+/// every half minute while it is: a turn's end is not pushed to the phones
+/// while someone is here using it (`push` in the service, which also asks
+/// the Mac whether it was used lately).
+pub(crate) fn watch_presence() {
+    if !is_desktop() || cfg!(target_arch = "wasm32") {
+        return;
+    }
+    let tell = || {
+        if on_this_mac() {
+            send(Command::Presence { front: lifecycle_active() });
+        }
+    };
+    effect(move || {
+        lifecycle();
+        untracked(tell);
+    });
+    spawn(async move {
+        loop {
+            nsh_core::element::timer(std::time::Duration::from_secs(30)).await;
+            if lifecycle_active() {
+                tell();
+            }
+        }
+    });
 }
 
 /// Opens the agent a pressed notification names.
@@ -8354,7 +8272,7 @@ mod service_version_tests {
 
 #[cfg(test)]
 mod conversation_name_tests {
-    use super::{LAST_SAID_FOR, as_name, recently_active};
+    use super::{Agent, as_name, conversation_title};
 
     #[test]
     fn a_message_s_name_leaves_its_attachments_out() {
@@ -8365,11 +8283,14 @@ mod conversation_name_tests {
     }
 
     #[test]
-    fn the_last_message_names_a_conversation_for_two_hours() {
-        let at = crate::usage::parse::rfc3339("2026-11-14T10:00:00Z").unwrap();
-        assert!(recently_active("2026-11-14T10:00:00Z", at + LAST_SAID_FOR - 1));
-        assert!(!recently_active("2026-11-14T10:00:00Z", at + LAST_SAID_FOR));
-        assert!(recently_active("", at), "an unknown time keeps the last message");
+    fn a_conversation_keeps_its_first_name_or_the_one_given() {
+        let agent = |title: &str, named: bool| {
+            let labels = if named { serde_json::json!({"sophon.named":"1"}) } else { serde_json::json!({}) };
+            Agent::from_json(&serde_json::json!({"id":"a","cwd":"/p/app","title":title,"labels":labels,"status":"running"})).unwrap()
+        };
+        assert_eq!(conversation_title(&agent("[shot.png] fix the tab bar\nand more", false)), "fix the tab bar");
+        assert_eq!(conversation_title(&agent("[shot.png]", false)), "[shot.png]");
+        assert_eq!(conversation_title(&agent("  my  [own] name", true)), "  my  [own] name");
     }
 }
 

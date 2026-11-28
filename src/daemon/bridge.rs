@@ -302,6 +302,18 @@ pub fn revoke(device_id: &str) {
 fn forget_pushes_of_revoked() {
     let good = good_tokens();
     super::push_gateway::update_record(|r| r.keep_only(&good));
+    sync_pushes();
+}
+
+/// Tells each space's service who wants notifications and what checks an
+/// action now; a device a service saw forget this computer loses its own
+/// pairing.
+pub fn sync_pushes() {
+    let gone = super::push_gateway::sync_services(with(|s| s.private), &good_tokens());
+    for (device, token) in gone {
+        forgotten_by(&token, &device);
+        emit(BridgeEvent::Act(super::push::Act::Forget { device }));
+    }
 }
 
 /// A device forgot this computer (its "Forget this computer"): its push
@@ -426,13 +438,16 @@ pub fn start() -> Option<(BridgeInfo, mpsc::UnboundedReceiver<BridgeEvent>)> {
                 log::info!("LAN bridge listening on port {port}");
                 tokio::spawn(relay_loop());
                 tokio::spawn(p2p_loop());
-                tokio::spawn(super::push_gateway::computer_loop(|| with(|s| s.private), good_tokens, |token, act| match act {
-                    super::push::Act::Forget { device } => {
-                        forgotten_by(token, &device);
-                        emit(BridgeEvent::Act(super::push::Act::Forget { device }));
+                // The services send the notifications (`push`): each is told
+                // its devices and what checks an action, and says which
+                // devices forgot this computer.
+                tokio::spawn(async {
+                    let mut every = tokio::time::interval(Duration::from_secs(10));
+                    loop {
+                        every.tick().await;
+                        sync_pushes();
                     }
-                    act => emit(BridgeEvent::Act(act)),
-                }));
+                });
                 loop {
                     let Ok((stream, peer)) = listener.accept().await else { continue };
                     tokio::spawn(async move {
@@ -515,17 +530,21 @@ fn push_register(v: &Value, pairing: &str, space: Option<&str>) -> Value {
         hide: v.get("hide").and_then(Value::as_bool).unwrap_or(false),
         pairing: pairing.to_owned(),
         space: space.map(str::to_owned),
+        events: super::push::Events::from_json(v.get("events")),
     };
     let good = good_tokens();
     if !device.is_empty() {
-        push_gateway::update_record(|r| {
+        let changed = push_gateway::update_record(|r| {
             let registered = r.register(&device, wants);
             // Devices forgotten since go, too.
             r.keep_only(&good) || registered
         });
+        if changed {
+            sync_pushes();
+        }
     }
     let (gateway, tls) = push_gateway::target().unwrap_or_default();
-    json!({ "type": "sophon_push_info", "gateway": gateway, "tls": tls, "id": push_gateway::record().map(|r| r.id).unwrap_or_default() })
+    json!({ "type": "sophon_push_info", "gateway": gateway, "tls": tls, "id": push_gateway::space_id(space) })
 }
 
 /// Holds the bridge's place at the relay: a control socket the relay tells
