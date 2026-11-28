@@ -199,9 +199,9 @@ pub(crate) fn watch_bridge(mut events: tokio::sync::mpsc::UnboundedReceiver<crat
                         store::notify(t("The pairing request ended").into());
                     }
                 }
-                // An action pressed on a phone's (or a watch's) notification.
-                BridgeEvent::Act(crate::daemon::push::Act::Forget { .. }) => refresh(),
-                BridgeEvent::Act(act) => store::push_act(act),
+                // A phone forgot this computer (its notification's action,
+                // taken by the service): its pairing went.
+                BridgeEvent::Act(_) => refresh(),
                 BridgeEvent::Connected { device, .. } => {
                     let device = shown(device);
                     let already = connected().iter().any(|c| c.device == device);

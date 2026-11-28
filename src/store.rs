@@ -1536,6 +1536,8 @@ pub(crate) struct Settings {
     pub(crate) push_hide: bool,
     /// The phone's id at the computers it registers with, made once.
     pub(crate) push_device: String,
+    /// The phone: which kinds of news it wants pushed.
+    pub(crate) push_events: crate::daemon::push::Events,
     /// When a finished turn is told with a notification here.
     pub(crate) notify_finished: NotifyWhen,
     /// An agent waiting for an approval is told.
@@ -3477,6 +3479,7 @@ fn forget_push(id: &str, current: bool) {
             env: crate::platform::ios_push::environment().to_owned(),
             lang: String::new(),
             hide: false,
+            events: Default::default(),
         });
     }
     if let Some((_, key, token)) = crate::daemon::relay::PairingLink::parse(&host.url).and_then(|l| l.lan) {
@@ -3558,6 +3561,9 @@ fn save_prefs() {
             _ => "system",
         },
     });
+    // Apart: one more field in the macro passes its recursion limit.
+    let mut json = json;
+    json["pushEvents"] = s.push_events.to_json();
     if let Err(e) = crate::daemon::write_file("settings.json", &json.to_string()) {
         log::warn!("cannot save settings: {e}");
     }
@@ -3721,6 +3727,7 @@ pub(crate) fn load_prefs() {
         s.push = PushWanted(v.get("push").and_then(serde_json::Value::as_bool).unwrap_or(true));
         s.push_hide = v.get("pushHide").and_then(serde_json::Value::as_bool).unwrap_or(false);
         s.push_device = v.get("pushDevice").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned();
+        s.push_events = crate::daemon::push::Events::from_json(v.get("pushEvents"));
         s.notify_finished = match v.get("notifyFinished").and_then(serde_json::Value::as_str) {
             Some("always") => NotifyWhen::Always,
             Some("never") => NotifyWhen::Never,
@@ -6507,10 +6514,7 @@ fn notify_attention(next: &mut Agent) {
         send(Command::ClearAgentAttention(next.id.clone()));
         return;
     }
-    // The phones hear of what is not on screen here, as before.
-    if !on_screen(&next.id) {
-        push_attention(next, why);
-    }
+    // The phones hear of it from the service (`push`), the app open or not.
     // The computer's push says it to this phone already.
     if cfg!(target_os = "ios") && push_served() {
         return;
@@ -6588,6 +6592,12 @@ pub(crate) fn set_push(on: bool, hide: bool) {
     push_register_now();
 }
 
+/// Which kinds of news the phone wants pushed: told to the computer at once.
+pub(crate) fn set_push_events(events: crate::daemon::push::Events) {
+    edit_settings(|s| s.push_events = events);
+    push_register_now();
+}
+
 /// Tells the computer in use what this phone wants of push notifications
 /// (`docs/push.md`), once Apple gave the phone a token.
 fn push_register_now() {
@@ -6608,6 +6618,7 @@ fn push_register_now() {
         env: env.to_owned(),
         lang: if crate::i18n::is_zh() { "zh" } else { "en" }.to_owned(),
         hide: s.push_hide,
+        events: s.push_events,
     });
 }
 
@@ -6666,26 +6677,6 @@ fn open_pressed_agent() {
     }
 }
 
-/// The paired phones that asked for push notifications hear the same
-/// (`docs/push.md`): the computer whose service this is tells them, so
-/// only it.
-fn push_attention(next: &Agent, why: crate::daemon::push::Reason) {
-    #[cfg(not(any(target_arch = "wasm32", target_os = "ios", target_os = "android")))]
-    {
-        use crate::daemon::{push, push_gateway};
-        if !is_desktop() || !on_this_mac() {
-            return;
-        }
-        let Some(record) = push_gateway::record() else { return };
-        let space = current_space_home().map(|h| h.to_string_lossy().into_owned());
-        for wants in record.wanting(space.as_deref()) {
-            push_gateway::send(push::agent_push(&record.id, next, why, &wants));
-        }
-    }
-    #[cfg(any(target_arch = "wasm32", target_os = "ios", target_os = "android"))]
-    let _ = (next, why);
-}
-
 /// The mark each plan limit was last seen at (`push::limit_mark`), by its
 /// key: a push says a limit once as it passes 80% and 95%.
 #[cfg_attr(any(target_arch = "wasm32", target_os = "ios"), allow(dead_code))]
@@ -6697,7 +6688,7 @@ struct LimitMarks(HashMap<String, u32>);
 fn push_limits(list: &[crate::daemon::connection::ProviderUsage]) {
     #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
     {
-        use crate::daemon::{push, push_gateway};
+        use crate::daemon::push;
         use crate::usage::{self, limits};
         if !is_desktop() || !on_this_mac() {
             return;
@@ -6720,15 +6711,9 @@ fn push_limits(list: &[crate::daemon::connection::ProviderUsage]) {
                 }
             }
         });
-        if news.is_empty() {
-            return;
-        }
-        let Some(record) = push_gateway::record() else { return };
-        let space = current_space_home().map(|h| h.to_string_lossy().into_owned());
-        for wants in record.wanting(space.as_deref()) {
-            for (label, percent, ends) in &news {
-                push_gateway::send(push::usage_push(&record.id, label, *percent, ends.as_deref(), &wants));
-            }
+        // The service of this space sends it to its phones.
+        for (label, percent, ends) in news {
+            send(Command::PushUsage { label, percent, ends });
         }
     }
     #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
@@ -6777,32 +6762,6 @@ pub(crate) fn watch_limits() {
         });
     }
     Owner::detached().run(again);
-}
-
-/// An action a paired device pressed on a notification: the approval is
-/// answered, the reply sent, as from here.
-pub(crate) fn push_act(act: crate::daemon::push::Act) {
-    use crate::daemon::push::Act;
-    match act {
-        Act::Permission { agent: agent_id, permission, allow } => {
-            // Answered already, here or on another device: nothing to do.
-            if agent(&agent_id).is_some_and(|a| a.pending.iter().any(|p| p.id == permission)) {
-                global::<Agents>().update(|a| {
-                    if let Some(agent) = a.0.iter_mut().find(|a| a.id == agent_id) {
-                        agent.pending.retain(|p| p.id != permission);
-                    }
-                });
-                send(Command::Permit { agent_id, permission_id: permission, allow, action_id: None, updated_input: None });
-            }
-        }
-        Act::Reply { agent: agent_id, text } => {
-            if agent(&agent_id).is_some() {
-                deliver(&agent_id, text.trim(), None);
-            }
-        }
-        // Done by the bridge itself.
-        Act::Forget { .. } => {}
-    }
 }
 
 /// Back in the foreground after being away: the connection is checked at
@@ -6866,6 +6825,33 @@ pub(crate) fn watch_network() {
 
 fn lifecycle_active() -> bool {
     matches!(lifecycle(), nsh_core::element::Lifecycle::Active)
+}
+
+/// Tells this Mac's service whether Sophon is in front, as it changes and
+/// every half minute while it is: a turn's end is not pushed to the phones
+/// while someone is here using it (`push` in the service, which also asks
+/// the Mac whether it was used lately).
+pub(crate) fn watch_presence() {
+    if !is_desktop() || cfg!(target_arch = "wasm32") {
+        return;
+    }
+    let tell = || {
+        if on_this_mac() {
+            send(Command::Presence { front: lifecycle_active() });
+        }
+    };
+    effect(move || {
+        lifecycle();
+        untracked(tell);
+    });
+    spawn(async move {
+        loop {
+            nsh_core::element::timer(std::time::Duration::from_secs(30)).await;
+            if lifecycle_active() {
+                tell();
+            }
+        }
+    });
 }
 
 /// Opens the agent a pressed notification names.

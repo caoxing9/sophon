@@ -20,3 +20,9 @@ tempfile = "3"
 tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros", "io-util", "process", "fs"] }
 tokio-tungstenite = "0.28"
 uuid = { version = "1", features = ["v4"] }
+sophon-push = { path = "../sophon-push" }
+
+# The push gateway is reached over TLS when the relay is (`push`): the
+# system's.
+[target.'cfg(target_os = "macos")'.dependencies]
+tokio-tungstenite = { version = "0.28", features = ["native-tls"] }

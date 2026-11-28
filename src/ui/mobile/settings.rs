@@ -77,4 +77,32 @@ fn notifications_card() -> View {
             switch(|| store::settings().push_hide, |hide| store::set_push(store::settings().push.0, hide)),
             false,
         ))
+        // Which kinds of news come: each told to the computer at once.
+        .child(event_row(t("Turn finished"), t("An agent finished its turn while you were away from the computer"), |e| e.finished, |e, on| e.finished = on))
+        .child(event_row(t("Approvals"), t("An agent waits for your approval: answer it from the notification"), |e| e.permission, |e, on| e.permission = on))
+        .child(event_row(t("Questions and errors"), t("An agent asks you something, or its turn failed"), |e| e.attention, |e, on| e.attention = on))
+        .child(event_row(t("Plan limits"), t("A plan's limit passes 80% and 95%"), |e| e.usage, |e, on| e.usage = on))
+}
+
+/// A kind of news the phone can turn off, while it wants notifications.
+fn event_row(
+    title: &'static str,
+    hint: &'static str,
+    get: fn(&crate::daemon::push::Events) -> bool,
+    set: fn(&mut crate::daemon::push::Events, bool),
+) -> View {
+    row(
+        title,
+        hint,
+        switch(
+            move || get(&store::settings().push_events),
+            move |on| {
+                let mut events = store::settings().push_events;
+                set(&mut events, on);
+                store::set_push_events(events);
+            },
+        )
+        .disabled(move || !store::settings().push.0),
+        false,
+    )
 }

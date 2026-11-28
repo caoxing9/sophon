@@ -1,0 +1,22 @@
+[package]
+name = "sophon-push"
+version = "0.2.86"
+edition = "2024"
+publish = false
+
+# Push notifications (`docs/push.md`), shared by the app (a phone's
+# registration, its actions) and the service (what it sends, and the
+# actions it takes): sealing, who wants what, the words, the gateway's socket.
+
+[dependencies]
+base64 = "0.22"
+crypto_box = { version = "0.9", features = ["std"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+log = "0.4"
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net"] }
+tokio-tungstenite = "0.28"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net"] }

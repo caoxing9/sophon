@@ -5566,11 +5566,26 @@ dependencies = [
  "qrcode",
  "serde_json",
  "snow",
+ "sophon-push",
  "tokio",
  "tokio-tungstenite",
  "uuid",
  "wasm-bindgen",
  "web-sys",
+]
+
+[[package]]
+name = "sophon-push"
+version = "0.2.86"
+dependencies = [
+ "base64 0.22.1",
+ "crypto_box",
+ "futures-util",
+ "log",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+ "uuid",
 ]
 
 [[package]]
@@ -5587,6 +5602,7 @@ dependencies = [
  "portable-pty",
  "serde",
  "serde_json",
+ "sophon-push",
  "tar",
  "tempfile",
  "tokio",

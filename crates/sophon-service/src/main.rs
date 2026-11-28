@@ -13,6 +13,7 @@ mod pack;
 mod plugin;
 mod projects;
 mod provider;
+mod push;
 mod schedule;
 mod state;
 mod terminal;
@@ -427,6 +428,9 @@ async fn serve(home: PathBuf) -> Result<(), Error> {
         }
     }
     let host = Rc::new(RefCell::new(host));
+    // Notifications to paired phones go from here, the app open or not.
+    push::start(&host);
+    let mut pushes = interval(Duration::from_secs(1));
     let mut again = false;
     let mut poll = interval(Duration::from_millis(200));
     let mut schedules = interval(Duration::from_secs(1));
@@ -439,6 +443,7 @@ async fn serve(home: PathBuf) -> Result<(), Error> {
         tokio::select! {
             _ = schedules.tick() => schedule::due(&host),
             _ = checkouts.tick() => host::watch_checkouts(&host),
+            _ = pushes.tick() => host.borrow_mut().push.tick(),
             // A connection that could not be taken (too many files
             // open, one gone before it was taken) is that connection's
             // loss, not the service's.

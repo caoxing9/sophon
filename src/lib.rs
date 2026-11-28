@@ -139,6 +139,8 @@ pub fn App() -> impl IntoElement {
         update::preview();
     }
     store::watch_limits();
+    // This Mac's service is told whether Sophon is in front (`push`).
+    store::watch_presence();
     store::watch_resume();
     store::watch_conn_clock();
     store::watch_network();
