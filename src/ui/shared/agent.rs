@@ -54,6 +54,23 @@ pub(crate) fn agent_pane(bar: bool) -> impl IntoElement {
                         .bottom(px(0.0))
                         // The conversation leaves room for all of it.
                         .on_layout(|b: &nsh_core::Bounds<nsh_core::Points>| store::set_floating_foot(b.size.height.0))
+                        // Behind it, the page fading in from a little over its
+                        // top (Messages', ChatGPT's): the conversation scrolled
+                        // under it fades out rather than running through the
+                        // pet, the capsule and the tasks' line.
+                        .child(
+                            view()
+                                .absolute()
+                                .top(px(-S6))
+                                .left(px(0.0))
+                                .right(px(0.0))
+                                .bottom(px(0.0))
+                                .pointer_events(nsh_core::PointerEvents::None)
+                                .bg_linear_to_b()
+                                .gradient_from(tint(SURFACE0(), 0.0))
+                                .gradient_via(tint(SURFACE0(), 0.94))
+                                .gradient_to(SURFACE0()),
+                        )
                 })
                 .px(px(if MOBILE { S2 } else { S6 }))
                 .pb(px(if MOBILE { S2 } else { S4 }))
