@@ -123,7 +123,9 @@ pub(crate) fn file_page(path: String) -> Screen {
     )
 }
 
-fn content(path: String) -> AnyElement {
+/// The file `path` shown: a preview of a PDF, picture or media fetched
+/// whole; text as text. The file page's and the file sheet's.
+pub(crate) fn content(path: String) -> AnyElement {
     if preview::kind_of(&path).is_some() {
         return preview::file_preview(path).into_element();
     }

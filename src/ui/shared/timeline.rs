@@ -2005,7 +2005,9 @@ fn made_card(range: Memo<Option<(usize, usize)>>) -> impl IntoElement {
                             .child(text(name).text_size(tx(TEXT_SM)).font_weight(FontWeight(500)).text_color(FG()).number_of_lines(1))
                             .child(text(subtitle).text_size(tx(TEXT_XS)).text_color(FG_FAINT()).number_of_lines(1)),
                     );
-                line = line.child(file_menu(reveal));
+                // The phone: a press opens it in a sheet (`open_path`), whose
+                // foot has its actions; a chevron says so.
+                line = if MOBILE { line.child(icon(Icon::ChevronRight, 15.0).text_color(FG_FAINT())) } else { line.child(file_menu(reveal)) };
                 card = card.child(line);
             }
             if list.len() > MADE_SHOWN && !shown_all {

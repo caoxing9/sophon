@@ -1471,6 +1471,10 @@ pub(crate) enum Modal {
     RenameProject { id: String, name: String },
     SwitchBranch,
     ToolDetail { name: String, kind: String, detail: serde_json::Value, error: Option<String> },
+    /// The phone's sheet of a file of the workspace (`path` under its
+    /// folder): the file itself, fetched from the computer and shown, with
+    /// its download and its path to copy.
+    FileSheet { path: String },
     /// A newer version: what changed since this one, and a restart to it.
     Update,
     ImportSession,
@@ -2829,6 +2833,30 @@ struct Downloads(HashMap<String, (String, bool)>);
 /// Saves the workspace's file `path` on this device, whatever its size or
 /// kind: on the Mac where the save panel says, on the phone in Sophon's
 /// folder of the Files app.
+/// `path` as the workspace's files are named, under its folder: a path the
+/// agent gave whole (`/Users/…/budget/out/a.pdf`) as `out/a.pdf`. The
+/// computer serves the files under that folder only.
+pub(crate) fn workspace_path(path: &str) -> String {
+    let path = path.strip_prefix("file://").unwrap_or(path);
+    match tree_cwd() {
+        Some(cwd) if !cwd.is_empty() => path.strip_prefix(&format!("{}/", cwd.trim_end_matches('/'))).unwrap_or(path).to_owned(),
+        _ => path.to_owned(),
+    }
+}
+
+/// Shows the workspace's file `path` (whole, or under its folder) in the
+/// phone's sheet, fetched from the computer: nothing kept on the phone
+/// unless downloaded.
+pub(crate) fn open_file_sheet(path: &str) {
+    let path = workspace_path(path);
+    // Text is read as the file page reads it; the rest fetched whole for
+    // its preview as it shows.
+    if crate::ui::shared::preview::kind_of(&path).is_none() {
+        load_file(&path);
+    }
+    open_modal(Modal::FileSheet { path });
+}
+
 pub(crate) fn download_file(path: &str) {
     let Some(cwd) = tree_cwd() else { return };
     if downloading(path) {

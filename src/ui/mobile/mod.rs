@@ -11,7 +11,7 @@
 
 mod add_project;
 mod changes;
-mod files;
+pub(crate) mod files;
 mod github;
 mod chat;
 mod connect;
