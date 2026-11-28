@@ -312,6 +312,12 @@ pub(crate) fn sending_card() -> View {
         true,
     ))
     .child(row(
+        t("Pet"),
+        t("A little one over the composer that works, waits and sleeps with the agent"),
+        switch(store::show_pet, store::set_show_pet),
+        true,
+    ))
+    .child(row(
         t("While an agent is running"),
         t("What Return does with your message"),
         segmented(

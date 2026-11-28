@@ -159,6 +159,18 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
     let running = computed(move || live && store::selected_agent().is_some_and(|a| a.is_running()));
     let busy = computed(move || !live && store::form().busy);
     let empty = computed(move || doc.tracked().is_none_or(|s| composer_doc::outgoing(s.state().doc()).is_empty()));
+    // While the agent works, what a message sent now does with it.
+    let placeholder = computed(move || {
+        if !running.get() {
+            return placeholder.to_owned();
+        }
+        match store::settings().send_behavior {
+            store::SendBehavior::Steer => t("Working · a message joins this turn"),
+            store::SendBehavior::Interrupt => t("Working · a message stops this turn"),
+            store::SendBehavior::Queue => t("Working · a message waits for this turn"),
+        }
+        .to_owned()
+    });
 
     if MOBILE {
         // One glass card, as Lody's: the text on top, a bar under it with
@@ -169,7 +181,6 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         return view()
             .w_full()
             .child(elsewhere_bar(live))
-            .child(queue_track(live))
             .child(suggest_panel(target, doc))
             .child(chips::preview_layer(key))
             .child(
@@ -248,6 +259,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
                             // The context, beside Send (a press opens the
                             // usage page; the phone has no pointer to rest).
                             .child(when(move || live, context_meter_ring))
+                            .child(when(computed(move || running.get() && !empty.get()), move || send_as(submit)))
                             .child(disc(running, busy, empty, submit)),
                     )
                     // While it listens, the whole card is the listening:
@@ -277,7 +289,6 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         .max_w(px(CONTENT_MAX_WIDTH()))
         .self_center()
         .child(elsewhere_bar(live))
-        .child(queue_track(live))
         .child(suggest_panel(target, doc))
         .child(chips::preview_layer(key))
         .child(glass_strong(view())
@@ -313,6 +324,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         )
         .child(view().flex_1().min_w(px(0.0)).min_h(sp(CONTROL_SM)).justify_center().child(editor(doc, text_value, placeholder, suggestion, TEXT_BASE, 220.0, changed).mx(sp(S1))))
         .child(view().flex_shrink_0().child(mic_button(doc)))
+        .child(when(computed(move || running.get() && !empty.get()), move || send_as(submit)))
         .child(when(stoppable, || {
             button()
                 .on_press(store::stop_selected)
@@ -351,7 +363,7 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
 fn editor(
     doc: Doc,
     text_value: Memo<String>,
-    placeholder: &'static str,
+    placeholder: Memo<String>,
     suggestion: Memo<Option<String>>,
     size: f32,
     max_height: f32,
@@ -406,7 +418,7 @@ fn editor(
                 .pr(move || Length::from(px(if suggestion.with(Option::is_some) { 44.0 } else { 0.0 })));
             // The agent's guess at the next message stands where the
             // placeholder does.
-            el.placeholder(move || SharedString::from(suggestion.get().unwrap_or_else(|| placeholder.to_owned())))
+            el.placeholder(move || SharedString::from(suggestion.get().unwrap_or_else(|| placeholder.get())))
         }))
     }))
     // The guess's key at the end of the line while it shows: pressed (the
@@ -792,7 +804,10 @@ fn elsewhere_bar(live: bool) -> impl IntoElement {
     }))
 }
 
-fn queue_track(live: bool) -> impl IntoElement {
+/// The messages queued for the open agent, each to edit, steer or take
+/// back: over the line of what the agent does now (`activity::bar`), which
+/// stays by the composer.
+pub(crate) fn queue_track(live: bool) -> impl IntoElement {
     let queued = computed(move || if live { store::selected_id().map(|id| store::queue(&id)).unwrap_or_default() } else { vec![] });
     let held = computed(move || live && store::selected_id().is_some_and(|id| store::queue_held(&id)));
     view().child(dynamic(move || {
@@ -804,71 +819,121 @@ fn queue_track(live: bool) -> impl IntoElement {
         Some(untracked(move || {
             // Waiting after an Escape: said, with the key that takes them back.
             let held = store::selected_id().is_some_and(|id| store::queue_held(&id));
-            let mut track = card().mb(sp(S2)).px(sp(S3)).py(sp(S2)).gap(sp(S1)).child(section_label(if held {
-                t("Queued · paused — Esc to edit, send to continue")
-            } else {
-                t("Queued")
-            }));
+            // Each as the message it will be, faint, on the right (DSH Go's):
+            // under it what becomes of it and, quietly, what can be done.
+            let mut track = view().w_full().max_w(px(CONTENT_MAX_WIDTH())).self_center().mb(sp(S2)).gap(sp(S2)).items_end();
             for (i, msg) in list.clone().into_iter().enumerate() {
+                let mut thumbs: Vec<(String, Option<String>)> =
+                    msg.images.iter().map(|i| (i.name.clone(), Some(format!("data:{};base64,{}", i.mime, i.data)))).collect();
+                thumbs.extend(msg.attachments.iter().map(|a| (a.get("fileName").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned(), None)));
+                // Its words and its attachments' chips where they stand, as
+                // the composer had them: one line, room above and below so
+                // a chip keeps its edge.
+                let mut line = view().flex_row().items_center().min_w(px(0.0)).py(px(2.0)).overflow_hidden();
+                for segment in composer_doc::segments(&msg.text) {
+                    line = match segment {
+                        composer_doc::Segment::Text(t) => line.child(text(t.replace('\n', " ")).text_size(tx(TEXT_BASE)).number_of_lines(1).flex_shrink(1.0)),
+                        composer_doc::Segment::Chip(name) => {
+                            let thumb = thumbs.iter().position(|(n, _)| n.replace(['[', ']', '\n'], " ").trim() == name).map(|i| thumbs.remove(i).1).flatten();
+                            line.child(super::timeline::sent_chip(name, thumb).flex_shrink_0())
+                        }
+                    };
+                }
+                for (name, thumb) in thumbs {
+                    line = line.child(super::timeline::sent_chip(name, thumb).flex_shrink_0());
+                }
+                let link = move |label: &'static str, press: Box<dyn Fn()>| {
+                    nsh_base::button()
+                        .on_press(move || press())
+                        .accessibility_label(label)
+                        .px(px(6.0))
+                        .h(px(24.0))
+                        .rounded(px(R_MD))
+                        .items_center()
+                        .justify_center()
+                        .hover(|s| s.bg(highlight()))
+                        .child(text(label).text_size(tx(TEXT_XS)).font_weight(FontWeight(600)).text_color(ACCENT()))
+                };
                 track = track.child(
                     view()
-                        .flex_row()
-                        .items_center()
-                        .gap(sp(S2))
-                        .child(icon(Icon::Inbox, 14.0).text_color(FG_FAINT()))
-                        // Its words and its attachments' chips where they
-                        // stand, as the composer had them: one line.
-                        .child({
-                            let mut thumbs: Vec<(String, Option<String>)> = msg
-                                .images
-                                .iter()
-                                .map(|i| (i.name.clone(), Some(format!("data:{};base64,{}", i.mime, i.data))))
-                                .collect();
-                            thumbs.extend(msg.attachments.iter().map(|a| (a.get("fileName").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned(), None)));
-                            // Clipped at its end (one line); room above and below,
-                            // so a chip, lifted to sit level with the words, keeps
-                            // its edge.
-                            let mut line = view().flex_row().items_center().flex_1().min_w(px(0.0)).py(px(2.0)).overflow_hidden();
-                            for segment in composer_doc::segments(&msg.text) {
-                                line = match segment {
-                                    composer_doc::Segment::Text(t) => {
-                                        line.child(text(t.replace('\n', " ")).text_size(tx(TEXT_BASE)).number_of_lines(1).flex_shrink(1.0))
+                        .items_end()
+                        .gap(px(2.0))
+                        .max_w(relative(0.85))
+                        .child(view().px(px(14.0)).py(px(9.0)).rounded(px(18.0)).bg(super::timeline::user_bubble()).opacity(0.6).child(line))
+                        .child(
+                            view()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(2.0))
+                                .child(icon(Icon::History, 12.0).text_color(FG_FAINT()).mr(px(4.0)))
+                                .child(
+                                    text(if held { t("Queued · paused — Esc to edit, send to continue") } else { t("Queued · sent when this turn ends") })
+                                        .text_size(tx(TEXT_XS))
+                                        .text_color(FG_FAINT())
+                                        .mr(px(4.0)),
+                                )
+                                // Back into the composer, attachments and all,
+                                // to be changed and sent again.
+                                .child(link(t("Edit"), Box::new(move || {
+                                    if let Some(id) = store::selected_id() {
+                                        store::edit_queued(&id, i);
                                     }
-                                    composer_doc::Segment::Chip(name) => {
-                                        let thumb = thumbs.iter().position(|(n, _)| n.replace(['[', ']', '\n'], " ").trim() == name).map(|i| thumbs.remove(i).1).flatten();
-                                        line.child(super::timeline::sent_chip(name, thumb).flex_shrink_0())
+                                })))
+                                // Into the running turn now, without waiting.
+                                .child(link(t("Steer"), Box::new(move || {
+                                    if let Some(id) = store::selected_id() {
+                                        store::steer_queued(&id, i);
                                     }
-                                };
-                            }
-                            for (name, thumb) in thumbs {
-                                line = line.child(super::timeline::sent_chip(name, thumb).flex_shrink_0());
-                            }
-                            line
-                        })
-                        // Back into the composer, attachments and all, to be
-                        // changed and sent again.
-                        .child(btn(t("Edit"), Variant::Ghost, Sz::Sm, Some(Icon::Pencil), move || {
-                            if let Some(id) = store::selected_id() {
-                                store::edit_queued(&id, i);
-                            }
-                        }))
-                        // Into the running turn now, without waiting for it
-                        // to end.
-                        .child(btn(t("Steer"), Variant::Ghost, Sz::Sm, Some(Icon::CircleArrowUp), move || {
-                            if let Some(id) = store::selected_id() {
-                                store::steer_queued(&id, i);
-                            }
-                        }))
-                        .child(icon_btn(Icon::X, Sz::Sm, t("Remove from queue"), move || {
-                            if let Some(id) = store::selected_id() {
-                                store::unqueue(&id, i);
-                            }
-                        })),
+                                })))
+                                .child(link(t("Take back"), Box::new(move || {
+                                    if let Some(id) = store::selected_id() {
+                                        store::unqueue(&id, i);
+                                    }
+                                }))),
+                        ),
                 );
             }
             track
         }))
     }))
+}
+
+/// While the agent works and there is a message: how it goes, this once
+/// (into the turn, stopping it, or after it), the setting's way checked.
+fn send_as(submit: impl Fn() + Clone + 'static) -> impl IntoElement {
+    use store::SendBehavior as B;
+    let now = store::settings().send_behavior;
+    let word = |b: B| match b {
+        B::Steer => t("Steer"),
+        B::Interrupt => t("Interrupt"),
+        B::Queue => t("Queue"),
+    };
+    let trigger = view()
+        .flex_row()
+        .items_center()
+        .gap(px(2.0))
+        .h(sp(CONTROL_SM))
+        .pl(sp(S2))
+        .pr(px(6.0))
+        .rounded(px(R_FULL))
+        .hover(|s| s.bg(highlight()))
+        .accessible(true)
+        .label(t("Send as"))
+        .child(text(word(now)).text_size(tx(TEXT_SM)).text_color(FG_MUTED()))
+        .child(icon(Icon::ChevronUp, 13.0).text_color(FG_FAINT()));
+    let mut menu = dropup(trigger).align(nsh_core::overlay::Align::End);
+    for (b, detail) in [
+        (B::Steer, t("Into this turn, now")),
+        (B::Interrupt, t("Stop this turn and send")),
+        (B::Queue, t("After this turn ends")),
+    ] {
+        let submit = submit.clone();
+        menu = menu.child(menu_row(word(b), None, Some(detail.into()), b == now, move || {
+            store::send_next_as(b);
+            submit();
+        }));
+    }
+    view().flex_shrink_0().child(menu)
 }
 
 /// The trailing control: send, or stop while the agent runs.

@@ -195,7 +195,7 @@ fn turn(items: &[Item], start: usize, end: usize, running: bool, choice: &HashMa
     }
     if !live {
         let run = &items[body..end];
-        if !changes(run).is_empty() {
+        if !work_changes(run).is_empty() {
             rows.push(Row::Changes { start: body, end, id: id.clone() });
         }
         if !made(run).is_empty() {
@@ -210,16 +210,18 @@ fn running_here(running: bool, end: usize, len: usize) -> bool {
 }
 
 /// Items `from..to` as rows, as they happened: three calls in a row or
-/// more (and the thinking between them) one line, pressed open; a call
+/// more one line, pressed open (a thought between calls parts them); a call
 /// still going in one shows under it all the same.
 fn fold_range(items: &[Item], from: usize, to: usize, running: bool, choice: &HashMap<String, bool>, rows: &mut Vec<Row>) {
     let mut i = from;
     while i < to {
         let mut end = i;
-        while end < to && matches!(items[end], Item::Tool { .. } | Item::Reasoning { .. }) {
+        // Calls in a row, as DSH Go's: a thought between them parts them,
+        // and shows as its own line.
+        while end < to && matches!(items[end], Item::Tool { .. }) {
             end += 1;
         }
-        let calls = items[i..end].iter().filter(|t| matches!(t, Item::Tool { .. })).count();
+        let calls = end - i;
         if calls < GROUP_MIN {
             rows.push(Row::Item { index: i, grouped: false, turn_end: turn_end(items, i) });
             i += 1;
@@ -277,6 +279,23 @@ pub(crate) fn short_path(words: &str) -> String {
     parts.into_iter().rev().collect::<Vec<_>>().join("/")
 }
 
+/// A command as the line has room for: its first line, without the `cd
+/// <folder> &&` an agent puts before it (the folder is the conversation's).
+pub(crate) fn command_shown(command: &str) -> String {
+    let first = command.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or_default();
+    let mut rest = first;
+    while let Some(after) = rest.strip_prefix("cd ").and_then(|r| r.split_once("&&")).map(|(_, a)| a.trim_start()) {
+        rest = after;
+    }
+    rest.to_owned()
+}
+
+/// What a call is about, as a line has room for: a command short
+/// ([`command_shown`]), a path by its folder and name ([`short_path`]).
+pub(crate) fn target_shown(kind: &str, summary: &str) -> String {
+    if kind == "shell" { command_shown(summary) } else { short_path(summary) }
+}
+
 /// What a turn's done line says: its calls, the words said on the way,
 /// how many failed, and whether it was stopped.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -307,6 +326,14 @@ pub(crate) struct FileChange {
 
 /// The files `run`'s calls edited or wrote, each once, in the order first
 /// changed.
+/// The changes card's files: what `run` changed less what it made for the
+/// user (the made card has those, each once).
+pub(crate) fn work_changes(run: &[Item]) -> Vec<FileChange> {
+    let made = made(run);
+    let same = |a: &str, b: &str| a == b || a.ends_with(&format!("/{b}")) || b.ends_with(&format!("/{a}"));
+    changes(run).into_iter().filter(|c| !made.iter().any(|m| same(&c.path, m))).collect()
+}
+
 pub(crate) fn changes(run: &[Item]) -> Vec<FileChange> {
     let mut out: Vec<FileChange> = vec![];
     for item in run {
@@ -561,14 +588,16 @@ mod tests {
 
     #[test]
     fn three_calls_in_a_row_are_one_line_and_two_are_not() {
-        let think = || Item::Reasoning { text: "hm".into() };
-        // thinking, call, thinking, call, thinking, call, then words.
-        let items = vec![think(), tool("a", "shell", "completed", ""), think(), tool("b", "shell", "completed", ""), think(), tool("c", "shell", "completed", ""), said("done")];
+        let items = vec![tool("a", "shell", "completed", ""), tool("b", "shell", "completed", ""), tool("c", "shell", "completed", ""), said("done")];
         let rows = flat(&items, false, &none());
-        assert_eq!(keys(&rows), ["g:a", "6"]);
-        assert!(matches!(&rows[0], Row::Group(g) if g.start == 0 && g.end == 6 && !g.open));
+        assert_eq!(keys(&rows), ["g:a", "3"]);
+        assert!(matches!(&rows[0], Row::Group(g) if g.start == 0 && g.end == 3 && !g.open));
         let items = vec![said("hi"), tool("a", "shell", "completed", "ls"), tool("b", "read", "completed", "x"), said("done")];
         assert_eq!(keys(&flat(&items, false, &none())), ["0", "1", "2", "3"]);
+        // A thought between calls parts them: each its own line.
+        let think = || Item::Reasoning { text: "hm".into() };
+        let items = vec![tool("a", "read", "completed", "x"), think(), tool("b", "shell", "completed", ""), think(), tool("c", "shell", "completed", "")];
+        assert_eq!(keys(&flat(&items, false, &none())), ["0", "1", "2", "3", "4"]);
     }
 
     #[test]
@@ -799,6 +828,9 @@ mod tests {
             said("做好了：生成了10月趋势.png，也写了 `/w/out/summary.pdf`。参考了 report.xlsx。"),
         ];
         assert_eq!(made(&items), ["/w/out/summary.pdf", "10月趋势.png"]);
+        // The changes card has the work's own files, the made card the rest.
+        let work: Vec<_> = work_changes(&items).into_iter().map(|c| c.path).collect();
+        assert_eq!(work, ["/w/make_chart.py", "/w/notes.md"]);
         let rows = fold(&items, false, &none());
         assert_eq!(keys(&rows), ["0", "w:a", "5", "c:w:a", "m:w:a"]);
         // Live, no cards yet.
@@ -828,6 +860,15 @@ mod tests {
                 FileChange { path: "new.txt".into(), added: 3, removed: 0 },
             ]
         );
+    }
+
+    #[test]
+    fn a_command_is_shown_without_its_cd_and_past_its_first_line() {
+        assert_eq!(command_shown("cd /Users/a/wt && cargo test --lib"), "cargo test --lib");
+        assert_eq!(command_shown("cd /a && cd b && python3 - <<'EOF'\nprint(1)\nEOF"), "python3 - <<'EOF'");
+        assert_eq!(command_shown("npm test"), "npm test");
+        assert_eq!(command_shown("cd /a"), "cd /a", "a cd alone is the command");
+        assert_eq!(target_shown("read", "/tmp/x/budget/账单-10月.csv"), "budget/账单-10月.csv");
     }
 
     #[test]

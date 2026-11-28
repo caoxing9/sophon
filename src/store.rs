@@ -2329,7 +2329,47 @@ pub(crate) fn display_rows() -> Vec<crate::fold::Row> {
         let running = t.agent_id.as_deref().is_some_and(|id| {
             global::<Agents>().with(|a| a.0.iter().any(|x| x.id == id && x.is_running()))
         });
-        crate::fold::fold_as(&t.items, running, &t.folds, tool_display())
+        let live = running || settling(t.agent_id.as_deref(), running);
+        crate::fold::fold_as(&t.items, live, &t.folds, tool_display())
+    })
+}
+
+/// How long a turn seen to end stays as it was before it folds.
+const SETTLE_FOR: std::time::Duration = std::time::Duration::from_millis(700);
+
+thread_local! {
+    /// The conversation last folded, whether its agent was running, and
+    /// until when a turn that just ended stays unfolded.
+    static SETTLE: std::cell::RefCell<(Option<String>, bool, Option<std::time::Instant>)> =
+        const { std::cell::RefCell::new((None, false, None)) };
+}
+
+/// A turn ended now: wakes the rows once it has settled.
+#[derive(Clone, Default, PartialEq)]
+struct Settled(u64);
+
+/// Whether the turn of `agent`, which has just ended, stays a moment as it
+/// was while it ran (its steps, before its cards), so the eye sees it fold:
+/// then the rows glide to their places (`animate_rows`).
+fn settling(agent: Option<&str>, running: bool) -> bool {
+    global::<Settled>().with(|_| ());
+    let agent = agent.map(str::to_owned);
+    SETTLE.with_borrow_mut(|(seen, was, until)| {
+        if *seen != agent {
+            *until = None;
+        } else if *was && !running {
+            *until = Some(std::time::Instant::now() + SETTLE_FOR);
+            set_timeout(SETTLE_FOR, || {
+                SETTLE.with_borrow_mut(|(.., until)| *until = None);
+                animate_rows();
+                global::<Settled>().update(|s| s.0 += 1);
+            });
+        } else if running {
+            *until = None;
+        }
+        *seen = agent;
+        *was = running;
+        until.is_some_and(|u| std::time::Instant::now() < u)
     })
 }
 
@@ -2361,9 +2401,31 @@ pub(crate) fn work_tally(start: usize, end: usize) -> (crate::fold::Tally, Optio
     })
 }
 
-/// The files a turn (`start..end`) changed.
+/// What the turn that the reply at `reply` ends took, for under it: how
+/// long ("47 秒") and how many calls ("6 步"); nothing for a reply alone.
+pub(crate) fn turn_stats(reply: usize) -> String {
+    let start = global::<Timeline>().with(|t| (0..reply).rev().find(|&i| matches!(t.items.get(i), Some(Item::User { .. }))).map_or(0, |i| i + 1));
+    let (tally, took) = work_tally(start, reply);
+    let zh = crate::i18n::is_zh();
+    let mut parts = Vec::new();
+    if let Some(secs) = took.filter(|s| *s > 0) {
+        parts.push(match (secs, zh) {
+            (s, true) if s < 60 => format!("{s} 秒"),
+            (s, true) => format!("{} 分 {} 秒", s / 60, s % 60),
+            (s, false) if s < 60 => format!("{s}s"),
+            (s, false) => format!("{}m {:02}s", s / 60, s % 60),
+        });
+    }
+    if tally.calls > 0 {
+        parts.push(if zh { format!("{} 步", tally.calls) } else if tally.calls == 1 { "1 step".to_owned() } else { format!("{} steps", tally.calls) });
+    }
+    parts.join(" · ")
+}
+
+/// The files a turn (`start..end`) changed, less those it made for the
+/// user (`fold::work_changes`).
 pub(crate) fn turn_changes(start: usize, end: usize) -> Vec<crate::fold::FileChange> {
-    global::<Timeline>().with(|t| crate::fold::changes(t.items.get(start..end).unwrap_or_default()))
+    global::<Timeline>().with(|t| crate::fold::work_changes(t.items.get(start..end).unwrap_or_default()))
 }
 
 /// The files a turn (`start..end`) made for the user, each a path to open:
@@ -3564,6 +3626,7 @@ fn save_prefs() {
     // Apart: one more field in the macro passes its recursion limit.
     let mut json = json;
     json["pushEvents"] = s.push_events.to_json();
+    json["showPet"] = global::<ShowPet>().with_untracked(|p| p.0).into();
     if let Err(e) = crate::daemon::write_file("settings.json", &json.to_string()) {
         log::warn!("cannot save settings: {e}");
     }
@@ -3807,6 +3870,9 @@ pub(crate) fn load_prefs() {
     }
     if let Some(on) = v.get("numberShortcuts").and_then(serde_json::Value::as_bool) {
         global::<NumberShortcuts>().set(NumberShortcuts(on));
+    }
+    if let Some(on) = v.get("showPet").and_then(serde_json::Value::as_bool) {
+        global::<ShowPet>().set(ShowPet(on));
     }
     let color = |k: &str| v.get(k).and_then(serde_json::Value::as_str).and_then(parse_hex);
     let theme = ColorTheme {
@@ -4115,6 +4181,25 @@ pub(crate) fn number_shortcuts_untracked() -> bool {
 
 pub(crate) fn set_number_shortcuts(on: bool) {
     global::<NumberShortcuts>().set(NumberShortcuts(on));
+    save_prefs();
+}
+
+/// Whether the pet stands over the composer (on by default). `showPet`.
+#[derive(Clone, PartialEq)]
+struct ShowPet(bool);
+
+impl Default for ShowPet {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
+pub(crate) fn show_pet() -> bool {
+    global::<ShowPet>().with(|p| p.0)
+}
+
+pub(crate) fn set_show_pet(on: bool) {
+    global::<ShowPet>().set(ShowPet(on));
     save_prefs();
 }
 
@@ -6426,6 +6511,17 @@ pub(crate) fn set_note(agent: &str, index: usize, note: crate::notes::Note) {
 
 // ---------------------------------------------------------- agent actions
 
+thread_local! {
+    /// How the next message goes while the agent runs, chosen for it alone
+    /// (the composer's menu), over the setting.
+    static SEND_NEXT_AS: std::cell::Cell<Option<SendBehavior>> = const { std::cell::Cell::new(None) };
+}
+
+/// Sends the next message `behavior`'s way, whatever the setting says.
+pub(crate) fn send_next_as(behavior: SendBehavior) {
+    SEND_NEXT_AS.set(Some(behavior));
+}
+
 pub(crate) fn send_message(text: &str) -> bool {
     let text = text.trim();
     let Some(agent) = selected_agent() else { return false };
@@ -6440,7 +6536,7 @@ pub(crate) fn send_message(text: &str) -> bool {
     global::<QueueHeld>().update(|h| {
         h.0.remove(&agent.id);
     });
-    let behavior = settings().send_behavior;
+    let behavior = SEND_NEXT_AS.take().unwrap_or(settings().send_behavior);
     // A pending permission must be answered first; queueing would wait forever.
     if agent.is_running() && behavior == SendBehavior::Queue && agent.pending.is_empty() {
         let queued = Queued { text: text.to_owned(), images: take_images(), attachments: take_files() };

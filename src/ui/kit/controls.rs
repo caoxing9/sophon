@@ -443,6 +443,38 @@ pub(crate) fn spinner(size: f32) -> View {
         .child(view().bind_rotate(&turn).child(icon(Icon::LoaderCircle, glyph).text_color(FG_MUTED())))
 }
 
+/// Words at work (a thought going on): a band of the page's light sweeps
+/// across them now and then, as the agents' own apps do. `width`: about
+/// how wide they are, for the sweep's run. Still when the system asks for
+/// less motion.
+pub(crate) fn shimmer(words: impl IntoElement, width: f32) -> View {
+    const BAND: f32 = 36.0;
+    let at = animated_value(-BAND);
+    if !reduce_motion() {
+        Animation::sequence([
+            Animation::timing(&at, width + BAND, nsh_core::element::Timing::new(1100.0, Easing::EaseInOut)),
+            Animation::delay(900.0),
+            Animation::timing(&at, -BAND, nsh_core::element::Timing::new(0.0, Easing::Linear)),
+        ])
+        .looped(None)
+        .start();
+    }
+    view().flex_shrink_0().overflow_hidden().child(words).child(
+        view()
+            .absolute()
+            .top(px(0.0))
+            .bottom(px(0.0))
+            .left(px(0.0))
+            .w(px(BAND))
+            .pointer_events(nsh_core::PointerEvents::None)
+            .bg_linear_to_r()
+            .gradient_from(tint(SURFACE0(), 0.0))
+            .gradient_via(tint(SURFACE0(), 0.85))
+            .gradient_to(tint(SURFACE0(), 0.0))
+            .bind_translate_x(&at),
+    )
+}
+
 /// How far the mark's tile stands off the page.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Lift {
