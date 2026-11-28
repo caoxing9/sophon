@@ -169,7 +169,6 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         return view()
             .w_full()
             .child(elsewhere_bar(live))
-            .child(queue_track(live))
             .child(suggest_panel(target, doc))
             .child(chips::preview_layer(key))
             .child(
@@ -277,7 +276,6 @@ pub(crate) fn composer(target: Target, placeholder: &'static str) -> AnyElement 
         .max_w(px(CONTENT_MAX_WIDTH()))
         .self_center()
         .child(elsewhere_bar(live))
-        .child(queue_track(live))
         .child(suggest_panel(target, doc))
         .child(chips::preview_layer(key))
         .child(glass_strong(view())
@@ -792,7 +790,10 @@ fn elsewhere_bar(live: bool) -> impl IntoElement {
     }))
 }
 
-fn queue_track(live: bool) -> impl IntoElement {
+/// The messages queued for the open agent, each to edit, steer or take
+/// back: over the line of what the agent does now (`activity::bar`), which
+/// stays by the composer.
+pub(crate) fn queue_track(live: bool) -> impl IntoElement {
     let queued = computed(move || if live { store::selected_id().map(|id| store::queue(&id)).unwrap_or_default() } else { vec![] });
     let held = computed(move || live && store::selected_id().is_some_and(|id| store::queue_held(&id)));
     view().child(dynamic(move || {
