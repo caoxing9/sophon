@@ -159,10 +159,11 @@ fn turn(items: &[Item], start: usize, end: usize, running: bool, choice: &HashMa
     if display == ToolDisplay::Stream && (live || broke) {
         fold_range(items, body, end, running, choice, rows);
     } else if display == ToolDisplay::Quiet {
-        // Quietly the calls and the thinking are one line (and, while the
-        // agent works, the feed over the composer); what it writes reads on
-        // where it was written, as it is written. Opened, the steps show
-        // between the words, under the line's thread.
+        // Quietly the calls are one line (and, while the agent works, the
+        // capsule over the composer); what it writes and what it thinks read
+        // on where they were written, as they are written (a thought one
+        // line, opened whole). Opened, the steps show between the words,
+        // under the line's thread.
         let open = !live && choice.get(&id).copied().unwrap_or(false);
         rows.push(Row::Work(Group { start: body, end: work_end, id: id.clone(), live, open }));
         for i in body..end {
@@ -171,6 +172,7 @@ fn turn(items: &[Item], start: usize, end: usize, running: bool, choice: &HashMa
                     rows.push(Row::Item { index: i, grouped: false, turn_end: turn_end(items, i) });
                 }
                 _ if open && i < work_end => rows.push(Row::Item { index: i, grouped: true, turn_end: false }),
+                Item::Reasoning { .. } => rows.push(Row::Item { index: i, grouped: false, turn_end: false }),
                 _ => {}
             }
         }
@@ -737,7 +739,7 @@ mod tests {
             edit("b", "src/a.rs", "@@\n-old\n+new\n+more"),
             said("Fixed."),
         ];
-        assert_eq!(keys(&quiet(&items, false, &none())), ["0", "w:a", "1", "5", "c:w:a"], "quietly, the words said on the way too");
+        assert_eq!(keys(&quiet(&items, false, &none())), ["0", "w:a", "1", "3", "5", "c:w:a"], "quietly, the words said and thought on the way too");
         for rows in [fold(&items, false, &none())] {
             assert_eq!(keys(&rows), ["0", "w:a", "5", "c:w:a"]);
             assert!(matches!(&rows[1], Row::Work(g) if g.start == 1 && g.end == 5 && !g.live && !g.open));
@@ -766,6 +768,14 @@ mod tests {
         let rows = fold(&items, true, &none());
         assert_eq!(keys(&rows), ["0", "w:a", "5", "6", "7"]);
         assert!(matches!(&rows[1], Row::Work(g) if !g.live));
+    }
+
+    /// Quietly, what it thinks reads in the conversation as it is thought
+    /// (a line each), as its words do: not only over the composer.
+    #[test]
+    fn quietly_a_thought_is_in_the_conversation() {
+        let items = vec![asked("go"), Item::Reasoning { text: "the server serves its folder only".into() }, tool("a", "shell", "running", "ls")];
+        assert_eq!(keys(&quiet(&items, true, &none())), ["0", "w:#1", "1"]);
     }
 
     /// Done, quietly: the work's line, every word said in its place, and

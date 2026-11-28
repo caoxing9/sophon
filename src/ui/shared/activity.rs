@@ -55,9 +55,6 @@ const STRIP_H: f32 = 34.0;
 const STRIP_GAP: f32 = 6.0;
 /// Where the pet stands along it: past the capsule's rounded end.
 const PET_AT: f32 = 6.0;
-/// A line of the live feed over the capsule (`Quiet`), and how many show.
-const FEED_LINE: f32 = 17.0;
-const FEED_SHOWN: usize = 2;
 /// How far under its feet the pet's frame goes (empty), less a point, so
 /// its feet are on the edge, not over it.
 const PET_FEET: f32 = 4.0;
@@ -88,9 +85,9 @@ fn now_doing(agent: &crate::daemon::Agent) -> (String, String, String) {
 }
 
 /// Over the composer, as wide as it and lined up with it: while the agent
-/// works, the capsule of what it does now, and over it (`Quiet`) what it
-/// thought, each new line pushing the rest up; the pet on the top edge of
-/// whichever is under it.
+/// works, the capsule of what it does now; the pet on the top edge of
+/// whichever is under it. What it writes and thinks is the conversation's,
+/// read there.
 pub(crate) fn bar() -> impl IntoElement {
     let agent = computed(store::selected_agent);
     let running = computed(move || agent.with(|a| a.as_ref().is_some_and(|a| a.is_running())));
@@ -106,36 +103,14 @@ pub(crate) fn bar() -> impl IntoElement {
             }
         });
     });
-    // Quietly, the conversation shows no steps: what the agent thinks
-    // scrolls by here instead, as DSH Go's strip does, so the work is seen
-    // going on.
-    let live = computed(move || running.get() && store::tool_display() == crate::fold::ToolDisplay::Quiet);
     let shown = computed(store::show_pet);
-    // The room over the capsule: the pet's, and the feed's beside it.
-    let room = computed(move || shown.get() || live.get());
     view()
         .w_full()
         .max_w(px(CONTENT_MAX_WIDTH()))
         .self_center()
         .select_none()
-        .child(dynamic(move || {
-            if !room.get() {
-                return None;
-            }
-            let quiet = live.get();
-            let pet_on = shown.get();
-            Some(untracked(move || {
-                view()
-                    .flex_row()
-                    .items_end()
-                    .h(px(ROOM))
-                    .gap(sp(S2))
-                    .when(pet_on, |v| v.child(pet(agent, running)))
-                    .when(!pet_on, |v| v.pl(px(14.0)))
-                    .when(quiet, |v| v.child(view().flex_1().min_w(px(0.0)).pb(px(3.0)).child(feed())))
-                    .into_element()
-            }))
-        }))
+        // The pet's room over the capsule (or the composer).
+        .child(when(shown, move || view().flex_row().items_end().h(px(ROOM)).child(pet(agent, running))))
         .child(dynamic(move || {
             if !running.get() {
                 return None;
@@ -143,76 +118,6 @@ pub(crate) fn bar() -> impl IntoElement {
             let id = id.get_untracked().unwrap_or_default();
             Some(untracked(move || view().pb(px(STRIP_GAP)).child(doing_line(agent, id)).into_element()))
         }))
-}
-
-/// A line of the live feed: a thought.
-#[derive(Clone, Debug, PartialEq)]
-struct FeedLine {
-    words: String,
-}
-
-/// What the turn has thought so far, as lines (Markdown's marks and code
-/// left out): its words read on in the conversation, and its calls are
-/// not here (a command line is long, and it crowded the feed out): the
-/// one going on is the line by the composer, the rest under the turn's
-/// line in the conversation. How many there are, and the last `n`.
-fn feed_lines(n: usize) -> (usize, Vec<FeedLine>) {
-    let mut all: Vec<FeedLine> = Vec::new();
-    let count = store::item_count();
-    let start = (0..count).rev().find(|&i| matches!(store::item_at(i), Some(Item::User { .. }))).map_or(0, |i| i + 1);
-    for i in start..count {
-        // Its words read on in the conversation: here its thinking.
-        if let Some(Item::Reasoning { text }) = store::item_at(i) {
-            let mut fence = false;
-            for line in text.lines() {
-                let t = line.trim();
-                if t.starts_with("```") {
-                    fence = !fence;
-                    continue;
-                }
-                if fence || t.is_empty() {
-                    continue;
-                }
-                let words = sophon_push::excerpt(t);
-                if !words.trim().is_empty() {
-                    all.push(FeedLine { words: sophon_push::clip(&words, 160) });
-                }
-            }
-        }
-    }
-    let total = all.len();
-    let last = all.split_off(total.saturating_sub(n));
-    (total, last)
-}
-
-/// The live feed: the turn's last lines, the newest at the foot, growing
-/// as it is written; each new one slides the rest up (a quick spring), the
-/// older fainter.
-fn feed() -> View {
-    let lines = computed(|| feed_lines(FEED_SHOWN + 1));
-    let slide = animated_value(0.0);
-    let seen = std::cell::Cell::new(None::<usize>);
-    effect(move || {
-        let total = lines.with(|(n, _)| *n);
-        let before = seen.replace(Some(total));
-        if before.is_some_and(|b| total > b) && !reduce_motion() {
-            slide.set(FEED_LINE);
-            let _ = slide.spring(0.0, Spring { stiffness: 420.0, damping: 36.0, ..Spring::default() });
-        }
-    });
-    view().max_h(px(FEED_LINE * FEED_SHOWN as f32)).overflow_hidden().justify_end().child(view().bind_translate_y(&slide).child(dynamic(move || {
-        let (_, list) = lines.get();
-        Some(untracked(move || {
-            let n = list.len();
-            let mut column = view();
-            for (i, line) in list.into_iter().enumerate() {
-                let age = n - 1 - i;
-                let words = text(line.words).text_size(tx(TEXT_XS)).line_height(px(FEED_LINE)).text_color(FG_FAINT()).number_of_lines(1);
-                column = column.child(view().h(px(FEED_LINE)).opacity([1.0_f32, 0.55, 0.25][age.min(2)]).child(words));
-            }
-            column.into_element()
-        }))
-    })))
 }
 
 /// What the agent does now, one line of words.
