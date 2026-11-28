@@ -1563,7 +1563,10 @@ fn work_line(work: Memo<Option<Group>>) -> impl IntoElement {
     let words = move || {
         tally.with(|(tl, took)| {
             let mut parts = vec![if tl.stopped { t("Stopped") } else { t("Completed") }.to_owned()];
-            parts.push(if tl.calls == 1 { t("1 tool call").to_owned() } else { tf("{} tool calls", &[&tl.calls.to_string()]) });
+            // A turn that only thought says no calls at all, not "0 tool calls".
+            if tl.calls > 0 {
+                parts.push(if tl.calls == 1 { t("1 tool call").to_owned() } else { tf("{} tool calls", &[&tl.calls.to_string()]) });
+            }
             if tl.messages > 0 {
                 parts.push(if tl.messages == 1 { t("1 message").to_owned() } else { tf("{} messages", &[&tl.messages.to_string()]) });
             }

@@ -132,8 +132,9 @@ struct FeedLine {
     call: bool,
 }
 
-/// What the turn has said and done so far, as lines: its thinking and its
-/// words (Markdown's marks and code left out), each call done one line
+/// What the turn has thought and done so far, as lines: its thinking
+/// (Markdown's marks and code left out; its words read on in the
+/// conversation), each call done one line
 /// (the one going on is the line above the feed). How many there are, and
 /// the last `n`.
 fn feed_lines(n: usize) -> (usize, Vec<FeedLine>) {
@@ -142,7 +143,8 @@ fn feed_lines(n: usize) -> (usize, Vec<FeedLine>) {
     let start = (0..count).rev().find(|&i| matches!(store::item_at(i), Some(Item::User { .. }))).map_or(0, |i| i + 1);
     for i in start..count {
         match store::item_at(i) {
-            Some(Item::Reasoning { text } | Item::Assistant { text, .. }) => {
+            // Its words read on in the conversation: here its thinking.
+            Some(Item::Reasoning { text }) => {
                 let mut fence = false;
                 for line in text.lines() {
                     let t = line.trim();

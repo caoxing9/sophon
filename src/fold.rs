@@ -158,6 +158,22 @@ fn turn(items: &[Item], start: usize, end: usize, running: bool, choice: &HashMa
         && items[body..end].iter().any(|i| matches!(i, Item::Error { .. }) || matches!(i, Item::Tool { status, .. } if status == "canceled"));
     if display == ToolDisplay::Stream && (live || broke) {
         fold_range(items, body, end, running, choice, rows);
+    } else if display == ToolDisplay::Quiet {
+        // Quietly the calls and the thinking are one line (and, while the
+        // agent works, the feed over the composer); what it writes reads on
+        // where it was written, as it is written. Opened, the steps show
+        // between the words, under the line's thread.
+        let open = !live && choice.get(&id).copied().unwrap_or(false);
+        rows.push(Row::Work(Group { start: body, end: work_end, id: id.clone(), live, open }));
+        for i in body..end {
+            match &items[i] {
+                Item::Assistant { .. } | Item::Error { .. } | Item::Notice { .. } | Item::Retry { .. } => {
+                    rows.push(Row::Item { index: i, grouped: false, turn_end: turn_end(items, i) });
+                }
+                _ if open && i < work_end => rows.push(Row::Item { index: i, grouped: true, turn_end: false }),
+                _ => {}
+            }
+        }
     } else {
         let open = choice.get(&id).copied().unwrap_or(false);
         // What was said before the work ("Let me look at…") is the work's too.
@@ -692,7 +708,8 @@ mod tests {
             edit("b", "src/a.rs", "@@\n-old\n+new\n+more"),
             said("Fixed."),
         ];
-        for rows in [fold(&items, false, &none()), quiet(&items, false, &none())] {
+        assert_eq!(keys(&quiet(&items, false, &none())), ["0", "w:a", "1", "5", "c:w:a"], "quietly, the words said on the way too");
+        for rows in [fold(&items, false, &none())] {
             assert_eq!(keys(&rows), ["0", "w:a", "5", "c:w:a"]);
             assert!(matches!(&rows[1], Row::Work(g) if g.start == 1 && g.end == 5 && !g.live && !g.open));
             assert!(matches!(rows[2], Row::Item { index: 5, turn_end: true, .. }), "the reply ends the turn");
@@ -703,23 +720,37 @@ mod tests {
         assert_eq!(keys(&fold(&items, false, &open)), ["0", "w:a", "1", "2", "3", "4", "5", "c:w:a"]);
     }
 
-    /// While the agent works, its steps show one by one; quietly, one line
-    /// of what it does now, the last words streaming under it.
+    /// While the agent works, its steps show one by one (`Stream`); quietly,
+    /// the work is one row and what it writes reads on as it is written.
     #[test]
-    fn a_live_turn_shows_its_steps_or_one_line() {
+    fn a_live_turn_shows_its_steps_or_its_words() {
         let mut items = vec![asked("go"), said("Looking"), tool("a", "shell", "running", "ls")];
         assert_eq!(keys(&fold(&items, true, &none())), ["0", "1", "2"]);
-        assert_eq!(keys(&quiet(&items, true, &none())), ["0", "w:a"]);
-        assert!(matches!(&quiet(&items, true, &none())[1], Row::Work(g) if g.live && g.end == 3));
+        assert_eq!(keys(&quiet(&items, true, &none())), ["0", "w:a", "1"]);
+        assert!(matches!(&quiet(&items, true, &none())[1], Row::Work(g) if g.live));
         items.push(said("Now the tests"));
-        assert_eq!(keys(&quiet(&items, true, &none())), ["0", "w:a", "3"]);
+        assert_eq!(keys(&quiet(&items, true, &none())), ["0", "w:a", "1", "3"]);
         items.push(tool("b", "shell", "running", "cargo test"));
-        assert_eq!(keys(&quiet(&items, true, &none())), ["0", "w:a"], "the words joined the work");
+        assert_eq!(keys(&quiet(&items, true, &none())), ["0", "w:a", "1", "3"], "the words stay where they were written");
         // An earlier turn is done while a later one runs.
         items.extend([said("ok"), asked("again"), tool("c", "shell", "running", "ls")]);
         let rows = fold(&items, true, &none());
         assert_eq!(keys(&rows), ["0", "w:a", "5", "6", "7"]);
         assert!(matches!(&rows[1], Row::Work(g) if !g.live));
+    }
+
+    /// Done, quietly: the work's line, every word said in its place, and
+    /// opened, the steps between them.
+    #[test]
+    fn quietly_a_done_turn_keeps_its_words_in_place() {
+        let items = vec![asked("go"), said("Looking"), tool("a", "read", "completed", "x"), said("Found it"), tool("b", "shell", "completed", ""), said("Done.")];
+        assert_eq!(keys(&quiet(&items, false, &none())), ["0", "w:a", "1", "3", "5"]);
+        let ends: Vec<bool> = quiet(&items, false, &none()).iter().filter_map(|r| match r { Row::Item { turn_end, .. } => Some(*turn_end), _ => None }).collect();
+        assert_eq!(ends, [false, false, false, true], "the reply's actions under the last words only");
+        let open = HashMap::from([("w:a".to_owned(), true)]);
+        let rows = quiet(&items, false, &open);
+        assert_eq!(keys(&rows), ["0", "w:a", "1", "2", "3", "4", "5"]);
+        assert!(matches!(rows[3], Row::Item { index: 2, grouped: true, .. }) && matches!(rows[4], Row::Item { index: 3, grouped: false, .. }));
     }
 
     /// A stopped or failed turn stays as it ran; quietly it folds as well.
