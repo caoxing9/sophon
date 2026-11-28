@@ -112,7 +112,7 @@ pub(crate) fn bar() -> impl IntoElement {
         .h(move || Length::from(px(if live.get() { LIVE_H } else { BAR_H })))
         .px(sp(S2))
         .child(pet(agent, running))
-        .child(view().flex_1().min_w(px(0.0)).h_full().justify_center().child(dynamic(move || {
+        .child(view().flex_1().min_w(px(0.0)).h_full().justify_end().pb(px(6.0)).child(dynamic(move || {
             if !running.get() {
                 return None;
             }
@@ -120,7 +120,10 @@ pub(crate) fn bar() -> impl IntoElement {
             let id = id.get_untracked().unwrap_or_default();
             Some(untracked(move || {
                 let line = doing_line(agent, id);
-                if quiet { view().gap(px(2.0)).child(line).child(feed()).into_element() } else { line.into_element() }
+                // From the foot up, as a log: what it does now on the line by
+                // the composer, what it thought and did before over it, each
+                // new line pushing the rest up.
+                if quiet { view().justify_end().gap(px(2.0)).child(feed()).child(line).into_element() } else { line.into_element() }
             }))
         })))
 }
@@ -190,7 +193,7 @@ fn feed() -> View {
             let _ = slide.spring(0.0, Spring { stiffness: 420.0, damping: 36.0, ..Spring::default() });
         }
     });
-    view().h(px(FEED_LINE * FEED_SHOWN as f32)).overflow_hidden().justify_end().child(view().bind_translate_y(&slide).child(dynamic(move || {
+    view().max_h(px(FEED_LINE * FEED_SHOWN as f32)).overflow_hidden().justify_end().child(view().bind_translate_y(&slide).child(dynamic(move || {
         let (_, list) = lines.get();
         Some(untracked(move || {
             let n = list.len();
