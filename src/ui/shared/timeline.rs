@@ -316,8 +316,13 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
     let turn_end = computed(move || matches!(shown.get(), Some(Row::Item { turn_end: true, .. })));
     view()
         .px(sp(S6))
-        // Close together: a turn's steps and words read as one piece.
-        .py(px(if MOBILE { 6.0 } else { 2.0 }))
+        // Close together: a turn's steps and words read as one piece; its
+        // steps (a call, a thought, a line of them) closer still, a list
+        // with no gaps (each is its own 30 points high).
+        .py(move || {
+            let step = matches!(kind.get(), Some(RowKind::Tool | RowKind::Reasoning | RowKind::Group | RowKind::Work));
+            px(if step { 1.0 } else if MOBILE { 6.0 } else { 2.0 })
+        })
         .w_full()
         .max_w(px(CONTENT_MAX_WIDTH() + 2.0 * S6))
         .self_center()
@@ -533,16 +538,36 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                         // Under the reply (as T3 Code's): copy it, fork the
                         // conversation, quote it in the next message, and when
                         // it was written; there under the pointer once written.
-                        .child(when(turn_end, move || view().select_none().child(reply_actions(item, text_of, chosen, computed(move || !streaming.get() && hover.get())))))
+                        .child(when(turn_end, move || {
+                            // What the turn took, at the row's end, always (DSH Go's
+                            // footer); the reply's actions at its start, under the pointer.
+                            let stats = computed(move || index.get().map(store::turn_stats).unwrap_or_default());
+                            view()
+                                .select_none()
+                                .flex_row()
+                                .items_center()
+                                .child(reply_actions(item, text_of, chosen, computed(move || !streaming.get() && hover.get())))
+                                .child(view().flex_1())
+                                .child(when(move || !streaming.get(), move || text(move || stats.get()).text_size(tx(TEXT_XS)).text_color(FG_FAINT()).mt(px(2.0))))
+                        }))
                         // Over the reply, so last.
                         .child(super::notes::selection_layer(offer, noting))
                         .into_element()
                 }
                 // The agent's thinking, folded to one line ("Thinking"):
                 // a press shows it whole, another folds it again.
+                // The agent's thinking, one line as a call is (DSH Go's): its
+                // glyph, "Thinking · its first words" (while it thinks, its
+                // latest), a chevron at the end; pressed, all of it under.
                 RowKind::Reasoning => {
                     let key = move || text_of().chars().take(80).collect::<String>();
                     let open = computed(move || global::<OpenThoughts>().with(|o| o.0.contains(&key())));
+                    let gist = move || {
+                        let t = text_of();
+                        let lines: Vec<&str> = t.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+                        let line = if streaming.get() { lines.last() } else { lines.first() };
+                        line.map(|l| sophon_push::clip(&sophon_push::excerpt(l), 160)).unwrap_or_default()
+                    };
                     view()
                         .child(
                             nsh_base::button()
@@ -559,29 +584,33 @@ fn row(at: Position, rows: Memo<Vec<Row>>, running: Memo<bool>) -> impl IntoElem
                                 .flex_row()
                                 .items_center()
                                 .gap(sp(S2))
-                                .h(px(24.0))
-                                .self_start()
+                                .px(sp(S2))
+                                .mx(px(-S2))
+                                .min_h(px(30.0))
+                                .rounded(px(R_LG))
                                 .group()
-                                .child(icon(Icon::Brain, 15.0).text_color(FG_FAINT()))
+                                .hover(|s| s.bg(highlight()))
+                                .child(tool_glyph("thinking", "", 22.0))
                                 .child(
                                     text(move || if streaming.get() { t("Thinking…") } else { t("Thinking") }.to_owned())
-                                        .text_size(px(13.0))
-                                        .text_color(FG_FAINT())
-                                        .group_hover(|s| s.text_color(FG_MUTED())),
+                                        .text_size(tx(TEXT_SM))
+                                        .text_color(FG_MUTED())
+                                        .flex_shrink_0(),
                                 )
+                                .child(view().w(px(3.0)).h(px(3.0)).rounded(px(R_FULL)).bg(FG_FAINT()).flex_shrink_0())
+                                .child(text(gist).text_size(tx(TEXT_SM)).text_color(FG_FAINT()).number_of_lines(1).flex_1())
                                 .child(
-                                    icon(Icon::ChevronRight, 12.0)
+                                    icon(Icon::ChevronDown, 13.0)
                                         .text_color(FG_FAINT())
-                                        .rotate(move || Radians(if open.get() { std::f32::consts::FRAC_PI_2 } else { 0.0 }))
+                                        .rotate(move || Radians(if open.get() { std::f32::consts::PI } else { 0.0 }))
                                         .transition_transform(),
                                 ),
                         )
                         .child(when(open, move || {
-                            view().selectable(true).on_text_selection_change(take_copy).pl(px(15.0 + S2)).pt(px(2.0)).child(
+                            view().selectable(true).on_text_selection_change(take_copy).pl(px(22.0 + S2)).pt(px(2.0)).pb(sp(S1)).child(
                                 text(move || text_of().trim().to_owned())
                                     .text_size(px(13.0))
                                     .line_height(px(19.0))
-                                    .italic()
                                     .text_color(FG_MUTED()),
                             )
                         }))
@@ -1080,6 +1109,7 @@ fn tool_icon(kind: &str, name: &str) -> Icon {
         "fetch" => Icon::Globe,
         "sub_agent" => Icon::Bot,
         "plan" => Icon::ListTodo,
+        "thinking" => Icon::Brain,
         _ if name.to_lowercase().contains("todo") => Icon::ListTodo,
         _ => Icon::Wrench,
     }
@@ -1115,6 +1145,7 @@ fn tool_tone(kind: &str) -> (AdaptiveColor, AdaptiveColor) {
         "fetch" => (pair(0xd7f1e2, 0x1a3328), pair(0x034a2e, 0x93d9b3)),
         "sub_agent" => (pair(0xf9e2f0, 0x3a2232), pair(0x582b4a, 0xeeb2d6)),
         "plan" => (pair(0xd0f1f0, 0x163433), pair(0x004747, 0x8fdcd9)),
+        "thinking" => (pair(0xe4e8fd, 0x252a42), pair(0x3346c4, 0xa9b6ff)),
         _ => (pair(0xebebef, 0x2c2c33), pair(0x4a4a55, 0xc4c4cc)),
     }
 }
@@ -1573,9 +1604,8 @@ fn work_line(work: Memo<Option<Group>>) -> impl IntoElement {
             if tl.failed > 0 {
                 parts.push(tf("{} failed", &[&tl.failed.to_string()]));
             }
-            if let Some(secs) = took {
-                parts.push(short_time(*secs));
-            }
+            // How long it took is the reply's, under it (`turn_stats`).
+            let _ = took;
             parts.join(" · ")
         })
     };
@@ -1634,10 +1664,9 @@ fn changes_card(range: Memo<Option<(usize, usize)>>) -> impl IntoElement {
             let (added, removed) = list.iter().fold((0, 0), |(a, r), f| (a + f.added, r + f.removed));
             let title = if list.len() == 1 { t("Changed 1 file").to_owned() } else { tf("Changed {} files", &[&list.len().to_string()]) };
             let mut card = view()
-                .rounded(px(R_LG))
-                .border_1()
-                .border_color(BORDER())
+                .rounded(px(16.0))
                 .bg(SURFACE0())
+                .shadow_sm()
                 .px(sp(S3))
                 .py(sp(S2))
                 .gap(px(2.0))
@@ -1736,10 +1765,9 @@ fn made_card(range: Memo<Option<(usize, usize)>>) -> impl IntoElement {
         Some(untracked(move || {
             let title = if list.len() == 1 { t("Made 1 file").to_owned() } else { tf("Made {} files", &[&list.len().to_string()]) };
             let mut card = view()
-                .rounded(px(R_XL))
-                .border_1()
-                .border_color(BORDER())
+                .rounded(px(16.0))
                 .bg(SURFACE0())
+                .shadow_sm()
                 .px(sp(S3))
                 .py(sp(S2))
                 .gap(px(2.0))
@@ -1768,7 +1796,7 @@ fn made_card(range: Memo<Option<(usize, usize)>>) -> impl IntoElement {
                     .overflow_hidden()
                     .border_1()
                     .border_color(BORDER())
-                    .bg(tint(tone, 0.08))
+                    .bg(SURFACE0())
                     .items_center()
                     .justify_center()
                     .child(icon(glyph, 18.0).text_color(tone));
@@ -1907,8 +1935,10 @@ fn tool_row(item: Memo<Option<Item>>) -> impl IntoElement {
                 .flex_shrink_0(),
         )
         .child(when(computed(move || tool.with(|(.., s)| !s.is_empty())), || view().w(px(3.0)).h(px(3.0)).rounded(px(R_FULL)).bg(FG_FAINT()).flex_shrink_0()))
+        // What it is about, short: a command without its `cd … &&`, a file
+        // by its folder and name (the whole is in its detail).
         .child(
-            text(move || tool.with(|(.., s)| s.clone()))
+            text(move || tool.with(|(_, k, _, s)| crate::fold::target_shown(k, s)))
                 .text_size(tx(TEXT_CODE))
                 .font_family(mono_font)
                 .text_color(move || if failed.get() { DANGER } else { FG_FAINT() })
@@ -1922,9 +1952,9 @@ fn tool_row(item: Memo<Option<Item>>) -> impl IntoElement {
                 && item.with(|i| matches!(i, Some(Item::Tool { detail, error, .. }) if super::tool_detail::has_body(detail, error.as_deref())));
             expandable.then(|| {
                 untracked(move || {
-                    icon(Icon::ChevronRight, 13.0)
+                    icon(Icon::ChevronDown, 13.0)
                         .text_color(FG_FAINT())
-                        .rotate(move || Radians(if open.get() { std::f32::consts::FRAC_PI_2 } else { 0.0 }))
+                        .rotate(move || Radians(if open.get() { std::f32::consts::PI } else { 0.0 }))
                         .transition_transform()
                         .into_element()
                 })
@@ -1947,7 +1977,9 @@ fn tool_row(item: Memo<Option<Item>>) -> impl IntoElement {
                         .when(added > 0, |v| v.child(text(format!("+{added}")).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(SUCCESS)))
                         .when(removed > 0, |v| v.child(text(format!("\u{2212}{removed}")).text_size(tx(TEXT_XS)).font_family(mono_font).text_color(DANGER)))
                         .into_element(),
-                    _ => view().into_element(),
+                    // Nothing to say: no room either (its gap taken back), so
+                    // its chevron lines up with a thought's.
+                    _ => view().w(px(0.0)).ml(px(-S2)).into_element(),
                 },
             }))
         }));
@@ -2711,14 +2743,9 @@ pub(crate) fn short_count(n: usize) -> String {
     if n >= 1000 { format!("{:.1}k", n as f64 / 1000.0) } else { n.to_string() }
 }
 
-/// "53s", "2m 05s".
-fn short_time(secs: u64) -> String {
-    if secs < 60 { format!("{secs}s") } else { format!("{}m {:02}s", secs / 60, secs % 60) }
-}
-
 #[cfg(test)]
 mod status_tests {
-    use super::{short_count, short_time, tokens_in};
+    use super::{short_count, tokens_in};
 
     #[test]
     fn the_status_line_counts_and_times_as_claude_code_does() {
@@ -2726,8 +2753,6 @@ mod status_tests {
         assert_eq!(tokens_in("你好"), 2);
         assert_eq!(short_count(860), "860");
         assert_eq!(short_count(3200), "3.2k");
-        assert_eq!(short_time(53), "53s");
-        assert_eq!(short_time(125), "2m 05s");
     }
 }
 

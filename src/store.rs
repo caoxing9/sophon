@@ -2361,6 +2361,27 @@ pub(crate) fn work_tally(start: usize, end: usize) -> (crate::fold::Tally, Optio
     })
 }
 
+/// What the turn that the reply at `reply` ends took, for under it: how
+/// long ("47 秒") and how many calls ("6 步"); nothing for a reply alone.
+pub(crate) fn turn_stats(reply: usize) -> String {
+    let start = global::<Timeline>().with(|t| (0..reply).rev().find(|&i| matches!(t.items.get(i), Some(Item::User { .. }))).map_or(0, |i| i + 1));
+    let (tally, took) = work_tally(start, reply);
+    let zh = crate::i18n::is_zh();
+    let mut parts = Vec::new();
+    if let Some(secs) = took.filter(|s| *s > 0) {
+        parts.push(match (secs, zh) {
+            (s, true) if s < 60 => format!("{s} 秒"),
+            (s, true) => format!("{} 分 {} 秒", s / 60, s % 60),
+            (s, false) if s < 60 => format!("{s}s"),
+            (s, false) => format!("{}m {:02}s", s / 60, s % 60),
+        });
+    }
+    if tally.calls > 0 {
+        parts.push(if zh { format!("{} 步", tally.calls) } else if tally.calls == 1 { "1 step".to_owned() } else { format!("{} steps", tally.calls) });
+    }
+    parts.join(" · ")
+}
+
 /// The files a turn (`start..end`) changed.
 pub(crate) fn turn_changes(start: usize, end: usize) -> Vec<crate::fold::FileChange> {
     global::<Timeline>().with(|t| crate::fold::changes(t.items.get(start..end).unwrap_or_default()))

@@ -69,7 +69,7 @@ fn now_doing(agent: &crate::daemon::Agent) -> (String, String, String) {
         match store::item_at(i) {
             Some(Item::User { .. }) | None => break,
             Some(Item::Tool { kind, name, status, summary, .. }) if status == "running" => {
-                let what = if kind == "shell" { command_shown(&summary) } else { crate::fold::short_path(&summary) };
+                let what = crate::fold::target_shown(&kind, &summary);
                 return (kind.clone(), tool_verb(&kind, &name), what);
             }
             Some(Item::Reasoning { .. }) => return ("thinking".into(), t("Thinking").to_owned(), String::new()),
@@ -78,17 +78,6 @@ fn now_doing(agent: &crate::daemon::Agent) -> (String, String, String) {
         }
     }
     (String::new(), String::new(), String::new())
-}
-
-/// A command as the line has room for: its first line, without the `cd
-/// <folder> &&` an agent puts before it (the folder is the conversation's).
-fn command_shown(command: &str) -> String {
-    let first = command.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or_default();
-    let mut rest = first;
-    while let Some(after) = rest.strip_prefix("cd ").and_then(|r| r.split_once("&&")).map(|(_, a)| a.trim_start()) {
-        rest = after;
-    }
-    rest.to_owned()
 }
 
 /// The line over the composer, as wide as it and lined up with it: the
@@ -351,17 +340,4 @@ fn sprite(mood: Mood) -> View {
         .h(px(PET))
         .overflow_hidden()
         .child(view().bind_translate_x(&at).child(image(strip).w(px(PET * frames as f32)).h(px(PET))))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::command_shown;
-
-    #[test]
-    fn a_command_is_shown_without_its_cd_and_past_its_first_line() {
-        assert_eq!(command_shown("cd /Users/a/wt && cargo test --lib"), "cargo test --lib");
-        assert_eq!(command_shown("cd /a && cd b && python3 - <<'EOF'\nprint(1)\nEOF"), "python3 - <<'EOF'");
-        assert_eq!(command_shown("npm test"), "npm test");
-        assert_eq!(command_shown("cd /a"), "cd /a", "a cd alone is the command");
-    }
 }
