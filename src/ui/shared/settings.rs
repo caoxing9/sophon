@@ -15,7 +15,10 @@ use crate::store::{self, Conn, DefaultModel, SendBehavior};
 /// Appearance, in sections as monocode's: the theme and its colours, the
 /// text, the layout, and the settings file.
 pub(crate) fn appearance_sections() -> View {
+    // Apart as a page's sections are (the phone's page holds them in a
+    // section of its own, whose gap is not theirs).
     view()
+        .gap(px(if MOBILE { S6 } else { S8 }))
         .child(section_about(
             t("Theme"),
             t("Light or dark, the interface's colours, its accent and background."),
@@ -35,13 +38,13 @@ pub(crate) fn appearance_sections() -> View {
                     true,
                 ))
                 .child(row(t("Color theme"), t("Each theme has a light and a dark palette"), theme_picker(), false))
-                .child(row(
+                .child(row_wide(
                     t("Accent color"),
                     t("Buttons, links and the caret"),
                     color_control(ACCENTS, || store::color_theme().accent, |c| store::edit_color_theme(|t| t.accent = c)),
                     false,
                 ))
-                .child(row(
+                .child(row_wide(
                     t("Background"),
                     t("A solid color of your own; light or dark follows it"),
                     color_control(BACKGROUNDS, || store::color_theme().background, |c| store::edit_color_theme(|t| t.background = c)),
@@ -575,6 +578,27 @@ pub(crate) fn row(title: impl IntoReactive<SharedString>, hint: impl IntoReactiv
                 .child(text(hint).text_size(tx(TEXT_SM)).text_color(FG_MUTED())),
         )
         .child(control)
+}
+
+/// [`row`] for a wide control (a row of swatches): on the phone, too
+/// narrow for both side by side, the control goes under the words, at the
+/// row's start, rather than squeezing them into a column.
+pub(crate) fn row_wide(title: impl IntoReactive<SharedString>, hint: impl IntoReactive<SharedString>, control: impl IntoElement, first: bool) -> View {
+    if !MOBILE {
+        return row(title, hint, control, first);
+    }
+    view()
+        .gap(sp(S3))
+        .px(sp(S4))
+        .py(sp(S4))
+        .when(!first, |v| v.border_t_1().border_color(BORDER()))
+        .child(
+            view()
+                .gap(px(2.0))
+                .child(text(title).text_size(tx(TEXT_BASE)).text_color(FG()))
+                .child(text(hint).text_size(tx(TEXT_SM)).text_color(FG_MUTED())),
+        )
+        .child(view().self_start().child(control))
 }
 
 pub(crate) fn host_card() -> View {
