@@ -1,13 +1,15 @@
-//! Over the composer, as DSH Go's: a line as wide as it, the pet at its
-//! start, Sophon's eclipse in pixels, in the conversation's mood (typing
-//! while the agent works, a hand up while it waits for the user, a hop when
-//! a turn ends, asleep otherwise); beside it, while the agent works, what
-//! it does now (its step, the command or file, how long the turn has run).
-//! No box, and nothing laid over the conversation.
+//! Over the composer, as DSH Go's: while the agent works, a capsule as
+//! wide as the composer of what it does now (its step, the command or
+//! file, how long the turn has run), and the pet standing on its top edge
+//! (on the composer's while it rests): Sophon's eclipse in pixels, in the
+//! conversation's mood (typing while the agent works, a hand up while it
+//! waits for the user, a hop when a turn ends, asleep otherwise). The pet
+//! has room of its own over the capsule, so nothing in the conversation is
+//! covered; the settings can put it away (`store::show_pet`).
 
 use nsh_core::prelude::*;
 
-use super::timeline::{VERBS_EN, VERBS_ZH, short_count, tokens_in, tool_glyph, tool_verb};
+use super::timeline::{VERBS_EN, VERBS_ZH, short_count, tokens_in, tool_verb};
 use crate::daemon::Item;
 use crate::i18n::t;
 use crate::store;
@@ -45,15 +47,20 @@ impl Mood {
 /// each (its strips are drawn six to a pixel: three device pixels apiece
 /// on a 2x screen).
 const PET: f32 = 48.0;
-/// The line's height: the pet's body, its frame's empty sky above it.
-const BAR_H: f32 = 34.0;
-/// A line of the live feed under it (`Quiet`), and how many show.
+/// The room over the capsule (or the composer): the pet's body, its
+/// frame's empty sky reaching on above it.
+const ROOM: f32 = 34.0;
+/// The capsule's height, and the air between it and the composer.
+const STRIP_H: f32 = 34.0;
+const STRIP_GAP: f32 = 6.0;
+/// Where the pet stands along it: past the capsule's rounded end.
+const PET_AT: f32 = 6.0;
+/// A line of the live feed over the capsule (`Quiet`), and how many show.
 const FEED_LINE: f32 = 17.0;
 const FEED_SHOWN: usize = 2;
-/// The line's height with the feed: its words, then the feed.
-const LIVE_H: f32 = 22.0 + FEED_LINE * FEED_SHOWN as f32 + 4.0;
-/// How far under its feet the pet's frame goes (empty).
-const PET_FEET: f32 = 5.0;
+/// How far under its feet the pet's frame goes (empty), less a point, so
+/// its feet are on the edge, not over it.
+const PET_FEET: f32 = 4.0;
 /// How long it hops for joy once a turn ends (ms).
 const HAPPY_FOR: u64 = 4000;
 
@@ -80,10 +87,10 @@ fn now_doing(agent: &crate::daemon::Agent) -> (String, String, String) {
     (String::new(), String::new(), String::new())
 }
 
-/// The line over the composer, as wide as it and lined up with it: the
-/// pet, and while the agent works, what it does now (its step, the file or
-/// command, how long the turn has run). No box: words beside the pet, which
-/// has room of its own, so nothing is covered.
+/// Over the composer, as wide as it and lined up with it: while the agent
+/// works, the capsule of what it does now, and over it (`Quiet`) what it
+/// thought, each new line pushing the rest up; the pet on the top edge of
+/// whichever is under it.
 pub(crate) fn bar() -> impl IntoElement {
     let agent = computed(store::selected_agent);
     let running = computed(move || agent.with(|a| a.as_ref().is_some_and(|a| a.is_running())));
@@ -99,34 +106,43 @@ pub(crate) fn bar() -> impl IntoElement {
             }
         });
     });
-    // Quietly, the conversation shows no steps: what the agent writes and
-    // runs scrolls by here instead, as DSH Go's strip does, so the work is
-    // seen going on.
+    // Quietly, the conversation shows no steps: what the agent thinks
+    // scrolls by here instead, as DSH Go's strip does, so the work is seen
+    // going on.
     let live = computed(move || running.get() && store::tool_display() == crate::fold::ToolDisplay::Quiet);
+    let shown = computed(store::show_pet);
+    // The room over the capsule: the pet's, and the feed's beside it.
+    let room = computed(move || shown.get() || live.get());
     view()
         .w_full()
         .max_w(px(CONTENT_MAX_WIDTH()))
         .self_center()
-        .flex_row()
-        .items_end()
-        .gap(sp(S2))
-        .h(move || Length::from(px(if live.get() { LIVE_H } else { BAR_H })))
-        .px(sp(S2))
-        .child(pet(agent, running))
-        .child(view().flex_1().min_w(px(0.0)).h_full().justify_end().pb(px(6.0)).child(dynamic(move || {
-            if !running.get() {
+        .select_none()
+        .child(dynamic(move || {
+            if !room.get() {
                 return None;
             }
             let quiet = live.get();
-            let id = id.get_untracked().unwrap_or_default();
+            let pet_on = shown.get();
             Some(untracked(move || {
-                let line = doing_line(agent, id);
-                // From the foot up, as a log: what it does now on the line by
-                // the composer, what it thought and did before over it, each
-                // new line pushing the rest up.
-                if quiet { view().justify_end().gap(px(2.0)).child(feed()).child(line).into_element() } else { line.into_element() }
+                view()
+                    .flex_row()
+                    .items_end()
+                    .h(px(ROOM))
+                    .gap(sp(S2))
+                    .when(pet_on, |v| v.child(pet(agent, running)))
+                    .when(!pet_on, |v| v.pl(px(14.0)))
+                    .when(quiet, |v| v.child(view().flex_1().min_w(px(0.0)).pb(px(3.0)).child(feed())))
+                    .into_element()
             }))
-        })))
+        }))
+        .child(dynamic(move || {
+            if !running.get() {
+                return None;
+            }
+            let id = id.get_untracked().unwrap_or_default();
+            Some(untracked(move || view().pb(px(STRIP_GAP)).child(doing_line(agent, id)).into_element()))
+        }))
 }
 
 /// A line of the live feed: a thought.
@@ -184,8 +200,7 @@ fn feed() -> View {
             let _ = slide.spring(0.0, Spring { stiffness: 420.0, damping: 36.0, ..Spring::default() });
         }
     });
-    // Lined up with the words of the line under it, past its glyph.
-    view().pl(px(18.0 + S2)).max_h(px(FEED_LINE * FEED_SHOWN as f32)).overflow_hidden().justify_end().child(view().bind_translate_y(&slide).child(dynamic(move || {
+    view().max_h(px(FEED_LINE * FEED_SHOWN as f32)).overflow_hidden().justify_end().child(view().bind_translate_y(&slide).child(dynamic(move || {
         let (_, list) = lines.get();
         Some(untracked(move || {
             let n = list.len();
@@ -245,38 +260,35 @@ fn doing_line(agent: Memo<Option<crate::daemon::Agent>>, id: String) -> View {
             n => format!("{time} · ↓{}", short_count(n)),
         }
     };
-    view()
+    // Waiting for the user: in the warning's color, as DSH Go's.
+    let waiting = computed(move || agent.with(|a| a.as_ref().is_some_and(|a| !a.pending.is_empty())));
+    let tone = move || if waiting.get() { WARNING } else { FG() };
+    glass(view())
+        .rounded(px(R_FULL))
+        .h(px(STRIP_H))
+        .px(px(14.0))
         .flex_row()
         .items_center()
         .gap(sp(S2))
-        .child(dynamic(move || {
-            let kind = doing.with(|(k, ..)| k.clone());
-            // A steady glyph (the pet is what moves), as wide as any.
-            Some(untracked(move || match kind.as_str() {
-                "" | "thinking" => tool_glyph("thinking", "", 18.0).into_element(),
-                "said" => tool_glyph("said", "", 18.0).into_element(),
-                k => tool_glyph(k, "", 18.0).into_element(),
-            }))
-        }))
         .child(
             text(move || doing.with(|(_, word, _)| if word.is_empty() { format!("{idle_word}…") } else { word.clone() }))
                 .text_size(tx(TEXT_SM))
                 .font_weight(FontWeight(500))
-                .text_color(FG_MUTED())
+                .text_color(tone)
                 .flex_shrink_0(),
         )
         .child(
             text(move || doing.with(|(.., detail)| detail.clone()))
                 .text_size(tx(TEXT_XS))
                 .font_family(mono_font)
-                .text_color(FG_FAINT())
+                .text_color(FG_MUTED())
                 .number_of_lines(1)
                 .flex_1(),
         )
-        .child(text(clock).text_size(tx(TEXT_XS)).text_color(FG_FAINT()).flex_shrink_0())
+        .child(text(clock).text_size(tx(TEXT_XS)).tabular_nums().text_color(move || if waiting.get() { WARNING } else { FG_FAINT() }).flex_shrink_0())
 }
 
-/// The pet in its room at the line's start, in the conversation's mood.
+/// The pet in its room over the capsule's start, in the conversation's mood.
 fn pet(agent: Memo<Option<crate::daemon::Agent>>, running: Memo<bool>) -> impl IntoElement {
     let waiting = computed(move || {
         agent.with(|a| {
@@ -311,9 +323,10 @@ fn pet(agent: Memo<Option<crate::daemon::Agent>>, running: Memo<bool>) -> impl I
             Mood::Sleeping
         }
     });
-    // Its frame is taller than the line: the empty sky over its head
-    // reaches up past it, its feet on the line's foot.
-    view().w(px(PET)).h(px(BAR_H)).flex_shrink_0().child(
+    // Its frame is taller than its room: the empty sky over its head
+    // reaches up past it, its feet on the room's foot (the capsule's top
+    // edge, or the composer's).
+    view().ml(px(PET_AT)).w(px(PET)).h(px(ROOM)).flex_shrink_0().child(
         view().absolute().bottom(px(-PET_FEET)).left(px(0.0)).w(px(PET)).h(px(PET)).pointer_events(nsh_core::PointerEvents::None).child(dynamic(
             move || {
                 let mood = mood.get();

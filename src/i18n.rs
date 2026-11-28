@@ -1081,6 +1081,8 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Reset", "重置"),
     ("Keyboard", "键盘"),
     ("Number shortcuts", "数字快捷键"),
+    ("Pet", "小角色"),
+    ("A little one over the composer that works, waits and sleeps with the agent", "输入框上方的小家伙，跟着 agent 干活、等你、睡觉"),
     ("Use ⌘1–9 to switch conversations", "使用 ⌘1–9 切换聊天"),
     ("Tool calls", "工具调用"),
     ("The commands and reads between the agent's replies", "回复之间执行的命令和读取的文件"),

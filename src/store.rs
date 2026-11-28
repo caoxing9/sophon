@@ -3585,6 +3585,7 @@ fn save_prefs() {
     // Apart: one more field in the macro passes its recursion limit.
     let mut json = json;
     json["pushEvents"] = s.push_events.to_json();
+    json["showPet"] = global::<ShowPet>().with_untracked(|p| p.0).into();
     if let Err(e) = crate::daemon::write_file("settings.json", &json.to_string()) {
         log::warn!("cannot save settings: {e}");
     }
@@ -3828,6 +3829,9 @@ pub(crate) fn load_prefs() {
     }
     if let Some(on) = v.get("numberShortcuts").and_then(serde_json::Value::as_bool) {
         global::<NumberShortcuts>().set(NumberShortcuts(on));
+    }
+    if let Some(on) = v.get("showPet").and_then(serde_json::Value::as_bool) {
+        global::<ShowPet>().set(ShowPet(on));
     }
     let color = |k: &str| v.get(k).and_then(serde_json::Value::as_str).and_then(parse_hex);
     let theme = ColorTheme {
@@ -4136,6 +4140,25 @@ pub(crate) fn number_shortcuts_untracked() -> bool {
 
 pub(crate) fn set_number_shortcuts(on: bool) {
     global::<NumberShortcuts>().set(NumberShortcuts(on));
+    save_prefs();
+}
+
+/// Whether the pet stands over the composer (on by default). `showPet`.
+#[derive(Clone, PartialEq)]
+struct ShowPet(bool);
+
+impl Default for ShowPet {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
+pub(crate) fn show_pet() -> bool {
+    global::<ShowPet>().with(|p| p.0)
+}
+
+pub(crate) fn set_show_pet(on: bool) {
+    global::<ShowPet>().set(ShowPet(on));
     save_prefs();
 }
 
