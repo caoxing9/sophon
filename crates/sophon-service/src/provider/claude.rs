@@ -194,6 +194,10 @@ pub(crate) fn said(content: &Value) -> String {
 }
 
 /// A call as the timeline shows it, by what the tool does.
+/// The calls shown as they begin to be written (`streaming`): the plain
+/// ones. A task list, an agent, a plan or a question show otherwise, whole.
+const EARLY_CALLS: &[&str] = &["Bash", "Read", "Edit", "MultiEdit", "Write", "NotebookEdit", "Grep", "Glob", "WebSearch", "WebFetch"];
+
 pub(crate) fn detail(name: &str, input: &Value) -> Value {
     let field = |key: &str| input[key].clone();
     match name {
@@ -897,6 +901,18 @@ impl Claude {
             }
             Some("content_block_start") if event["content_block"]["type"] == "text" => {
                 self.fresh = true
+            }
+            // A call begins to be written: it shows now, by its name, not
+            // once its input is whole (a long command or file takes the
+            // model a while to write, and nothing showed meanwhile). The
+            // whole call replaces it by its id (`said`).
+            Some("content_block_start") if event["content_block"]["type"] == "tool_use" => {
+                let block = &event["content_block"];
+                if let (Some(id), Some(name)) = (block["id"].as_str(), block["name"].as_str())
+                    && EARLY_CALLS.contains(&name)
+                {
+                    self.item(tool(id, name, "running", detail(name, &json!({})), None));
+                }
             }
             Some("content_block_delta") => match event["delta"]["type"].as_str() {
                 Some("text_delta") => {

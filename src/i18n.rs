@@ -640,6 +640,7 @@ const ZH_HANS: &[(&str, &str)] = &[
     ("Mode", "模式"),
     ("Thinking", "思考"),
     ("Steer", "引导"),
+    ("writing it…", "正在写…"),
     ("Content", "内容"),
     ("Query", "查询"),
     ("Result", "结果"),
